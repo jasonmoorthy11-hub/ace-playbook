@@ -10,46 +10,61 @@ the block (and the reason is logged), never rewritten.
 from __future__ import annotations
 
 import re
+import string
 
 from ..store.schema import unsafe_text_reason
 
-# Extensions that are not delegated TLDs, plus .py/.md which are too common in lessons to ban.
-BARE_OK_EXTS = frozenset(
-    "json jsonl toml yml yaml txt js ts tsx jsx cfg ini lock log csv html css rb java cpp hpp php "
-    "sql xml pdf png jpg jpeg gif svg gz tar env conf pem key bak tmp pyc ipynb mjs cjs vue swift "
-    "lua mdx rst cff plist db sqlite sock pid out lockb py md".split())
-# Real TLDs (.rs Serbia, .zip, .pl Poland, .sh, ...): a file name only inside a real path ("src/lib.rs").
-PATH_ONLY_EXTS = frozenset("rs zip pl sh kt cs go mov cc ws to so".split())
+# Well-known file names that may appear bare. Everything else dotted is host-like.
+KNOWN_FILES = frozenset(
+    "README.md CHANGELOG.md LICENSE.md setup.py conftest.py pyproject.toml package.json "
+    "SKILL.md CLAUDE.md".split())
 
-_DOTTED = re.compile(r"(?<![\w.-])([\w-]+)((?:\.[\w-]+)+)(?![\w-])")
-_OPENERS = frozenset(" \t(\"'[,;")
+_DOTTED = re.compile(r"(?<![\w.-])([\w-]+(?:\.[\w-]+)+)")
+_IPV4 = re.compile(r"(?<![\w.])\d{1,3}(?:\.\d{1,3}){3}(?![\w])")
+_SCHEME = re.compile(r"(?i)(?<![a-z0-9+.\-])[a-z][a-z0-9+.\-]*:/|[\w+.\-]:/|://")
+_PUNYCODE = re.compile(r"(?i)(?<![\w-])xn--")
+_PATH_CHARS = frozenset("/.~-_" + string.ascii_letters + string.digits)
+
+
+def _path_prefix_ok(text: str, start: int) -> bool:
+    """True if the char before `start` is '/' closing a genuine path segment [\\w.-]+/ that is
+    not part of '//' or a scheme-like ':/' or user@host/ prefix."""
+    i = start - 1
+    if i < 0 or text[i] != "/":
+        return False
+    j = i
+    while j > 0 and text[j - 1] in _PATH_CHARS:
+        j -= 1
+    run = text[j:i + 1]
+    if "//" in run or (j > 0 and text[j - 1] in ":@"):
+        return False
+    seg = run[:-1].rsplit("/", 1)[-1]
+    return bool(seg) and all(c.isalnum() or c in "._-~" for c in seg)
+
+
+def _exempt(text: str, start: int, end: int, token: str) -> bool:
+    if end < len(text) and text[end] in ":?#@/":
+        return False
+    prev = text[start - 1] if start else ""
+    if prev == "/":
+        return _path_prefix_ok(text, start)
+    if prev in ":@":
+        return False
+    return token in KNOWN_FILES
 
 
 def _host_like(text: str) -> bool:
-    """True if any dotted token could be a host name, other than a plain file name."""
+    """True if any dotted token ends in a label with a letter (a possible TLD), unless it is
+    a known file name or the last segment of a genuine path. Single-letter final labels
+    (e.g., i.e.) cannot be TLDs and are ignored."""
     for m in _DOTTED.finditer(text):
-        labels = m.group(2).lstrip(".").split(".")
-        last = labels[-1]
-        if not (len(last) >= 2 and last.isalpha()):  # TLD must be 2+ letters (any script)
+        token = m.group(1)
+        last = token.rsplit(".", 1)[-1]
+        if len(last) < 2 or not any(c.isalpha() for c in last):
             continue
-        if len(labels) == 1 and _plain_filename(text, m, last.lower()):
+        if _exempt(text, m.start(1), m.end(1), token):
             continue
         return True
-    return False
-
-
-def _plain_filename(text: str, m: re.Match, ext: str) -> bool:
-    prev = text[m.start() - 1] if m.start() else ""
-    after = text[m.end()] if m.end() < len(text) else ""
-    if after and after in ":?#@/":
-        return False
-    if prev == "/":  # a real path segment: "src/main.py", not "//evil.md" or ":/evil.rs"
-        before = text[m.start() - 2] if m.start() >= 2 else ""
-        if not (before.isalnum() or before in "._~-"):
-            return False
-        return ext in BARE_OK_EXTS or ext in PATH_ONLY_EXTS
-    if prev == "" or prev in _OPENERS:
-        return ext in BARE_OK_EXTS
     return False
 
 
@@ -61,7 +76,9 @@ _MODIFY = (r"(?:set|change|edit|modify|disable|enable|add|update|write|grant|all
            r"delete|overwrite|append|configure|toggle|replace|insert|patch)")
 
 _CHECKS: list[tuple[str, re.Pattern[str]]] = [
-    ("url", re.compile(r"(?i)(?:\b[a-z][a-z0-9+.\-]*:/|\bwww\.|\b[a-z0-9\-]+\.(?:com|net|org|io|dev|sh)/)")),
+    ("url", _SCHEME),
+    ("ip_literal", _IPV4),
+    ("punycode", _PUNYCODE),
     ("code_fence_or_backtick", re.compile(r"`")),
     ("shell_syntax", re.compile(r"\$\(|\$\{|&&|\|\||\s\|\s|>>|\s>\s|;\s*(?:rm|curl|wget|sh|bash)\b")),
     ("pipe_to_shell",
