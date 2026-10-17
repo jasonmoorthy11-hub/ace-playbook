@@ -25,7 +25,11 @@ mistake the lesson targets recurs in that session. Reported as a rate ratio, sho
   list per lesson, frozen at seal time.
 - Assignment: micro-randomized. Each eligible lesson in each session is independently shown or
   hidden by a seeded Bernoulli draw with p = 0.5, computed from (seed, session id, lesson id)
-  and written to `injections.jsonl` at injection time. TBD: seed commitment (hash).
+  and written to `injections.jsonl` at injection time. Holdout is off by default.
+  Seed commitment: generate a private seed (`python3 -c "import secrets; print(secrets.token_hex(16))"`),
+  keep it only in the private config file as `holdout_seed`, set `holdout_enabled` to true, and
+  commit only `sha256(seed)` here and as `holdout_seed_sha256` in the config; the injector refuses
+  a seed that does not match the committed hash. TBD: the committed hash.
 - Analysis: randomization inference with a clustered Poisson regression as a cross-check.
   TBD: analysis code and its SHA-256, committed before the first confirmatory session.
 - Pre-registered meaningful effect: rate ratio 0.67 (a one-third reduction).

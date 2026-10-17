@@ -38,7 +38,7 @@ staying as prose the agent may ignore. The compile step and the evaluation harne
 | `ace_playbook/clean` | Transcript cleaner: drops harness noise, sidechain records, thinking and large tool results; head 25K + tail 75K sampling; header of outcome signals (user corrections, hook blocks, repeated failing commands) |
 | `ace_playbook/scrub` | Regex + entropy + base64-decoded secret scanner, PII and long-token lints, quarantine semantics, repo pre-commit check |
 | `ace_playbook/keys` | Project key from the git common directory, with an optional aliases/paths map |
-| `ace_playbook/inject` | SessionStart injector: at most 7,000 characters, inert advisory block, pinned lessons only by default, seeded per-(session, lesson) holdout, `injections.jsonl` ledger, citation recorder |
+| `ace_playbook/inject` | SessionStart injector: at most 7,000 characters, inert advisory block, pinned lessons only by default (ranked mode adds unpinned `active` lessons, never `provisional` ones), seeded per-(session, lesson) holdout, `injections.jsonl` ledger, citation recorder |
 | `ace_playbook/reflect` | Haiku 5.5 reflector client (stdlib HTTP, mockable), provenance gate, minting runner with usage logging and refusal/error paths |
 | `hooks/` | Hook scripts, a nightly sweep, a launchd example and `INSTALL.md` (nothing is installed for you) |
 | `ace_playbook/fixtures` | Seeded synthetic corpus generator, a frozen seed-1 copy, `DATASHEET.md` |
