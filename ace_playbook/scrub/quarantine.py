@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .engine import Hit, redact
+from .engine import Hit
 
 
 class QuarantineRequired(Exception):
@@ -25,6 +25,18 @@ class QuarantineRequired(Exception):
         self.where = where
         rules = sorted({h.rule for h in hits})
         super().__init__(f"scrub hit{' in ' + where if where else ''}: {', '.join(rules)}")
+
+
+def mask(text: str, hits: list[Hit]) -> str:
+    """Replace every hit's matched string wherever it occurs in `text`.
+
+    Matching by string rather than offset keeps this correct when the hits came
+    from scanning a different string (for example an evidence quote).
+    """
+    for h in sorted(hits, key=lambda h: -len(h.match)):
+        if h.match:
+            text = text.replace(h.match, f"[HIT:{h.rule}]")
+    return text
 
 
 def quarantine(
@@ -46,7 +58,7 @@ def quarantine(
             json.dumps(candidate, sort_keys=True).encode()
         ).hexdigest()[:16],
         "hits": [h.public() for h in hits],
-        "masked_text": redact(text, hits) if hits else text,
+        "masked_text": mask(text, hits),
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
