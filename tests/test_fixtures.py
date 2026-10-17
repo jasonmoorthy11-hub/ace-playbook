@@ -57,8 +57,9 @@ def test_store_fixture_is_valid(corpus):
 
 def test_no_real_data_markers(corpus):
     blob = "".join(p.read_text() for p in corpus.rglob("*") if p.is_file())
-    for needle in ("think", "samplecloset", "railway.app"):
-        assert needle not in blob.lower() or needle == "think" and "thinking" in blob.lower()
+    # Invented stand-ins; real client names belong in the private config.deny_terms list.
+    for needle in ("northwind-hotels", "widgetworks", "railway.app"):
+        assert needle not in blob.lower()
 
 
 def test_planted_secrets_are_found_in_transcripts(corpus):
