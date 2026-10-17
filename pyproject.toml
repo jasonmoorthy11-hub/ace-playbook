@@ -22,4 +22,3 @@ packages = ["ace_playbook"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-addopts = "-q"
