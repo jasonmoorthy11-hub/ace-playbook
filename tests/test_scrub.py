@@ -1,6 +1,6 @@
 import pytest
 
-from ace_playbook.scrub import LESSON, REPO, SECRETS, QuarantineRequired, quarantine, redact, scan
+from ace_playbook.scrub import Hit, LESSON, REPO, SECRETS, QuarantineRequired, quarantine, redact, scan
 from ace_playbook.scrub.check import scan_files
 
 from . import fakes
@@ -24,6 +24,17 @@ def test_redact_removes_secret_text():
     text = f"token {secret} used"
     out = redact(text, scan(text, SECRETS))
     assert secret not in out and "[REDACTED:" in out
+
+
+def test_redact_merges_overlapping_hits_without_leaking_tail():
+    secret = fakes.anthropic()
+    text = f"x {secret} y"
+    start = text.index(secret)
+    hits = [Hit("a", "regex", start, start + 20, secret[:20]),
+            Hit("b", "regex", start + 10, start + len(secret), secret[10:])]
+    out = redact(text, hits)
+    assert out == "x [REDACTED:a] y"
+    assert secret[-8:] not in out and secret[10:20] not in out
 
 
 @pytest.mark.parametrize("depth", [1, 2])

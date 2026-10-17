@@ -170,15 +170,25 @@ def scan(text: str, profile: Profile = LESSON, deny_terms: Iterable[str] = ()) -
     return _dedupe(hits)
 
 
+def _merge_spans(hits: list[Hit]) -> list[tuple[int, int, str]]:
+    """Union overlapping hit spans so no tail of an overlapping secret survives."""
+    spans: list[tuple[int, int, str]] = []
+    for h in sorted(hits, key=lambda h: (h.start, h.end)):
+        if spans and h.start < spans[-1][1]:
+            start, end, rule = spans[-1]
+            spans[-1] = (start, max(end, h.end), rule)
+        else:
+            spans.append((h.start, h.end, h.rule))
+    return spans
+
+
 def redact(text: str, hits: list[Hit]) -> str:
     """Outbound-only masking. Never used to keep a lesson (see quarantine)."""
     out, last = [], 0
-    for h in sorted(hits, key=lambda h: h.start):
-        if h.start < last:
-            continue
-        out.append(text[last:h.start])
-        out.append(f"[REDACTED:{h.rule}]")
-        last = h.end
+    for start, end, rule in _merge_spans(hits):
+        out.append(text[last:start])
+        out.append(f"[REDACTED:{rule}]")
+        last = end
     out.append(text[last:])
     return "".join(out)
 
