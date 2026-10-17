@@ -80,7 +80,18 @@ def unsafe_text_reason(text: str) -> str | None:
                 return "invisible_or_symbol_char"
         if FENCE in form:
             return "fence_marker"
+    if _mixed_script(text):
+        return "mixed_script"
     return None
+
+
+def _mixed_script(text: str) -> bool:
+    """A word mixing Latin with Cyrillic or Greek letters (look-alike spoofing)."""
+    for word in re.findall(r"[^\W\d_]+", unicodedata.normalize("NFKC", text)):
+        scripts = {unicodedata.name(c, "").split(" ")[0] for c in word}
+        if "LATIN" in scripts and scripts & {"CYRILLIC", "GREEK"}:
+            return True
+    return False
 
 
 def _inj_text(f: dict, keys: tuple[str, ...], errs: list[str]) -> None:
