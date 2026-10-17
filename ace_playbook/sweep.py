@@ -9,9 +9,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import Config
+from .filelock import locked
 from .inject.ledger import read_jsonl
 from .reflect.client import ReflectorClient, log_line
 from .reflect.runner import reflect_transcript
+from .store import DeltaLog, SchemaError
 
 MIN_BYTES = 2000
 
@@ -59,11 +61,12 @@ def prune_queue(cfg: Config) -> None:
     """Rewrite the queue without entries whose session has been reflected."""
     if not cfg.queue.exists():
         return
-    done = reflected_ids(cfg)
-    keep = [e for e in queue_entries(cfg) if Path(e.get("transcript_path") or "").stem not in done]
-    tmp = cfg.queue.with_name(cfg.queue.name + ".tmp")
-    tmp.write_text("".join(json.dumps(e, sort_keys=True) + "\n" for e in keep))
-    os.replace(tmp, cfg.queue)
+    with locked(cfg.queue):
+        done = reflected_ids(cfg)
+        keep = [e for e in queue_entries(cfg) if Path(e.get("transcript_path") or "").stem not in done]
+        tmp = cfg.queue.with_name(cfg.queue.name + ".tmp")
+        tmp.write_text("".join(json.dumps(e, sort_keys=True) + "\n" for e in keep))
+        os.replace(tmp, cfg.queue)
 
 
 def run_sweep(cfg: Config, client: ReflectorClient | None = None, max_n: int = 20,
@@ -75,6 +78,12 @@ def run_sweep(cfg: Config, client: ReflectorClient | None = None, max_n: int = 2
     if cands and not (cfg.api_key_path and Path(cfg.api_key_path).exists()):
         log_line(cfg, f"sweep SKIPPED no-api-key candidates={len(cands)}")
         return [{"status": "skipped_no_key", "candidates": len(cands)}]
+    try:
+        if cfg.deltas.exists():
+            DeltaLog(cfg.deltas).verify()
+    except SchemaError as e:
+        log_line(cfg, f"sweep REFUSED delta log failed verification: {e}")
+        return [{"status": "refused_chain_invalid", "candidates": len(cands)}]
     client = client or ReflectorClient(cfg)
     out = []
     for c in cands:

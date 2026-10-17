@@ -72,6 +72,11 @@ class DeltaLog:
             if hits:
                 raise QuarantineRequired(hits, where)
 
+    def check_draft(self, draft: dict) -> None:
+        """Raise SchemaError or QuarantineRequired if this one draft would be refused."""
+        validate_draft(draft)
+        self._scrub(draft)
+
     def _atomic_write(self, records: list[dict]) -> None:
         tmp = self.path.with_name(self.path.name + ".tmp")
         with open(tmp, "w", encoding="utf-8") as fh:

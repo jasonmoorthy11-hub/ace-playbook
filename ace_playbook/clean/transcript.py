@@ -39,6 +39,7 @@ class Turn:
 @dataclass
 class Drops:
     sidechain: int = 0
+    compact_summary: int = 0
     noise_records: int = 0
     big_results: int = 0
     bad_lines: int = 0
@@ -99,7 +100,7 @@ def _result_origin(use: dict, cwd: str, written: set[str], untrusted: tuple[str,
     path = str(use.get("input", {}).get("file_path", ""))
     if not path or path in written or any(m in path for m in untrusted):
         return "tool_output"
-    if path.startswith("/") and cwd and not path.startswith(cwd):
+    if path.startswith("/") and cwd and not (path == cwd or path.startswith(cwd.rstrip("/") + "/")):
         return "tool_output"
     return "user_file"
 
@@ -114,6 +115,10 @@ def parse_records(records: Iterator[dict], result_max: int,
         out.session_id = out.session_id or rec.get("sessionId", "") or ""
         if rec.get("isSidechain"):
             out.drops.sidechain += 1
+            continue
+        if (rec.get("isCompactSummary") or rec.get("isVisibleInTranscriptOnly")
+                or rec.get("origin") == "tool_output"):
+            out.drops.compact_summary += 1  # summarized tool output is not the user speaking
             continue
         if rec.get("type") == "attachment" and _is_hook_block(rec, ""):
             out.hook_blocks += 1

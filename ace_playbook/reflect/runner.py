@@ -19,6 +19,27 @@ from .provenance import check_provenance
 
 TAG_COUNTERS = {"helpful": "helpful", "harmful": "harmful", "violated": "violated"}
 MIN_USER_TURNS = 2
+MAX_ATTEMPTS = 3
+
+
+def retry_count(cfg: Config, session_id: str) -> int:
+    return sum(1 for r in read_jsonl(cfg.reflections)
+               if r.get("session_id") == session_id and r.get("status") == "retryable")
+
+
+def is_final_http_error(res) -> bool:
+    """4xx other than 429 will not succeed on a retry."""
+    return 400 <= res.http_status < 500 and res.http_status != 429
+
+
+def _fail(cfg: Config, sid: str, error: str, final: bool = False, **extra) -> dict:
+    """Ledger a retryable failure; the third failure (or a final one) closes the session."""
+    attempts = retry_count(cfg, sid) + 1
+    if final:
+        return _ledger(cfg, sid, "failed_final", error=error, attempts=attempts, **extra)
+    if attempts >= MAX_ATTEMPTS:
+        return _ledger(cfg, sid, "retry_exhausted", error=error, attempts=attempts, **extra)
+    return _ledger(cfg, sid, "retryable", error=error, attempts=attempts, **extra)
 
 
 def already_reflected(cfg: Config, session_id: str) -> bool:
@@ -35,8 +56,18 @@ def _ledger(cfg: Config, session_id: str, status: str, **extra) -> dict:
 
 
 def _quarantine(cfg: Config, session_id: str, insight: dict, reason: str, hits=()) -> None:
+    """Record a rejected insight. Only text and applies_when are stored, and only masked;
+    evidence quotes are scanned (so their secrets are masked everywhere) but never stored."""
+    deny = tuple(cfg.deny_terms)
     text = str(insight.get("text", ""))
-    quarantine(cfg.quarantine, "lesson", insight, text, list(hits), reason, session_id)
+    when = str(insight.get("applies_when", ""))
+    hits = list(hits)
+    for e in insight.get("evidence", []) if isinstance(insight.get("evidence"), list) else []:
+        if isinstance(e, dict):
+            q = str(e.get("quote", ""))
+            hits += scan(q, LESSON, deny) + scan(q, OUTBOUND, deny)
+    quarantine(cfg.quarantine, "lesson", insight, f"{text}\n[applies_when] {when}", hits, reason,
+               session_id, deny)
 
 
 def _to_draft(cfg: Config, insight: dict, cwd: str, evidence: list[dict], session_id: str) -> dict:
@@ -54,13 +85,17 @@ def gate_insight(cfg: Config, insight: dict, kept_turns, session_id: str) -> tup
     text, when = insight.get("text"), insight.get("applies_when")
     if not (isinstance(text, str) and isinstance(when, str)) or insight.get("kind") not in KINDS:
         return None, "malformed"
+    deny = tuple(cfg.deny_terms)
+    hits = scan(f"{text}\n{when}", LESSON, deny) + scan(f"{text}\n{when}", OUTBOUND, deny)
+    if hits:
+        return {"hits": hits}, "scrub_hit"
     quotes = [e.get("quote", "") for e in insight.get("evidence", []) if isinstance(e, dict)]
-    verdict = check_provenance([q for q in quotes if isinstance(q, str)], kept_turns, session_id)
+    verdict = check_provenance([q for q in quotes if isinstance(q, str)], kept_turns, session_id,
+                               f"{text} {when}")
     if not verdict.ok:
         return None, verdict.reason
-    hits = scan(f"{text}\n{when}", LESSON, tuple(cfg.deny_terms))
     for e in verdict.evidence:
-        hits += scan(e["quote"], LESSON, tuple(cfg.deny_terms))
+        hits += scan(e["quote"], LESSON, deny)
     if hits:
         return {"hits": hits}, "scrub_hit"
     if inert_reason(text, when):
@@ -68,8 +103,9 @@ def gate_insight(cfg: Config, insight: dict, kept_turns, session_id: str) -> tup
     return {"evidence": verdict.evidence}, ""
 
 
-def _mint(cfg: Config, insights: list[dict], cleaned, state: dict, session_id: str):
-    drafts, reasons = [], []
+def _mint(cfg: Config, insights: list[dict], cleaned, state: dict, session_id: str, log=None):
+    drafts, reasons, seen = [], [], set()
+    log = log or DeltaLog(cfg.deltas, tuple(cfg.deny_terms))
     for i, ins in enumerate(insights):
         if i >= cfg.max_new_per_run:
             _quarantine(cfg, session_id, ins, "rate_limited")
@@ -81,9 +117,17 @@ def _mint(cfg: Config, insights: list[dict], cleaned, state: dict, session_id: s
             reasons.append(reason)
             continue
         draft = _to_draft(cfg, ins, cleaned.cwd, info["evidence"], session_id)
-        if draft["lesson_id"] in state:
+        if draft["lesson_id"] in state or draft["lesson_id"] in seen:
             reasons.append("duplicate")
             continue
+        try:
+            log.check_draft(draft)
+        except (SchemaError, QuarantineRequired) as e:
+            _quarantine(cfg, session_id, ins, "schema_invalid" if isinstance(e, SchemaError) else "scrub_hit",
+                        getattr(e, "hits", ()))
+            reasons.append("schema_invalid" if isinstance(e, SchemaError) else "scrub_hit")
+            continue
+        seen.add(draft["lesson_id"])
         drafts.append(draft)
     return drafts, reasons
 
@@ -108,6 +152,12 @@ def reflect_transcript(cfg: Config, path: Path, client: client_mod.ReflectorClie
     if cleaned.user_turn_count < MIN_USER_TURNS:
         return _ledger(cfg, sid, "skipped_short")
     log = DeltaLog(cfg.deltas, tuple(cfg.deny_terms))
+    try:
+        if cfg.deltas.exists():
+            log.verify()
+    except SchemaError as e:
+        client_mod.log_line(cfg, f"reflect session={sid} REFUSED delta log failed verification: {e}")
+        return {"session_id": sid, "status": "refused_chain_invalid", "error": str(e)[:200]}
     state = log.state()
     shown = [i for i in shown_ids_for_session(cfg.injections, sid) if i in state]
     user = build_user(cleaned, [state[i] for i in shown])
@@ -117,8 +167,9 @@ def reflect_transcript(cfg: Config, path: Path, client: client_mod.ReflectorClie
             "signals": {"corrections": cleaned.signals.user_corrections,
                         "hook_blocks": cleaned.signals.hook_blocks}}
     if res.status != "ok":
-        status = "retryable" if res.status == "error" else res.status
-        return _ledger(cfg, sid, status, error=res.error, category=res.category, **base)
+        if res.status == "error":
+            return _fail(cfg, sid, res.error, final=is_final_http_error(res), category=res.category, **base)
+        return _ledger(cfg, sid, res.status, error=res.error, category=res.category, **base)
     return _apply(cfg, log, state, cleaned, shown, res.text, base)
 
 
@@ -128,14 +179,14 @@ def _apply(cfg, log, state, cleaned, shown, text, base) -> dict:
         parsed = parse_reflection(text)
     except ReflectParseError as e:
         return _ledger(cfg, sid, "parse_error", error=str(e), **base)
-    drafts, reasons = _mint(cfg, parsed["insights"], cleaned, state, sid)
+    drafts, reasons = _mint(cfg, parsed["insights"], cleaned, state, sid, log)
     drafts += _tag_drafts(parsed["tags"], shown, sid)
     try:
         written = log.append_many(drafts, max_touched=cfg.max_touched_per_run) if drafts else []
         if written:
             log.rebuild_view(cfg.sqlite)
     except (SchemaError, QuarantineRequired) as e:
-        return _ledger(cfg, sid, "write_error", error=type(e).__name__, **base)
+        return _fail(cfg, sid, f"write_error: {type(e).__name__}", **base)
     minted = [d["lesson_id"] for d in drafts if d["op"] == "ADD"]
     return _ledger(cfg, sid, "ok", minted=minted, rejected=reasons,
                    tags_applied=sum(1 for d in drafts if d["op"] == "NOOP"), **base)

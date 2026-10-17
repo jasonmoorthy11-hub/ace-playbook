@@ -12,6 +12,7 @@ import sys
 import time
 
 from . import config as cfgmod
+from .filelock import locked
 
 
 def main() -> int:
@@ -23,11 +24,12 @@ def main() -> int:
                "session_id": payload.get("session_id", ""),
                "transcript_path": payload.get("transcript_path", ""),
                "reason": payload.get("reason", "")}
-        fd = os.open(cfg.queue, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-        try:
-            os.write(fd, (json.dumps(rec, sort_keys=True) + "\n").encode())
-        finally:
-            os.close(fd)
+        with locked(cfg.queue):
+            fd = os.open(cfg.queue, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+            try:
+                os.write(fd, (json.dumps(rec, sort_keys=True) + "\n").encode())
+            finally:
+                os.close(fd)
     except Exception:  # noqa: BLE001 - never block session exit
         pass
     return 0

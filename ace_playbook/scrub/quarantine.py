@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .engine import Hit
+from .engine import LESSON, OUTBOUND, Hit, scan
 
 
 class QuarantineRequired(Exception):
@@ -39,6 +39,14 @@ def mask(text: str, hits: list[Hit]) -> str:
     return text
 
 
+def _union(*groups: list[Hit]) -> list[Hit]:
+    seen: dict[str, Hit] = {}
+    for g in groups:
+        for h in g:
+            seen.setdefault(h.match or f"{h.rule}:{h.start}:{h.end}", h)
+    return list(seen.values())
+
+
 def quarantine(
     path: Path,
     kind: str,
@@ -47,8 +55,15 @@ def quarantine(
     hits: list[Hit],
     reason: str,
     session_id: str | None = None,
+    deny_terms: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    """Append a quarantine record and return it."""
+    """Append a quarantine record and return it.
+
+    Whatever the caller found, the text is scanned again here and every hit is
+    masked, so a record for a lesson rejected for some other reason (rate limit,
+    malformed, no provenance) never carries a secret verbatim.
+    """
+    hits = _union(hits, scan(text, LESSON, deny_terms), scan(text, OUTBOUND, deny_terms))
     record = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "kind": kind,

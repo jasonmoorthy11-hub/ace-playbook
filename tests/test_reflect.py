@@ -179,7 +179,7 @@ INSIGHTS = {"insights": [
 
 def test_end_to_end_mint_gate_and_quarantine(cfg, tmp_path):
     insights = json.loads(json.dumps(INSIGHTS))
-    insights["insights"][3]["text"] = "Deploy using " + fakes.anthropic() + " for auth"
+    insights["insights"][3]["text"] = "Run uv sync with " + fakes.anthropic() + " before pytest"
     cfg.max_new_per_run = 10
     c, t = client(cfg, api(json.dumps(insights)))
     res = reflect_transcript(cfg, session(tmp_path), c)
