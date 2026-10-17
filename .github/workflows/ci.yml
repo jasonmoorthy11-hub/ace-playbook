@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      # third-party actions are pinned to full commit references
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - name: Install
+        run: uv sync --python 3.12
+      - name: Tests
+        run: uv run pytest -q
+      - name: Scrub check, pre-commit mode (fixtures allowlisted, FAKE-marked only)
+        run: uv run python -m ace_playbook.scrub check --mode pre-commit
+      - name: Scrub check, audit mode finds planted secrets in fixtures only
+        run: |
+          uv run python -m ace_playbook.scrub check --mode audit > audit.txt || true
+          cat audit.txt
+          grep -q "allowlisted fixture" audit.txt
+          ! grep -E '^[^ ]+:[0-9]+: ' audit.txt | grep -v "allowlisted fixture"
+      - name: Frozen fixtures match the generator
+        run: |
+          uv run python -m ace_playbook.fixtures.generate --seed 1 --out "$RUNNER_TEMP/fx"
+          diff -r "$RUNNER_TEMP/fx" ace_playbook/fixtures/frozen
+      - name: No personal paths or names in code or docs
+        run: |
+          ! grep -rn "jasonmoorthy\|/Users/" --include=*.py --include=*.md . --exclude=INSTALL.md --exclude-dir=.venv --exclude-dir=.git

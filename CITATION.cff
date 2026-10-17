@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it and the ACE paper it implements."
+title: "ACE playbook: a measured lesson-to-hook compiler for CLI coding agents"
+type: software
+version: 0.1.0
+license: Apache-2.0
+repository-code: "https://github.com/jasonmoorthy11-hub/ace-playbook"
+authors:
+  - family-names: Moorthy
+    given-names: Jason
+abstract: >-
+  Stage 1 scaffold of an append-only lesson store, scrubber, injector and reflector
+  for CLI coding agents, built around a pre-registered evaluation. It implements ideas
+  from Agentic Context Engineering (Zhang et al., ICLR 2026). Not affiliated with or
+  endorsed by the ACE authors or by Anthropic.
+references:
+  - type: article
+    title: "Agentic Context Engineering: Evolving Contexts for Self-Improving Language Models"
+    authors:
+      - family-names: Zhang
+        given-names: Qizheng
+      - name: "and co-authors (see the arXiv record)"
+    year: 2026
+    journal: "ICLR 2026"
+    url: "https://arxiv.org/abs/2510.04618"
+    notes: "arXiv:2510.04618. Reference implementation: https://github.com/ace-agent/ace"
