@@ -6,7 +6,6 @@ import hashlib
 import json
 import re
 import time
-import unicodedata
 from typing import Any
 
 SCHEMA_VERSION = 1
@@ -59,39 +58,24 @@ def record_hash(record: dict) -> str:
     return hashlib.sha256(canonical(body).encode()).hexdigest()
 
 
-BAD_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp", "Mn", "So"})
-# Characters that render as blank or near-blank but are letters/symbols by category.
-FILLERS = frozenset("\u115f\u1160\u3164\uffa0\u2800\u180e\u034f\u17b4\u17b5")
 FENCE = "==="
 
 
 def unsafe_text_reason(text: str) -> str | None:
-    """Structural reasons a string must never be stored as injectable lesson text.
+    """Fail-closed rule for injectable lesson text: printable ASCII only.
 
-    Checked on the raw string and on its NFKC form, so compatibility look-alikes
-    cannot hide a newline, a fence or an invisible character.
+    No newlines (a lesson must stay on its own line of the advisory block), no
+    non-ASCII letters, punctuation, spaces or invisible characters (so no look-alikes,
+    fillers, separators or combining marks), and no "===" fence marker.
     """
-    for form in (text, unicodedata.normalize("NFKC", text)):
-        for c in form:
-            if c in "\n\r":
-                return "newline"
-            cat = unicodedata.category(c)
-            if cat in BAD_CATEGORIES or c in FILLERS or (cat == "Zs" and c != " "):
-                return "invisible_or_symbol_char"
-        if FENCE in form:
-            return "fence_marker"
-    if _mixed_script(text):
-        return "mixed_script"
+    for c in text:
+        if c in "\n\r":
+            return "newline"
+        if not 0x20 <= ord(c) <= 0x7E:
+            return "non_ascii_or_control"
+    if FENCE in text:
+        return "fence_marker"
     return None
-
-
-def _mixed_script(text: str) -> bool:
-    """A word mixing Latin with Cyrillic or Greek letters (look-alike spoofing)."""
-    for word in re.findall(r"[^\W\d_]+", unicodedata.normalize("NFKC", text)):
-        scripts = {unicodedata.name(c, "").split(" ")[0] for c in word}
-        if "LATIN" in scripts and scripts & {"CYRILLIC", "GREEK"}:
-            return True
-    return False
 
 
 def _inj_text(f: dict, keys: tuple[str, ...], errs: list[str]) -> None:
