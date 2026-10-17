@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from dataclasses import dataclass, field, fields
@@ -11,6 +12,7 @@ from typing import Any
 ENV_CONFIG = "ACE_PLAYBOOK_CONFIG"
 DEFAULT_CONFIG = Path.home() / ".config" / "ace-playbook" / "config.json"
 DEFAULT_DATA = Path.home() / ".local" / "share" / "ace-playbook"
+MAX_INJECT_CHARS = 7000
 
 
 @dataclass
@@ -31,9 +33,13 @@ class Config:
     max_global: int = 4
     max_project: int = 8
     max_exploratory: int = 3
-    holdout_enabled: bool = True
+    # Holdout is off until a private seed is configured. Keep the seed out of the repo and
+    # commit only its SHA-256 (see PREREGISTRATION.md); holdout_seed_sha256 lets the injector
+    # refuse a seed that does not match the committed hash.
+    holdout_enabled: bool = False
     holdout_rate: float = 0.5
-    holdout_seed: str = "ace-playbook-v1"
+    holdout_seed: str = ""
+    holdout_seed_sha256: str = ""
     # reflector limits
     max_new_per_run: int = 3
     max_touched_per_run: int = 5
@@ -42,6 +48,22 @@ class Config:
         default_factory=lambda: ["upstream/", "node_modules/", ".venv/", "vendor/"]
     )
     deny_terms: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not 200 <= self.inject_max_chars <= MAX_INJECT_CHARS:
+            raise ValueError(f"inject_max_chars must be 200..{MAX_INJECT_CHARS}")
+        if not 0.0 <= self.holdout_rate <= 1.0:
+            raise ValueError("holdout_rate must be between 0 and 1")
+
+    def check_holdout(self) -> None:
+        """Raise ValueError if holdout is on without a usable private seed."""
+        if not self.holdout_enabled:
+            return
+        if len(self.holdout_seed) < 16:
+            raise ValueError("holdout_enabled needs a private holdout_seed of 16+ characters")
+        if self.holdout_seed_sha256 and (
+                hashlib.sha256(self.holdout_seed.encode()).hexdigest() != self.holdout_seed_sha256):
+            raise ValueError("holdout_seed does not match holdout_seed_sha256")
 
     # derived paths -------------------------------------------------------
     def path(self, name: str) -> Path:

@@ -25,9 +25,17 @@ def _log_error(cfg, where: str, exc: Exception) -> None:
         pass
 
 
+def _session_id(payload: dict) -> str | None:
+    sid = payload.get("session_id")
+    return sid if isinstance(sid, str) and sid.strip() else None
+
+
 def start(cfg, payload: dict) -> int:
-    inj = injector.run(cfg, payload.get("session_id", "unknown"), payload.get("cwd", "."),
-                       payload.get("source", "startup"))
+    sid = _session_id(payload)
+    if sid is None:  # no id means the ledger and holdout draw cannot be attributed
+        _log_error(cfg, "inject.start", ValueError("missing session_id"))
+        return 0
+    inj = injector.run(cfg, sid, payload.get("cwd", "."), payload.get("source", "startup"))
     if inj.block:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart",
                                                  "additionalContext": inj.block}}))
@@ -35,8 +43,11 @@ def start(cfg, payload: dict) -> int:
 
 
 def cite(cfg, payload: dict) -> int:
-    record_citations(cfg, payload.get("session_id", "unknown"),
-                     payload.get("last_assistant_message", ""))
+    sid = _session_id(payload)
+    if sid is None:
+        _log_error(cfg, "inject.cite", ValueError("missing session_id"))
+        return 0
+    record_citations(cfg, sid, payload.get("last_assistant_message", ""))
     return 0
 
 

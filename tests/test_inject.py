@@ -17,7 +17,8 @@ PROJ = {"type": "project", "key": "demo"}
 
 @pytest.fixture
 def cfg(tmp_path):
-    return cfgmod.Config(data_dir=tmp_path / "data", holdout_enabled=False)
+    return cfgmod.Config(data_dir=tmp_path / "data", holdout_enabled=False,
+                         holdout_seed="test-private-seed-0123456789")
 
 
 def seed(cfg, items, pin=True, status="active"):
@@ -131,13 +132,13 @@ def test_holdout_arm_is_ledgered_not_injected(cfg, tmp_path):
     assert shown_ids_for_session(cfg.injections, "s9") == inj.shown
 
 
-def test_ranked_mode_adds_unpinned_and_exploratory(cfg, tmp_path):
+def test_ranked_mode_adds_unpinned_active_but_never_provisional(cfg, tmp_path):
     cfg.inject_mode = "ranked"
     seed(cfg, [("Pinned global rule about quoting", GLOBAL)])
     unpinned = seed(cfg, [("Active but unpinned global lesson", GLOBAL)], pin=False)
     prov = seed(cfg, [("Provisional exploratory lesson here", GLOBAL)], pin=False, status="provisional")
     inj = build(cfg, "s1", str(tmp_path))
-    assert unpinned[0] in inj.shown and prov[0] in inj.shown
+    assert unpinned[0] in inj.shown and prov[0] not in inj.shown
 
 
 def test_empty_store_emits_nothing(cfg, tmp_path):

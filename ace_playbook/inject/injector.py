@@ -6,9 +6,9 @@ import hashlib
 import time
 from dataclasses import dataclass, field
 
-from ..config import Config
+from ..config import MAX_INJECT_CHARS, Config
 from ..keys import resolve_key
-from ..store import DeltaLog, view
+from ..store import DeltaLog, SchemaError, view
 from ..store.rank import score
 from .ledger import append_jsonl
 from .sanitize import inert_reason
@@ -29,6 +29,7 @@ class Injection:
     holdout: list[str] = field(default_factory=list)
     excluded: list[dict] = field(default_factory=list)
     dropped_cap: list[str] = field(default_factory=list)
+    refused: str = ""
 
 
 def coin(seed: str, session_id: str, lesson_id: str) -> float:
@@ -40,12 +41,20 @@ def coin(seed: str, session_id: str, lesson_id: str) -> float:
 def is_holdout(cfg: Config, session_id: str, lesson: dict) -> bool:
     if not cfg.holdout_enabled or lesson["holdout_exempt"]:
         return False
+    cfg.check_holdout()
     return coin(cfg.holdout_seed, session_id, lesson["id"]) < cfg.holdout_rate
 
 
 def ensure_view(cfg: Config) -> None:
+    """Verify the hash chain, then make sure the SQLite view matches the log's head.
+
+    Raises SchemaError if the log fails verification; the caller must then inject nothing.
+    """
     log = DeltaLog(cfg.deltas)
-    if cfg.deltas.exists() and view.view_head(cfg.sqlite) != log.head_hash():
+    if not cfg.deltas.exists():
+        return
+    log.verify()
+    if view.view_head(cfg.sqlite) != log.head_hash():
         log.rebuild_view(cfg.sqlite)
 
 
@@ -63,7 +72,11 @@ def _rows(cfg: Config, key: str, status: str) -> list[dict]:
 
 
 def select_candidates(cfg: Config, key: str, now: float) -> list[dict]:
-    """Priority-ordered candidates: pinned first; ranked/exploratory only when configured."""
+    """Priority-ordered candidates: pinned first, then (ranked mode) unpinned lessons.
+
+    Only status "active" is ever injected; "provisional" lessons (fresh from the reflector,
+    unreviewed) are never shown, in any mode. max_exploratory is reserved and unused.
+    """
     active = _rows(cfg, key, "active")
     by_rank = lambda r: (-score(r, now), r["id"])  # noqa: E731
     pinned = [r for r in active if r["pinned"]]
@@ -73,7 +86,6 @@ def select_candidates(cfg: Config, key: str, now: float) -> list[dict]:
     if cfg.inject_mode == "ranked":
         rest = sorted([r for r in active if not r["pinned"]], key=by_rank)
         out += rest[:max(0, cfg.max_project - len(proj))]
-        out += sorted(_rows(cfg, key, "provisional"), key=by_rank)[:cfg.max_exploratory]
     return out
 
 
@@ -85,9 +97,13 @@ def build(cfg: Config, session_id: str, cwd: str, now: float | None = None) -> I
     now = time.time() if now is None else now
     key = resolve_key(cwd, cfg.engagements_path, cfg.fold_key_separators)
     inj = Injection(key)
-    ensure_view(cfg)
+    try:
+        ensure_view(cfg)
+    except SchemaError:
+        inj.refused = "delta_log_failed_verification"
+        return inj
     lines: list[str] = []
-    budget = cfg.inject_max_chars - len(HEADER) - len(FOOTER) - 2
+    budget = min(cfg.inject_max_chars, MAX_INJECT_CHARS) - len(HEADER) - len(FOOTER) - 2
     for les in select_candidates(cfg, key, now):
         reason = inert_reason(les["text"], les["applies_when"])
         if reason:
@@ -114,7 +130,7 @@ def record(cfg: Config, inj: Injection, session_id: str, source: str) -> None:
         "excluded": inj.excluded, "dropped_cap": inj.dropped_cap,
         "holdout_rate": cfg.holdout_rate if cfg.holdout_enabled else 0.0,
         "seed_fp": hashlib.sha256(cfg.holdout_seed.encode()).hexdigest()[:8],
-        "block_chars": len(inj.block),
+        "block_chars": len(inj.block), "refused": inj.refused,
     })
 
 
