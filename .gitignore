@@ -1,0 +1,28 @@
+# local state and quarantine (never tracked)
+quarantine*.jsonl
+*.quarantine
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+injections.jsonl
+citations.jsonl
+reflections.jsonl
+queue.jsonl
+reflect.log
+config.local.json
+*.key
+anthropic_api_key
+.env
+.env.*
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+dist/
+build/
+*.egg-info/
+.DS_Store
+*.jsonl.lock
