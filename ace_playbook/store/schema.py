@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import time
+import unicodedata
 from typing import Any
 
 SCHEMA_VERSION = 1
@@ -58,6 +59,38 @@ def record_hash(record: dict) -> str:
     return hashlib.sha256(canonical(body).encode()).hexdigest()
 
 
+BAD_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp", "Mn", "So"})
+# Characters that render as blank or near-blank but are letters/symbols by category.
+FILLERS = frozenset("\u115f\u1160\u3164\uffa0\u2800\u180e\u034f\u17b4\u17b5")
+FENCE = "==="
+
+
+def unsafe_text_reason(text: str) -> str | None:
+    """Structural reasons a string must never be stored as injectable lesson text.
+
+    Checked on the raw string and on its NFKC form, so compatibility look-alikes
+    cannot hide a newline, a fence or an invisible character.
+    """
+    for form in (text, unicodedata.normalize("NFKC", text)):
+        for c in form:
+            if c in "\n\r":
+                return "newline"
+            cat = unicodedata.category(c)
+            if cat in BAD_CATEGORIES or c in FILLERS or (cat == "Zs" and c != " "):
+                return "invisible_or_symbol_char"
+        if FENCE in form:
+            return "fence_marker"
+    return None
+
+
+def _inj_text(f: dict, keys: tuple[str, ...], errs: list[str]) -> None:
+    for k in keys:
+        if isinstance(f.get(k), str):
+            reason = unsafe_text_reason(f[k])
+            if reason:
+                errs.append(f"{k} not allowed in injectable text: {reason}")
+
+
 def _str(v: Any, lo: int, hi: int) -> bool:
     return isinstance(v, str) and lo <= len(v.strip()) and len(v) <= hi
 
@@ -105,6 +138,7 @@ def _check_add(f: dict, errs: list[str]) -> None:
         errs.append("applies_when length out of range")
     if "kind" in f and f["kind"] not in KINDS:
         errs.append(f"kind must be one of {KINDS}")
+    _inj_text(f, ("text", "applies_when"), errs)
     if "scope" in f:
         _check_scope(f["scope"], errs)
     origins = _check_evidence(f["evidence"], errs) if "evidence" in f else []
@@ -126,6 +160,7 @@ def _check_patch(f: dict, errs: list[str]) -> None:
         errs.append("text length out of range")
     if "applies_when" in f and not _str(f["applies_when"], WHEN_MIN, WHEN_MAX):
         errs.append("applies_when length out of range")
+    _inj_text(f, ("text", "applies_when"), errs)
     if "kind" in f and f["kind"] not in KINDS:
         errs.append("bad kind")
     if "status" in f and f["status"] not in STATUSES:
@@ -145,9 +180,11 @@ def _check_other(op: str, lesson_id: Any, f: dict, errs: list[str]) -> None:
             errs.append("MERGE needs merged_from (1..5 unique ids, not the survivor) and optional text")
         if "text" in f and not _str(f["text"], TEXT_MIN, TEXT_MAX):
             errs.append("text length out of range")
+        _inj_text(f, ("text",), errs)
     elif op == "NARROW":
         if not _str(f.get("applies_when"), WHEN_MIN, WHEN_MAX) or set(f) - {"applies_when", "scope"}:
             errs.append("NARROW needs applies_when and optional scope")
+        _inj_text(f, ("applies_when",), errs)
         if "scope" in f:
             _check_scope(f["scope"], errs)
             if f["scope"].get("type") != "project":
