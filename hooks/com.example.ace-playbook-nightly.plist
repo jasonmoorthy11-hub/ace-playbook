@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Example only. launchd does not expand ~ or $HOME: replace the three __PLACEHOLDERS__
+     with absolute paths, rename the Label, then see INSTALL.md. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.example.ace-playbook-nightly</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/env</string>
+    <string>python3</string>
+    <string>__ACE_PLAYBOOK_HOME__/hooks/nightly_sweep.py</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>ACE_PLAYBOOK_CONFIG</key>
+    <string>__ACE_CONFIG_FILE__</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>3</integer>
+    <key>Minute</key>
+    <integer>15</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__ACE_DATA_DIR__/sweep.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__ACE_DATA_DIR__/sweep.err.log</string>
+</dict>
+</plist>
