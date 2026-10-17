@@ -10,7 +10,7 @@ from ..config import Config
 from ..inject.ledger import append_jsonl, read_jsonl, shown_ids_for_session
 from ..inject.sanitize import inert_reason
 from ..keys import resolve_key
-from ..scrub import LESSON, SECRETS, QuarantineRequired, quarantine, redact, scan
+from ..scrub import LESSON, OUTBOUND, QuarantineRequired, quarantine, redact, scan
 from ..store import DeltaLog, SchemaError, make_lesson_id
 from ..store.schema import KINDS
 from . import client as client_mod
@@ -111,7 +111,7 @@ def reflect_transcript(cfg: Config, path: Path, client: client_mod.ReflectorClie
     state = log.state()
     shown = [i for i in shown_ids_for_session(cfg.injections, sid) if i in state]
     user = build_user(cleaned, [state[i] for i in shown])
-    hits = scan(user, SECRETS)
+    hits = scan(user, OUTBOUND, tuple(cfg.deny_terms))
     res = client.complete(SYSTEM, redact(user, hits) if hits else user)
     base = {"usage": res.usage, "model": cfg.model, "outbound_redactions": len(hits),
             "signals": {"corrections": cleaned.signals.user_corrections,

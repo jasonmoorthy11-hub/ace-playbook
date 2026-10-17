@@ -21,9 +21,11 @@ class Profile:
     secrets: bool = True
     pii: bool = False
     long_tokens: bool = False
+    outbound: bool = False
 
 
 SECRETS = Profile()
+OUTBOUND = Profile(pii=True, outbound=True)
 REPO = Profile(pii=True)
 LESSON = Profile(pii=True, long_tokens=True)
 
@@ -146,6 +148,19 @@ def _long_token_hits(text: str) -> list[Hit]:
     return hits
 
 
+def _outbound_hits(text: str) -> list[Hit]:
+    """Broader masking for text leaving the machine: precision matters less than recall."""
+    hits = []
+    for m in P.MIXED_TOKEN.finditer(text):
+        tok = m.group(0)
+        if any(c.isalpha() for c in tok) and any(c.isdigit() for c in tok):
+            hits.append(Hit("mixed_token", "lint", m.start(), m.end(), tok))
+    for m in P.LOWER_SECRET_ASSIGNMENT.finditer(text):
+        if not _is_placeholder(m.group(1)):
+            hits.append(Hit("secret_assignment", "regex", m.start(), m.end(), m.group(0)))
+    return hits
+
+
 GENERIC_RULES = {"secret_assignment", "bearer_token", "url_userinfo"}
 
 
@@ -159,13 +174,14 @@ def _dedupe(hits: list[Hit]) -> list[Hit]:
     """Keep the most specific hits; drop one wholly inside a better-or-equal hit.
 
     A broad rule (an assignment whose value runs on) never hides a specific
-    provider hit inside it, and an entropy guess that merely overlaps a specific
-    hit is dropped rather than allowed to hide it.
+    provider hit inside it. An entropy hit is dropped only when it lies wholly
+    inside a kept hit; one that extends past it is kept so the tail of a secret
+    is not left behind (redaction merges overlapping spans).
     """
     kept: list[Hit] = []
     for h in sorted(hits, key=lambda h: (_rank(h), h.start, -(h.end - h.start))):
         if h.layer == "entropy":
-            if any(h.start < k.end and k.start < h.end for k in kept):
+            if any(k.start <= h.start and h.end <= k.end for k in kept):
                 continue
         elif any(k.start <= h.start and h.end <= k.end and _rank(k) <= _rank(h) for k in kept):
             continue
@@ -182,6 +198,8 @@ def scan(text: str, profile: Profile = LESSON, deny_terms: Iterable[str] = ()) -
         hits += _pii_hits(text, deny_terms)
     if profile.long_tokens:
         hits += _long_token_hits(text)
+    if profile.outbound:
+        hits += _outbound_hits(text)
     return _dedupe(hits)
 
 

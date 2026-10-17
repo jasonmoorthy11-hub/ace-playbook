@@ -37,7 +37,7 @@ PROVIDER_RULES: list[tuple[str, re.Pattern[str]]] = [
     ("stripe_key", re.compile(r"[sr]k_live_[A-Za-z0-9]{16,}")),
     ("google_api_key", re.compile(r"AIza[0-9A-Za-z_\-]{35}")),
     ("private_key_block", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
-    ("bearer_token", re.compile(r"(?i)\bbearer\s+[A-Za-z0-9_\-\.=]{20,}")),
+    ("bearer_token", re.compile(r"(?i)\bbearer\s+[A-Za-z0-9_\-\.=/+~]{20,}")),
     (
         "url_userinfo",
         re.compile(r"\b[a-z][a-z0-9+.\-]*://[^\s/:@]+:[^\s/@]{3,}@"),
@@ -85,3 +85,11 @@ LONG_B64 = re.compile(r"(?<![0-9A-Za-z+/])[A-Za-z0-9+/_\-]{13,}={0,2}(?![0-9A-Za
 
 ENTROPY_CANDIDATE = re.compile(r"[A-Za-z0-9_\-+/=]{24,}")
 B64_CANDIDATE = re.compile(r"[A-Za-z0-9+/_\-]{24,}={0,2}")
+
+# Outbound-only (text sent to the reflector): any 20+ char token mixing letters and digits
+# (bare UUIDs, hex digests, short passwords) and lowercase secret-ish key=value pairs.
+MIXED_TOKEN = re.compile(r"(?<![A-Za-z0-9_\-+=])[A-Za-z0-9_\-+=]{20,}(?![A-Za-z0-9_\-+=])")
+LOWER_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)\b[a-z0-9_]*(?:secret|token|password|passwd|pwd|api_?key|credential|private_?key)"
+    r"[a-z0-9_]*\s*[=:]\s*['\"]?([^\s'\"]{4,})"
+)
