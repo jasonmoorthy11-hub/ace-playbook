@@ -141,3 +141,23 @@ def test_sweep_script_dry_run(env, tmp_path):
     p = subprocess.run([sys.executable, str(HOOKS / "nightly_sweep.py"), "--dry-run"],
                        capture_output=True, text=True, env=e)
     assert p.returncode == 0 and json.loads(p.stdout)[0]["status"] == "would_reflect"
+
+
+def _git(cwd, *args):
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+
+def test_pre_commit_script_blocks_staged_secret_and_passes_clean(env, tmp_path):
+    from . import fakes
+    e, _ = env
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    script = str(HOOKS / "pre-commit-scrub.sh")
+    (repo / "ok.txt").write_text("nothing to see here\n")
+    _git(repo, "add", "ok.txt")
+    assert subprocess.run([script], cwd=repo, env=e, capture_output=True).returncode == 0
+    (repo / "leak.py").write_text(f'KEY = "{fakes.github()}"\n')
+    _git(repo, "add", "leak.py")
+    p = subprocess.run([script], cwd=repo, env=e, capture_output=True, text=True)
+    assert p.returncode == 1 and "github_token" in p.stdout and fakes.github() not in p.stdout

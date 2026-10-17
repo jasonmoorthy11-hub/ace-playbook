@@ -133,7 +133,19 @@ in a subagent folder, and have no entry in `reflections.jsonl`. Each reflection 
 call; usage is written to the ledger and the log. Remove the job with
 `launchctl bootout "gui/$(id -u)/com.example.ace-playbook-nightly"`.
 
-## 5. Uninstall
+## 5. Optional: git pre-commit scrub
+
+To scan staged files in a repository before every commit (this touches only that repo's
+`.git/hooks`, never your Claude Code configuration):
+
+```sh
+ln -s "$ACE_PLAYBOOK_HOME/hooks/pre-commit-scrub.sh" .git/hooks/pre-commit
+```
+
+It runs `python -m ace_playbook.scrub check --mode pre-commit --staged` and fails closed. The
+same check runs in this repo's CI.
+
+## 6. Uninstall
 
 Delete the three hook entries from `settings.json` and boot out the launchd job. Your data
 directory is plain files (`deltas.jsonl` is the source of truth); delete or keep it.

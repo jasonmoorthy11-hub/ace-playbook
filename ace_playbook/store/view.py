@@ -125,7 +125,7 @@ def rebuild(records: list[dict], db_path: Path) -> dict[str, dict]:
     """Rebuild the view from scratch into a temp file, then rename over `db_path`."""
     state = fold(records)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = db_path.with_name(db_path.name + ".tmp")
+    tmp = db_path.with_name(f"{db_path.name}.{os.getpid()}.tmp")
     tmp.unlink(missing_ok=True)
     con = sqlite3.connect(tmp)
     try:
