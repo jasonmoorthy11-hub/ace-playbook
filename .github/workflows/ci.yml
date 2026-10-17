@@ -35,4 +35,4 @@ jobs:
           diff -r "$RUNNER_TEMP/fx" ace_playbook/fixtures/frozen
       - name: No personal paths or names in code or docs
         run: |
-          ! grep -rn "jasonmoorthy\|/Users/" --include=*.py --include=*.md . --exclude=INSTALL.md --exclude-dir=.venv --exclude-dir=.git
+          ! grep -rn "jasonmoorthy\|/Users/" --include=*.py --include=*.md --include=*.json --include=*.jsonl --include=*.yml --include=*.cff . --exclude=INSTALL.md --exclude=ci.yml --exclude-dir=.venv --exclude-dir=.git | grep -v "jasonmoorthy11-hub/ace-playbook\|/Users/FAKEuser"

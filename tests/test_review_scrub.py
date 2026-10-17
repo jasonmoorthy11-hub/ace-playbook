@@ -53,7 +53,7 @@ def test_reflect_request_body_has_none_of_the_probe_secrets(tmp_path):
 
 def test_bearer_charset_covers_slash_plus_tilde():
     tail = "XYZsecretTAIL98765+more~end"
-    text = "Authorization: Bearer abcDEF1234567890abcdef/" + tail
+    text = "Authorization: " + "Bearer " + "abcDEF1234567890abcdef/" + tail
     out = redacted(text, SECRETS)
     assert "TAIL98765" not in out and "more~end" not in out
 

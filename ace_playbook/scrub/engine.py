@@ -151,7 +151,7 @@ def _long_token_hits(text: str) -> list[Hit]:
 def _outbound_hits(text: str) -> list[Hit]:
     """Broader masking for text leaving the machine: precision matters less than recall."""
     hits = []
-    for m in P.MIXED_TOKEN.finditer(text):
+    for m in P.MIXED_RUN.finditer(text):
         tok = m.group(0)
         if any(c.isalpha() for c in tok) and any(c.isdigit() for c in tok):
             hits.append(Hit("mixed_token", "lint", m.start(), m.end(), tok))

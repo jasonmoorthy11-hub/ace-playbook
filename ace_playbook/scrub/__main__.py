@@ -13,7 +13,8 @@ from .engine import LESSON, line_of, scan
 def _check(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve()
     files = args.paths or list_files(root, staged=args.staged)
-    findings = scan_files(root, files, args.mode, load_allow(root), tuple(args.deny_term))
+    findings = scan_files(root, files, args.mode, load_allow(root), tuple(args.deny_term),
+                          staged=args.staged)
     for f in findings:
         print(f.render())
     outside = [f for f in findings if not f.allowlisted]

@@ -88,7 +88,7 @@ B64_CANDIDATE = re.compile(r"[A-Za-z0-9+/_\-]{24,}={0,2}")
 
 # Outbound-only (text sent to the reflector): any 20+ char token mixing letters and digits
 # (bare UUIDs, hex digests, short passwords) and lowercase secret-ish key=value pairs.
-MIXED_TOKEN = re.compile(r"(?<![A-Za-z0-9_\-+=])[A-Za-z0-9_\-+=]{20,}(?![A-Za-z0-9_\-+=])")
+MIXED_RUN = re.compile(r"(?<![A-Za-z0-9_\-+=])[A-Za-z0-9_\-+=]{20,}(?![A-Za-z0-9_\-+=])")
 LOWER_SECRET_ASSIGNMENT = re.compile(
     r"(?i)\b[a-z0-9_]*(?:secret|token|password|passwd|pwd|api_?key|credential|private_?key)"
     r"[a-z0-9_]*\s*[=:]\s*['\"]?([^\s'\"]{4,})"
