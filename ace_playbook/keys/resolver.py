@@ -11,11 +11,12 @@ import subprocess
 from pathlib import Path
 
 
-def normalize(name: str, fold_separators: bool = True) -> str:
-    key = name.strip().lower()
+def normalize(name: str, fold_separators: bool = False) -> str:
+    """Lowercase, map anything outside [a-z0-9._-] to '-'. With fold_separators the
+    separators are dropped too, so AcmeWidgets and acme-widgets collide."""
+    key = re.sub(r"[^a-z0-9._\-]+", "-", name.strip().lower()).strip("-")
     if fold_separators:
-        key = re.sub(r"[\s_\-]+", "", key)
-    key = re.sub(r"[^a-z0-9._\-]", "", key)
+        key = re.sub(r"[_\-]+", "", key)
     return key or "unknown"
 
 
@@ -41,7 +42,7 @@ def load_engagements(path: Path | None) -> dict:
 
 
 def resolve_key(cwd: str | Path, engagements_path: Path | None = None,
-                fold_separators: bool = True) -> str:
+                fold_separators: bool = False) -> str:
     """Return the project key for `cwd`.
 
     engagements.json: {"aliases": {"alt-name": "canonical"}, "paths": {"<dir prefix>": "key"}}.

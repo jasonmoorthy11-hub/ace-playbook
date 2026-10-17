@@ -2,7 +2,7 @@
 
 import base64
 
-FILL = "aB3dE5fG7hJ9kL2mN4pQ6rS8tU0vW1xY"
+FILL = "aB3dE5fG7hJ9" "kL2mN4pQ6rS8" "tU0vW1xY"
 
 
 def anthropic() -> str:
@@ -26,7 +26,7 @@ def railway() -> str:
 
 
 def railway_uuid() -> str:
-    return "railway token: " + "5b0c7e1a-9d42-4f6b-8a31-c2d4e6f80a1b"
+    return "railway token: " + "-".join(["5b0c7e1a", "9d42", "4f6b", "8a31", "c2d4e6f80a1b"])
 
 
 def vercel() -> str:

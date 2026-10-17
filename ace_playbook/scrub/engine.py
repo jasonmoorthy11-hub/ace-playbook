@@ -64,7 +64,7 @@ def _is_placeholder(value: str) -> bool:
 
 def _regex_hits(text: str, offset: int = 0, prefix: str = "") -> list[Hit]:
     hits = []
-    for name, pat in P.SECRET_RULES:
+    for name, pat in P.PROVIDER_RULES:
         for m in pat.finditer(text):
             if name == "secret_assignment" and _is_placeholder(m.group(1)):
                 continue
@@ -87,7 +87,7 @@ def _entropy_hits(text: str, offset: int = 0, prefix: str = "") -> list[Hit]:
     return hits
 
 
-def _try_decode(token: str) -> str | None:
+def try_decode(token: str) -> str | None:
     pad = token + "=" * (-len(token) % 4)
     for fn in (base64.b64decode, base64.urlsafe_b64decode):
         try:
@@ -106,7 +106,7 @@ def _decoded_hits(text: str, depth: int, offset: int = 0) -> list[Hit]:
         return []
     hits: list[Hit] = []
     for m in P.B64_CANDIDATE.finditer(text):
-        decoded = _try_decode(m.group(0))
+        decoded = try_decode(m.group(0))
         if not decoded:
             continue
         inner = _regex_hits(decoded) + _entropy_hits(decoded)
@@ -146,16 +146,31 @@ def _long_token_hits(text: str) -> list[Hit]:
     return hits
 
 
+GENERIC_RULES = {"secret_assignment", "bearer_token", "url_userinfo"}
+
+
+def _rank(h: Hit) -> int:
+    if h.layer == "regex":
+        return 1 if h.rule in GENERIC_RULES else 0
+    return {"decoded": 2, "lint": 3, "entropy": 4}[h.layer]
+
+
 def _dedupe(hits: list[Hit]) -> list[Hit]:
-    """Drop a hit wholly contained in an earlier-sorted hit's span."""
-    rank = {"regex": 0, "decoded": 1, "lint": 2, "entropy": 3}
-    hits = sorted(hits, key=lambda h: (h.start, -(h.end - h.start), rank[h.layer]))
+    """Keep the most specific hits; drop one wholly inside a better-or-equal hit.
+
+    A broad rule (an assignment whose value runs on) never hides a specific
+    provider hit inside it, and an entropy guess that merely overlaps a specific
+    hit is dropped rather than allowed to hide it.
+    """
     kept: list[Hit] = []
-    for h in hits:
-        if any(k.start <= h.start and h.end <= k.end for k in kept):
+    for h in sorted(hits, key=lambda h: (_rank(h), h.start, -(h.end - h.start))):
+        if h.layer == "entropy":
+            if any(h.start < k.end and k.start < h.end for k in kept):
+                continue
+        elif any(k.start <= h.start and h.end <= k.end and _rank(k) <= _rank(h) for k in kept):
             continue
         kept.append(h)
-    return kept
+    return sorted(kept, key=lambda h: h.start)
 
 
 def scan(text: str, profile: Profile = LESSON, deny_terms: Iterable[str] = ()) -> list[Hit]:

@@ -83,7 +83,7 @@ def format_line(les: dict) -> str:
 
 def build(cfg: Config, session_id: str, cwd: str, now: float | None = None) -> Injection:
     now = time.time() if now is None else now
-    key = resolve_key(cwd, cfg.engagements_path)
+    key = resolve_key(cwd, cfg.engagements_path, cfg.fold_key_separators)
     inj = Injection(key)
     ensure_view(cfg)
     lines: list[str] = []

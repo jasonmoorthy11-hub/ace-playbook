@@ -41,7 +41,7 @@ def _quarantine(cfg: Config, session_id: str, insight: dict, reason: str, hits=(
 
 def _to_draft(cfg: Config, insight: dict, cwd: str, evidence: list[dict], session_id: str) -> dict:
     scope = ({"type": "global"} if insight.get("scope") == "global"
-             else {"type": "project", "key": resolve_key(cwd or ".", cfg.engagements_path)})
+             else {"type": "project", "key": resolve_key(cwd or ".", cfg.engagements_path, cfg.fold_key_separators)})
     text = insight["text"].strip()
     return {"op": "ADD", "lesson_id": make_lesson_id(scope, text), "session_id": session_id,
             "fields": {"text": text, "scope": scope, "kind": insight["kind"],

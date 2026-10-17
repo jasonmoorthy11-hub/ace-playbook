@@ -6,18 +6,18 @@ import re
 
 # (rule name, compiled pattern). Order matters only for overlap tie-breaks:
 # earlier rules win when two rules cover the same span.
-SECRET_RULES: list[tuple[str, re.Pattern[str]]] = [
+PROVIDER_RULES: list[tuple[str, re.Pattern[str]]] = [
     ("anthropic_key", re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}")),
     ("openai_key", re.compile(r"sk-(?:proj-|svcacct-)?[A-Za-z0-9_\-]{32,}")),
-    ("github_token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}")),
-    ("github_pat", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{50,}")),
+    ("github_token", re.compile(r"gh[pousr]_[A-Za-z0-9]{36,}")),
+    ("github_pat", re.compile(r"github_pat_[A-Za-z0-9_]{50,}")),
     (
         "jwt",
         re.compile(r"\beyJ[A-Za-z0-9_\-]{8,}\.eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}"),
     ),
     (
         "railway_token",
-        re.compile(r"\bRAILWAY_[A-Z_]*(?:TOKEN|KEY)\s*[=:]\s*['\"]?[A-Za-z0-9\-_]{16,}"),
+        re.compile(r"RAILWAY_[A-Z_]*(?:TOKEN|KEY)\s*[=:]\s*['\"]?[A-Za-z0-9\-_]{16,}"),
     ),
     (
         "railway_uuid_context",
@@ -28,14 +28,14 @@ SECRET_RULES: list[tuple[str, re.Pattern[str]]] = [
     ),
     (
         "vercel_token",
-        re.compile(r"\bVERCEL_[A-Z_]*(?:TOKEN|KEY)\s*[=:]\s*['\"]?[A-Za-z0-9_\-]{20,}"),
+        re.compile(r"VERCEL_[A-Z_]*(?:TOKEN|KEY)\s*[=:]\s*['\"]?[A-Za-z0-9_\-]{20,}"),
     ),
-    ("linear_key", re.compile(r"\blin_(?:api|oauth)_[A-Za-z0-9]{30,}")),
-    ("neon_key", re.compile(r"\bnapi_[A-Za-z0-9]{40,}")),
-    ("aws_access_key", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
-    ("slack_token", re.compile(r"\bxox[baprs]-[A-Za-z0-9\-]{10,}")),
-    ("stripe_key", re.compile(r"\b[sr]k_live_[A-Za-z0-9]{16,}")),
-    ("google_api_key", re.compile(r"\bAIza[0-9A-Za-z_\-]{35}")),
+    ("linear_key", re.compile(r"lin_(?:api|oauth)_[A-Za-z0-9]{30,}")),
+    ("neon_key", re.compile(r"napi_[A-Za-z0-9]{40,}")),
+    ("aws_access_key", re.compile(r"(?<![A-Z0-9])(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
+    ("slack_token", re.compile(r"xox[baprs]-[A-Za-z0-9\-]{10,}")),
+    ("stripe_key", re.compile(r"[sr]k_live_[A-Za-z0-9]{16,}")),
+    ("google_api_key", re.compile(r"AIza[0-9A-Za-z_\-]{35}")),
     ("private_key_block", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
     ("bearer_token", re.compile(r"(?i)\bbearer\s+[A-Za-z0-9_\-\.=]{20,}")),
     (
@@ -45,8 +45,15 @@ SECRET_RULES: list[tuple[str, re.Pattern[str]]] = [
     (
         "secret_assignment",
         re.compile(
-            r"(?i)\b[A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|PRIVATE_KEY)"
-            r"[A-Z0-9_]*\s*[=:]\s*['\"]?([^\s'\"]{12,})"
+            r"(?<![A-Z0-9_])[A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|PRIVATE_KEY)"
+            r"[A-Z0-9_]*\s*[=:]\s*['\"]?([^\s'\"\\]{12,})"
+        ),
+    ),
+    (
+        "secret_assignment",
+        re.compile(
+            r"(?i)\b[a-z0-9_]*(?:secret|token|password|passwd|api_?key)"
+            r"[a-z0-9_]*\s*[=:]\s*['\"]([^\s'\"]{12,})['\"]"
         ),
     ),
 ]

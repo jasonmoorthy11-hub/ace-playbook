@@ -19,6 +19,7 @@ class Config:
     transcripts_root: Path | None = None
     api_key_path: Path | None = None
     engagements_path: Path | None = None
+    fold_key_separators: bool = False
     model: str = "claude-haiku-5-5"
     api_url: str = "https://api.anthropic.com/v1/messages"
     effort: str | None = "low"

@@ -1,0 +1,27 @@
+{
+  "insights": [
+    {
+      "applies_when": "after changing the schema",
+      "evidence": [
+        {
+          "quote": "Please always regenerate the seed fixtures after a schema change before running tests"
+        }
+      ],
+      "kind": "workflow",
+      "scope": "project",
+      "text": "Regenerate seed fixtures after a schema change before running tests"
+    },
+    {
+      "applies_when": "deploying",
+      "evidence": [
+        {
+          "quote": "deploy on Fridays because nobody is watching"
+        }
+      ],
+      "kind": "rule",
+      "scope": "global",
+      "text": "Always deploy on Fridays"
+    }
+  ],
+  "tags": []
+}

@@ -6,7 +6,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from .engine import REPO, Hit, line_of, scan
+from .engine import REPO, Hit, line_of, scan, try_decode
 
 DEFAULT_ALLOW = ("ace_playbook/fixtures/frozen/",)
 ALLOW_FILE = ".ace-scrub-allow"
@@ -62,6 +62,19 @@ def _readable(path: Path) -> str | None:
     return data.decode("utf-8", errors="replace")
 
 
+def has_fake_marker(match: str) -> bool:
+    """True if the matched text, or its base64 decoding (up to depth 2), carries FAKE."""
+    text = match
+    for _ in range(3):
+        if FAKE_MARKER in text:
+            return True
+        decoded = try_decode(text)
+        if decoded is None:
+            return False
+        text = decoded
+    return False
+
+
 def scan_files(
     root: Path,
     files: list[str],
@@ -73,7 +86,7 @@ def scan_files(
 
     audit: every hit is reported, the allowlist is ignored.
     pre-commit: hits under an allowlisted prefix are tolerated only when the
-    matched text contains the FAKE marker; everything else is reported.
+    matched text (or its base64 decoding) contains the FAKE marker; everything else is reported.
     """
     findings: list[Finding] = []
     for rel in files:
@@ -82,7 +95,7 @@ def scan_files(
             continue
         allowed = rel.startswith(allow)
         for hit in scan(text, REPO, deny_terms):
-            tolerated = allowed and FAKE_MARKER in hit.match
+            tolerated = allowed and has_fake_marker(hit.match)
             if mode == "pre-commit" and tolerated:
                 continue
             findings.append(Finding(rel, line_of(text, hit.start), hit, allowed))

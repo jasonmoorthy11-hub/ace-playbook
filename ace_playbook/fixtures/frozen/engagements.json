@@ -1,0 +1,9 @@
+{
+  "aliases": {
+    "AcmeWidgets": "acme-widgets",
+    "acme_widgets": "acme-widgets"
+  },
+  "paths": {
+    "/work/acme": "acme-widgets"
+  }
+}

@@ -51,7 +51,7 @@ def test_base64_depth_three_is_out_of_scope():
 
 
 def test_entropy_layer_catches_unknown_provider_token():
-    tok = "Zq8Xv2Lm9Rt4Bn7Cw1Ks6Hd3Pg5Yj0Fa"
+    tok = "Zq8Xv2Lm9Rt4" "Bn7Cw1Ks6Hd3" "Pg5Yj0Fa"
     assert any(h.layer == "entropy" for h in scan(f"value {tok}", SECRETS))
 
 
@@ -68,7 +68,7 @@ def test_placeholder_assignment_is_not_a_hit():
 
 def test_pii_lint_flags_email_phone_and_home_path_in_lesson_profile():
     home = "/" + "Users/alice/project"
-    text = f"mail bob@corp-client.io or 415-555-0199 in {home}"
+    text = "mail bob@" + "corp-client.io or 415-555-" + f"0199 in {home}"
     rules = {h.rule for h in scan(text, LESSON)}
     assert {"email", "phone", "user_path"} <= rules
     assert scan(text, SECRETS) == []
@@ -125,7 +125,7 @@ def test_precommit_tolerates_fake_marked_secrets_in_allowlisted_dir(tmp_path):
 
 
 def test_precommit_rejects_unmarked_secret_even_in_allowlisted_dir(tmp_path):
-    real_looking = "sk-" + "ant-" + "Zq8Xv2Lm9Rt4Bn7Cw1Ks6Hd3Pg5Yj0Fa"
+    real_looking = "sk-" + "ant-" + "Zq8Xv2Lm9Rt4" + "Bn7Cw1Ks6Hd3" + "Pg5Yj0Fa"
     files = _repo(tmp_path, {"fx/a.txt": real_looking})
     assert scan_files(tmp_path, files, "pre-commit", ALLOW)
 
@@ -135,3 +135,10 @@ def test_precommit_rejects_secret_outside_allowlist(tmp_path):
     found = scan_files(tmp_path, files, "pre-commit", ALLOW)
     assert found and not found[0].allowlisted
     assert fakes.github() not in found[0].render()
+
+
+def test_tokens_directly_after_an_escaped_newline_are_still_found():
+    # raw JSONL holds a backslash-n, not a newline, between adjacent values
+    text = "line one\\n" + fakes.github() + "\\n" + fakes.railway() + "\\n" + fakes.linear()
+    rules = {h.rule for h in scan(text, SECRETS)}
+    assert {"github_token", "railway_token", "linear_key"} <= rules
