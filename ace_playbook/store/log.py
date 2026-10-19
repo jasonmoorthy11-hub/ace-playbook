@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
+from ..atomic import write_private
 from ..scrub import LESSON, QuarantineRequired, scan
 from . import view
 from .schema import (GENESIS, SCHEMA_VERSION, SchemaError, canonical, now_iso, record_hash,
@@ -78,13 +79,7 @@ class DeltaLog:
         self._scrub(draft)
 
     def _atomic_write(self, records: list[dict]) -> None:
-        tmp = self.path.with_name(self.path.name + ".tmp")
-        with open(tmp, "w", encoding="utf-8") as fh:
-            for r in records:
-                fh.write(canonical(r) + "\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, self.path)
+        write_private(self.path, "".join(canonical(r) + "\n" for r in records))
         dfd = os.open(self.path.parent, os.O_RDONLY)
         try:
             os.fsync(dfd)

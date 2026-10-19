@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 
@@ -197,3 +198,72 @@ def test_corrupt_line_reports_position(log):
     with pytest.raises(SchemaError, match="deltas.jsonl:2"):
         log.read()
     assert json.loads('{"a":1}')
+
+
+# ------------------------------------------------------------ file modes (0600)
+def _mode(path):
+    return path.stat().st_mode & 0o777
+
+
+def test_append_creates_deltas_0600_even_under_umask_000(log):
+    old = os.umask(0)
+    try:
+        log.append(add_draft(), ts="2026-01-01T00:00:00Z")
+    finally:
+        os.umask(old)
+    assert _mode(log.path) == 0o600
+
+
+def test_append_tightens_a_preexisting_0644_log(log):
+    log.append(add_draft(), ts="2026-01-01T00:00:00Z")
+    os.chmod(log.path, 0o644)
+    log.append(add_draft("Second distinct lesson text here"), ts="2026-01-02T00:00:00Z")
+    assert _mode(log.path) == 0o600
+    assert log.verify() == 2
+
+
+def test_pin_keeps_deltas_0600(log):
+    d = add_draft()
+    log.append(d, ts="2026-01-01T00:00:00Z")
+    os.chmod(log.path, 0o644)
+    old = os.umask(0)
+    try:
+        log.append({"op": "PATCH", "lesson_id": d["lesson_id"], "fields": {"pinned": True}},
+                   ts="2026-01-02T00:00:00Z")
+    finally:
+        os.umask(old)
+    assert _mode(log.path) == 0o600
+
+
+def test_failed_replace_removes_tmp_and_keeps_old_log(log, monkeypatch):
+    log.append(add_draft(), ts="2026-01-01T00:00:00Z")
+    before = log.path.read_text()
+
+    def boom(*_a, **_k):
+        raise OSError("replace failed")
+
+    with monkeypatch.context() as m:
+        m.setattr(os, "replace", boom)
+        with pytest.raises(OSError):
+            log.append(add_draft("Second distinct lesson text here"), ts="2026-01-02T00:00:00Z")
+    assert not log.path.with_name("deltas.jsonl.tmp").exists()
+    assert log.path.read_text() == before
+
+
+def test_tmp_symlink_is_not_followed(log, tmp_path):
+    victim = tmp_path / "victim"
+    victim.write_text("keep")
+    log.path.with_name("deltas.jsonl.tmp").symlink_to(victim)
+    with pytest.raises(OSError):
+        log.append(add_draft(), ts="2026-01-01T00:00:00Z")
+    assert victim.read_text() == "keep"
+    assert not log.path.exists()
+
+
+def test_rebuilt_view_db_is_0600_under_umask_000(tmp_path):
+    old = os.umask(0)
+    try:
+        rebuild([], tmp_path / "view.sqlite")
+    finally:
+        os.umask(old)
+    assert _mode(tmp_path / "view.sqlite") == 0o600

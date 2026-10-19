@@ -8,9 +8,9 @@ broken health file must never change what the sweep or a session does.
 from __future__ import annotations
 
 import json
-import os
 import time
 
+from .atomic import write_private
 from .config import Config
 from .scrub import LESSON, OUTBOUND, redact, scan
 
@@ -34,26 +34,7 @@ def scrub_error(text: str, deny_terms: tuple[str, ...] = ()) -> str:
 def _write_private(path, payload: dict) -> None:
     """Atomic replace; the file is created 0600 and never readable by others."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-    try:
-        try:
-            os.fchmod(fd, 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fd = -1
-                fh.write(json.dumps(payload, sort_keys=True) + "\n")
-                fh.flush()
-                os.fsync(fh.fileno())
-        finally:
-            if fd >= 0:
-                os.close(fd)
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    write_private(path, json.dumps(payload, sort_keys=True) + "\n")
 
 
 def read(cfg: Config) -> dict | None:

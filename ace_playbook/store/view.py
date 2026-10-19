@@ -12,6 +12,7 @@ import sqlite3
 from pathlib import Path
 from typing import Iterable
 
+from ..atomic import create_private
 from .schema import (COUNTERS, FROZEN_STATUSES, LIVE_STATUSES, USER_ORIGINS, SchemaError,
                      make_lesson_id)
 
@@ -127,6 +128,7 @@ def rebuild(records: list[dict], db_path: Path) -> dict[str, dict]:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = db_path.with_name(f"{db_path.name}.{os.getpid()}.tmp")
     tmp.unlink(missing_ok=True)
+    os.close(create_private(tmp))  # sqlite would create it with the umask; accepts an empty file
     con = sqlite3.connect(tmp)
     try:
         con.executescript(DDL)
