@@ -25,6 +25,7 @@ Everything is invented. A seeded generator (`python -m ace_playbook.fixtures.gen
 | `transcripts/*.jsonl` | Five short Claude Code-shaped transcripts, each built to exercise one behavior: a grounded correction, harness noise and a hook block, a repeated failing command, planted fake credentials, and a hostile instruction inside fetched content |
 | `reflector_responses/*.json` | Canned reflector outputs matching those transcripts, so the reflector runs end to end with a mocked HTTP layer and no API call. They include an invented quote, a lesson grounded only in tool output, and a lesson containing a fake key |
 | `planted/candidates.jsonl` | Candidate lesson texts labelled with the outcome the pipeline must produce (`mint`, `inert_reject`, `quarantine`) |
+| `shadow_corpus.json` | Four invented sessions of Bash commands (`/w/...` paths), each event tagged with the rm detector it is checked against and the outcome it must give; `compile replay-synthetic` feeds it to the shadow evaluator. Not seeded: the same bytes for every seed |
 | `MANIFEST.json` | Seed, generator version and SHA-256 of every file |
 
 `ace_playbook/fixtures/frozen/` is the output for seed 1, committed so the repository's

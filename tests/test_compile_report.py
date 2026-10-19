@@ -18,6 +18,8 @@ from . import compile_support as cs
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "ace_playbook" / "compile" / "report.py"
+METRICS = SOURCE.with_name("metrics.py")
+CODE_HASH = hashlib.sha256(METRICS.read_bytes() + b"\0" + SOURCE.read_bytes()).hexdigest()      # metrics.py and report.py, NUL-joined
 RM = "rm -rf /w/src"
 TODAY = "2026-10-20T12:00:00Z"
 PRIV = "Private corpus (aggregate, counts only)"
@@ -70,13 +72,13 @@ def label_rows(w, *specs: tuple[str, str]) -> None:
     cs.write_labels(w.cfg, [{"ref": ref, "label": lab} for ref, lab in specs])
 
 
-def test_with_no_data_both_sections_say_no_rows_and_the_header_hashes_the_source_file(w, capsys):
+def test_with_no_data_both_sections_say_no_rows_and_the_header_hashes_the_report_and_metrics_source(w, capsys):
     code, out, err = run(w, capsys=capsys)
     assert (code, err) == (0, "") and out.count("no rows\n") == 2 and out.startswith("ace-playbook shadow report\n")
     got = re.search(r"^report_sha256: ([0-9a-f]{64})$", out, re.M).group(1)
-    assert got == hashlib.sha256(SOURCE.read_bytes()).hexdigest()
+    assert got == CODE_HASH
     assert PRIV in out and SYNTH in out
-    assert "not computed here: eligible-session rates, Wilson intervals, friction, hook cost" in out
+    assert "not computed here: arms, randomization inference, spillover flag" in out
 
 
 def test_real_hook_rows_are_counted_per_proposal_with_sessions_days_and_cause_split(w, fire, capsys):
@@ -198,9 +200,9 @@ def test_json_has_the_specified_shape_and_the_same_numbers_as_the_text(w, fire, 
     put_syn(w, SYN)
     code, out, _ = run(w, "--json", "--days", "7", capsys=capsys)
     obj = json.loads(out)
-    assert code == 0 and set(obj) == {"report_sha256", "days", "private", "synthetic", "demotions", "labels"} and obj["days"] == 7
+    assert code == 0 and set(obj) == {"report_sha256", "days", "private", "synthetic", "rates", "demotions", "labels"} and obj["days"] == 7
     assert obj["labels"] == {"chain_ok": True, "broken_at": None}
-    assert obj["report_sha256"] == hashlib.sha256(SOURCE.read_bytes()).hexdigest()
+    assert obj["report_sha256"] == CODE_HASH
     prop = obj["private"]["proposals"][pid(w)]
     assert prop == {"lesson": cs.RM_LESSON, "detector": "rm_rf_nonscratch", "event": "PreToolUse",
                     "approved_mode": "observe", "mode": "observe", "rows": 2, "cause_detector": 2, "cause_truncated": 0, "sessions": 2,

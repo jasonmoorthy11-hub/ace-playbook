@@ -497,9 +497,9 @@ apart lower one rung each in the same run); and the disable causes `lesson_inact
 store)`, when `deltas.jsonl` does not exist), `source_sha256` (catalogue hash against `provenance.source_sha256` of the proposal) and
 `error_rate` (`error:` lines of `shadow.log` above 1% of those plus shadow rows over seven days, only when that sample is at
 least 100; below it the run reports `error_rate: not computable (n=k, need 100)`, because the rows count fires, not hook calls).
-When the shadow corpus cannot be read the demotion stage is skipped and counted as an error. The p95 cost rule cannot be
-computed yet because rows carry no `dur_ms`: every run prints `p95_rule: not computable: no dur_ms in rows`, and the rule is
-not treated as passing. After a block, a different Bash command whose rm targets hash to the same key within the next five
+When the shadow corpus cannot be read the demotion stage is skipped and counted as an error. The p95 cost rule is not implemented
+(rows carry `dur_ms` since step 5c, but it covers firing calls only and not the interpreter start, and there is no demotion cause for
+it): every run prints `p95_rule: not implemented`, and the rule is not treated as passing. After a block, a different Bash command whose rm targets hash to the same key within the next five
 tool uses is an evasion candidate (`evasion_candidates.jsonl`); two for one proposal within 14 days append an `evasion_pair`
 row with `review_required` and the current mode (no lowering). Regular `shadow_state` files older than seven days are removed
 (a `.json.lock` only when its `.json` is stale or missing and its flock is free); `--dry-run` computes everything and writes
@@ -680,7 +680,7 @@ the separation the report requires for the README results table (report:59).
 | False-block rate | FP blocks over all blocks (the compiled-path primary, PREREGISTRATION.md:78-81) |
 | Friction | warn or block messages per 100 tool calls; correction turns per 100 human prompts |
 | Evasion candidates | from 7.3 |
-| Hook cost | p50/p95 `dur_ms`, error count |
+| Hook cost | p50/p95 `dur_ms` (firing calls only, in-process; limits in the 5c paragraph) |
 | Live versus offline agreement | fires seen in one tier and not the other |
 
 **As built (step 4c, 2026-10-19).** `python3 -m ace_playbook.compile report [--days N] [--json]` (`compile/report.py`) is the
@@ -692,11 +692,47 @@ cost are not computed (they need the offline pass). The private table reads `sha
 summed, and the guard checks every raw object, so a row whose `corpus` disagrees with its file refuses the whole report
 (exit 2). tp/fp come from `labels.jsonl`: newest row per ref wins, `incident` rows are ignored, and a broken chain ignores
 every label and says so. Rows are not split per mode or tier; `approved_mode` is the mode of the current approved copy, not
-of each row, and the synthetic table takes detector, event and mode from the private proposals directory. Rows sharing a
+of each row, and (until step 5c) the synthetic table took detector, event and mode from the private proposals directory; it now takes detector and event from its own rows and shows no mode. Rows sharing a
 `row_id` (same second, session and payload) collapse for labelling: one label counts once in tp or fp, and `unlabelled`
 counts the rows whose id has no label, so tp + fp + unlabelled can differ from rows. The header prints `report_sha256`, the hash
-of `report.py` only (`labels.py` and `shadow.pending_body` also shape the numbers and are not covered), so the operator can
+of `report.py` only (from step 5c: `metrics.py` and `report.py`, NUL-joined; `labels.py` and `shadow.pending_body` also shape the numbers and are not covered), so the operator can
 record it before observe starts.
+
+**As built (step 5c, 2026-10-19).** Hook rows gain `v: 1` and `dur_ms` (whole milliseconds, `time.monotonic` from the start of
+`shadow._run` to the row write); `labels.row_id` is unchanged. `compile replay-synthetic [--out PATH]` (`compile/synth.py`, not imported by
+the hook) feeds every `fire` and `no_fire` payload of `fixtures/compile/examples.json` (one session per detector) and the frozen sessions
+of `fixtures/frozen/shadow_corpus.json` (listed in `MANIFEST.json`; `fixtures/generate.py` writes it) through `shadow._evaluate` with a
+throwaway state directory. It replaces `shadow.synthetic.jsonl` with one row per event (`corpus: "synthetic"`, `detector`; a row that did
+not fire has `would_fire: false`, because the report needs the quiet sessions as eligible ones; the table counts only the fires), prints
+counts only, exits 1 when an `expect` disagrees with the outcome or a detector errors (the corpus is a regression test), and 2 for an
+unusable corpus. Detector names and tools are checked against the catalogue. Synthetic proposal ids are stand-ins derived from the
+detector name, never ids from the private proposals directory. `compile/metrics.py` (stdlib only) computes, per corpus and proposal:
+`eligible` (private: sessions whose newest `_session` summary row in `detector_events.jsonl` lists the proposal's detector; the offline
+pass now writes one such row per transcript, `{detector: "_session", session, count: tool calls, prompts: human prompts, eligible:
+[detectors with at least one consumed event]}`, and a grown transcript adds a newer row; synthetic: every corpus session that fed the
+detector), the session-level `fire_rate` with a Wilson 95% interval (z 1.96, `-` for n = 0), `fires_per_eligible`, `repeat_fires`,
+friction (warn and block messages per 100 tool calls; `user_correction` events per 100 human prompts, private only), `evasion` (rows of
+`evasion_candidates.jsonl`), and per corpus the hook cost (nearest-rank p50 and p95 of `dur_ms`, `-` without it) and agreement: live
+fires in scanned sessions with no offline event of the same detector, session and payload hash, and offline events of the deployed
+detectors dated at or after the first live row with no live fire (`-` without live rows; synthetic `-`). A live fire in a session the
+offline pass has not scanned yet is not an eligible-session fire and not a disagreement; the block prints their number (`live fires
+awaiting offline scan`, `awaiting_offline_scan` in `--json`; a fire stamped after its session's newest summary row counts as
+awaiting too, `truncated` rows do not; a proposal id with no proposal file has no rates). The agreement window starts at each detector's own first live row (a
+revocation gap is not excluded yet), `cause: truncated` rows are counted apart (`truncated_fires`; fail-closed, not detector fires, but
+still messages in the friction) and left out of agreement, and so are `Stop` rows and proposals (their payload hash is the raw hook
+input, which no offline row has). A session that the offline pass scanned before it wrote `_session` rows is scanned again once
+(its detector rows are deduplicated by id); the `_session` id covers the transcript's size and mtime, so a transcript that returns to an
+older state still adds the newest row. `compile report` prints a `Rates` table and a
+`Hook cost / agreement` block per corpus and carries all of it under `rates` in `--json`. **Limits of the cost figures.** (1) Private rows
+exist only for fires, so the cost is that of firing calls, not of every call. (2) `dur_ms` is in-process: it starts at `_run` entry and
+excludes the interpreter start, the imports and the config load (about 35 ms per wrapper call, section 3). (3) The synthetic cost is
+the evaluator alone (`_evaluate` and the row), not a hook call. No per-call row is written. **Subagents.** The offline pass drops
+sidechain records, while a subagent's hook call may carry its parent's session id: such calls can count as live fires against a
+parent session whose tool-call count excludes them. **`--out`.** `replay-synthetic --out` is refused (exit 2, nothing written) inside
+`data_dir` (decided by file identity of the parent and its ancestors, so a differently cased path cannot pass) unless it is
+`shadow.synthetic.jsonl` itself, and when the target exists and is not a regular file of synthetic rows only;
+synthetic rows carry `tier: "synthetic"` and the private-file guard refuses such a row. Still not computed: arms, randomization
+inference, the spillover flag (they need the randomized phase).
 
 **Effect estimate.** For the compiled path, blocking prevents the action by construction, so the
 primary is false-block rate and friction, with recurrence descriptive (PREREGISTRATION.md:78-84).
@@ -724,7 +760,7 @@ in a new dated "Shadow-mode additions" section added before the tag; sealed text
 after it (PREREGISTRATION.md:3-7). The additions: the `shadow_seed` sha256 (seed private, as
 PREREGISTRATION.md:29-32); the detector list with each `source_sha256` and strength; the approved
 proposal hashes and modes; `arm_rate` and the arm definition; the eligible-session rule; the
-analysis code hash (`compile/report.py` plus `compile/detectors.py`); the TP/FP rules of 7.3; the
+analysis code hash (`compile/report.py`, `compile/metrics.py` and `compile/detectors.py`); the TP/FP rules of 7.3; the
 promotion and demotion rules; stopping for harm only.
 
 **Why seal only after shadow data exists.** (a) The detectors are unvalidated until they run on
@@ -777,7 +813,7 @@ only a proposal the operator promoted to block mode after the observe and warn l
 | 2 | `evidence.py` + `compile cards` | 15: admission rules, quote only in tool output rejected, self-report-only refused, scrub hit masks and sets non-replayable, idempotent ids, offsets within user messages; legacy path: `legacy:` evidence refused without a human incident label, admitted with one and flagged `provenance: legacy`, re-minted lesson takes the standard path |
 | 3 | `proposal.py` + first proposal for `rm_rf_nonscratch` (lesson g-010, mapped to `L-b3d1fba9`, ace/migration/id_map.jsonl:96, migration applied 2026-10-19); the real proposal needs the legacy card or a re-minted lesson (section 5) | 18: schema, 5 sanitiser rejects, replay must fire, regressions must not, scrub, containment, approve refuses without TTY or review, hash chain, legacy-card banner and second confirmation, `Stop` with mode above observe rejected, end-to-end under a temp HOME proving nothing outside `data_dir` changes |
 | 4 | `shadow.py`, `hooks/shadow.sh`, INSTALL.md section; the operator installs it by hand in observe mode (settings writes are hook-guarded in this setup) | 26: three modes and their stdout/stderr output, deny and block JSON shape, `stop_hook_active`, malformed or empty stdin, missing session id, kill switch, unapproved or hash-mismatched or symlinked proposal ignored, oversize skip, no-network imports, no payload text in rows or stderr, arm determinism, shell script inspection (no `exec`), 7 wrapper tests (`ACE_PYTHON=/usr/bin/python3`, no argument, nonexistent interpreter, crashing module, stdout empty-or-valid-JSON, exit 0 always, and under `ACE_PYTHON=/usr/bin/python3` a planted `json.py` in the working directory is not imported), locked state file skipped within 50 ms, `edit_unread_session` capped at observe until labelled |
-| 5 | `offline.py` + `report.py`: nightly signal detectors, label pre-fill, demotions, two tables. **5a landed 2026-10-19** (`offline.py`, `demotions.py`, `compile offline`, the hook honouring demotions, the `tp_cand` column; 88 new tests in `test_compile_offline*.py` and `test_compile_demotions.py`); 5b and 5c (the promotion ladder with its TP listing, synthetic replay, the full report with rates and inference) follow | 25: auto-FP rules (a) correction after a message, (b) target in the last prompt, (c) shell-mode rerun (3); auto-TP (a) existing hook blocked, (b) correction after an observe fire (2); unlabeled counts neither side (1); agent self-tags and citations never inputs (1); human label precedence (1); evasion candidates flag without demoting, and the `/tmp/..` shape (2); disable triggers: lesson leaves `active`, `source_sha256` change, error rate or p95 (3); demotions: block to warn on one FP, warn to observe on one FP, two FPs in 30 days to observe with re-review (3), counters reset after a demotion (1); promotion rule check and TP listing with forged-label refusal (3); randomisation inference: seeded permutations deterministic, rate ratio and Wilson per arm (2); corpus mixing refused (1); synthetic and private tables separate (1); state files deleted seven days after the last event (1) |
+| 5 | `offline.py` + `report.py`: nightly signal detectors, label pre-fill, demotions, two tables. **5a landed 2026-10-19** (`offline.py`, `demotions.py`, `compile offline`, the hook honouring demotions, the `tp_cand` column; 88 new tests in `test_compile_offline*.py` and `test_compile_demotions.py`); **5b** (the promotion ladder with its TP listing) and **5c** (synthetic replay, the report with rates; no inference) **landed 2026-10-19**; arms, randomization inference and the spillover flag follow | 25: auto-FP rules (a) correction after a message, (b) target in the last prompt, (c) shell-mode rerun (3); auto-TP (a) existing hook blocked, (b) correction after an observe fire (2); unlabeled counts neither side (1); agent self-tags and citations never inputs (1); human label precedence (1); evasion candidates flag without demoting, and the `/tmp/..` shape (2); disable triggers: lesson leaves `active`, `source_sha256` change, error rate or p95 (3); demotions: block to warn on one FP, warn to observe on one FP, two FPs in 30 days to observe with re-review (3), counters reset after a demotion (1); promotion rule check and TP listing with forged-label refusal (3); randomisation inference: seeded permutations deterministic, rate ratio and Wilson per arm (2); corpus mixing refused (1); synthetic and private tables separate (1); state files deleted seven days after the last event (1) |
 | 6 | One week of observe-mode measurement | none; output is the report with every fire labeled, live versus offline agreement, p95 cost, and a written go or no-go for the seal |
 
 Total about 131 new tests over the existing 223 test functions (358 collected by pytest). Steps 1

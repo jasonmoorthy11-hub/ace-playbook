@@ -21,15 +21,14 @@ from datetime import datetime
 from pathlib import Path
 
 from ..atomic import write_private
-from . import catalogue, demotions, detectors, evidence, labels, modes, report, shadow
+from . import catalogue, demotions, detectors, evidence, labels, metrics, modes, report, shadow
 from . import state as state_mod
 from .events import end_event, events_from_records, hash16
 from .report import _read as read_jsonl
 from .shell import command_segments
 
-P95 = "not computable: no dur_ms in rows"
-DAY, STAMP, SHELL = 86400, "%Y-%m-%dT%H:%M:%SZ", re.compile(r"\s*<bash-input>(.*)</bash-input>\s*", re.S)
-MIN_SAMPLE = 100
+P95 = "not implemented"                                            # design 7.3 names the 200 ms rule but no demotion cause for it
+DAY, STAMP, SHELL, MIN_SAMPLE = 86400, "%Y-%m-%dT%H:%M:%SZ", re.compile(r"\s*<bash-input>(.*)</bash-input>\s*", re.S), 100
 WITHDRAWN = {"dormant", "superseded", "retired", "quarantined"}      # store statuses that mean withdrawn (not compiled)
 EVENTS, EVASION, SEEN = "detector_events.jsonl", "evasion_candidates.jsonl", "offline_state.json"
 
@@ -130,8 +129,8 @@ def discover(cfg, now: float, idle_minutes: float, since_days: int, done: dict) 
     return [(p, sh, size, int(m)) for m, p, sh, size in sorted(todo)], skipped
 
 
-def detector_rows(events: list, sh: str) -> list[dict]:
-    """One row per detector fire over the transcript plus its end (`commit_without_push`); ids are stable across reruns."""
+def detector_rows(events: list, sh: str, stamp: str = "") -> list[dict]:
+    """One row per detector fire plus its end (`commit_without_push`) and one `_session` summary row (metrics.py); ids are stable; `stamp` is the transcript's size and mtime."""
     state, rows, ts = None, [], ""
     for ev in [*events, end_event("offline")]:
         ts = ev.ts or ts
@@ -143,7 +142,7 @@ def detector_rows(events: list, sh: str) -> list[dict]:
             rid = hashlib.sha256(f"{sh}|{f.detector}|{at}|{ph}".encode()).hexdigest()[:16]
             rows.append({"ts": ts, "v": 1, "id": rid, "session": sh, "detector": f.detector, "tier": "offline",
                          "count": f.count, "key": f.key, "payload_sha256": ph, "tool_name": tu.name if tu else ""})
-    return rows
+    return [*rows, metrics.session_row(events, sh, ts, {n: d.consumes for n, d in catalogue.CATALOGUE.items()}, stamp)]
 
 
 def join(uses: list, t: float):
@@ -249,10 +248,9 @@ def stage(out: dict):
 
 
 def run(cfg, *, dry_run: bool = False, since_days: int = 7, idle_minutes: float = 60.0, now: float | None = None) -> dict:
-    """The offline pass; counts only. A session is marked done only when its rows were written and, if it has shadow rows,
-    the label stage succeeded."""
+    """The offline pass; counts only. A session is marked done when its rows were written (and, with shadow rows, its labels)."""
     explicit, now = now is not None, time.time() if now is None else now
-    out = {"transcripts": 0, "skipped": 0, "detector_events": 0, "labels": dict.fromkeys(labels.AUTO, 0), "demotions": 0,
+    out = {"transcripts": 0, "skipped": 0, "detector_events": 0, "sessions": 0, "labels": dict.fromkeys(labels.AUTO, 0), "demotions": 0,
            "evasion_candidates": 0, "state_removed": 0, "errors": 0, "lesson_check": "not run", "error_rate": "not run",
            "p95_rule": P95}
     rows, old_ev, old_ca, done, todo, corpus = [], [], [], {}, [], False
@@ -262,7 +260,8 @@ def run(cfg, *, dry_run: bool = False, since_days: int = 7, idle_minutes: float 
         old_ev, old_ca = read_jsonl(cfg.path(EVENTS)), read_jsonl(cfg.path(EVASION))
         seen = demotions.read_regular(cfg.path(SEEN), 1 << 22)
         done = d if isinstance(d := json.loads(seen or b"{}"), dict) else {}
-        todo, out["skipped"] = discover(cfg, now, idle_minutes, since_days, done)
+        scanned = {k: v for have in [metrics.latest_sessions(old_ev)] for k, v in done.items() if k in have}    # no `_session` row: scan again
+        todo, out["skipped"] = discover(cfg, now, idle_minutes, since_days, scanned)
     by_session, known, metas, picks, new_ev, new_ca, marks = {}, {r.get("id") for r in old_ev + old_ca}, {}, [], [], [], {}
     for r in rows:
         by_session.setdefault(r["session"], []).append(r)
@@ -271,7 +270,7 @@ def run(cfg, *, dry_run: bool = False, since_days: int = 7, idle_minutes: float 
         try:
             from ..clean.transcript import read_records
             events = list(events_from_records(read_records(path)))
-            ev_rows, (got, cands) = detector_rows(events, sh), session_pass(by_session.get(sh, []), events, detector_of)
+            ev_rows, (got, cands) = detector_rows(events, sh, f"{size}:{mtime}"), session_pass(by_session.get(sh, []), events, detector_of)
         except Exception:                                      # one bad transcript never stops the pass
             out["errors"] += 1
             continue
@@ -280,7 +279,8 @@ def run(cfg, *, dry_run: bool = False, since_days: int = 7, idle_minutes: float 
         picks += got
         for bucket, fresh in ((new_ev, ev_rows), (new_ca, cands)):
             bucket += [r for r in fresh if r["id"] not in known and not known.add(r["id"])]     # de-duplicate by id
-    out["detector_events"], out["evasion_candidates"], labs, before = len(new_ev), len(new_ca), {}, out["errors"]
+    out["sessions"] = sum(r["detector"] == metrics.SESSION for r in new_ev)          # summary rows; detector_events counts fires only
+    out["detector_events"], out["evasion_candidates"], labs, before = len(new_ev) - out["sessions"], len(new_ca), {}, out["errors"]
     with stage(out):
         counts, labs = write_labels(cfg, picks, now, dry_run)
         out["labels"].update(counts)

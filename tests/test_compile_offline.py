@@ -61,8 +61,9 @@ def test_detector_events_carry_ids_hashes_counts_and_no_text(w):
                              {"human": "why do you keep doing that"}])
     out = offline.run(w.cfg, now=cs.NOW)
     rows = {r["detector"]: r for r in jsonl(w, "detector_events.jsonl")}
-    assert out["detector_events"] == len(jsonl(w, "detector_events.jsonl")) and out["errors"] == 0
-    assert set(rows) == {"rm_rf_nonscratch", "rm_rf", "commit_without_push", "user_correction"}
+    assert out["detector_events"] + out["sessions"] == len(jsonl(w, "detector_events.jsonl")) and out["errors"] == 0
+    assert out["sessions"] == 1 and out["detector_events"] == len(jsonl(w, "detector_events.jsonl")) - 1      # fires and summary rows apart
+    assert set(rows) == {"rm_rf_nonscratch", "rm_rf", "commit_without_push", "user_correction", "_session"}      # + the per-session summary
     rm = rows["rm_rf_nonscratch"]
     assert set(rm) == {"ts", "v", "id", "session", "detector", "tier", "count", "key", "payload_sha256", "tool_name"}
     assert (rm["v"], rm["tier"], rm["count"], rm["tool_name"], rm["session"]) == (1, "offline", 1, "Bash", st.session_hash("s1"))
@@ -114,7 +115,7 @@ def test_a_changed_session_is_scanned_again_and_adds_only_new_ids(w):
     os.utime(path, (cs.NOW - 7000, cs.NOW - 7000))
     out = offline.run(w.cfg, now=cs.NOW)
     ids = [r["id"] for r in jsonl(w, "detector_events.jsonl")]
-    assert out["transcripts"] == 1 and out["detector_events"] == len(ids) - len(first_ids) > 0
+    assert out["transcripts"] == 1 and out["detector_events"] + out["sessions"] == len(ids) - len(first_ids) > 0
     assert len(ids) == len(set(ids)) and ids[:len(first_ids)] == first_ids
 
 
@@ -183,13 +184,13 @@ def test_cli_prints_one_ascii_count_line_each_and_the_p95_rule_every_run(w, caps
     code, out, err = cli_run(w, "--idle-minutes", "0", capsys=capsys)
     assert code == 0 and err == "" and all(ch == "\n" or " " <= ch <= "~" for ch in out)
     names = [ln.split(":")[0] for ln in out.splitlines()]
-    assert names == ["transcripts", "skipped", "detector_events", "labels", *(f"labels.{k}" for k in labels.AUTO),
+    assert names == ["transcripts", "skipped", "detector_events", "sessions", "labels", *(f"labels.{k}" for k in labels.AUTO),
                      "demotions", "evasion_candidates", "state_removed", "errors", "lesson_check", "error_rate", "p95_rule"]
     assert all(re.fullmatch(r"[a-z0-9_.]+: [0-9a-z_ :.()=,]+", ln) for ln in out.splitlines())
-    assert "p95_rule: not computable: no dur_ms in rows" in out and "labels: 1" in out
+    assert "p95_rule: not implemented" in out and "labels: 1" in out
     assert str(w.data) not in out and st.session_hash("s1") not in out
     code, out, _ = cli_run(w, "--dry-run", capsys=capsys)
-    assert code == 0 and "p95_rule: not computable: no dur_ms in rows" in out
+    assert code == 0 and "p95_rule: not implemented" in out
 
 
 @pytest.mark.parametrize("args", [("--since", "0"), ("--since", "3661"), ("--since", "-5"), ("--idle-minutes", "-1")])
@@ -205,9 +206,9 @@ def test_cli_exits_2_when_the_config_cannot_load(tmp_path, capsys):
     assert "error" in capsys.readouterr().err
 
 
-def test_p95_is_reported_not_computable_in_the_counts(w):
+def test_p95_is_reported_not_implemented_in_the_counts(w):
     out = offline.run(w.cfg, now=cs.NOW)
-    assert out["p95_rule"] == "not computable: no dur_ms in rows" and not hasattr(offline, "lines")
+    assert out["p95_rule"] == "not implemented" and not hasattr(offline, "lines")
 
 
 # ------------------------------------------------------------------ hooks/nightly_sweep.py

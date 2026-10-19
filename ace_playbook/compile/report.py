@@ -1,4 +1,4 @@
-"""`compile report` (docs/design/compiler.md 8, minimal first cut): per-proposal counts from shadow rows and labels.
+"""`compile report` (docs/design/compiler.md 8): per-proposal counts from shadow rows and labels, and (step 5c, metrics.py) rates per corpus.
 
 Two corpora, two tables, never summed: the private `shadow.jsonl` (written by the live hook) and the optional
 `shadow.synthetic.jsonl` (every row says `corpus: synthetic`). A row in the wrong file refuses the whole report.
@@ -7,8 +7,10 @@ wins, `incident` rows ignored, a broken chain ignores every label): fp counts hu
 ones, `tp_cand` the auto `tp_candidate` rows, which are never TPs. `approved_mode` is the copy's own mode, `mode` what
 `modes.resolve` says the hook runs. A `Demotions` section lists every row of `demotions.jsonl` with `lifted` yes/no (a
 strictly later approval lifts it; the lowest row not lifted is the cap; a broken chain is one visible line). No session hash, row id, payload hash or path is printed.
+Per corpus a `Rates` table (eligible sessions, fire rate with a Wilson 95% interval, repeat fires, friction, evasion) and a `Hook cost / agreement` block come
+from `metrics.compute` over the shadow rows and the offline files `detector_events.jsonl` and `evasion_candidates.jsonl`.
 Both shadow files are read here through a no-follow, regular-file-only reader. Imports: stdlib, `..canon`,
-`..config`, `.labels`; `catalogue`, `proposal` and `shadow` load lazily (hook path).
+`..config`, `.labels`, `.metrics`; `catalogue`, `proposal` and `shadow` load lazily (hook path).
 """
 
 from __future__ import annotations
@@ -27,9 +29,10 @@ from pathlib import Path
 
 from ..canon import now_iso
 from ..config import Config
-from . import demotions, labels, modes
+from . import demotions, labels, metrics, modes
 
 PRIVATE, SYNTHETIC = "shadow.jsonl", "shadow.synthetic.jsonl"
+EVENTS, EVASION = "detector_events.jsonl", "evasion_candidates.jsonl"      # offline.py writes them
 KEYS = ("ts", "session", "proposal_id", "payload_sha256")
 PID, LID = re.compile(r"P-[0-9a-f]{8}"), re.compile(r"L-[0-9a-f]{8}")
 MAX_DAYS = 3660
@@ -37,13 +40,18 @@ FIELDS = ("lesson", "detector", "event", "approved_mode", "mode", "rows", "cause
           "days", "tp", "fp", "tp_cand", "unlabelled", "first", "last")
 HEADS = ("proposal", "lesson", "detector", "event", "approved_mode", "mode", "rows", "detector", "truncated", "sessions",
          "days", "tp", "fp", "tp_cand", "unlabelled", "first", "last")
-NOT_COMPUTED = ("not computed here: eligible-session rates, Wilson intervals, friction, hook cost "
-                "(need the offline pass, design 8)")
+RATE_HEADS = ("proposal", "detector", "eligible", "fire_sessions", "fire_rate", "wilson95", "fires", "fires/eligible", "repeat_fires",
+              "msgs/100calls", "corrections/100prompts", "evasion")
+NOT_COMPUTED = "not computed here: arms, randomization inference, spillover flag (they need the randomized phase, design 8)"
+
+
+HASHED = tuple(sorted((Path(__file__), Path(metrics.__file__)), key=lambda p: p.name))      # metrics.py decides every rate
 
 
 def source_sha256() -> str:
-    """sha256 of this file's bytes: the design commits the report code hash before observe starts."""
-    return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    """sha256 of the bytes of metrics.py and report.py, in that order, joined by a NUL: the design commits the report code hash
+    before observe starts."""
+    return hashlib.sha256(b"\0".join(p.read_bytes() for p in HASHED)).hexdigest()
 
 
 def _match(value: object, rx: re.Pattern) -> str:
@@ -87,7 +95,7 @@ def _read(path: Path) -> list[dict]:
 def read_corpora(cfg: Config) -> tuple[list[dict], list[dict]]:
     """(private rows, synthetic rows). The corpus guard runs on every raw object, before the key filter."""
     private, synthetic = _read(cfg.path(PRIVATE)), _read(cfg.path(SYNTHETIC))
-    if any(r.get("corpus", "private") != "private" for r in private):
+    if any(r.get("corpus", "private") != "private" or r.get("tier") == "synthetic" for r in private):
         raise labels.Refusal("row with a non-private corpus in shadow.jsonl", 2)
     if any(r.get("corpus") != "synthetic" for r in synthetic):
         raise labels.Refusal("non-synthetic row found in the synthetic corpus", 2)
@@ -176,8 +184,11 @@ def _meta(cfg: Config, pid: str, chains: tuple | None = None, now: str = "~") ->
     return det, ev, mode, res
 
 
-def summarize(cfg: Config, rows: list[dict], labs: dict[str, str], now: str, days: int) -> dict:
-    """{"proposals": {pid: {FIELDS}}, "per_day": [{date, proposal_id, rows}]} for one corpus."""
+def summarize(cfg: Config, rows: list[dict], labs: dict[str, str], now: str, days: int, synthetic: bool = False) -> dict:
+    """{"proposals": {pid: {FIELDS}}, "per_day": [{date, proposal_id, rows}]} for one corpus. A synthetic id is a stand-in: it is never
+    looked up in the private proposals directory, its detector and event come from the rows."""
+    from . import catalogue
+    shadow_events = ("PreToolUse", "Stop")
     by: dict[str, list[dict]] = {}
     for r in rows:
         by.setdefault(r["proposal_id"] if PID.fullmatch(r["proposal_id"]) else "invalid", []).append(r)
@@ -189,7 +200,8 @@ def summarize(cfg: Config, rows: list[dict], labs: dict[str, str], now: str, day
         dates = [d for d in (_day(r["ts"]) for r in rs) if d]
         ids = {labels.row_id(r) for r in rs}                         # rows sharing an id collapse for labelling
         marks, causes = Counter(labs.get(i) for i in ids), Counter(r.get("cause") for r in rs)
-        det, ev, mode, res = _meta(cfg, pid, chains, now)
+        det, ev, mode, res = ("-",) * 4 if synthetic else _meta(cfg, pid, chains, now)
+        det, ev = (_pick(rs[0].get("detector"), catalogue.CATALOGUE), _pick(rs[0].get("event"), shadow_events)) if synthetic else (det, ev)
         props[pid] = {"lesson": next((v for v in (_match(r.get("lesson_id"), LID) for r in rs) if v != "-"), "-"),
                       "detector": det, "event": ev, "approved_mode": mode, "mode": res, "rows": len(rs),
                       "cause_detector": causes["detector"], "cause_truncated": causes["truncated"],
@@ -207,12 +219,26 @@ def _grid(head: tuple[str, ...], body: list[list[str]]) -> list[str]:
     return ["  ".join(c.ljust(w) for c, w in zip(row, widths)).rstrip() for row in [list(head), *body]]
 
 
-def _section(title: str, source: str, data: dict, days: int) -> list[str]:
+def _rates(rates: dict, synthetic: bool) -> list[str]:
+    body = [[pid, r["detector"], *map(str, (r["eligible"], r["sessions_with_fire"], r["fire_rate"])),
+             r["wilson95"] if isinstance(r["wilson95"], str) else "[{},{}]".format(*r["wilson95"]),
+             *map(str, (r["fires"], r["fires_per_eligible"], r["repeat_fires"], *r["friction"].values(), r["evasion"]))]
+            for pid, r in rates["proposals"].items()]
+    c, ag = rates["corpus"], rates["corpus"]["agreement"]
+    return ["Rates (per eligible session; eligible = a session with an event the detector consumes)", *_grid(RATE_HEADS, body), "",
+            "Hook cost / agreement (hook cost: " + ("the evaluator only, not a hook call" if synthetic else
+                                                  "firing calls only, in-process: no interpreter start, imports or config load") + ")",
+            f"dur_ms p50 {c['cost_p50_ms']}  p95 {c['cost_p95_ms']}  (rows with dur_ms: {c['cost_rows']})",
+            f"live fires awaiting offline scan: {c['awaiting_offline_scan']} (in neither the numerator nor the denominator of any rate)",
+            "live versus offline: " + (ag if isinstance(ag, str) else f"{ag['live_only']} live-only fires, {ag['offline_only']} offline-only events"), ""]
+
+
+def _section(title: str, source: str, data: dict, days: int, rates: dict | None) -> list[str]:
     out = [title, f"source: {source}"]
     if not data["proposals"]:
         return [*out, "no rows", ""]
     out += _grid(HEADS, [[pid, *(str(p[f]) for f in FIELDS)] for pid, p in data["proposals"].items()])
-    out += ["", f"Rows per day (last {days} days)"]
+    out += ["", *(_rates(rates, source == SYNTHETIC) if rates else []), f"Rows per day (last {days} days)"]
     body = [[d["date"], d["proposal_id"], str(d["rows"])] for d in data["per_day"]]
     out += _grid(("date", "proposal_id", "rows"), body) if body else ["no rows in window"]
     return [*out, ""]
@@ -227,10 +253,10 @@ def _demotions(dem: dict) -> list[str]:
     return [*out, *(_grid(("proposal", "to_mode", "cause", "ts", "review_required", "lifted"), rows) if rows else ["no demotions"]), ""]
 
 
-def render(sha: str, days: int, private: dict, synthetic: dict, broken: int | None, dem: dict) -> str:
+def render(sha: str, days: int, private: dict, synthetic: dict, broken: int | None, dem: dict, rates: dict | None = None) -> str:
     lines = ["ace-playbook shadow report", f"report_sha256: {sha}", ""]
-    lines += _section("Private corpus (aggregate, counts only)", PRIVATE, private, days)
-    lines += _section("Synthetic corpus (reproducible)", SYNTHETIC, synthetic, days)
+    lines += _section("Private corpus (aggregate, counts only)", PRIVATE, private, days, rates and rates["private"])
+    lines += _section("Synthetic corpus (reproducible)", SYNTHETIC, synthetic, days, rates and rates["synthetic"])
     lines += _demotions(dem)
     lines.append(NOT_COMPUTED)
     if broken is not None:
@@ -247,15 +273,21 @@ def run(cfg: Config, days: int, as_json: bool = False, now: str | None = None) -
         priv_rows, syn_rows = read_corpora(cfg)
         labs, broken = label_map(cfg)
         private = summarize(cfg, priv_rows, labs, now, days)
-        synthetic = summarize(cfg, syn_rows, {}, now, days)          # human labels are on private rows only
-        dem = demotion_summary(cfg, now)
+        synthetic = summarize(cfg, [r for r in syn_rows if r.get("would_fire") is not False], {}, now, days, True)   # labels: private only
+        dem, (events, evasion) = demotion_summary(cfg, now), (_read(cfg.path(EVENTS)), _read(cfg.path(EVASION)))
+        from . import catalogue
+        syn_det = {r["proposal_id"]: r["detector"] for r in syn_rows if PID.fullmatch(r["proposal_id"]) and r.get("detector") in catalogue.CATALOGUE}
+        stop = {k for k, p in private["proposals"].items() if p["event"] == "Stop"}
+        known = {k: p["detector"] for k, p in private["proposals"].items() if p["detector"] != "-"}       # no proposal file: no rate
+        rates = {"private": metrics.compute("private", priv_rows, known, events, evasion, stop),
+                 "synthetic": metrics.compute("synthetic", syn_rows, syn_det, [], [])}
     except labels.Refusal as exc:
         print(f"error: {exc}", file=sys.stderr)
         return exc.code
     sha = source_sha256()
     if as_json:
-        print(json.dumps({"report_sha256": sha, "days": days, "private": private, "synthetic": synthetic,
+        print(json.dumps({"report_sha256": sha, "days": days, "private": private, "synthetic": synthetic, "rates": rates,
                           "demotions": dem, "labels": {"chain_ok": broken is None, "broken_at": broken}}, indent=1, sort_keys=True))
     else:
-        print(render(sha, days, private, synthetic, broken, dem), end="")
+        print(render(sha, days, private, synthetic, broken, dem, rates), end="")
     return 0
