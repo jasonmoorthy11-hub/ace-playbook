@@ -37,10 +37,11 @@ class Detector:
 
     @property
     def source_sha256(self) -> str:
-        """Row name, fire name and metadata, plus the text of detectors.py and catalogue.py minus the other rows' fire
-        bodies and the registry literal, plus the three leaf modules (srchash.py). Raises ValueError unless the fire is
-        the top-level function of detectors.py that carries its name (a lambda, a wrapper, a partial or a callable
-        instance fails closed, for this row only: a nameless fire is left out of the other rows' list of fires)."""
+        """Row name, fire name and metadata, plus the text of detectors.py minus the other rows' fire bodies, the whole
+        text of catalogue.py (registry literal included) and the three leaf modules (srchash.py). Raises ValueError
+        unless the fire is the top-level function of detectors.py that carries its name (a lambda, a wrapper, a partial
+        or a callable instance fails closed, for this row only: a nameless fire is left out of the other rows' list of
+        fires)."""
         name = getattr(self.fire, "__name__", None)
         if not isinstance(name, str) or getattr(detectors, name, None) is not self.fire:
             raise ValueError(f"fire of {self.name} is not detectors.{name}")

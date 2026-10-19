@@ -77,36 +77,10 @@ def test_a_header_side_effect_is_hashed_a_decorator_or_a_default_argument():
     assert srchash.excised_text(text, {"f"}) == "@_b\ndef f(x=AUTOLOADED.add(1)):\n    ...excised...\n"
 
 
-# ------------------------------------------------------------------ excised_text: the registry literal, by exact span
-def test_a_registry_assignment_is_excised_plain_or_annotated_and_other_assigns_stay():
-    text = "A = {\n    1: 2,\n}\nB: dict = {\n    3: 4}\nC = 5\n"
-    assert srchash.excised_text(text, (), ("A",)) == "A = ...excised...\nB: dict = {\n    3: 4}\nC = 5\n"
-    assert srchash.excised_text(text, (), ("B",)) == "A = {\n    1: 2,\n}\nB = ...excised...\nC = 5\n"
-
-
-def test_statements_sharing_a_line_with_the_registry_stay_hashed():
-    text = "X = 1; CATALOGUE = {\n    1: 2,\n}; Y = evil()\n"
-    assert srchash.excised_text(text, (), ("CATALOGUE",)) == "X = 1; CATALOGUE = ...excised...; Y = evil()\n"
-    text = "CATALOGUE = {1: 2}; shell.git_subcommand = lambda t: 0\n"
-    assert srchash.excised_text(text, (), ("CATALOGUE",)) == "CATALOGUE = ...excised...; shell.git_subcommand = lambda t: 0\n"
-
-
-def test_columns_are_utf8_byte_offsets_so_a_non_ascii_neighbour_is_safe():
-    text = 's = "é"; CATALOGUE = {1: 2}; t = "ü"\n'
-    assert srchash.excised_text(text, (), ("CATALOGUE",)) == 's = "é"; CATALOGUE = ...excised...; t = "ü"\n'
-
-
-def test_a_chained_tuple_or_attribute_assignment_is_not_excised():
-    for text in ("A = B = 1\n", "A, B = 1, 2\n", "X.A = 2\n"):
-        assert srchash.excised_text(text, (), ("A",)) == text
-
-
-def test_a_registry_bound_twice_at_top_level_raises():
-    with pytest.raises(ValueError, match="CATALOGUE"):
-        srchash.excised_text("CATALOGUE = {}\nCATALOGUE = {1: 1}\n", (), ("CATALOGUE",))
-    with pytest.raises(ValueError):
-        srchash.excised_text("CATALOGUE = {}\nCATALOGUE: dict = {}\n", (), ("CATALOGUE",))
-    srchash.excised_text("CATALOGUE = {}\nCATALOGUE, X = 1, 2\n", (), ("CATALOGUE",))        # a tuple target stays hashed
+def test_columns_are_utf8_byte_offsets_so_multibyte_text_around_a_dropped_body_is_safe():
+    assert srchash.excised_text('def f(x="é—"): return "ü"  # ß\n', {"f"}) == 'def f(x="é—"): ...excised...  # ß\n'
+    text = '# é—\n@_b("ü")\ndef f(x="é—"):\n    s = "ß—é"\n    return s + "ü"  # ñ\nY = "é"\n'
+    assert srchash.excised_text(text, {"f"}) == '# é—\n@_b("ü")\ndef f(x="é—"):\n    ...excised...  # ñ\nY = "é"\n'
 
 
 # ------------------------------------------------------------------ detector_drop

@@ -140,13 +140,21 @@ def test_a_fire_that_calls_another_fire_keeps_the_callee(monkeypatch):
     assert changed(base, hashes()) == {"rm_rf", "rm_rf_nonscratch"}
 
 
-def test_the_text_of_the_registry_literal_is_not_hashed(monkeypatch):
+def test_editing_the_registry_literals_text_moves_every_hash(monkeypatch):
     before = hashes()
     patch_text(monkeypatch, **{"catalogue.py": swap('rm_rf, "observe", _RM),', 'rm_rf, "warn", _RM),')})
-    assert hashes() == before
+    assert changed(before, hashes()) == set(before)
 
 
-def test_editing_another_rows_registry_fields_moves_only_that_row(monkeypatch):
+def test_a_side_effecting_expression_inside_the_registry_literal_moves_every_hash(monkeypatch):
+    before = hashes()
+    edit = swap('             rm_rf_nonscratch, "block", _RM),',
+                '             (shell.__dict__.update({}) or rm_rf_nonscratch), "block", _RM),')
+    patch_text(monkeypatch, **{"catalogue.py": edit})
+    assert changed(before, hashes()) == set(before)
+
+
+def test_the_meta_label_moves_only_the_row_whose_fields_change_on_an_unchanged_file(monkeypatch):
     before = hashes()
     monkeypatch.setitem(cat.CATALOGUE, "rm_rf", dataclasses.replace(cat.CATALOGUE["rm_rf"], compilable="warn"))
     assert changed(before, hashes()) == {"rm_rf"}
