@@ -3,6 +3,8 @@
 import calendar
 import io
 import json
+import os
+import stat
 import sys
 import time
 from types import SimpleNamespace
@@ -13,7 +15,7 @@ from ace_playbook.compile import approvals, catalogue, labels, ladder, shadow
 from ace_playbook.compile import __main__ as cli
 
 from . import compile_support as cs
-from .test_compile_cli import FakeTty, approved_dir, run, tty, world, written  # noqa: F401  (fixtures)
+from .test_compile_cli import BANNER, FakeTty, approved_dir, legacy, run, tty, world, written  # noqa: F401  (fixtures)
 
 
 def shift(ts, days=0, secs=0):
@@ -106,6 +108,42 @@ def test_unapprove_asks_first_and_a_broken_chain_does_not_stop_the_removal(obser
     assert code == 0 and not dest.exists() and "revocation row not written" in err
 
 
+def test_a_back_fill_shows_the_provenance_and_a_legacy_copy_needs_both_answers(legacy, tty, capsys):
+    cs.approve_file(legacy.cfg, json.loads((legacy.cfg.data_dir / "proposals" / (legacy.pid + ".json")).read_text()), "observe")
+    code, out, _ = run(legacy, "approve", legacy.pid, "--mode", "observe", capsys=capsys)
+    assert code == 0 and BANNER in out and "evidence cards:" in out and "message:" in out and "source_sha256:" in out
+    (row,) = approvals.read_chain(legacy.cfg.data_dir)[0]
+    assert len(tty.asked) == 2 and tty.asked[0] == f"Record the approval of {legacy.pid} in observe mode (approved {row['ts']})? [y/N] "
+    assert tty.asked[1].startswith("Legacy evidence")
+
+
+def test_a_back_fill_of_a_copy_dated_in_the_future_is_refused(world, written, tty, capsys):
+    from ace_playbook.atomic import write_private
+    p = json.loads(written.read_text())
+    dest = approved_dir(world) / (written.stem + ".json")
+    dest.parent.mkdir(mode=0o700, parents=True)
+    write_private(dest, json.dumps(shadow.approved_record(p, "observe", now="2099-01-01T00:00:00Z")))
+    code, _, err = run(world, "approve", written.stem, "--mode", "observe", capsys=capsys)
+    assert code == 1 and "in the future" in err and tty.asked == [] and not (world.cfg.data_dir / "approvals.jsonl").exists()
+
+
+def test_warn_refuses_a_copy_with_no_approvals_row_and_names_the_command(world, written, tty, capsys):
+    cs.approve_file(world.cfg, json.loads(written.read_text()), "observe")
+    code, out, _ = run(world, "approve", written.stem, "--mode", "warn", capsys=capsys)
+    assert code == 1 and "run approve --mode observe to record it" in out and tty.asked == []
+
+
+def test_a_copy_write_failure_after_the_row_says_so(ready, tty, capsys, monkeypatch):
+    def boom(*a, **k):
+        raise PermissionError("x")
+
+    monkeypatch.setattr(ladder, "write_private", boom)
+    code, _, err = run(ready, "approve", ready.pid, "--mode", "warn", capsys=capsys)
+    assert code == 1 and "approvals row written but the copy failed (PermissionError)" in err
+    assert "re-run approve --mode warn" in err and [r["mode"] for r in approvals.read_chain(ready.cfg.data_dir)[0]] == ["observe", "warn"]
+    assert copy_of(ready, ready.pid)["mode"] == "observe"
+
+
 # ------------------------------------------------------------------ the warn ladder
 @pytest.fixture
 def observed(world, written, tty, capsys, monkeypatch):
@@ -185,7 +223,7 @@ def test_an_fp_label_is_listed_and_blocks_promotion(ready, tty, capsys):
 def test_a_forged_label_without_a_fire_row_is_refused(ready, tty, capsys):
     set_labels(ready, tp_labels(ready.fires, shift(ready.entry, 2)) + [{"ref": "deadbeef", "at": shift(ready.entry, 2)}])
     code, out, _ = run(ready, "approve", ready.pid, "--mode", "warn", capsys=capsys)
-    assert code == 1 and "forged label: deadbeef has no fire row" in out and tty.asked == []
+    assert code == 1 and "forged label: deadbeef (no fire row)" in out and tty.asked == []
     assert copy_of(ready, ready.pid)["mode"] == "observe"
 
 
@@ -286,3 +324,65 @@ def test_end_to_end_observe_then_five_labelled_fires_then_warn_then_the_hook_spe
     out = hook(cs.pre_payload(cs.RM_CMD, sid="sess-e2e-fresh"))
     assert json.loads(out.out) == {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": msg}}
     assert out.err == msg + "\n" and cs.shadow_rows(w.cfg.data_dir)[-1]["mode"] == "warn"
+
+
+# ------------------------------------------------------------------ unapprove: the revocation row has to land
+def test_unapprove_records_a_revocation_when_the_copy_is_gone_but_the_row_is_not_revoked(observed, tty, capsys):
+    w = observed
+    (approved_dir(w) / (w.pid + ".json")).unlink()
+    code, out, _ = run(w, "unapprove", w.pid, capsys=capsys)
+    last = approvals.read_chain(w.cfg.data_dir)[0][-1]
+    assert code == 0 and f"ok: revocation recorded for {w.pid} (no copy present)" in out
+    assert (last["mode"], last["proposal_sha256"]) == ("revoked", "-")
+    code, _, err = run(w, "unapprove", w.pid, capsys=capsys)                      # now there is nothing left to revoke
+    assert code == 1 and "is not approved" in err and len(approvals.read_chain(w.cfg.data_dir)[0]) == 2
+
+
+def test_unapprove_with_neither_a_copy_nor_a_row_is_not_approved(world, written, tty, capsys):
+    code, _, err = run(world, "unapprove", written.stem, capsys=capsys)
+    assert code == 1 and "is not approved" in err and tty.asked == []
+
+
+def test_a_broken_chain_at_unapprove_is_repaired_then_unapprove_is_rerun(ready, tty, capsys, monkeypatch):
+    w = ready
+    assert run(w, "approve", w.pid, "--mode", "warn", capsys=capsys)[0] == 0
+    dest = approved_dir(w) / (w.pid + ".json")
+    old = dest.read_bytes()
+    path = w.cfg.data_dir / "approvals.jsonl"
+    whole = path.read_bytes()
+    path.write_bytes(whole[:-20])                                                  # the warn row is cut mid-line
+    code, _, err = run(w, "unapprove", w.pid, capsys=capsys)
+    assert code == 0 and not dest.exists()
+    assert f"revocation row not written" in err and f"re-run unapprove {w.pid}" in err
+    code, _, err = run(w, "unapprove", w.pid, capsys=capsys)                      # no copy, chain still broken: nothing to do yet
+    assert code == 1 and "re-run unapprove" in err
+    path.write_bytes(whole[:whole.rindex(b"\n", 0, len(whole) - 1) + 1])          # repair: truncate to the last complete line
+    code, out, _ = run(w, "unapprove", w.pid, capsys=capsys)
+    assert code == 0 and "revocation recorded" in out and approvals.read_chain(w.cfg.data_dir)[0][-1]["mode"] == "revoked"
+    dest.write_bytes(old)                                                          # the old warn copy comes back
+    monkeypatch.setenv("ACE_PLAYBOOK_CONFIG", w.conf)
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(json.dumps(cs.pre_payload(cs.RM_CMD)).encode())))
+    assert shadow.main(["pre"]) == 0
+    assert capsys.readouterr().out == "" and cs.shadow_rows(w.cfg.data_dir)[-1]["mode"] == "observe"
+    assert f"approvals:{w.pid}:mismatch" in (w.cfg.data_dir / "shadow.log").read_text()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file modes")
+def test_an_unwritable_approvals_file_warns_by_type_and_still_removes_the_copy(observed, tty, capsys):
+    w, dest = observed, approved_dir(observed) / (observed.pid + ".json")
+    path = w.cfg.data_dir / "approvals.jsonl"
+    path.chmod(0o400)
+    try:
+        code, _, err = run(w, "unapprove", w.pid, capsys=capsys)
+    finally:
+        path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    assert code == 0 and not dest.exists() and "revocation row not written (PermissionError)" in err
+    assert str(w.cfg.data_dir) not in err
+
+
+def test_an_unreadable_copy_is_revoked_with_a_dash_hash(observed, tty, capsys):
+    w, dest = observed, approved_dir(observed) / (observed.pid + ".json")
+    dest.write_text("{not json")
+    assert run(w, "unapprove", w.pid, capsys=capsys)[0] == 0 and not dest.exists()
+    last = approvals.read_chain(w.cfg.data_dir)[0][-1]
+    assert (last["mode"], last["proposal_sha256"]) == ("revoked", "-")

@@ -58,12 +58,12 @@ RESULTS.md:62), alongside `edit_unread_turn` and `rm_rf` (RESULTS.md:34). The ve
 | `compile/proposal.py` | Proposal schema, ordered validation, replay/regression runner, writer (section 6) | 299 (built, step 2) |
 | `compile/propscrub.py` | The scrub step and quarantine path of `proposal.write`, split out and imported lazily so the hook path never loads the scrub engine (step 4) | 34 |
 | `ace_playbook/canon.py` | Stdlib-only leaf: `canonical`, `now_iso`, `record_hash`, `GENESIS`, `ID_RE`; `store/schema.py` re-exports them (step 4, see 7.2) | 29 |
-| `compile/shadow.py` | Hook entry point: load approved proposals, re-validate, check the approvals row of a warn or block copy, evaluate, append `shadow.jsonl` rows, print the decision as JSON on stdout (block deny, or warn `additionalContext`); always returns 0 (section 7) | ~220; 220 (step 4), 258 (step 5b) |
-| `compile/approvals.py` | The hash-chained `approvals.jsonl`: `read_chain`, `newest`, `append` (locked, chain verified from the fd, duplicate skip), `verify_copy`; stdlib and `canon` only, on the hook path (step 5b) | 115 |
-| `compile/ladder.py` | The promotion rules: pure `check` over rows (TP and FP re-derivation, 14 days, 5 human TPs, 0 FPs, strength, source hash, cap) and `run`, the `approve --mode warn\|block` flow with the TP listing; imported lazily by the CLI (step 5b) | 218 |
+| `compile/shadow.py` | Hook entry point: load approved proposals, re-validate, check the approvals row of a warn or block copy, evaluate, append `shadow.jsonl` rows, print the decision as JSON on stdout (block deny, or warn `additionalContext`); always returns 0 (section 7) | ~220; 220 (step 4), 259 (step 5b) |
+| `compile/approvals.py` | The hash-chained `approvals.jsonl`: `read_chain`, `newest`, `append` (locked, chain verified from the fd, duplicate skip), `verify_copy`; stdlib and `canon` only, on the hook path (step 5b) | 117 |
+| `compile/ladder.py` | The promotion rules: pure `check` over rows (TP and FP re-derivation, 14 days, 5 human TPs, 0 FPs, strength, source hash, cap) and `run`, the `approve --mode warn\|block` flow with the TP listing; imported lazily by the CLI (step 5b) | 235 |
 | `compile/offline.py` | Nightly pass: run signal detectors over finished transcripts, finalize session-level detectors, label pre-fill, demotions | ~250 |
 | `compile/report.py` | shadow.jsonl to results tables, effect estimates (section 8) | ~260; 193 for the minimal first cut (built, step 4c) |
-| `compile/__main__.py` | CLI: `cards`, `propose`, `validate` (step 2); `approve --mode observe`, `unapprove`, `shadow pre\|stop` (step 4); `label` (step 4b); `report` (step 4c); later `packet`, `review-record`, `replay-synthetic` and `approve --mode warn\|block` | 98, then 181 (step 4), 230 (step 5b: observe rows, warn and block through `ladder.run`) |
+| `compile/__main__.py` | CLI: `cards`, `propose`, `validate` (step 2); `approve --mode observe`, `unapprove`, `shadow pre\|stop` (step 4); `label` (step 4b); `report` (step 4c); later `packet`, `review-record`, `replay-synthetic` and `approve --mode warn\|block` | 98, then 181 (step 4), 266 (step 5b: observe rows, back-fill, unapprove revocation, warn and block through `ladder.run`) |
 | `ace_playbook/textrules.py` | Leaf module (stdlib `re`, `string` only): `unsafe_text_reason`, `inert_reason` and their regexes, moved out of `store/schema.py` and `inject/sanitize.py`, which re-export them (step 1, see 7.2) | ~120 moved |
 | `hooks/shadow.sh` | One script, two registrations (PreToolUse, Stop); never `exec`s, always `exit 0` | 19 lines (built, step 4; a test pins it to the block in section 7) |
 
@@ -478,9 +478,12 @@ does must use the same formula.
 "operator-tty", tp_refs, fp_refs, review_sha, prev_hash, hash}`: enums, ids, hashes, timestamps and lists of row ids only.
 Every `approve` appends one row (`proposal_sha256` is the approved copy's own hash, so a row binds id, content and mode;
 the same hash and mode twice appends nothing) and `unapprove` appends a `revoked` row (`proposal_sha256` = the removed
-copy's hash, or `-`), so putting the old bytes back reads as `mismatch`. `approve --mode observe` on a copy that already
-exists and matches, but has no row for the proposal at all (the first live approval predates the chain), asks `y/N` and
-appends the missing row with `ts` = the copy's `approved_at`, so the observe clock is not reset; when the newest row says
+copy's hash, or `-`; also when the copy is already gone but the newest row is not revoked), so putting the old bytes
+back reads as `mismatch`. `approve --mode observe` on a copy that already exists and matches, but has no row for the
+proposal at all (the first live approval predates the chain), prints the same provenance block and prompts as a fresh
+approval (the legacy banner and second prompt included), refuses a copy whose `approved_at` is in the future, and appends
+the missing row with `ts` = the copy's `approved_at`, so the observe clock is not reset. That row is the only way a
+pre-chain copy starts a window: `approve --mode warn` never trusts the copy's own `approved_at`; when the newest row says
 otherwise (`mismatch`: demoted, revoked, or a copy edited down) it approves afresh (new `approved_at`, full listing, row
 `ts` = now). The hook honours a copy in `warn` or `block` only when the newest row for
 its proposal has the same `proposal_sha256` and `mode` (`verify_copy`); otherwise it runs the proposal in observe and logs
@@ -496,15 +499,15 @@ only when some counted label does NOT postdate the newest approvals row; when al
 postdate the last approval row (<ts>)`. Then each failed rule, and exits 1; if all hold it asks `Promote
 <id> to warn mode? N TPs, 0 FPs listed above. [y/N]` and on `y` appends the row with the listed `tp_refs` and `fp_refs`
 and writes the approved copy. The rules: copy in observe for at least 14 days (window start = the newest approvals row of
-the proposal, which must be an `observe` row, else the copy's `approved_at` when the proposal has no rows; a newer row of
-another mode, a `revoked` row, or a copy the chain does not back, `copy not backed by the approvals chain`, refuses); at
+the proposal, which must be an `observe` row; with no row at all the ladder refuses and says to run `approve --mode observe`, which
+records it; a newer row of another mode, a `revoked` row, or a copy the chain does not back, `copy not backed by the approvals chain`, refuses); at
 least 5 TPs, counted only from human `tp` rows (newest human row per ref wins) whose ref is the `row_id` of a live
 `shadow.jsonl` fire of this proposal run in observe, with `window start <= fire ts <= now`; a counted label dated before its
 fire or after now is refused; 0 FPs, where a ref's label is its newest
 human row, else its newest row of any reason code (an auto `fp` blocks; `tp_candidate` never counts); validation passes on
 current code; the lesson is `active`; the detector is strong and its catalogue `compilable` reaches the mode; the
 proposal's `source_sha256` equals the catalogue's; `edit_unread_session` also needs `--raw-checked`. A counted label with no
-fire row (`forged label`), a broken labels chain and a broken approvals chain are refused. `--mode block` applies the same
+fire row (`forged label`, every offending ref listed), a broken labels chain and a broken approvals chain are refused; the repair for a forged label is to restore the missing shadow row, or to truncate `labels.jsonl` to the row before the forged one and re-label. If the approved copy cannot be written after the row was appended, the error says so and the hook keeps running observe (row before copy is the fail-safe order). `--mode block` applies the same
 rules with the window starting at the newest approvals row, which must be a `warn` row (`not in warn` otherwise), counting
 fires run in warn, a `block`-capable `PreToolUse`
 detector, and a required `--opus-reviewed <sha>` (7 to 40 lowercase hex) stored as `review_sha` and named in the prompt.

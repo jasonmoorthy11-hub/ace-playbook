@@ -18,6 +18,7 @@ from pathlib import Path
 from .. import config as cfgmod
 from .. import ttyio
 from ..atomic import write_private
+from ..canon import now_iso
 from . import approvals, evidence, labels, proposal, report, shadow
 
 LEGACY_BANNER = ("This lesson's stored evidence is self-quoted legacy text; "
@@ -93,6 +94,19 @@ def _confirm(prompts: list[str]) -> bool:
     return all(_ask(a).lower() in ("y", "yes") for a in prompts)
 
 
+def _provenance(cfg: cfgmod.Config, p: dict) -> bool:
+    """Print what the operator is approving; True when a cited card is legacy (the banner is printed too)."""
+    print(f"{p['id']}  lesson {p['lesson_id']}  detector {p['check']['detector']}  on {p['event']} matcher {p['matcher']}")
+    print(f"  evidence cards: {', '.join(p['provenance']['cards'])}")
+    print(f"  source_sha256:  {p['provenance']['source_sha256']}")
+    print(f"  message:        {p['message']}")
+    legacy = any(c["provenance"] == "legacy" for c in evidence.load_cards(cfg, p["lesson_id"])
+                 if c["id"] in p["provenance"]["cards"])
+    if legacy:
+        print("  " + LEGACY_BANNER)
+    return legacy
+
+
 def cmd_approve(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
     if args.mode != "observe":
         from . import ladder                                  # lazy: the promotion rules stay off the hook path
@@ -123,23 +137,20 @@ def cmd_approve(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
     if verdict == "ok":
         print(f"already approved: {args.id} (observe)")
         return 0
+    legacy = _provenance(cfg, p)                              # the same block and prompts for a fresh approval and a back-fill
+    asks = ["Legacy evidence: approve anyway? [y/N] "] if legacy else []
     if verdict == "missing":                                  # predates the chain: record it; "mismatch" is approved afresh below
-        if not _confirm([f"Record the approval of {args.id} (observe, approved {rec['approved_at']}) in approvals.jsonl? [y/N] "]):
+        if rec["approved_at"] > now_iso():
+            print("error: the copy's approved_at is in the future; nothing was written", file=sys.stderr)
+            return 1
+        if not _confirm([f"Record the approval of {args.id} in observe mode (approved {rec['approved_at']})? [y/N] "] + asks):
             print("error: not approved", file=sys.stderr)
             return 1
         approvals.append(cfg.data_dir, {"ts": rec["approved_at"], "proposal_id": args.id, "mode": "observe",
                                         "proposal_sha256": rec["proposal_sha256"]})
         print(f"ok: recorded the existing observe approval of {args.id} in approvals.jsonl")
         return 0
-    print(f"{p['id']}  lesson {p['lesson_id']}  detector {p['check']['detector']}  on {p['event']} matcher {p['matcher']}")
-    print(f"  evidence cards: {', '.join(p['provenance']['cards'])}")
-    print(f"  source_sha256:  {p['provenance']['source_sha256']}")
-    print(f"  message:        {p['message']}")
-    legacy = any(c["provenance"] == "legacy" for c in evidence.load_cards(cfg, p["lesson_id"])
-                 if c["id"] in p["provenance"]["cards"])
-    if legacy:
-        print("  " + LEGACY_BANNER)
-    if not _confirm([f"Approve {p['id']} in observe mode? [y/N] "] + (["Legacy evidence: approve anyway? [y/N] "] if legacy else [])):
+    if not _confirm([f"Approve {p['id']} in observe mode? [y/N] "] + asks):
         print("error: not approved", file=sys.stderr)
         return 1
     new = shadow.approved_record(p)
@@ -155,14 +166,19 @@ def cmd_unapprove(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
     if not _need_tty("unapprove"):
         return 2
     dest = shadow.approved_path(cfg, args.id)
-    if not dest.exists():
+    try:
+        newest = approvals.newest(approvals.read_chain(cfg.data_dir)[0], args.id)
+    except (ValueError, OSError):
+        newest = None
+    has_copy = dest.exists()
+    if not has_copy and (newest is None or newest["mode"] == "revoked"):
         print(f"error: {args.id} is not approved", file=sys.stderr)
         return 1
     if not _confirm([f"Remove the approval of {args.id}? [y/N] "]):
         print("error: not removed", file=sys.stderr)
         return 1
     try:                                                      # a revocation row makes a restored copy "mismatch" in the hook
-        rec = proposal.load(dest)
+        rec = proposal.load(dest) if has_copy else None
         sha = rec.get("proposal_sha256") if isinstance(rec, dict) else None
     except proposal.ProposalError:
         sha = None
@@ -170,8 +186,13 @@ def cmd_unapprove(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
         approvals.append(cfg.data_dir, {"proposal_id": args.id, "mode": "revoked",
                                         "proposal_sha256": sha if isinstance(sha, str) and len(sha) == 64 else "-"})
     except (ValueError, OSError) as exc:                      # removing the copy matters more than the row
-        print(f"warning: revocation row not written ({exc if isinstance(exc, ValueError) else type(exc).__name__})",
-              file=sys.stderr)
+        print(f"warning: revocation row not written ({exc if isinstance(exc, ValueError) else type(exc).__name__}); "
+              f"repair approvals.jsonl, then re-run unapprove {args.id}", file=sys.stderr)
+        if not has_copy:
+            return 1
+    if not has_copy:
+        print(f"ok: revocation recorded for {args.id} (no copy present)")
+        return 0
     os.unlink(dest)
     print(f"ok: {args.id} is no longer approved (the proposal file is kept)")
     return 0

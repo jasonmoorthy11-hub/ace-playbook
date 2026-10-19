@@ -71,9 +71,10 @@ def test_less_than_14_days_in_observe_fails_and_14_days_passes():
     assert check(now="2026-10-15T00:00:00Z").ok
 
 
-def test_without_an_observe_row_the_copys_approved_at_is_the_start_and_says_so():
+def test_without_an_observe_row_the_copys_approved_at_is_not_trusted():
     res = check(rows_approvals=[])
-    assert res.ok and res.since == SINCE and res.since_source == "copy approved_at"
+    assert not res.ok and res.since is None and res.tps == []
+    assert "copy not backed by the approvals chain; run approve --mode observe to record it" in res.reasons
 
 
 def test_the_newest_observe_row_is_the_start_not_the_first():

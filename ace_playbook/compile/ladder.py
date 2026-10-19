@@ -96,8 +96,8 @@ def check(p: dict, copy: dict | None, rows_shadow: list[dict], rows_labels: list
         res.since, res.since_source = newest["ts"], "approvals row"
     elif newest:
         why(f"not in {prev} (newest approvals row is {newest['mode']})")
-    elif prev == "observe" and copy is not None:
-        res.since, res.since_source = copy["approved_at"], "copy approved_at"
+    elif prev == "observe":                                    # no row: the copy's approved_at is a file the agent can write
+        why("copy not backed by the approvals chain; run approve --mode observe to record it")
     elif f"not in {prev}" not in res.reasons:
         why(f"not in {prev}")                                  # block: a warn copy with no warn row in the chain
     if res.since is not None:
@@ -111,7 +111,7 @@ def check(p: dict, copy: dict | None, rows_shadow: list[dict], rows_labels: list
     for ref, (n, row, human) in sorted(effective(rows_labels).items()):
         kind, f = _counted(row, human), fires.get(ref)
         if kind and f is None:
-            why(f"forged label: {labels._clean(ref)[:32]} has no fire row")
+            why(f"forged label: {labels._clean(ref)[:32]} (no fire row)")
         if not (kind and f and f["proposal_id"] == p["id"]):
             continue
         at = row.get("at") if isinstance(row.get("at"), str) else "-"
@@ -222,8 +222,12 @@ def run(cfg, args, ask: Callable[[str], str], need_tty: Callable[[str], bool], n
         approvals.append(cfg.data_dir, {"ts": now, "proposal_id": p["id"], "proposal_sha256": rec["proposal_sha256"],
                                         "mode": mode, "tp_refs": sorted(x.row_id for x in res.tps),
                                         "fp_refs": sorted(x.row_id for x in res.fps), "review_sha": review or "-"})
-        evidence.private_dir(dest.parent)
-        write_private(dest, json.dumps(rec, indent=1, sort_keys=True) + "\n")
+        try:
+            evidence.private_dir(dest.parent)
+            write_private(dest, json.dumps(rec, indent=1, sort_keys=True) + "\n")
+        except OSError as exc:
+            _need(False, f"approvals row written but the copy failed ({type(exc).__name__}); the hook keeps running "
+                         f"observe; re-run approve --mode {mode} after fixing the copy directory")
         print(f"ok: {p['id']} is now in {mode} mode\n{dest}")
         return 0
     except labels.Refusal as exc:

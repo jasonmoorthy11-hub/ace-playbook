@@ -239,7 +239,7 @@ for strong detectors that allow it and makes the hook answer `permissionDecision
 block wins over any warn in the same call. Every approval is a row in the hash-chained `approvals.jsonl`; the hook runs a
 `warn` or `block` copy at that mode only while the newest row for it carries the same hash and mode. A copy edited by hand
 (or with no row, or with a broken `approvals.jsonl`) falls back to observe and logs `approvals:<id>:missing`, `:mismatch` or
-`approvals:chain_broken` in `shadow.log`; a hand edit of the copy alone never enforces.
+`approvals:chain_broken` in `shadow.log`; a hand edit of the copy alone never enforces. If `approve --mode warn` reports a `forged label` (a label with no fire row in `shadow.jsonl`), restore the missing shadow row or truncate `labels.jsonl` to the row before the forged one and re-label; if it reports `copy not backed by the approvals chain`, run `approve --mode observe` to record the copy.
 
 Two things to know. The matcher is `Bash` only, narrower than the design's list (no approvable proposal
 looks at Read, Edit or Write yet, and every extra matcher is another Python start per call). And Python
