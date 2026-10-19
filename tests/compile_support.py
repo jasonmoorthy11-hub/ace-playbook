@@ -33,12 +33,12 @@ def _text(step: dict) -> str:
     return step["human"] + "x" * step.get("pad", 0)
 
 
-def records(steps: list[dict], sid: str = SID) -> list[dict]:
+def records(steps: list[dict], sid: str = SID, day: str = "2026-09-15") -> list[dict]:
     """Invented transcript records, shaped like Claude Code JSONL."""
     out: list[dict] = []
 
     def add(rtype: str, **kw) -> None:
-        rec = {"type": rtype, "sessionId": sid, "timestamp": f"2026-09-15T10:00:{len(out) % 60:02d}Z",
+        rec = {"type": rtype, "sessionId": sid, "timestamp": f"{day}T10:00:{len(out) % 60:02d}Z",
                "isSidechain": False, "uuid": f"u{len(out)}"}
         rec.update(kw)
         out.append(rec)
@@ -192,7 +192,7 @@ def write_transcript(cfg, session: dict) -> Path:
     d = Path(cfg.transcripts_root) / "proj"
     d.mkdir(parents=True, exist_ok=True)
     p = d / f"{session['id']}.jsonl"
-    p.write_text("".join(json.dumps(r) + "\n" for r in records(session["steps"], session["id"])))
+    p.write_text("".join(json.dumps(r) + "\n" for r in records(session["steps"], session["id"], session.get("day", "2026-09-15"))))
     return p
 
 
@@ -299,6 +299,59 @@ def pre_payload(command: str, sid: str = "sess-live-1", tool: str = "Bash") -> d
 def shadow_rows(data) -> list[dict]:
     p = Path(data) / "shadow.jsonl"
     return [json.loads(line) for line in p.read_text().splitlines()] if p.exists() else []
+
+
+# ---------------------------------------------------------------- step 5a: the offline pass
+NOW = 1792411200.0         # 2026-10-19T12:00:00Z: every offline test passes this as `now`
+RM_PROMPT_CMD = "rm -rf /w/src"
+
+
+def offline_world(tmp_path, mode: str = "observe", approved_at: str = "2026-10-01T00:00:00Z"):
+    """real_world with a transcripts root and its approved copy re-written at `mode` and a fixed approval time."""
+    from ace_playbook.atomic import write_private
+    from ace_playbook.compile import approvals, shadow
+    w = real_world(tmp_path)
+    w.cfg.transcripts_root = tmp_path / "projects"
+    w.pid = w.props["rm_rf_nonscratch"]["id"]
+
+    def approve(m, at=approved_at):
+        """Write the copy; above observe the hook also needs the matching approvals row (step 5b), so append it."""
+        rec = shadow.approved_record(w.props["rm_rf_nonscratch"], m, at)
+        write_private(w.data / "proposals" / "approved" / (w.pid + ".json"), json.dumps(rec, indent=1, sort_keys=True) + "\n")
+        if m != "observe":
+            approvals.append(w.data, {"proposal_id": w.pid, "proposal_sha256": rec["proposal_sha256"], "mode": m, "ts": at})
+
+    w.approve = approve
+    w.approve(mode)
+    return w
+
+
+def put_session(w, sid: str, steps: list[dict], age: float = 7200.0, day: str = "2026-10-18") -> Path:
+    """An invented transcript (record `i` is stamped `<day>T10:00:<i>Z`) whose mtime is `age` seconds before NOW."""
+    import os
+    path = write_transcript(w.cfg, {"id": sid, "steps": steps, "day": day})
+    os.utime(path, (NOW - age, NOW - age))
+    return path
+
+
+def put_shadow(w, sid: str, command: str, mode: str = "observe", ts: str = "2026-10-18T10:00:00Z", pid: str | None = None) -> dict:
+    """A live shadow row the hook would have written for `command` in session `sid`."""
+    from ace_playbook.compile import evidence as evm, state as st
+    row = {"ts": ts, "proposal_id": pid or w.pid, "lesson_id": RM_LESSON, "mode": mode, "event": "PreToolUse",
+           "tool_name": "Bash", "session": st.session_hash(sid), "would_fire": True, "cause": "detector", "tier": "live",
+           "payload_sha256": evm.payload_hash({"tool_name": "Bash", "tool_input": {"command": command}})}
+    append_jsonl(w.cfg.path("shadow.jsonl"), row)
+    return row
+
+
+def tree_state(root) -> dict:
+    """Relative path -> (is a directory, size, mtime_ns) of every file AND directory under `root`, symlinks not followed: a
+    new directory or a same-size rewrite shows (a dry run must leave it unchanged)."""
+    out = {}
+    for p in sorted(Path(root).rglob("*")):
+        info = p.lstat()
+        out[str(p.relative_to(root))] = (p.is_dir() and not p.is_symlink(), info.st_size, info.st_mtime_ns)
+    return out
 
 
 if __name__ == "__main__":  # python -m tests.compile_support <rebuild-lab>/ace/step0

@@ -87,7 +87,7 @@ def test_real_hook_rows_are_counted_per_proposal_with_sessions_days_and_cause_sp
     code, out, _ = run(w, capsys=capsys)
     (row,) = table(out, PRIV)
     assert code == 0
-    assert row == [pid(w), cs.RM_LESSON, "rm_rf_nonscratch", "PreToolUse", "observe", "4", "3", "1", "2", "2", "0", "0",
+    assert row == [pid(w), cs.RM_LESSON, "rm_rf_nonscratch", "PreToolUse", "observe", "4", "3", "1", "2", "2", "0", "0", "0",
                    "4", "2026-10-18", "2026-10-20"]
 
 
@@ -96,7 +96,7 @@ def test_the_header_names_the_columns_in_the_specified_order(w, fire, capsys):
     out = run(w, capsys=capsys)[1]
     head = out.split(PRIV + "\n", 1)[1].splitlines()[1].split()
     assert head == ["proposal", "lesson", "detector", "event", "approved_mode", "rows", "detector", "truncated",
-                    "sessions", "days", "tp", "fp", "unlabelled", "first", "last"]
+                    "sessions", "days", "tp", "fp", "tp_cand", "unlabelled", "first", "last"]
 
 
 def test_tp_and_fp_labels_are_counted_the_newest_per_ref_wins_and_the_rest_are_unlabelled(w, fire, capsys):
@@ -105,7 +105,7 @@ def test_tp_and_fp_labels_are_counted_the_newest_per_ref_wins_and_the_rest_are_u
     ids = [labels.row_id(r) for r in cs.shadow_rows(w.data)]
     label_rows(w, (ids[0], "tp"), (ids[1], "fp"), (ids[1], "tp"), (ids[2], "tp"), (ids[2], "fp"))
     (row,) = table(run(w, capsys=capsys)[1], PRIV)
-    assert row[10:13] == ["2", "1", "1"]                                   # tp (0, 1), fp (2), unlabelled (3)
+    assert row[10:14] == ["2", "1", "0", "1"]                                   # tp (0, 1), fp (2), unlabelled (3)
 
 
 def test_incident_labels_do_not_count(w, fire, capsys):
@@ -113,10 +113,10 @@ def test_incident_labels_do_not_count(w, fire, capsys):
     rid = labels.row_id(cs.shadow_rows(w.data)[0])
     label_rows(w, (rid, "incident"))
     (row,) = table(run(w, capsys=capsys)[1], PRIV)
-    assert row[10:13] == ["0", "0", "1"]
+    assert row[10:14] == ["0", "0", "0", "1"]
     w.cfg.path("labels.jsonl").unlink()
     label_rows(w, (rid, "tp"), (rid, "incident"))                           # a later incident row never unseats a tp
-    assert table(run(w, capsys=capsys)[1], PRIV)[0][10:13] == ["1", "0", "0"]
+    assert table(run(w, capsys=capsys)[1], PRIV)[0][10:14] == ["1", "0", "0", "0"]
 
 
 def test_a_broken_chain_ignores_every_label_and_says_so(w, fire, capsys):
@@ -128,7 +128,7 @@ def test_a_broken_chain_ignores_every_label_and_says_so(w, fire, capsys):
     path.write_text(first + "\n" + second.replace('"fp"', '"tp"') + "\n")
     code, out, _ = run(w, capsys=capsys)
     assert code == 0 and "labels: chain BROKEN at row 2, labels ignored" in out
-    assert table(out, PRIV)[0][10:13] == ["0", "0", "1"]
+    assert table(out, PRIV)[0][10:14] == ["0", "0", "0", "1"]
     assert json.loads(run(w, "--json", capsys=capsys)[1])["labels"] == {"chain_ok": False, "broken_at": 2}
 
 
@@ -147,7 +147,7 @@ def test_synthetic_rows_get_their_own_table_and_never_change_the_private_one(w, 
     out = run(w, capsys=capsys)[1]
     assert table(out, PRIV) == table(before, PRIV)
     (row,) = table(out, SYNTH)
-    assert row[0] == "P-0a1b2c3d" and row[5] == "2" and row[8] == "2" and row[10:13] == ["0", "0", "2"]
+    assert row[0] == "P-0a1b2c3d" and row[5] == "2" and row[8] == "2" and row[10:14] == ["0", "0", "0", "2"]
     assert "no rows" in before and "no rows" not in out and "not computed here" in out
 
 
@@ -198,13 +198,13 @@ def test_json_has_the_specified_shape_and_the_same_numbers_as_the_text(w, fire, 
     put_syn(w, SYN)
     code, out, _ = run(w, "--json", "--days", "7", capsys=capsys)
     obj = json.loads(out)
-    assert code == 0 and set(obj) == {"report_sha256", "days", "private", "synthetic", "labels"} and obj["days"] == 7
+    assert code == 0 and set(obj) == {"report_sha256", "days", "private", "synthetic", "demotions", "labels"} and obj["days"] == 7
     assert obj["labels"] == {"chain_ok": True, "broken_at": None}
     assert obj["report_sha256"] == hashlib.sha256(SOURCE.read_bytes()).hexdigest()
     prop = obj["private"]["proposals"][pid(w)]
     assert prop == {"lesson": cs.RM_LESSON, "detector": "rm_rf_nonscratch", "event": "PreToolUse",
                     "approved_mode": "observe", "rows": 2, "cause_detector": 2, "cause_truncated": 0, "sessions": 2,
-                    "days": 2, "tp": 0, "fp": 0, "unlabelled": 2, "first": "2026-10-19", "last": "2026-10-20"}
+                    "days": 2, "tp": 0, "fp": 0, "tp_cand": 0, "unlabelled": 2, "first": "2026-10-19", "last": "2026-10-20"}
     assert obj["private"]["per_day"] == [{"date": "2026-10-19", "proposal_id": pid(w), "rows": 1},
                                          {"date": "2026-10-20", "proposal_id": pid(w), "rows": 1}]
     assert set(obj["synthetic"]) == {"proposals", "per_day"}
@@ -316,7 +316,7 @@ def test_identical_rows_share_a_row_id_so_one_label_counts_once(w, fire, capsys)
     first, second, third = cs.shadow_rows(w.data)
     assert labels.row_id(first) == labels.row_id(second) != labels.row_id(third)
     label_rows(w, (labels.row_id(first), "tp"))
-    assert table(run(w, capsys=capsys)[1], PRIV)[0][5:13] == ["3", "3", "0", "2", "1", "1", "0", "1"]
+    assert table(run(w, capsys=capsys)[1], PRIV)[0][5:14] == ["3", "3", "0", "2", "1", "1", "0", "0", "1"]
 
 
 def test_an_unparsable_ts_counts_in_rows_only(w, fire, capsys):
@@ -324,7 +324,7 @@ def test_an_unparsable_ts_counts_in_rows_only(w, fire, capsys):
     cs.append_jsonl(w.cfg.path("shadow.jsonl"), {**SYN, "corpus": "private", "proposal_id": pid(w), "ts": "garbage"})
     out = run(w, capsys=capsys)[1]
     row = table(out, PRIV)[0]
-    assert row[5] == "2" and row[9] == "1" and row[13:] == ["2026-10-20", "2026-10-20"]
+    assert row[5] == "2" and row[9] == "1" and row[14:] == ["2026-10-20", "2026-10-20"]
     assert out.split("Rows per day", 1)[1].count(pid(w)) == 1
 
 
@@ -332,7 +332,7 @@ def test_a_label_whose_ref_is_a_synthetic_rows_id_does_not_count_in_the_syntheti
     put_syn(w, SYN)
     label_rows(w, (labels.row_id(SYN), "tp"))
     row = table(run(w, capsys=capsys)[1], SYNTH)[0]
-    assert row[5] == "1" and row[10:13] == ["0", "0", "1"]
+    assert row[5] == "1" and row[10:14] == ["0", "0", "0", "1"]
 
 
 def test_a_symlinked_shadow_file_exits_2(w, tmp_path, capsys):
@@ -362,3 +362,26 @@ def test_a_non_utf8_shadow_file_exits_2_without_a_traceback(w, capsys):
     w.cfg.path("shadow.jsonl").write_bytes(b"\xff\xfe not utf8\n")
     code, out, err = run(w, capsys=capsys)
     assert (code, out) == (2, "") and err.startswith("error: ")
+
+
+def test_the_demotions_section_lists_the_newest_cap_per_proposal_and_flags_a_broken_chain(w, capsys):
+    from ace_playbook.compile import demotions as dm
+    row = {"proposal_id": pid(w), "from_mode": "block", "to_mode": "warn", "cause": "label_fp", "ref": "aaaa1111",
+           "review_required": False}
+    dm.append(w.data, row)
+    dm.append(w.data, {**row, "from_mode": "warn", "to_mode": "observe", "cause": "label_fp_pair", "ref": "bbbb2222",
+                       "review_required": True})
+    out = run(w, capsys=capsys)[1]
+    line = next(ln.split() for ln in out.split("Demotions", 1)[1].splitlines() if ln.startswith(pid(w)))
+    assert line[:3] == [pid(w), "observe", "label_fp_pair"] and line[4:] == ["true", "2"]
+    obj = json.loads(run(w, "--json", capsys=capsys)[1])["demotions"]
+    assert obj["chain_ok"] is True and obj["proposals"][pid(w)]["rows"] == 2 and obj["proposals"][pid(w)]["cap"] == "observe"
+    path = w.data / "demotions.jsonl"
+    path.write_text(path.read_text().replace("observe", "disabled"))
+    out = run(w, capsys=capsys)[1]
+    assert "demotions: chain BROKEN at row 1" in out
+    assert json.loads(run(w, "--json", capsys=capsys)[1])["demotions"]["broken_at"] == 1
+    path.unlink()
+    assert "no demotions" in run(w, capsys=capsys)[1]
+    path.symlink_to(w.data / "elsewhere")
+    assert run(w, capsys=capsys)[0] == 2

@@ -367,3 +367,10 @@ def test_python_dash_m_ace_playbook_compile_shadow_works_like_the_wrapper(w):
                            capture_output=True, text=True, cwd=root, env=env, timeout=30)
         assert (p.returncode, p.stdout) == (0, "")
     assert len(cs.shadow_rows(w.data)) == 1
+
+
+def test_a_broken_demotions_chain_is_logged_once_not_on_every_call(w, run):
+    (w.data / "demotions.jsonl").write_text("not json\n")
+    for _ in range(5):
+        run(cs.pre_payload(RM))
+    assert run.log.count("demotions:chain_broken") == 1 and len(run.rows) == 5

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reflect every transcript without a ledger entry. Run nightly via launchd (see INSTALL.md)."""
+"""Run the offline compiler pass, then reflect every transcript without a ledger entry. Run nightly via launchd (see INSTALL.md)."""
 
 import argparse
 import json
@@ -17,11 +17,21 @@ def main() -> int:
     ap.add_argument("--config")
     ap.add_argument("--max", type=int, default=20, dest="max_n")
     ap.add_argument("--idle-minutes", type=float, default=60.0)
-    ap.add_argument("--dry-run", action="store_true", help="list candidates; no API calls")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="list reflection candidates; no API calls (the offline pass still runs, see --offline-dry-run)")
+    ap.add_argument("--no-offline", action="store_true", help="skip the offline compiler pass")
+    ap.add_argument("--offline-dry-run", action="store_true", help="the offline pass computes its counts and writes nothing")
     args = ap.parse_args()
     cfg = cfgmod.load(args.config)
-    results = run_sweep(cfg, max_n=args.max_n, dry_run=args.dry_run, idle_minutes=args.idle_minutes)
-    print(json.dumps(results, indent=2))
+    report = {}
+    if not args.no_offline:
+        try:                                          # the pass makes no API call, so --dry-run does not stop it
+            from ace_playbook.compile import offline
+            report["offline"] = offline.run(cfg, dry_run=args.offline_dry_run, idle_minutes=args.idle_minutes)
+        except Exception as exc:                      # type only; reflection still runs
+            report["offline"] = {"error": type(exc).__name__}
+    report["sweep"] = run_sweep(cfg, max_n=args.max_n, dry_run=args.dry_run, idle_minutes=args.idle_minutes)
+    print(json.dumps(report, indent=2))
     return 0
 
 

@@ -1,15 +1,11 @@
 """The shadow hook (docs/design/compiler.md 7): evaluate approved proposals on one live hook payload.
 
-hooks/shadow.sh calls `main(["pre"|"stop"])`. It reads one payload on stdin (cap 256 KiB), loads the approved
-proposals, re-validates each from disk, runs the detectors they name and appends one row per fire to
-`data_dir/shadow.jsonl`. It ALWAYS returns 0 and never raises: a failure is one type-only line in
-`data_dir/shadow.log`. Observe mode prints nothing. Warn echoes the stored message on stderr and prints ONE
-`hookSpecificOutput.additionalContext` JSON on stdout (the only channel the model sees on exit 0; verified live for
-PreToolUse only, Stop follows the hooks reference and no Stop detector is approvable today); block prints the
-deny (PreToolUse) or block (Stop) JSON instead and wins over warn. A copy above observe is honoured only when the
-newest `approvals.jsonl` row matches its hash and mode (`approvals.verify_copy`); otherwise it runs in observe and
-the log says why. Rows hold enums, ids, hashes and a timestamp, never payload text. Stdlib plus this package; no
-inject/keys/reflect/network.
+hooks/shadow.sh calls `main(["pre"|"stop"])`: one payload on stdin (cap 256 KiB), the approved proposals re-validated,
+their detectors run, one `shadow.jsonl` row per fire; ALWAYS returns 0, failures are type-only lines in `shadow.log`.
+Observe prints nothing; warn echoes the message on stderr and prints ONE `hookSpecificOutput.additionalContext` JSON
+on stdout (verified live for PreToolUse; Stop per the hooks reference only); block prints the deny/block JSON and wins.
+A copy above observe counts only with a matching `approvals.jsonl` row (else observe, logged); `demotions.jsonl` only
+lowers (disabled skips; a broken chain caps everything at observe). Rows hold enums, ids, hashes and a timestamp.
 """
 
 from __future__ import annotations
@@ -23,15 +19,13 @@ from pathlib import Path
 
 from .. import config as cfgmod
 from ..canon import canonical, now_iso
-from . import approvals, catalogue, evidence, proposal
+from . import approvals, catalogue, demotions, evidence, proposal
 from . import state as state_mod
 from .events import event_from_hook
 
 MAX_STDIN, MAX_FILES, MAX_FILE_BYTES, LOG_CAP = 262144, 50, 16384, 1000000
-APPROVED = "approved"
-EVENTS = {"pre": "PreToolUse", "stop": "Stop"}
-MODES = ("observe", "warn", "block")
-ALLOWED_MODES = ("observe", "warn", "block")   # warn and block also need a matching approvals.jsonl row (7.3)
+APPROVED, EVENTS = "approved", {"pre": "PreToolUse", "stop": "Stop"}
+MODES = ALLOWED_MODES = ("observe", "warn", "block")   # warn and block also need a matching approvals.jsonl row (7.3)
 EXTRA_KEYS = {"approved_at", "proposal_sha256"}
 
 
@@ -77,12 +71,11 @@ def approved_path(cfg, pid: str) -> Path:
 
 class _Approvals:
     """The approvals chain, read at most once per hook call and only if a copy above observe needs it."""
-
     def __init__(self, cfg, log) -> None:
         self.cfg, self.log, self.loaded, self.rows, self.problem = cfg, log, False, [], None
 
     def check(self, rec: dict) -> str:
-        """`ok`, `missing`, `mismatch` or `chain_broken` for one approved record (a read error counts as missing)."""
+        """`ok`, `missing`, `mismatch` or `chain_broken` for one record (a read error counts as missing)."""
         if not self.loaded:
             self.loaded = True
             try:
@@ -96,7 +89,34 @@ class _Approvals:
         return self.problem or approvals.verify_copy(rec, self.rows)
 
 
-def _load_one(cfg, path: Path, pid: str, log, appr: _Approvals | None = None) -> tuple[dict, str] | None:
+def _tail(cfg, n: int = 200) -> str:
+    """The last `n` bytes of shadow.log, '' when it is missing or not a regular file."""
+    try:
+        with os.fdopen(os.open(Path(cfg.data_dir) / "shadow.log", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as fh:
+            info = os.fstat(fh.fileno())
+            fh.seek(max(0, info.st_size - n))
+            return fh.read(n).decode("utf-8", "replace") if stat.S_ISREG(info.st_mode) else ""
+    except OSError:
+        return ""
+
+
+def _demotions(cfg, log) -> tuple[list[dict], int | None]:
+    """(rows, broken_at) of demotions.jsonl, read once per call; a read error means no cap (fail open), a broken chain caps
+    every proposal at observe. A line already in the last 200 bytes of shadow.log is not logged again."""
+    once = lambda msg: None if msg in _tail(cfg) else log(msg)       # noqa: E731
+    try:
+        rows, broken = demotions.read_chain(cfg.data_dir)
+    except Exception as exc:
+        once(f"demotions:{type(exc).__name__}")
+        return [], None
+    if broken is not None:
+        once("demotions:chain_broken")
+    return rows, broken
+
+
+def _load_one(cfg, path: Path, pid: str, log, appr: _Approvals | None = None,
+              dem: tuple[list[dict], int | None] | None = None) -> tuple[dict, str] | None:
+    dem = dem or ([], None)
     try:
         if os.lstat(path).st_size > MAX_FILE_BYTES:
             return log(f"skipped:{pid}:oversize")
@@ -115,7 +135,12 @@ def _load_one(cfg, path: Path, pid: str, log, appr: _Approvals | None = None) ->
                 if verdict != "chain_broken":
                     log(f"approvals:{pid}:{verdict}")
                 mode = "observe"
-        return body, mode
+        cap = demotions.effective_cap(dem[0], pid)            # then a demotion can only lower what the chain allows
+        if dem[1] is not None:
+            cap = demotions.lower("observe", cap)
+        if cap == "disabled":
+            return log(f"skipped:{pid}:demoted")
+        return body, demotions.lower(mode, cap)
     except Exception as exc:                                  # type only; a bad file never stops the others
         return log(f"skipped:{pid}:invalid:{type(exc).__name__}")
 
@@ -132,19 +157,33 @@ def load_approved(cfg, log) -> list[tuple[dict, str]]:
         return []
     if len(names) > MAX_FILES:
         log("skipped:too_many_files")
-    out, appr = [], _Approvals(cfg, log)
+    out, appr, dem = [], _Approvals(cfg, log), (_demotions(cfg, log) if names else ([], None))
     for name in names[:MAX_FILES]:
         if not proposal.PID.fullmatch(name[:-5]):
             log("skipped:file_name")
             continue
-        item = _load_one(cfg, base / name, name[:-5], log, appr)
+        item = _load_one(cfg, base / name, name[:-5], log, appr, dem)
         if item:
             out.append(item)
     return out
 
 
+def approved_records(cfg) -> list[tuple[dict, str, str]]:
+    """[(proposal, mode, approved_at)] of the approved copies whose hash holds; not re-validated (the offline pass only lowers)."""
+    base, out = approved_dir(cfg), []
+    for p in sorted(base.glob("*.json")) if base.is_dir() and not base.is_symlink() else []:
+        try:
+            rec = proposal.load(p)
+            body, mode = pending_body(rec)
+        except (ValueError, OSError):
+            continue
+        if body is not None and body["id"] == p.stem:
+            out.append((body, mode, rec["approved_at"]))
+    return out
+
+
 # ---------------------------------------------------------------- files
-def _append(path: Path, text: str, cap: int | None = None) -> None:
+def _append(path: Path, text: str, cap: int | None = None, sync: bool = False) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
     try:
@@ -153,6 +192,8 @@ def _append(path: Path, text: str, cap: int | None = None) -> None:
             raise OSError("not a regular file")
         if cap is None or info.st_size < cap:
             os.write(fd, text.encode())
+            if sync:                                          # the offline pass; the hook never waits for a disk flush
+                os.fsync(fd)
     finally:
         os.close(fd)
 

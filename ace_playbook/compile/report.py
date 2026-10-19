@@ -2,8 +2,10 @@
 
 Two corpora, two tables, never summed: the private `shadow.jsonl` (written by the live hook) and the optional
 `shadow.synthetic.jsonl` (every row says `corpus: synthetic`). A row in the wrong file refuses the whole report.
-tp/fp come from `labels.jsonl` (newest row per ref wins, `incident` rows ignored, a broken chain ignores every
-label). No session hash, row id, payload hash or path is printed. Rates and hook cost need the offline pass.
+tp/fp come from `labels.jsonl` through `labels.effective` (a human row beats an auto one, the newest row of its kind
+wins, `incident` rows ignored, a broken chain ignores every label): fp counts human and auto rows, tp only human
+ones, `tp_cand` the auto `tp_candidate` rows, which are never TPs. A `Demotions` section lists the newest cap per proposal
+from `demotions.jsonl` (a broken chain is one visible line). No session hash, row id, payload hash or path is printed.
 Both shadow files are read here through a no-follow, regular-file-only reader. Imports: stdlib, `..canon`,
 `..config`, `.labels`; `catalogue`, `proposal` and `shadow` load lazily (hook path).
 """
@@ -24,16 +26,16 @@ from pathlib import Path
 
 from ..canon import now_iso
 from ..config import Config
-from . import labels
+from . import demotions, labels
 
 PRIVATE, SYNTHETIC = "shadow.jsonl", "shadow.synthetic.jsonl"
 KEYS = ("ts", "session", "proposal_id", "payload_sha256")
 PID, LID = re.compile(r"P-[0-9a-f]{8}"), re.compile(r"L-[0-9a-f]{8}")
 MAX_DAYS = 3660
 FIELDS = ("lesson", "detector", "event", "approved_mode", "rows", "cause_detector", "cause_truncated", "sessions",
-          "days", "tp", "fp", "unlabelled", "first", "last")
+          "days", "tp", "fp", "tp_cand", "unlabelled", "first", "last")
 HEADS = ("proposal", "lesson", "detector", "event", "approved_mode", "rows", "detector", "truncated", "sessions",
-         "days", "tp", "fp", "unlabelled", "first", "last")
+         "days", "tp", "fp", "tp_cand", "unlabelled", "first", "last")
 NOT_COMPUTED = ("not computed here: eligible-session rates, Wilson intervals, friction, hook cost "
                 "(need the offline pass, design 8)")
 
@@ -93,12 +95,31 @@ def read_corpora(cfg: Config) -> tuple[list[dict], list[dict]]:
 
 
 def label_map(cfg: Config) -> tuple[dict[str, str], int | None]:
-    """({row_id: tp|fp}, broken_at): the newest row per ref wins; a broken chain gives no labels at all."""
+    """({row_id: tp|fp|tp_candidate}, broken_at): `labels.effective`; a broken chain gives no labels at all."""
     rows, broken = labels.read_chain(cfg)
-    if broken is not None:
-        return {}, broken
-    marked = [r for r in rows if r.get("label") in ("tp", "fp") and isinstance(r.get("ref"), str)]
-    return {r["ref"]: r["label"] for r in marked}, None
+    return ({}, broken) if broken is not None else (labels.effective(rows), None)
+
+
+def hook_errors(cfg: Config, rows: list[dict], since: str) -> tuple[int, int]:
+    """(`error:` lines of shadow.log stamped at or after `since`, shadow rows stamped at or after it)."""
+    text = (demotions.read_regular(cfg.path("shadow.log"), 2_000_000) or b"").decode("utf-8", "replace")
+    errors = sum(ln[:20] >= since and ln[21:].startswith("error:") for ln in text.splitlines())
+    return errors, sum(r["ts"] >= since for r in rows)
+
+
+def demotion_summary(cfg: Config) -> dict:
+    """{"chain_ok", "broken_at", "proposals": {pid: {cap, cause, ts, review_required, rows}}}: the newest row names the cap,
+    cause and time; `review_required` is true when any row of the proposal asked for a review."""
+    try:
+        rows, broken = demotions.read_chain(cfg.data_dir)
+    except OSError:
+        raise labels.Refusal("demotions.jsonl is a symlink or not a regular file", 2) from None
+    props: dict[str, dict] = {}
+    for r in rows:
+        old = props.get(r["proposal_id"], {"review_required": False, "rows": 0})
+        props[r["proposal_id"]] = {"cap": r["to_mode"], "cause": r["cause"], "ts": r["ts"], "rows": old["rows"] + 1,
+                                   "review_required": old["review_required"] or r["review_required"]}
+    return {"chain_ok": broken is None, "broken_at": broken, "proposals": props}
 
 
 def _meta(cfg: Config, pid: str) -> tuple[str, str, str]:
@@ -109,7 +130,8 @@ def _meta(cfg: Config, pid: str) -> tuple[str, str, str]:
         return det, ev, mode
     try:
         p = proposal.load(proposal.proposal_path(cfg, pid))
-        det, ev = _pick(p["check"]["detector"], catalogue.CATALOGUE), _pick(p["event"], shadow.EVENTS.values())
+        det = _pick(p["check"]["detector"], catalogue.CATALOGUE)
+        ev = _pick(p["event"], shadow.EVENTS.values())
     except (ValueError, OSError, KeyError, TypeError):
         pass
     try:
@@ -138,7 +160,8 @@ def summarize(cfg: Config, rows: list[dict], labs: dict[str, str], now: str, day
                       "detector": det, "event": ev, "approved_mode": mode, "rows": len(rs),
                       "cause_detector": causes["detector"], "cause_truncated": causes["truncated"],
                       "sessions": len({r["session"] for r in rs}), "days": len(set(dates)),
-                      "tp": marks["tp"], "fp": marks["fp"], "unlabelled": sum(labels.row_id(r) not in labs for r in rs),
+                      "tp": marks["tp"], "fp": marks["fp"], "tp_cand": marks["tp_candidate"],
+                      "unlabelled": sum(labels.row_id(r) not in labs for r in rs),
                       "first": min(dates, default="-"), "last": max(dates, default="-")}
         per_day.update(Counter((d, pid) for d in dates if cutoff <= date.fromisoformat(d) <= today))
     return {"proposals": props,
@@ -161,10 +184,19 @@ def _section(title: str, source: str, data: dict, days: int) -> list[str]:
     return [*out, ""]
 
 
-def render(sha: str, days: int, private: dict, synthetic: dict, broken: int | None) -> str:
+def _demotions(dem: dict) -> list[str]:
+    out = ["Demotions (demotions.jsonl: the newest row of a proposal is its cap)"]
+    if not dem["chain_ok"]:
+        out.append(f"demotions: chain BROKEN at row {dem['broken_at']}, rows after it ignored (the hook caps every proposal at observe)")
+    rows = [[pid, *(str(p[k]).lower() for k in ("cap", "cause", "ts", "review_required", "rows"))] for pid, p in dem["proposals"].items()]
+    return [*out, *(_grid(("proposal", "cap", "cause", "ts", "review_required", "rows"), rows) if rows else ["no demotions"]), ""]
+
+
+def render(sha: str, days: int, private: dict, synthetic: dict, broken: int | None, dem: dict) -> str:
     lines = ["ace-playbook shadow report", f"report_sha256: {sha}", ""]
     lines += _section("Private corpus (aggregate, counts only)", PRIVATE, private, days)
     lines += _section("Synthetic corpus (reproducible)", SYNTHETIC, synthetic, days)
+    lines += _demotions(dem)
     lines.append(NOT_COMPUTED)
     if broken is not None:
         lines.append(f"labels: chain BROKEN at row {broken}, labels ignored")
@@ -181,13 +213,14 @@ def run(cfg: Config, days: int, as_json: bool = False, now: str | None = None) -
         labs, broken = label_map(cfg)
         private = summarize(cfg, priv_rows, labs, now, days)
         synthetic = summarize(cfg, syn_rows, {}, now, days)          # human labels are on private rows only
+        dem = demotion_summary(cfg)
     except labels.Refusal as exc:
         print(f"error: {exc}", file=sys.stderr)
         return exc.code
     sha = source_sha256()
     if as_json:
         print(json.dumps({"report_sha256": sha, "days": days, "private": private, "synthetic": synthetic,
-                          "labels": {"chain_ok": broken is None, "broken_at": broken}}, indent=1, sort_keys=True))
+                          "demotions": dem, "labels": {"chain_ok": broken is None, "broken_at": broken}}, indent=1, sort_keys=True))
     else:
-        print(render(sha, days, private, synthetic, broken), end="")
+        print(render(sha, days, private, synthetic, broken, dem), end="")
     return 0

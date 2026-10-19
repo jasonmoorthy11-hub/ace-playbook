@@ -58,12 +58,13 @@ RESULTS.md:62), alongside `edit_unread_turn` and `rm_rf` (RESULTS.md:34). The ve
 | `compile/proposal.py` | Proposal schema, ordered validation, replay/regression runner, writer (section 6) | 299 (built, step 2) |
 | `compile/propscrub.py` | The scrub step and quarantine path of `proposal.write`, split out and imported lazily so the hook path never loads the scrub engine (step 4) | 34 |
 | `ace_playbook/canon.py` | Stdlib-only leaf: `canonical`, `now_iso`, `record_hash`, `GENESIS`, `ID_RE`; `store/schema.py` re-exports them (step 4, see 7.2) | 29 |
-| `compile/shadow.py` | Hook entry point: load approved proposals, re-validate, check the approvals row of a warn or block copy, evaluate, append `shadow.jsonl` rows, print the decision as JSON on stdout (block deny, or warn `additionalContext`); always returns 0 (section 7) | ~220; 220 (step 4), 259 (step 5b) |
+| `compile/shadow.py` | Hook entry point: load approved proposals, re-validate, check the approvals row of a warn or block copy, evaluate, append `shadow.jsonl` rows, print the decision as JSON on stdout (block deny, or warn `additionalContext`); always returns 0 (section 7); since step 5a it also reads `demotions.jsonl` once per call and only ever lowers the mode (disabled skips the proposal, a broken chain caps every proposal at observe) | ~220; 220 (step 4), 259 (step 5b) |
 | `compile/approvals.py` | The hash-chained `approvals.jsonl`: `read_chain`, `newest`, `append` (locked, chain verified from the fd, duplicate skip), `verify_copy`; stdlib and `canon` only, on the hook path (step 5b) | 117 |
 | `compile/ladder.py` | The promotion rules: pure `check` over rows (TP and FP re-derivation, 14 days, 5 human TPs, 0 FPs, strength, source hash, cap) and `run`, the `approve --mode warn\|block` flow with the TP listing; imported lazily by the CLI (step 5b) | 235 |
-| `compile/offline.py` | Nightly pass: run signal detectors over finished transcripts, finalize session-level detectors, label pre-fill, demotions | ~250 |
+| `compile/offline.py` | Nightly pass: run signal detectors over finished transcripts, finalize session-level detectors, label pre-fill, evasion candidates, demotions, `shadow_state` cleanup (section 7.3) | ~250; 290 (built, step 5a) |
+| `compile/demotions.py` | Hash-chained, append-only `demotions.jsonl` (stdlib and `canon` only, read by the hook): reader, `effective_cap`, `lower`, locked writer; plus the pure FP and evasion rules `decide` and `pair_ref` the nightly pass uses | 149 (built, step 5a) |
 | `compile/report.py` | shadow.jsonl to results tables, effect estimates (section 8) | ~260; 193 for the minimal first cut (built, step 4c) |
-| `compile/__main__.py` | CLI: `cards`, `propose`, `validate` (step 2); `approve --mode observe`, `unapprove`, `shadow pre\|stop` (step 4); `label` (step 4b); `report` (step 4c); later `packet`, `review-record`, `replay-synthetic` and `approve --mode warn\|block` | 98, then 181 (step 4), 266 (step 5b: observe rows, back-fill, unapprove revocation, warn and block through `ladder.run`) |
+| `compile/__main__.py` | CLI: `cards`, `propose`, `validate` (step 2); `approve --mode observe`, `unapprove`, `shadow pre\|stop` (step 4); `label` (step 4b); `report` (step 4c); `offline [--dry-run] [--since DAYS] [--idle-minutes N]` (step 5a); later `packet`, `review-record`, `replay-synthetic` and `approve --mode warn\|block` | 98, then 181 (step 4), 266 (step 5b: observe rows, back-fill, unapprove revocation, warn and block through `ladder.run`) |
 | `ace_playbook/textrules.py` | Leaf module (stdlib `re`, `string` only): `unsafe_text_reason`, `inert_reason` and their regexes, moved out of `store/schema.py` and `inject/sanitize.py`, which re-export them (step 1, see 7.2) | ~120 moved |
 | `hooks/shadow.sh` | One script, two registrations (PreToolUse, Stop); never `exec`s, always `exit 0` | 19 lines (built, step 4; a test pins it to the block in section 7) |
 
@@ -464,6 +465,51 @@ computed on read from the stored shadow row (the bare `session` hash as stored, 
 joined with `|`, sha256, first 8 hex, no `r:` prefix); shadow.py writes no `row_id`, so a future hook that
 does must use the same formula.
 
+**As built (step 5a, 2026-10-19).** `python3 -m ace_playbook.compile offline [--dry-run] [--since DAYS] [--idle-minutes N]`
+(`compile/offline.py`; `hooks/nightly_sweep.py` runs it before the reflection sweep, also under that script's `--dry-run`,
+because it makes no API call) prints counts only. It scans transcripts that are regular files of at most 64 MiB, not in
+`subagents`, idle for the given minutes and modified within `--since` days; `offline_state.json` maps the session hash to
+size and mtime, and an unchanged session is skipped. Every catalogue detector runs over each transcript (strict mode, one
+failing transcript is one error) and the session end fires `commit_without_push`; rows go to `detector_events.jsonl` with an
+id of sha256(session, detector, ts, payload hash)[:16], so a rerun appends nothing twice. Live `shadow.jsonl` rows join their
+transcript by session hash and the fire by payload hash and time (the tool use with that hash whose timestamp is nearest at or
+before the row's, else the nearest after within 60 seconds, so only the identical call that fired is judged), and get at most one
+auto label in the order of the lists above.
+`labels.jsonl` rows carry `reason_code` set to the rule (`auto_fp_correction`, `auto_fp_prompt_target`, `auto_fp_shell_rerun`,
+`auto_tp_hook_block`, `auto_tp_correction`) and the label `fp`, or the new `tp_candidate`, which the CLI never writes and which
+counts as nothing. The effective label of a ref is its newest human row (any `reason_code` that is not an auto rule), else its
+newest auto row; no auto row is written over a human one or twice. `report` counts `fp` from both kinds, `tp` from human
+rows only, and shows `tp_cand` apart. Targets are hashed in memory against the latest prompt (never a token under two characters
+or made of `/`, `~` and `.` only; `~` is expanded in memory) and against shell-mode commands: only a user record whose whole text
+is one `<bash-input>...</bash-input>` block (Claude Code does not count it as a human prompt), never such a fragment inside
+other text. No prompt text is stored. Demotions go to the
+hash-chained `demotions.jsonl` (`compile/demotions.py`): `{ts, v, proposal_id, from_mode, to_mode, cause, ref,
+review_required, prev_hash, hash}`, `to_mode` never above `from_mode`, a repeat of the newest row skipped. The hook reads the
+file once per call: `disabled` skips the proposal, any other cap lowers its mode, a broken chain caps every proposal at
+`observe` (measurement continues), a read error is logged by type and means no cap. The pass appends `label_fp` (block to
+warn, warn to observe), `label_fp_pair` (two effective FPs within 30 days: observe, `review_required`) counting FPs since the
+later of approval and the proposal's last demotion (an `evasion_pair` row does not restart them; two FPs more than 30 days
+apart lower one rung each in the same run); and the disable causes `lesson_inactive` (store status `dormant`, `retired`,
+`superseded` or `quarantined`, never `provisional`, `active` or `compiled`; skipped, and reported as `lesson_check: skipped (no
+store)`, when `deltas.jsonl` does not exist), `source_sha256` (catalogue hash against `provenance.source_sha256` of the proposal) and
+`error_rate` (`error:` lines of `shadow.log` above 1% of those plus shadow rows over seven days, only when that sample is at
+least 100; below it the run reports `error_rate: not computable (n=k, need 100)`, because the rows count fires, not hook calls).
+When the shadow corpus cannot be read the demotion stage is skipped and counted as an error. The p95 cost rule cannot be
+computed yet because rows carry no `dur_ms`: every run prints `p95_rule: not computable: no dur_ms in rows`, and the rule is
+not treated as passing. After a block, a different Bash command whose rm targets hash to the same key within the next five
+tool uses is an evasion candidate (`evasion_candidates.jsonl`); two for one proposal within 14 days append an `evasion_pair`
+row with `review_required` and the current mode (no lowering). Regular `shadow_state` files older than seven days are removed
+(a `.json.lock` only when its `.json` is stale or missing and its flock is free); `--dry-run` computes everything and writes
+nothing. A session is marked done in `offline_state.json` only when its detector rows were written and, if it has shadow rows,
+the label stage succeeded.
+
+*Demotions are not lifted yet.* `effective_cap` is the newest row of the proposal, so a demotion stays until a later row
+says otherwise and nothing writes such a row. The integration wave makes a newer operator approval row (`approvals.jsonl`, the
+promotion ladder) clear an older demotion; this step does not implement the lift. `compile report` has a `Demotions` section
+(newest cap, cause, time, `review_required` if any row asked, row count per proposal; a broken chain is one visible line), so a
+silenced proposal shows. The chain is unkeyed: any local process can append a valid lowering row and silence a proposal (it
+can only lower, and the report shows it).
+
 **Mode ladder.**
 
 | Step | Allowed for | Rule to move up (all must hold) | Who acts |
@@ -673,7 +719,7 @@ only a proposal the operator promoted to block mode after the observe and warn l
 | 2 | `evidence.py` + `compile cards` | 15: admission rules, quote only in tool output rejected, self-report-only refused, scrub hit masks and sets non-replayable, idempotent ids, offsets within user messages; legacy path: `legacy:` evidence refused without a human incident label, admitted with one and flagged `provenance: legacy`, re-minted lesson takes the standard path |
 | 3 | `proposal.py` + first proposal for `rm_rf_nonscratch` (lesson g-010, mapped to `L-b3d1fba9`, ace/migration/id_map.jsonl:96, migration applied 2026-10-19); the real proposal needs the legacy card or a re-minted lesson (section 5) | 18: schema, 5 sanitiser rejects, replay must fire, regressions must not, scrub, containment, approve refuses without TTY or review, hash chain, legacy-card banner and second confirmation, `Stop` with mode above observe rejected, end-to-end under a temp HOME proving nothing outside `data_dir` changes |
 | 4 | `shadow.py`, `hooks/shadow.sh`, INSTALL.md section; the operator installs it by hand in observe mode (settings writes are hook-guarded in this setup) | 26: three modes and their stdout/stderr output, deny and block JSON shape, `stop_hook_active`, malformed or empty stdin, missing session id, kill switch, unapproved or hash-mismatched or symlinked proposal ignored, oversize skip, no-network imports, no payload text in rows or stderr, arm determinism, shell script inspection (no `exec`), 7 wrapper tests (`ACE_PYTHON=/usr/bin/python3`, no argument, nonexistent interpreter, crashing module, stdout empty-or-valid-JSON, exit 0 always, and under `ACE_PYTHON=/usr/bin/python3` a planted `json.py` in the working directory is not imported), locked state file skipped within 50 ms, `edit_unread_session` capped at observe until labelled |
-| 5 | `offline.py` + `report.py`: nightly signal detectors, label pre-fill, demotions, two tables | 25: auto-FP rules (a) correction after a message, (b) target in the last prompt, (c) shell-mode rerun (3); auto-TP (a) existing hook blocked, (b) correction after an observe fire (2); unlabeled counts neither side (1); agent self-tags and citations never inputs (1); human label precedence (1); evasion candidates flag without demoting, and the `/tmp/..` shape (2); disable triggers: lesson leaves `active`, `source_sha256` change, error rate or p95 (3); demotions: block to warn on one FP, warn to observe on one FP, two FPs in 30 days to observe with re-review (3), counters reset after a demotion (1); promotion rule check and TP listing with forged-label refusal (3); randomisation inference: seeded permutations deterministic, rate ratio and Wilson per arm (2); corpus mixing refused (1); synthetic and private tables separate (1); state files deleted seven days after the last event (1) |
+| 5 | `offline.py` + `report.py`: nightly signal detectors, label pre-fill, demotions, two tables. **5a landed 2026-10-19** (`offline.py`, `demotions.py`, `compile offline`, the hook honouring demotions, the `tp_cand` column; 88 new tests in `test_compile_offline*.py` and `test_compile_demotions.py`); 5b and 5c (the promotion ladder with its TP listing, synthetic replay, the full report with rates and inference) follow | 25: auto-FP rules (a) correction after a message, (b) target in the last prompt, (c) shell-mode rerun (3); auto-TP (a) existing hook blocked, (b) correction after an observe fire (2); unlabeled counts neither side (1); agent self-tags and citations never inputs (1); human label precedence (1); evasion candidates flag without demoting, and the `/tmp/..` shape (2); disable triggers: lesson leaves `active`, `source_sha256` change, error rate or p95 (3); demotions: block to warn on one FP, warn to observe on one FP, two FPs in 30 days to observe with re-review (3), counters reset after a demotion (1); promotion rule check and TP listing with forged-label refusal (3); randomisation inference: seeded permutations deterministic, rate ratio and Wilson per arm (2); corpus mixing refused (1); synthetic and private tables separate (1); state files deleted seven days after the last event (1) |
 | 6 | One week of observe-mode measurement | none; output is the report with every fire labeled, live versus offline agreement, p95 cost, and a written go or no-go for the seal |
 
 Total about 131 new tests over the existing 223 test functions (358 collected by pytest). Steps 1
