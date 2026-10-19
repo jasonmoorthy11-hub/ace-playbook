@@ -60,8 +60,8 @@ RESULTS.md:62), alongside `edit_unread_turn` and `rm_rf` (RESULTS.md:34). The ve
 | `ace_playbook/canon.py` | Stdlib-only leaf: `canonical`, `now_iso`, `record_hash`, `GENESIS`, `ID_RE`; `store/schema.py` re-exports them (step 4, see 7.2) | 29 |
 | `compile/shadow.py` | Hook entry point: load approved proposals, re-validate, evaluate, append `shadow.jsonl` rows, print the decision as JSON on stdout (block mode only); always returns 0 (section 7) | ~220; 220 (built, step 4) |
 | `compile/offline.py` | Nightly pass: run signal detectors over finished transcripts, finalize session-level detectors, label pre-fill, demotions | ~250 |
-| `compile/report.py` | shadow.jsonl to results tables, effect estimates (section 8) | ~260 |
-| `compile/__main__.py` | CLI: `cards`, `propose`, `validate` (step 2); `approve --mode observe`, `unapprove`, `shadow pre\|stop` (step 4); later `packet`, `review-record`, `label`, `report`, `replay-synthetic` and `approve --mode warn\|block` | 98, then 181 (step 4), ~230 when complete |
+| `compile/report.py` | shadow.jsonl to results tables, effect estimates (section 8) | ~260; 193 for the minimal first cut (built, step 4c) |
+| `compile/__main__.py` | CLI: `cards`, `propose`, `validate` (step 2); `approve --mode observe`, `unapprove`, `shadow pre\|stop` (step 4); `label` (step 4b); `report` (step 4c); later `packet`, `review-record`, `replay-synthetic` and `approve --mode warn\|block` | 98, then 181 (step 4), ~230 when complete |
 | `ace_playbook/textrules.py` | Leaf module (stdlib `re`, `string` only): `unsafe_text_reason`, `inert_reason` and their regexes, moved out of `store/schema.py` and `inject/sanitize.py`, which re-export them (step 1, see 7.2) | ~120 moved |
 | `hooks/shadow.sh` | One script, two registrations (PreToolUse, Stop); never `exec`s, always `exit 0` | 19 lines (built, step 4; a test pins it to the block in section 7) |
 
@@ -536,6 +536,21 @@ the separation the report requires for the README results table (report:59).
 | Evasion candidates | from 7.3 |
 | Hook cost | p50/p95 `dur_ms`, error count |
 | Live versus offline agreement | fires seen in one tier and not the other |
+
+**As built (step 4c, 2026-10-19).** `python3 -m ace_playbook.compile report [--days N] [--json]` (`compile/report.py`) is the
+minimal cut: per proposal, rows, rows by cause (detector, truncated), distinct sessions (a count, never the hashes), active days,
+tp, fp, unlabelled and first/last date, then rows per day for the last N days (1 to 3660, default 14; the totals are not
+windowed, and a row dated after today counts in the totals only). Eligible-session rates, Wilson intervals, friction and hook
+cost are not computed (they need the offline pass). The private table reads `shadow.jsonl` and the synthetic one
+`shadow.synthetic.jsonl`, each through a no-follow, regular-file-only reader (a symlink or directory exits 2); they are never
+summed, and the guard checks every raw object, so a row whose `corpus` disagrees with its file refuses the whole report
+(exit 2). tp/fp come from `labels.jsonl`: newest row per ref wins, `incident` rows are ignored, and a broken chain ignores
+every label and says so. Rows are not split per mode or tier; `approved_mode` is the mode of the current approved copy, not
+of each row, and the synthetic table takes detector, event and mode from the private proposals directory. Rows sharing a
+`row_id` (same second, session and payload) collapse for labelling: one label counts once in tp or fp, and `unlabelled`
+counts the rows whose id has no label, so tp + fp + unlabelled can differ from rows. The header prints `report_sha256`, the hash
+of `report.py` only (`labels.py` and `shadow.pending_body` also shape the numbers and are not covered), so the operator can
+record it before observe starts.
 
 **Effect estimate.** For the compiled path, blocking prevents the action by construction, so the
 primary is false-block rate and friction, with recurrence descriptive (PREREGISTRATION.md:78-84).

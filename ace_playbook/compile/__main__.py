@@ -1,8 +1,9 @@
-"""CLI: `python -m ace_playbook.compile cards|propose|validate|approve|unapprove|label|shadow` (docs/design/compiler.md 10).
+"""CLI: `python -m ace_playbook.compile cards|propose|validate|approve|unapprove|label|report|shadow` (docs/design/compiler.md 10).
 
 No network, no model, stdlib only. Exit codes: 0 ok, 1 a proposal failed validation or was not approved (the
 step is named), 2 usage, configuration, store or id errors. `approve` and `unapprove` need a terminal and
 `approve` only does `--mode observe`; `label` writes human labels (labels.py; `--list` and `--rows` need no terminal);
+`report` prints per-proposal shadow counts with labels (report.py; exit 2 on a corpus mix-up);
 the review and promotion commands come in later steps.
 """
 
@@ -16,7 +17,7 @@ from pathlib import Path
 
 from .. import config as cfgmod
 from ..atomic import write_private
-from . import evidence, labels, proposal, shadow
+from . import evidence, labels, proposal, report, shadow
 
 LEGACY_BANNER = ("This lesson's stored evidence is self-quoted legacy text; "
                  "the human incident label is the only evidence.")
@@ -146,6 +147,10 @@ def cmd_label(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
     return labels.run(cfg, args, lambda prompt: _ask(prompt), _need_tty)
 
 
+def cmd_report(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
+    return report.run(cfg, args.days, args.json)
+
+
 def cmd_shadow(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
     return shadow.main([args.event], cfg)
 
@@ -177,13 +182,16 @@ def main(argv: list[str] | None = None) -> int:
     lb.add_argument("--note", help=f"at most {labels.NOTE_MAX} characters, scrubbed")
     lb.add_argument("--kind", choices=labels.KINDS, help="with --list: only this label")
     lb.add_argument("--limit", type=int, help="with --rows: how many (default 50, newest last)")
+    rp = sub.add_parser("report", help="counts per proposal from shadow rows and labels; synthetic kept apart")
+    rp.add_argument("--days", type=int, default=14, help="days in the rows-per-day block (default 14, 1 to 3660)")
+    rp.add_argument("--json", action="store_true", help="one JSON object instead of text")
     sub.add_parser("shadow", help="the hook entry (what hooks/shadow.sh runs); reads a payload on stdin").add_argument(
         "event", choices=["pre", "stop"])
     args = ap.parse_args(argv)
     try:
         cfg = cfgmod.load(args.config)
         return {"cards": cmd_cards, "propose": cmd_propose, "validate": cmd_validate, "approve": cmd_approve,
-                "unapprove": cmd_unapprove, "label": cmd_label, "shadow": cmd_shadow}[args.cmd](cfg, args)
+                "unapprove": cmd_unapprove, "label": cmd_label, "report": cmd_report, "shadow": cmd_shadow}[args.cmd](cfg, args)
     except proposal.ProposalError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
