@@ -7,6 +7,7 @@ import re
 
 import pytest
 
+from ace_playbook.compile import catalogue as cat
 from ace_playbook.compile import detectors as d
 from ace_playbook.compile import events as ev
 from ace_playbook.compile import state as state_mod
@@ -29,7 +30,6 @@ def payloads_for(name):
     return [p for p in PAYLOADS if p["detector"] == name]
 
 
-# ------------------------------------------------------------------ fixtures, offline tier
 @pytest.mark.parametrize("p", PAYLOADS, ids=ids(PAYLOADS))
 def test_payload_offline(p):
     n = cs.run_offline(p["steps"]).get(p["detector"], 0)
@@ -44,7 +44,6 @@ def test_every_detector_has_the_required_payload_mix(name):
     assert len(mine) >= (5 if name in STRONG else 4)
 
 
-# ------------------------------------------------------------------ fixtures, live tier
 LIVE_PAYLOADS = [p for p in PAYLOADS if p["detector"] in LIVE_CAPABLE]
 
 
@@ -60,7 +59,6 @@ def test_offline_only_detectors_stay_silent_live(p):
     assert cs.run_live(p["steps"]).get(p["detector"], 0) == 0
 
 
-# ------------------------------------------------------------------ catalogue
 def test_catalogue_rows_match_the_design_table():
     expect = {
         "rm_rf_nonscratch": ("strong", "live+offline", "block"),
@@ -73,18 +71,18 @@ def test_catalogue_rows_match_the_design_table():
         "user_correction": ("weak", "offline", "none"),
         "unparseable": ("weak", "live+offline", "observe"),
     }
-    assert list(d.CATALOGUE) == list(expect)
-    assert d.CATALOGUE["rm_rf_nonscratch"].lessons == ("L-b3d1fba9",)
-    assert {n for n, r in d.CATALOGUE.items() if r.strength == "strong"} == set(STRONG)
+    assert list(cat.CATALOGUE) == list(expect)
+    assert cat.CATALOGUE["rm_rf_nonscratch"].lessons == ("L-b3d1fba9",)
+    assert {n for n, r in cat.CATALOGUE.items() if r.strength == "strong"} == set(STRONG)
     for name, (strength, tier, compilable) in expect.items():
-        row = d.CATALOGUE[name]
+        row = cat.CATALOGUE[name]
         assert (row.name, row.strength, row.tier, row.compilable) == (name, strength, tier, compilable)
         assert callable(row.fire) and isinstance(row.lessons, tuple)
         assert row.consumes and isinstance(row.state, str)
 
 
 def test_catalogue_consumes_and_state_columns():
-    c = d.CATALOGUE
+    c = cat.CATALOGUE
     assert c["rm_rf_nonscratch"].consumes == ("PreToolUse:Bash",) and c["rm_rf_nonscratch"].state == "none"
     assert "PreToolUse:NotebookEdit" in c["edit_unread_session"].consumes
     assert "attachment:file" in c["edit_unread_session"].consumes
@@ -93,20 +91,20 @@ def test_catalogue_consumes_and_state_columns():
 
 
 def test_no_compilable_detector_reads_stop():
-    for row in d.CATALOGUE.values():
+    for row in cat.CATALOGUE.values():
         if row.compilable in ("warn", "block"):
             assert not any(c.startswith("Stop") for c in row.consumes), row.name
 
 
 def test_source_sha256_changes_with_any_reachable_source(monkeypatch):
-    before = {n: r.source_sha256 for n, r in d.CATALOGUE.items()}
+    before = {n: r.source_sha256 for n, r in cat.CATALOGUE.items()}
     assert all(re.fullmatch(r"[0-9a-f]{64}", h) for h in before.values()) and len(set(before.values())) == len(before)
-    texts = d._source_texts()
-    assert len(texts) == 4 and all(texts)
-    for i in range(len(texts)):          # events, shell, textrules, detectors: a helper edit moves every hash
+    texts = cat._source_texts()
+    assert len(texts) == 5 and all(texts)
+    for i in range(len(texts)):          # events, shell, textrules, detectors, catalogue: any edit moves every hash
         changed = tuple(t + "# edit" if j == i else t for j, t in enumerate(texts))
-        monkeypatch.setattr(d, "_source_texts", lambda changed=changed: changed)
-        assert all(r.source_sha256 != before[n] for n, r in d.CATALOGUE.items()), i
+        monkeypatch.setattr(cat, "_source_texts", lambda changed=changed: changed)
+        assert all(r.source_sha256 != before[n] for n, r in cat.CATALOGUE.items()), i
 
 
 @pytest.mark.parametrize("target,scratch", [
@@ -115,6 +113,7 @@ def test_source_sha256_changes_with_any_reachable_source(monkeypatch):
     ("/w/src", False), ("src", False), ("Q", False), ("/", False), ("~/proj", False),
     ("/tmp", True), ("/tmp/./x", True), ("${TMPDIR}/x", True), ("$TMPDIRX/x", False),
     ("/tmpfoo/x", False), ("/private/tmpx", False),
+    ("${TMPDIR:-/w}/x", False), ("${TMPDIR:=/w}/x", False), ("${TMPDIR#a}/x", False),
 ])
 def test_scratch_regex(target, scratch):
     assert bool(d.SCRATCH.search(target)) is scratch
@@ -126,7 +125,6 @@ def test_dotdot_and_unbounded_prefixes_are_not_scratch_after_normpath(target):
     assert cs.run_offline(steps)["rm_rf_nonscratch"] == 1
 
 
-# ------------------------------------------------------------------ rm detectors
 def bash(cmd, tier="live", **kw):
     p = {"hook_event_name": "PreToolUse", "session_id": "s", "tool_name": "Bash", "tool_input": {"command": cmd}}
     e = ev.event_from_hook(p) if tier == "live" else ev.event_from_record(
@@ -163,14 +161,13 @@ def test_rm_quoted_target_with_spaces_is_masked_and_counts_as_nonscratch():
     assert d.rm_rf(bash("bash -c 'rm -rf /w/src'"), state_mod.new_state("s")) is None
 
 
-# ------------------------------------------------------------------ edit_unread_*
 def hook(tool, path, exists=True, event="PreToolUse"):
     return ev.event_from_hook({"hook_event_name": event, "session_id": "s", "tool_name": tool,
                                "tool_input": {"file_path": path}, "tool_use_id": "t"}, probe=lambda p: exists)
 
 
 def step(event, st):
-    _, st, _ = d.evaluate(event, st, strict=True)
+    _, st, _ = cat.evaluate(event, st, strict=True)
     return st
 
 
@@ -249,7 +246,7 @@ def test_offline_attachment_reads_count_as_reads():
     evs = list(ev.events_from_records(cs.records(steps)))
     total = 0
     for e in evs:
-        fires, st, _ = d.evaluate(e, st, strict=True)
+        fires, st, _ = cat.evaluate(e, st, strict=True)
         total += sum(f.count for f in fires if f.detector == "edit_unread_session")
     assert total == 0
 
@@ -258,9 +255,9 @@ def test_offline_fire_waits_for_the_result_and_skips_errors_and_new_files():
     st = state_mod.new_state("s")
     a, r = list(ev.events_from_records(cs.records(
         [{"tool": "Edit", "input": {"file_path": "/w/a.py"}, "result": "updated"}])))
-    fires, st, _ = d.evaluate(a, st, strict=True)
+    fires, st, _ = cat.evaluate(a, st, strict=True)
     assert fires == [] and "t0" in st["pending"]
-    fires, st, _ = d.evaluate(r, st, strict=True)
+    fires, st, _ = cat.evaluate(r, st, strict=True)
     assert {f.detector for f in fires} == {"edit_unread_session", "edit_unread_turn"} and st["pending"] == {}
 
 
@@ -299,11 +296,10 @@ def test_advance_and_detectors_do_not_mutate_their_input_state():
     e = hook("Edit", "/w/a.py")
     d.edit_unread_session(e, st)
     d.advance(e, st)
-    d.evaluate(e, st, strict=True)
+    cat.evaluate(e, st, strict=True)
     assert st == frozen
 
 
-# ------------------------------------------------------------------ block / signal detectors
 def result_event(text, tool="Bash", error=True):
     recs = cs.records([{"tool": tool, "input": {"command": "x"}, "result": text, "error": error}])
     return list(ev.events_from_records(recs))[1]
@@ -371,20 +367,32 @@ def test_commit_counts_accumulate_in_state_and_fire_only_at_session_end():
 
 def test_evaluate_runs_the_catalogue_in_order_and_filters_by_name():
     e = bash("cd /w && rm -rf /w/src")
-    fires, st, _ = d.evaluate(e, state_mod.new_state("s"), strict=True)
+    fires, st, _ = cat.evaluate(e, state_mod.new_state("s"), strict=True)
     assert [f.detector for f in fires] == ["rm_rf_nonscratch", "rm_rf"] and st["events"] == 1
-    fires, _, _ = d.evaluate(e, state_mod.new_state("s"), names=["rm_rf"], strict=True)
+    fires, _, _ = cat.evaluate(e, state_mod.new_state("s"), names=["rm_rf"], strict=True)
     assert [f.detector for f in fires] == ["rm_rf"]
     with pytest.raises(KeyError):
-        d.evaluate(e, state_mod.new_state("s"), names=["nope"])
+        cat.evaluate(e, state_mod.new_state("s"), names=["nope"])
+
+
+def test_a_failing_state_transition_is_reported_and_keeps_the_old_state(monkeypatch):
+    def boom(event, state):
+        raise ValueError("bug")
+
+    monkeypatch.setattr(cat, "advance", boom)
+    st = state_mod.new_state("s")
+    fires, new, errors = cat.evaluate(bash("ls"), st)
+    assert new is st and errors == [("advance", "ValueError")] and fires == []
+    with pytest.raises(ValueError):
+        cat.evaluate(bash("ls"), st, strict=True)
 
 
 def test_a_raising_detector_is_reported_and_strict_mode_reraises(monkeypatch):
     def boom(event, state):
         raise RuntimeError("bug")
 
-    monkeypatch.setitem(d.CATALOGUE, "rm_rf", dataclasses.replace(d.CATALOGUE["rm_rf"], fire=boom))
-    fires, _, errors = d.evaluate(bash("rm -rf /w/src"), state_mod.new_state("s"))
+    monkeypatch.setitem(cat.CATALOGUE, "rm_rf", dataclasses.replace(cat.CATALOGUE["rm_rf"], fire=boom))
+    fires, _, errors = cat.evaluate(bash("rm -rf /w/src"), state_mod.new_state("s"))
     assert [f.detector for f in fires] == ["rm_rf_nonscratch"] and errors == [("rm_rf", "RuntimeError")]
     with pytest.raises(RuntimeError):
-        d.evaluate(bash("rm -rf /w/src"), state_mod.new_state("s"), strict=True)
+        cat.evaluate(bash("rm -rf /w/src"), state_mod.new_state("s"), strict=True)

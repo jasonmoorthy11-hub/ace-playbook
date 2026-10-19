@@ -13,7 +13,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from ace_playbook.compile import detectors, state as state_mod
+from ace_playbook.compile import catalogue, detectors, state as state_mod
 from ace_playbook.compile.events import end_event, event_from_hook, events_from_records
 
 FIXTURE = Path(__file__).parent / "fixtures" / "compile_payloads.json"
@@ -77,7 +77,7 @@ def _tally(events, state=None) -> Counter:
     counts: Counter = Counter()
     state = state if state is not None else state_mod.new_state(SID)
     for ev in events:
-        fires, state, _errors = detectors.evaluate(ev, state, strict=True)
+        fires, state, _errors = catalogue.evaluate(ev, state, strict=True)
         for f in fires:
             counts[f.detector] += f.count
     return counts

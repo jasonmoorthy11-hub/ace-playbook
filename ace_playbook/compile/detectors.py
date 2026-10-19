@@ -1,22 +1,18 @@
-"""The detector catalogue (docs/design/compiler.md 4): pure `(event, state) -> Fire | None`.
+"""The detector functions (docs/design/compiler.md 4): pure `(event, state) -> Fire | None`.
 
 Ported from Step 0; `ace_playbook/fixtures/parity/step0_parity.json` freezes its counts and lists
 every hardening that changes one under `deviations`. No I/O, clock or environment: a detector
-never mutates its state; `advance` returns the next one and `evaluate` runs both. Live events
+never mutates its state; `advance` returns the next one (catalogue.evaluate runs both). Live events
 (hook payloads) carry `tier == "live"`, offline ones (transcript records) `tier == "offline"`.
 """
 
 from __future__ import annotations
 
-import hashlib
 import posixpath
 import re
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Callable
 
-from .. import textrules
-from . import events, shell
+from . import shell
 from .events import EDIT_TOOLS, Event, hash16
 
 MAX_PATHS = 5000
@@ -35,7 +31,7 @@ CORRECTION = re.compile(
     r"\byou (did|made|forgot|broke|missed|ignored|skipped|used|added)\b[^.?!\n]{0,40}\bagain\b", re.I)
 # Scratch targets, tested after normpath(). Unlike Step 0 a temp root must end at a path boundary
 # ("/tmpfoo" is not scratch) and ".." is resolved ("/tmp/../x" is "/x"): parity deviations.
-SCRATCH = re.compile(r"^(?:(?:/tmp|/private/tmp|/var/folders|\$TMPDIR|\$\{TMPDIR[^}]*\})(?:/|$)|\.?/?tmp/)|"
+SCRATCH = re.compile(r"^(?:(?:/tmp|/private/tmp|/var/folders|\$TMPDIR|\$\{TMPDIR\})(?:/|$)|\.?/?tmp/)|"
                      r"(?:^|/)(?:node_modules|\.next|dist|build|__pycache__|\.pytest_cache|\.cache|"
                      r"coverage|\.turbo|scratchpad|\.venv)/?$")
 
@@ -64,7 +60,7 @@ def _segments(event: Event):
 
 
 def _rm_rf_targets(toks: list[str]) -> list[str] | None:
-    if not toks or posixpath.basename(toks[0].lstrip("\\")) != "rm":
+    if not toks or posixpath.basename(toks[0].replace("\\", "")) != "rm":
         return None
     fl = [t for t in toks[1:] if t.startswith("-")]
     rec = any(f == "--recursive" or (not f.startswith("--") and re.search(r"[rR]", f)) for f in fl)
@@ -196,53 +192,6 @@ def unparseable(event: Event, state: dict) -> Fire | None:
     return _fire("unparseable", len(cut), event, hash16(cut[0].id) if cut else "")
 
 
-def _source_texts() -> tuple[str, ...]:
-    """Full source of every module a detector's behaviour depends on (patched in tests)."""
-    files = [Path(m.__file__) for m in (events, shell, textrules)] + [Path(__file__)]
-    return tuple(p.read_text() for p in files)
-
-
-@dataclass(frozen=True)
-class Detector:
-    name: str
-    strength: str            # copied from Step 0: "strong" | "weak"
-    tier: str                # "live+offline" | "offline"
-    consumes: tuple
-    state: str
-    fire: Callable[[Event, dict], Fire | None]
-    compilable: str          # highest mode a proposal may reach: block | warn | observe | none
-    lessons: tuple = ()
-
-    @property
-    def source_sha256(self) -> str:
-        """Name plus the full source of events, shell, textrules, detectors: any edit invalidates approvals."""
-        return hashlib.sha256("\0".join((self.name, *_source_texts())).encode()).hexdigest()
-
-
-_EDIT_USES = tuple(f"PreToolUse:{t}" for t in ("Read", "Edit", "Write", "MultiEdit", "NotebookEdit"))
-_ATTACH = tuple("attachment:" + t for t in ("file", "edited_text_file", "compact_file_reference"))
-_RM = ("L-b3d1fba9",)
-
-CATALOGUE: dict[str, Detector] = {d.name: d for d in (
-    Detector("rm_rf_nonscratch", "strong", "live+offline", ("PreToolUse:Bash",), "none",
-             rm_rf_nonscratch, "block", _RM),
-    Detector("rm_rf", "weak", "live+offline", ("PreToolUse:Bash",), "none", rm_rf, "observe", _RM),
-    Detector("edit_unread_session", "strong", "live+offline", _EDIT_USES + _ATTACH, "path_hash_set",
-             edit_unread_session, "warn"),
-    Detector("edit_unread_turn", "weak", "live+offline", _EDIT_USES + _ATTACH + ("Stop",), "turn_path_hash_set",
-             edit_unread_turn, "observe"),
-    Detector("exitplan_question_block", "strong", "offline", ("transcript:tool_result",), "none",
-             exitplan_question_block, "none"),
-    Detector("preclaim_audit_block", "strong", "offline", ("transcript:user",), "none",
-             preclaim_audit_block, "none"),
-    Detector("commit_without_push", "weak", "live+offline", ("PreToolUse:Bash", "session_end"), "git_counts",
-             commit_without_push, "observe"),
-    Detector("user_correction", "weak", "offline", ("transcript:human_prompt",), "none",
-             user_correction, "none"),
-    Detector("unparseable", "weak", "live+offline", ("PreToolUse:*",), "none", unparseable, "observe"),
-)}
-
-
 def advance(event: Event, state: dict | None) -> dict:
     """Return the state after `event`. Pure: the argument is never mutated."""
     base = blank_state()
@@ -274,27 +223,3 @@ def advance(event: Event, state: dict | None) -> dict:
     else:
         s["seen_paths"], s["turn_paths"] = sorted(seen), sorted(turn)
     return s
-
-
-def evaluate(event: Event, state: dict | None, names=None,
-             strict: bool = False) -> tuple[list[Fire], dict, list[tuple[str, str]]]:
-    """Run catalogue detectors on the pre-event state, then advance: (fires, new_state, errors).
-
-    errors = [(detector_name, exception_type_name)]. strict=True re-raises (tests, offline pass);
-    the hook path leaves it False, logs `error:<name>` and fails open."""
-    state = state if state is not None else blank_state()
-    rows = CATALOGUE.values() if names is None else [CATALOGUE[n] for n in names]
-    fires, errors = [], []
-    for row in rows:
-        if row.tier == "offline" and event.tier != "offline":
-            continue
-        try:
-            f = row.fire(event, state)
-        except Exception as exc:
-            if strict:
-                raise
-            errors.append((row.name, type(exc).__name__))
-            continue
-        if f:
-            fires.append(f)
-    return fires, advance(event, state), errors

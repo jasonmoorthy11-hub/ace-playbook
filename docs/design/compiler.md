@@ -50,8 +50,9 @@ RESULTS.md:62), alongside `edit_unread_turn` and `rm_rf` (RESULTS.md:34). The ve
 | File | Role | Budget |
 |---|---|---|
 | `compile/events.py` | `Event`, `ToolUse`, `ToolResult` (port of step0/scanlib.py:24-52); two adapters: hook payload to Event, transcript record to Event (port of scanlib.py:80-126); input caps with a `truncated` mark | ~230 lines |
-| `compile/shell.py` | `command_segments`, `git_subcommand` (scanlib.py:231-266), rewritten linear-time: one pass for quotes and heredocs, at most 32 heredoc openers, `&` and shell keywords split or strip (step 1 fix wave) | ~125 |
-| `compile/detectors.py` | Pure detector functions and the catalogue (section 4) | ~300 |
+| `compile/shell.py` | `command_segments`, `git_subcommand` (scanlib.py:231-266), rewritten linear-time: one pass for quotes, `$'..'`, comments and heredocs (no heredoc for `<<<`, `\<<`, `<<` inside `((`, or after a comment), at most 32 heredoc openers, `&`, braces and shell keywords split or strip, leading redirections and wrappers with their options are skipped | ~180 |
+| `compile/detectors.py` | Pure detector functions, `Fire`, `advance` (the state transition) (section 4) | ~230 |
+| `compile/catalogue.py` | `CATALOGUE` registry (`Detector` rows with strength, tier, consumes, state, compilable, lessons), `evaluate` (strict mode, error list), `source_sha256` over the full source of events, shell, textrules, detectors and catalogue | ~100 |
 | `compile/state.py` | Rolling per-session state file under `data_dir/shadow_state/`, locked (`LOCK_NB`), atomic, hashed name, 0600/0700, FIFO- and symlink-safe | ~235 |
 | `compile/evidence.py` | Evidence cards (section 5) | ~260 |
 | `compile/proposal.py` | Proposal schema, validation, replay/regression runner, writer (section 6) | ~300 |
@@ -440,7 +441,11 @@ Known evasion shapes are counted as candidates offline: a deleted target that re
 through a symlink or an unresolved `$VAR`, a `bash -c` body (invisible to the tokenizer,
 detectors.py:255), and the same target reached through a symlink. Out of scope for the step 1
 tokenizer and recorded here as further candidates: `find ... -delete`, `find ... -exec rm -rf`, `xargs` fed from a pipe, `python -c` with `shutil.rmtree`, shell functions or aliases
-wrapping `rm`, and anything past the 64 KB input cap (reported as `unparseable`).
+wrapping `rm`, `xargs rm -rf` whose targets arrive on stdin (the targets are invisible; only the wrapper is stripped), `bash -c '...'`, `eval` and
+`bash <<EOF` bodies (invisible to the tokenizer), and anything past the 64 KB input cap (reported as `unparseable`).
+Handled since the step 1 review waves, with parity deviations recorded in `step0_parity.json`: a redirection before the command
+word (`>/dev/null rm -rf x`), wrappers with options (`sudo -u root rm`, `timeout 5 rm`), backslash and `$'..'` obfuscation of the
+command word, and heredoc look-alikes (`# <<EOF`, `$((1<<2))`, `\<<EOF`) that used to hide the lines after them.
 
 **Label forgery.** `labels.jsonl` drives promotion and the agent, running as the user, can append
 to files in `data_dir`: a forged TP label is self-report by another route. TTY-only `compile label`
