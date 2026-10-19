@@ -198,7 +198,7 @@ def test_json_has_the_specified_shape_and_the_same_numbers_as_the_text(w, fire, 
     put_syn(w, SYN)
     code, out, _ = run(w, "--json", "--days", "7", capsys=capsys)
     obj = json.loads(out)
-    assert code == 0 and set(obj) == {"report_sha256", "days", "private", "synthetic", "labels"} and obj["days"] == 7
+    assert code == 0 and set(obj) == {"report_sha256", "days", "private", "synthetic", "demotions", "labels"} and obj["days"] == 7
     assert obj["labels"] == {"chain_ok": True, "broken_at": None}
     assert obj["report_sha256"] == hashlib.sha256(SOURCE.read_bytes()).hexdigest()
     prop = obj["private"]["proposals"][pid(w)]
@@ -362,3 +362,26 @@ def test_a_non_utf8_shadow_file_exits_2_without_a_traceback(w, capsys):
     w.cfg.path("shadow.jsonl").write_bytes(b"\xff\xfe not utf8\n")
     code, out, err = run(w, capsys=capsys)
     assert (code, out) == (2, "") and err.startswith("error: ")
+
+
+def test_the_demotions_section_lists_the_newest_cap_per_proposal_and_flags_a_broken_chain(w, capsys):
+    from ace_playbook.compile import demotions as dm
+    row = {"proposal_id": pid(w), "from_mode": "block", "to_mode": "warn", "cause": "label_fp", "ref": "aaaa1111",
+           "review_required": False}
+    dm.append(w.data, row)
+    dm.append(w.data, {**row, "from_mode": "warn", "to_mode": "observe", "cause": "label_fp_pair", "ref": "bbbb2222",
+                       "review_required": True})
+    out = run(w, capsys=capsys)[1]
+    line = next(ln.split() for ln in out.split("Demotions", 1)[1].splitlines() if ln.startswith(pid(w)))
+    assert line[:3] == [pid(w), "observe", "label_fp_pair"] and line[4:] == ["true", "2"]
+    obj = json.loads(run(w, "--json", capsys=capsys)[1])["demotions"]
+    assert obj["chain_ok"] is True and obj["proposals"][pid(w)]["rows"] == 2 and obj["proposals"][pid(w)]["cap"] == "observe"
+    path = w.data / "demotions.jsonl"
+    path.write_text(path.read_text().replace("observe", "disabled"))
+    out = run(w, capsys=capsys)[1]
+    assert "demotions: chain BROKEN at row 1" in out
+    assert json.loads(run(w, "--json", capsys=capsys)[1])["demotions"]["broken_at"] == 1
+    path.unlink()
+    assert "no demotions" in run(w, capsys=capsys)[1]
+    path.symlink_to(w.data / "elsewhere")
+    assert run(w, capsys=capsys)[0] == 2

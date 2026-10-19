@@ -10,8 +10,9 @@ from pathlib import Path
 
 import pytest
 
+from ace_playbook.atomic import write_private
 from ace_playbook.compile import __main__ as cli
-from ace_playbook.compile import catalogue, evidence, labels, offline
+from ace_playbook.compile import catalogue, evidence, labels, offline, shadow
 from ace_playbook.compile import state as st
 
 from . import compile_support as cs
@@ -183,8 +184,8 @@ def test_cli_prints_one_ascii_count_line_each_and_the_p95_rule_every_run(w, caps
     assert code == 0 and err == "" and all(ch == "\n" or " " <= ch <= "~" for ch in out)
     names = [ln.split(":")[0] for ln in out.splitlines()]
     assert names == ["transcripts", "skipped", "detector_events", "labels", *(f"labels.{k}" for k in labels.AUTO),
-                     "demotions", "evasion_candidates", "state_removed", "errors", "p95_rule"]
-    assert all(re.fullmatch(r"[a-z0-9_.]+: [0-9a-z_ :.]+", ln) for ln in out.splitlines())
+                     "demotions", "evasion_candidates", "state_removed", "errors", "lesson_check", "error_rate", "p95_rule"]
+    assert all(re.fullmatch(r"[a-z0-9_.]+: [0-9a-z_ :.()=,]+", ln) for ln in out.splitlines())
     assert "p95_rule: not computable: no dur_ms in rows" in out and "labels: 1" in out
     assert str(w.data) not in out and st.session_hash("s1") not in out
     code, out, _ = cli_run(w, "--dry-run", capsys=capsys)
@@ -206,7 +207,7 @@ def test_cli_exits_2_when_the_config_cannot_load(tmp_path, capsys):
 
 def test_p95_is_reported_not_computable_in_the_counts(w):
     out = offline.run(w.cfg, now=cs.NOW)
-    assert out["p95_rule"] == "not computable: no dur_ms in rows" and offline.lines(out)[-1].startswith("p95_rule: not comp")
+    assert out["p95_rule"] == "not computable: no dur_ms in rows" and not hasattr(offline, "lines")
 
 
 # ------------------------------------------------------------------ hooks/nightly_sweep.py
@@ -232,7 +233,7 @@ def test_nightly_sweep_runs_the_offline_pass_even_under_dry_run_and_lists_its_co
     assert calls["offline"][0]["dry_run"] is False and calls["sweep"][0]["dry_run"] is True
 
 
-def test_nightly_sweep_offline_dry_run_writes_nothing_and_no_offline_skips_the_stage(sweep):
+def test_nightly_sweep_passes_offline_dry_run_to_the_pass_and_no_offline_skips_the_stage(sweep):
     _, calls = sweep("--offline-dry-run")
     assert calls["offline"][0]["dry_run"] is True and calls["sweep"][0]["dry_run"] is False
     out, calls = sweep("--no-offline")
@@ -245,3 +246,111 @@ def test_an_offline_exception_is_reported_by_type_and_reflection_still_runs(swee
     monkeypatch.setattr(offline, "run", fail)
     out, calls = sweep("--dry-run")
     assert out == {"offline": {"error": "KeyError"}, "sweep": [{"status": "would_reflect"}]} and len(calls["sweep"]) == 1
+
+
+def test_nightly_sweep_with_offline_dry_run_really_leaves_the_data_directory_untouched(w, tmp_path, monkeypatch, capsys):
+    import time
+    conf = tmp_path / "c.json"
+    conf.write_text(json.dumps({"data_dir": str(w.data), "transcripts_root": str(w.cfg.transcripts_root)}))
+    path = cs.put_session(w, "s1", [{"human": "please remove /w/src"}, RM])
+    os.utime(path, (time.time() - 7200,) * 2)
+    cs.put_shadow(w, "s1", CMD)
+    stale = w.data / "shadow_state" / ("0" * 16 + ".json")
+    stale.parent.mkdir()
+    stale.write_text("{}")
+    os.utime(stale, (time.time() - 9 * 86400,) * 2)
+    spec = importlib.util.spec_from_file_location("nightly_sweep_dry", HOOKS / "nightly_sweep.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    monkeypatch.setattr(mod, "run_sweep", lambda cfg, **kw: [])
+    monkeypatch.setattr(sys, "argv", ["nightly_sweep.py", "--config", str(conf), "--offline-dry-run"])
+    before = cs.tree_state(w.data)
+    assert mod.main() == 0
+    out = json.loads(capsys.readouterr().out)
+    assert cs.tree_state(w.data) == before and stale.exists()
+    assert out["offline"]["detector_events"] > 0 and out["offline"]["state_removed"] == 1
+
+
+def test_tree_state_sees_a_new_directory_and_a_same_size_rewrite(tmp_path):
+    (tmp_path / "a").write_text("xx")
+    first = cs.tree_state(tmp_path)
+    (tmp_path / "d").mkdir()
+    second = cs.tree_state(tmp_path)
+    assert second != first and second["d"][0] is True
+    (tmp_path / "a").write_text("yy")
+    os.utime(tmp_path / "a", (1.0, 1.0))
+    assert cs.tree_state(tmp_path)["a"] != second["a"]
+
+
+# ------------------------------------------------------------------ marking sessions done
+def test_a_session_with_shadow_rows_stays_unmarked_while_the_label_stage_fails(w):
+    cs.put_session(w, "s1", [{"human": "please remove /w/src"}, RM])
+    cs.put_session(w, "s2", [{"human": "x"}, RM])
+    cs.put_shadow(w, "s1", CMD)
+    cs.write_labels(w.cfg, [{"ref": "aaaaaaaa", "label": "tp"}])
+    path = w.cfg.path("labels.jsonl")
+    path.write_text(path.read_text().replace('"tp"', '"fp"'))                # a broken chain
+    assert offline.run(w.cfg, now=cs.NOW)["errors"] == 1
+    assert set(json.loads(w.cfg.path("offline_state.json").read_text())) == {st.session_hash("s2")}
+    path.unlink()                                                           # repaired: the session is scanned again
+    out = offline.run(w.cfg, now=cs.NOW)
+    assert out["transcripts"] == 1 and sum(out["labels"].values()) == 1
+    assert set(json.loads(w.cfg.path("offline_state.json").read_text())) == {st.session_hash("s1"), st.session_hash("s2")}
+
+
+def test_a_write_failure_marks_no_session_done(w, monkeypatch):
+    cs.put_session(w, "s1", [{"human": "x"}, RM])
+
+    def boom(*a, **kw):
+        raise OSError("disk full")
+    monkeypatch.setattr(shadow, "_append", boom)
+    out = offline.run(w.cfg, now=cs.NOW)
+    assert out["errors"] == 1 and not w.cfg.path("offline_state.json").exists()
+    monkeypatch.undo()
+    assert offline.run(w.cfg, now=cs.NOW)["transcripts"] == 1 and w.cfg.path("offline_state.json").exists()
+
+
+def test_a_resumed_session_adds_no_second_session_end_row(w):
+    path = cs.put_session(w, "s1", [{"human": "x"}, {"tool": "Bash", "input": {"command": "git commit -m done"}}])
+    ends = lambda: [r for r in jsonl(w, "detector_events.jsonl") if r["detector"] == "commit_without_push"]  # noqa: E731
+    offline.run(w.cfg, now=cs.NOW)
+    assert len(ends()) == 1
+    with open(path, "a") as fh:
+        fh.write(json.dumps({"type": "user", "timestamp": "2026-10-18T11:00:00Z",
+                             "message": {"role": "user", "content": "hello again"}}) + "\n")
+    os.utime(path, (cs.NOW - 7000,) * 2)
+    assert offline.run(w.cfg, now=cs.NOW)["transcripts"] == 1 and len(ends()) == 1
+
+
+# ------------------------------------------------------------------ the demotion stage's inputs
+def test_an_unreadable_corpus_skips_the_demotion_stage_instead_of_reading_as_all_errors(w):
+    w.data.joinpath("shadow.log").write_text("2026-10-18T10:00:00Z error:rm_rf:RuntimeError\n" * 5)
+    w.data.joinpath("elsewhere.jsonl").write_text("")
+    w.cfg.path("shadow.jsonl").symlink_to(w.data / "elsewhere.jsonl")
+    out = offline.run(w.cfg, now=cs.NOW)
+    assert (out["errors"], out["demotions"], out["error_rate"]) == (1, 0, "not run") and not w.cfg.path("demotions.jsonl").exists()
+
+
+def test_a_small_sample_does_not_apply_the_error_rate_rule_and_says_so(w):
+    w.data.joinpath("shadow.log").write_text("2026-10-18T10:00:00Z error:rm_rf:RuntimeError\n" * 3)
+    for n in range(7):
+        cs.put_shadow(w, f"s{n}", f"echo {n}")
+    out = offline.run(w.cfg, now=cs.NOW)
+    assert out["error_rate"] == "not computable (n=10, need 100)" and out["demotions"] == 0
+    assert out["lesson_check"] == "skipped (no store)"
+
+
+def test_a_malformed_approved_copy_is_one_error_and_the_others_are_still_reviewed(w):
+    w.approve("block")
+    bad = {**w.props["rm_rf_nonscratch"], "id": "P-11111111", "provenance": {}}      # no source_sha256: KeyError
+    write_private(w.data / "proposals" / "approved" / "P-11111111.json",
+                  json.dumps(shadow.approved_record(bad, "block", "2026-10-01T00:00:00Z")) + "\n")
+    labels.append_row(w.cfg, "fp", labels.row_id(cs.put_shadow(w, "s1", CMD, "block")))
+    out = offline.run(w.cfg, now=cs.NOW)
+    assert (out["errors"], out["demotions"]) == (1, 1)
+
+
+def test_cli_prints_a_type_only_error_and_exits_1_when_the_pass_raises(w, monkeypatch, capsys):
+    monkeypatch.setattr(offline, "run", lambda cfg, **kw: {}["secret/path"])
+    code, out, err = cli_run(w, capsys=capsys)
+    assert (code, out, err) == (1, "", "error: KeyError\n")

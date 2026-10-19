@@ -470,26 +470,43 @@ because it makes no API call) prints counts only. It scans transcripts that are 
 size and mtime, and an unchanged session is skipped. Every catalogue detector runs over each transcript (strict mode, one
 failing transcript is one error) and the session end fires `commit_without_push`; rows go to `detector_events.jsonl` with an
 id of sha256(session, detector, ts, payload hash)[:16], so a rerun appends nothing twice. Live `shadow.jsonl` rows join their
-transcript by session hash and the fire by payload hash, and get at most one auto label in the order of the lists above.
+transcript by session hash and the fire by payload hash and time (the tool use with that hash whose timestamp is nearest at or
+before the row's, else the nearest after within 60 seconds, so only the identical call that fired is judged), and get at most one
+auto label in the order of the lists above.
 `labels.jsonl` rows carry `reason_code` set to the rule (`auto_fp_correction`, `auto_fp_prompt_target`, `auto_fp_shell_rerun`,
 `auto_tp_hook_block`, `auto_tp_correction`) and the label `fp`, or the new `tp_candidate`, which the CLI never writes and which
 counts as nothing. The effective label of a ref is its newest human row (any `reason_code` that is not an auto rule), else its
 newest auto row; no auto row is written over a human one or twice. `report` counts `fp` from both kinds, `tp` from human
-rows only, and shows `tp_cand` apart. Targets are hashed in memory against the latest prompt and shell-mode commands
-(`<bash-input>`, which Claude Code does not count as a human prompt); no prompt text is stored. Demotions go to the
+rows only, and shows `tp_cand` apart. Targets are hashed in memory against the latest prompt (never a token under two characters
+or made of `/`, `~` and `.` only; `~` is expanded in memory) and against shell-mode commands: only a user record whose whole text
+is one `<bash-input>...</bash-input>` block (Claude Code does not count it as a human prompt), never such a fragment inside
+other text. No prompt text is stored. Demotions go to the
 hash-chained `demotions.jsonl` (`compile/demotions.py`): `{ts, v, proposal_id, from_mode, to_mode, cause, ref,
 review_required, prev_hash, hash}`, `to_mode` never above `from_mode`, a repeat of the newest row skipped. The hook reads the
 file once per call: `disabled` skips the proposal, any other cap lowers its mode, a broken chain caps every proposal at
 `observe` (measurement continues), a read error is logged by type and means no cap. The pass appends `label_fp` (block to
 warn, warn to observe), `label_fp_pair` (two effective FPs within 30 days: observe, `review_required`) counting FPs since the
-later of approval and the proposal's last demotion; and the disable causes `lesson_inactive` (status not `active`; skipped
-when the store does not exist), `source_sha256` (catalogue hash against `provenance.source_sha256` of the proposal) and
-`error_rate` (`error:` lines of `shadow.log` above 1% of those plus shadow rows over seven days). The p95 cost rule cannot be
+later of approval and the proposal's last demotion (an `evasion_pair` row does not restart them; two FPs more than 30 days
+apart lower one rung each in the same run); and the disable causes `lesson_inactive` (store status `dormant`, `retired`,
+`superseded` or `quarantined`, never `provisional`, `active` or `compiled`; skipped, and reported as `lesson_check: skipped (no
+store)`, when `deltas.jsonl` does not exist), `source_sha256` (catalogue hash against `provenance.source_sha256` of the proposal) and
+`error_rate` (`error:` lines of `shadow.log` above 1% of those plus shadow rows over seven days, only when that sample is at
+least 100; below it the run reports `error_rate: not computable (n=k, need 100)`, because the rows count fires, not hook calls).
+When the shadow corpus cannot be read the demotion stage is skipped and counted as an error. The p95 cost rule cannot be
 computed yet because rows carry no `dur_ms`: every run prints `p95_rule: not computable: no dur_ms in rows`, and the rule is
 not treated as passing. After a block, a different Bash command whose rm targets hash to the same key within the next five
 tool uses is an evasion candidate (`evasion_candidates.jsonl`); two for one proposal within 14 days append an `evasion_pair`
-row with `review_required` and the current mode (no lowering). Regular `shadow_state` files older than seven days are removed;
-`--dry-run` computes everything and writes nothing.
+row with `review_required` and the current mode (no lowering). Regular `shadow_state` files older than seven days are removed
+(a `.json.lock` only when its `.json` is stale or missing and its flock is free); `--dry-run` computes everything and writes
+nothing. A session is marked done in `offline_state.json` only when its detector rows were written and, if it has shadow rows,
+the label stage succeeded.
+
+*Demotions are not lifted yet.* `effective_cap` is the newest row of the proposal, so a demotion stays until a later row
+says otherwise and nothing writes such a row. The integration wave makes a newer operator approval row (`approvals.jsonl`, the
+promotion ladder) clear an older demotion; this step does not implement the lift. `compile report` has a `Demotions` section
+(newest cap, cause, time, `review_required` if any row asked, row count per proposal; a broken chain is one visible line), so a
+silenced proposal shows. The chain is unkeyed: any local process can append a valid lowering row and silence a proposal (it
+can only lower, and the report shows it).
 
 **Mode ladder.**
 

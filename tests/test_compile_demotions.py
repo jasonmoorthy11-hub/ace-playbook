@@ -254,7 +254,8 @@ def test_a_lesson_that_is_not_active_in_the_store_disables_the_proposal(tmp_path
 
 def test_a_changed_detector_source_disables_the_proposal(tmp_path, monkeypatch):
     w = cs.offline_world(tmp_path, "observe")
-    assert offline.run(w.cfg, now=cs.NOW)["demotions"] == 0                  # no store and an unchanged source: nothing
+    out = offline.run(w.cfg, now=cs.NOW)                                     # no store and an unchanged source: nothing
+    assert out["demotions"] == 0 and out["lesson_check"] == "skipped (no store)"
     monkeypatch.setattr(catalogue, "_source_texts", lambda: ("an edited detector",))
     assert offline.run(w.cfg, now=cs.NOW)["demotions"] == 1
     assert [(d["to_mode"], d["cause"]) for d in chain(w)] == [("disabled", "source_sha256")]
@@ -346,3 +347,24 @@ def test_the_hook_reads_the_demotions_file_once_per_call(tmp_path, monkeypatch, 
     monkeypatch.setattr(dm, "read_chain", lambda d: seen.append(d) or real(d))
     hook(w, monkeypatch, capsys)
     assert len(seen) == 1
+
+
+@pytest.mark.parametrize("status,disabled", [("active", False), ("provisional", False), ("compiled", False), ("dormant", True),
+                                             ("retired", True), ("superseded", True), ("quarantined", True)])
+def test_only_a_withdrawn_lesson_status_disables_the_proposal(tmp_path, status, disabled):
+    w = cs.offline_world(tmp_path, "warn")
+    draft = add_draft(f"A {status} global lesson about careful deletes", GLOBAL, status=status)
+    DeltaLog(w.cfg.deltas).append(draft, ts="2026-10-01T00:00:00Z")
+    approve_for(w, draft["lesson_id"], "warn")
+    out = offline.run(w.cfg, now=cs.NOW)
+    assert out["lesson_check"] == "ok" and out["demotions"] == (1 if disabled else 0)
+    assert [d["cause"] for d in chain(w)] == (["lesson_inactive"] if disabled else [])
+
+
+def test_an_evasion_pair_row_does_not_reset_the_fp_counters(tmp_path):
+    w = cs.offline_world(tmp_path, "block")
+    fp(w, cs.put_shadow(w, "s1", CMD, "block", D2))
+    dm.append(w.data, fields(proposal_id=w.pid, from_mode="block", to_mode="block", cause="evasion_pair", ref="cafe0001",
+                             review_required=True))
+    assert offline.run(w.cfg, now=cs.NOW)["demotions"] == 1
+    assert [(d["cause"], d["to_mode"]) for d in chain(w)] == [("evasion_pair", "block"), ("label_fp", "warn")]

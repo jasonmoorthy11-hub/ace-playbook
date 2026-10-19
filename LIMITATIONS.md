@@ -79,7 +79,12 @@ and is not sealed.
   `tp_candidate` is never counted as a true positive, and a human row always wins. The signals are
   heuristics (a regex for user corrections, a hash match against the latest prompt). The p95 hook-cost
   rule (disable above 200 ms over seven days) waits for rows to carry `dur_ms` and is reported as
-  `not computable` on every run.
+  `not computable` on every run; the 1% hook-error rule needs a sample of 100 (rows count fires, not hook calls) and is
+  reported `not computable` below it.
+- Demotions are not lifted yet: the newest `demotions.jsonl` row is a proposal's cap and nothing clears it (the integration with
+  the promotion ladder will let a newer operator approval row do that). `demotions.jsonl` is hash-chained but unkeyed, so any
+  local process can append a valid lowering row and silence a proposal; it can only lower, and `compile report` lists every cap
+  in its `Demotions` section.
 
 ## Security and scrubbing
 

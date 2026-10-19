@@ -39,10 +39,23 @@ def test_auto_fp_a_does_not_look_past_the_second_human_prompt():
     assert rule("block", steps) is None
 
 
-@pytest.mark.parametrize("prompt", ["please remove /w/src now", 'delete "/w/src".', "rm `/w/src`, thanks", "go for ~/w/src",
+@pytest.mark.parametrize("prompt", ["please remove /w/src now", 'delete "/w/src".', "rm `/w/src`, thanks",
                                     "remove /w/src/ please"])
 def test_auto_fp_b_the_fire_target_is_in_the_latest_human_prompt_before_it(prompt):
     assert rule("observe", [{"human": prompt}, RM]) == "auto_fp_prompt_target"
+
+
+def test_auto_fp_b_expands_a_tilde_in_memory_and_also_hashes_the_raw_token(monkeypatch):
+    monkeypatch.setenv("HOME", "/h")
+    run = {"tool": "Bash", "input": {"command": "rm -rf /h/w/src"}}
+    assert rule("observe", [{"human": "go for ~/w/src"}, run], key=hash16("/h/w/src")) == "auto_fp_prompt_target"
+    assert rule("observe", [{"human": "go for ~/w/src"}, run], key=hash16("~/w/src")) == "auto_fp_prompt_target"
+
+
+@pytest.mark.parametrize("target", ["/", "~", ".", "..", "a", "//"])
+def test_auto_fp_b_never_hashes_empty_short_or_bare_root_tokens(target):
+    assert offline.prompt_hashes(f"please look at {target} now") & {hash16(target)} == set()
+    assert rule("observe", [{"human": f"clean {target} please"}, RM], key=hash16(target)) is None
 
 
 def test_auto_fp_b_only_the_most_recent_prompt_before_the_fire_counts():
@@ -59,6 +72,20 @@ def test_auto_fp_c_the_user_runs_the_same_rm_in_a_shell_mode_command_after_a_blo
     assert rule("warn", steps) is None and rule("observe", steps) is None
     other = [{"human": "tidy"}, RM, {"human": "<bash-input>rm -rf /w/other</bash-input>"}]
     assert rule("block", other) is None
+
+
+def test_auto_fp_c_only_a_whole_record_shell_entry_counts_never_a_fragment_in_other_text():
+    inside = "paste this: <bash-input>rm -rf /w/src</bash-input> and tell me"
+    steps = [{"human": "tidy"}, RM, {"human": inside}, {"human": "thanks"}]
+    assert rule("block", steps) is None
+    evs = events([{"human": "x"}, {**RM, "result": "<bash-input>rm -rf /w/src</bash-input>"}])
+    assert offline.shell_keys(evs) == set()
+    own = events([{"human": "<bash-input>rm -rf /w/src</bash-input>"}])
+    assert offline.shell_keys(own) == {hash16("/w/src"), hash16("/w/src")} == {KEY}
+    padded = events([{"human": "  <bash-input>rm -rf /w/src</bash-input>\n"}])
+    assert offline.shell_keys(padded) == {KEY}
+    queued = events([{"queued": "<bash-input>rm -rf /w/src</bash-input>"}])
+    assert offline.shell_keys(queued) == set()
 
 
 def test_auto_tp_a_an_operator_guard_hook_blocked_the_same_call():
@@ -272,7 +299,7 @@ def test_only_block_rows_can_have_evasion_candidates(w):
 def test_two_candidates_in_14_days_flag_the_proposal_for_review_without_lowering_it(blocked):
     w = blocked
     evade = [{"human": "tidy"}, RM, {"tool": "Bash", "input": {"command": "rm -rf /w/src/"}}]
-    cs.put_session(w, "s1", evade)
+    cs.put_session(w, "s1", evade, day="2026-10-10")
     cs.put_session(w, "s2", evade)
     cs.put_shadow(w, "s1", CMD, mode="block", ts="2026-10-10T10:00:00Z")
     cs.put_shadow(w, "s2", CMD, mode="block", ts="2026-10-18T10:00:00Z")
@@ -291,9 +318,36 @@ def test_two_candidates_in_14_days_flag_the_proposal_for_review_without_lowering
 def test_two_candidates_more_than_14_days_apart_do_not_flag(blocked):
     w = blocked
     evade = [{"human": "tidy"}, RM, {"tool": "Bash", "input": {"command": "rm -rf /w/src/"}}]
-    cs.put_session(w, "s1", evade)
+    cs.put_session(w, "s1", evade, day="2026-09-20")
     cs.put_session(w, "s2", evade)
     cs.put_shadow(w, "s1", CMD, mode="block", ts="2026-09-20T10:00:00Z")
     cs.put_shadow(w, "s2", CMD, mode="block", ts="2026-10-18T10:00:00Z")
     out = offline.run(w.cfg, now=cs.NOW)
     assert out["evasion_candidates"] == 2 and out["demotions"] == 0
+
+
+# ------------------------------------------------------------------ the time join
+def test_join_picks_the_use_nearest_at_or_before_the_row_then_the_nearest_after_within_60_seconds():
+    uses = [(100.0, 0, "a"), (130.0, 1, "b"), (200.0, 2, "c")]
+    assert offline.join(uses, 140.0) == (1, "b") and offline.join(uses, 130.0) == (1, "b")
+    assert offline.join(uses, 99.0) == (0, "a") and offline.join(uses, 30.0) is None
+    assert offline.join([(None, 0, "x")], 10.0) is None
+
+
+def test_a_row_joins_the_second_of_two_identical_uses_when_only_the_second_fired(w):
+    steps = [RM, {"human": "fine"}, {"human": "fine too"}, {"human": "and so on"}, RM, {"human": "you keep doing that"}]
+    cs.put_session(w, "s1", steps)                                  # the uses are stamped :00 and :05
+    cs.put_shadow(w, "s1", CMD, ts="2026-10-18T10:00:01Z")          # the hook fired for the first use: nobody objected
+    second = cs.put_shadow(w, "s1", CMD, ts="2026-10-18T10:00:06Z")  # ... and for the second, which drew the objection
+    offline.run(w.cfg, now=cs.NOW)
+    (lab,) = label_rows(w)
+    assert (lab["ref"], lab["reason_code"]) == (labels.row_id(second), "auto_tp_correction")
+
+
+@pytest.mark.parametrize("human", [{"label": "incident", "reason_code": "human"}, {"label": "fp", "reason_code": "real"},
+                                   {"label": "tp", "reason_code": "human"}])
+def test_any_non_auto_row_for_a_ref_stops_the_auto_rows(w, human):
+    cs.put_session(w, "s1", [{"human": "please remove /w/src"}, RM])
+    src = cs.put_shadow(w, "s1", CMD)
+    cs.write_labels(w.cfg, [{"ref": labels.row_id(src), **human}])
+    assert sum(offline.run(w.cfg, now=cs.NOW)["labels"].values()) == 0 and len(label_rows(w)) == 1

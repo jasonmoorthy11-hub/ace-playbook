@@ -317,3 +317,45 @@ def test_state_module_imports_only_stdlib_and_no_store():
             names.add(("." * node.level) + (node.module or ""))
     allowed = {"__future__", "fcntl", "hashlib", "json", "os", "re", "stat", "time", "pathlib", "typing", ".detectors"}
     assert names <= allowed, names - allowed
+
+
+# ------------------------------------------------------------------ prune (the nightly offline pass)
+def _pair(tmp_path, json_age, lock_age):
+    import os as _os
+    base = tmp_path / "shadow_state"
+    base.mkdir(exist_ok=True)
+    files = {"json": base / ("a" * 16 + ".json"), "lock": base / ("a" * 16 + ".json.lock")}
+    for key, age in (("json", json_age), ("lock", lock_age)):
+        if age is not None:
+            files[key].write_text("{}")
+            _os.utime(files[key], (age, age))
+    return files
+
+
+def test_prune_keeps_the_lock_of_a_session_whose_state_file_is_fresh(tmp_path):
+    files = _pair(tmp_path, 5000.0, 10.0)                                  # a live session: fresh state, old lock inode
+    assert st.prune(tmp_path, 1000.0) == 0 and files["json"].exists() and files["lock"].exists()
+
+
+def test_prune_removes_a_stale_state_file_and_its_free_lock_or_a_lock_with_no_state_file(tmp_path):
+    files = _pair(tmp_path, 10.0, 10.0)
+    assert st.prune(tmp_path, 1000.0) == 2 and not files["json"].exists() and not files["lock"].exists()
+    files = _pair(tmp_path, None, 10.0)
+    assert st.prune(tmp_path, 1000.0) == 1 and not files["lock"].exists()
+    files = _pair(tmp_path, None, 5000.0)                                  # a fresh lock is never touched
+    assert st.prune(tmp_path, 1000.0) == 0 and files["lock"].exists()
+
+
+def test_prune_takes_the_lock_first_and_skips_one_that_is_held(tmp_path):
+    import fcntl
+    import os as _os
+    files = _pair(tmp_path, 10.0, 10.0)
+    fd = _os.open(files["lock"], _os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        assert st.prune(tmp_path, 1000.0) == 1 and not files["json"].exists() and files["lock"].exists()
+        assert st.prune(tmp_path, 1000.0, dry_run=True) == 0
+    finally:
+        _os.close(fd)
+    assert st.prune(tmp_path, 1000.0, dry_run=True) == 1 and files["lock"].exists()
+    assert st.prune(tmp_path, 1000.0) == 1 and not files["lock"].exists()

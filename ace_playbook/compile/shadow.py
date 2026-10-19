@@ -73,20 +73,34 @@ def approved_path(cfg, pid: str) -> Path:
     return path
 
 
+def _tail(cfg, n: int = 200) -> str:
+    """The last `n` bytes of shadow.log, '' when it is missing or not a regular file."""
+    try:
+        with os.fdopen(os.open(Path(cfg.data_dir) / "shadow.log", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as fh:
+            info = os.fstat(fh.fileno())
+            fh.seek(max(0, info.st_size - n))
+            return fh.read(n).decode("utf-8", "replace") if stat.S_ISREG(info.st_mode) else ""
+    except OSError:
+        return ""
+
+
 def _demotions(cfg, log) -> tuple[list[dict], int | None]:
     """(rows, broken_at) of demotions.jsonl, read once per hook call. A read error is logged by type and means no demotions
-    (fail open); a broken chain is logged and makes `_load_one` cap every proposal at observe (lowering is always safe)."""
+    (fail open); a broken chain is logged and makes `_load_one` cap every proposal at observe (lowering is always safe).
+    A line already in the last 200 bytes of shadow.log is not written again, so a broken file cannot fill the log."""
+    once = lambda msg: None if msg in _tail(cfg) else log(msg)       # noqa: E731
     try:
         rows, broken = demotions.read_chain(cfg.data_dir)
     except Exception as exc:
-        log(f"demotions:{type(exc).__name__}")
+        once(f"demotions:{type(exc).__name__}")
         return [], None
     if broken is not None:
-        log("demotions:chain_broken")
+        once("demotions:chain_broken")
     return rows, broken
 
 
-def _load_one(cfg, path: Path, pid: str, log, dem: tuple[list[dict], int | None] = ([], None)) -> tuple[dict, str] | None:
+def _load_one(cfg, path: Path, pid: str, log, dem: tuple[list[dict], int | None] | None = None) -> tuple[dict, str] | None:
+    dem = dem or ([], None)
     try:
         if os.lstat(path).st_size > MAX_FILE_BYTES:
             return log(f"skipped:{pid}:oversize")

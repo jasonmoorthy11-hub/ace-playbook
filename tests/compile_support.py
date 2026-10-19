@@ -33,12 +33,12 @@ def _text(step: dict) -> str:
     return step["human"] + "x" * step.get("pad", 0)
 
 
-def records(steps: list[dict], sid: str = SID) -> list[dict]:
+def records(steps: list[dict], sid: str = SID, day: str = "2026-09-15") -> list[dict]:
     """Invented transcript records, shaped like Claude Code JSONL."""
     out: list[dict] = []
 
     def add(rtype: str, **kw) -> None:
-        rec = {"type": rtype, "sessionId": sid, "timestamp": f"2026-09-15T10:00:{len(out) % 60:02d}Z",
+        rec = {"type": rtype, "sessionId": sid, "timestamp": f"{day}T10:00:{len(out) % 60:02d}Z",
                "isSidechain": False, "uuid": f"u{len(out)}"}
         rec.update(kw)
         out.append(rec)
@@ -192,7 +192,7 @@ def write_transcript(cfg, session: dict) -> Path:
     d = Path(cfg.transcripts_root) / "proj"
     d.mkdir(parents=True, exist_ok=True)
     p = d / f"{session['id']}.jsonl"
-    p.write_text("".join(json.dumps(r) + "\n" for r in records(session["steps"], session["id"])))
+    p.write_text("".join(json.dumps(r) + "\n" for r in records(session["steps"], session["id"], session.get("day", "2026-09-15"))))
     return p
 
 
@@ -316,10 +316,10 @@ def offline_world(tmp_path, mode: str = "observe", approved_at: str = "2026-10-0
     return w
 
 
-def put_session(w, sid: str, steps: list[dict], age: float = 7200.0) -> Path:
-    """An invented transcript whose mtime is `age` seconds before NOW."""
+def put_session(w, sid: str, steps: list[dict], age: float = 7200.0, day: str = "2026-10-18") -> Path:
+    """An invented transcript (record `i` is stamped `<day>T10:00:<i>Z`) whose mtime is `age` seconds before NOW."""
     import os
-    path = write_transcript(w.cfg, {"id": sid, "steps": steps})
+    path = write_transcript(w.cfg, {"id": sid, "steps": steps, "day": day})
     os.utime(path, (NOW - age, NOW - age))
     return path
 
@@ -335,8 +335,13 @@ def put_shadow(w, sid: str, command: str, mode: str = "observe", ts: str = "2026
 
 
 def tree_state(root) -> dict:
-    """Relative path -> size of every file under `root` (a dry run must leave it unchanged)."""
-    return {str(p.relative_to(root)): p.stat().st_size for p in sorted(Path(root).rglob("*")) if p.is_file()}
+    """Relative path -> (is a directory, size, mtime_ns) of every file AND directory under `root`, symlinks not followed: a
+    new directory or a same-size rewrite shows (a dry run must leave it unchanged)."""
+    out = {}
+    for p in sorted(Path(root).rglob("*")):
+        info = p.lstat()
+        out[str(p.relative_to(root))] = (p.is_dir() and not p.is_symlink(), info.st_size, info.st_mtime_ns)
+    return out
 
 
 if __name__ == "__main__":  # python -m tests.compile_support <rebuild-lab>/ace/step0

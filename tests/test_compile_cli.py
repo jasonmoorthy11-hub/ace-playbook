@@ -352,6 +352,7 @@ def test_step2_and_4_sources_do_not_import_inject_keys_reflect_or_spawn_anything
 
 def test_step2_and_4_modules_stay_within_their_line_budgets():
     for name, cap in (("evidence.py", 300), ("proposal.py", 300), ("__main__.py", 300), ("shadow.py", 300),
-                      ("labels.py", 260), ("report.py", 300), ("offline.py", 300), ("demotions.py", 150)):
+                      ("labels.py", 260), ("report.py", 300), ("offline.py", 300), ("demotions.py", 150),
+                      ("state.py", 300)):
         assert len((COMPILE / name).read_text().splitlines()) <= cap, name
     assert os.access(COMPILE / "__main__.py", os.R_OK) and proposal.PROPOSALS == "proposals"

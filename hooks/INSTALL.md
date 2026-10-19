@@ -134,6 +134,10 @@ The nightly job also runs the offline compiler pass (`compile offline`: detector
 reflection step; it makes no API call, so `--dry-run` only affects the reflection step (use `--offline-dry-run` to make the pass
 write nothing, or `--no-offline` to skip it).
 
+**Upgrade note.** A nightly job already started with `--dry-run` now also writes offline data (`detector_events.jsonl`, auto
+labels, demotions, evasion candidates, `shadow_state` cleanup) and still makes no API call. Add `--offline-dry-run` to keep
+the whole job read-only.
+
 The sweep reflects up to 20 transcripts per run that are idle for an hour, larger than 2 KB, not
 in a subagent folder, and have no entry in `reflections.jsonl`. Each reflection is one Haiku 5.5
 call; usage is written to the ledger and the log. Remove the job with

@@ -159,8 +159,16 @@ def cmd_offline(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
     if not 1 <= args.since <= 3660 or args.idle_minutes < 0:
         print("error: --since must be 1..3660 and --idle-minutes at least 0", file=sys.stderr)
         return 2
-    print("\n".join(offline.lines(offline.run(cfg, dry_run=args.dry_run, since_days=args.since,
-                                              idle_minutes=args.idle_minutes))))
+    try:
+        out = offline.run(cfg, dry_run=args.dry_run, since_days=args.since, idle_minutes=args.idle_minutes)
+    except Exception as exc:                                  # type only: no traceback, no paths
+        print(f"error: {type(exc).__name__}", file=sys.stderr)
+        return 1
+    lines = [f"{k}: {out[k]}" for k in ("transcripts", "skipped", "detector_events")]
+    lines += [f"labels: {sum(out['labels'].values())}", *(f"labels.{k}: {v}" for k, v in out["labels"].items())]
+    lines += [f"{k}: {out[k]}" for k in ("demotions", "evasion_candidates", "state_removed", "errors", "lesson_check",
+                                         "error_rate", "p95_rule")]
+    print("\n".join(lines))                                   # counts only: no paths, no hashes
     return 0
 
 
