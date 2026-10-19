@@ -71,6 +71,16 @@ session are not surfaced to the running session, and the SessionEnd hook only en
 design never relies on a detached child surviving an interactive exit. Stage 1 depends on
 neither; the nightly sweep runs under launchd instead.
 
+## Provisional promotion
+
+The store-level rule for a live status still counts migrated `legacy:` evidence (origin
+`user_file`, self-quoted by the migration) as user-origin evidence. A hand-written `PATCH` with
+`status: active` and no typed quote is therefore not refused by the log. The `promote` CLI is the
+only sanctioned path and always attaches the operator's typed quote, but the log does not enforce
+that. The one-line fix (ignore `legacy:` session ids in `_has_user_evidence`) is deferred because
+it would also re-judge the 7 lessons the migration activated by override, which needs an
+operator decision.
+
 ## Single user
 
 One person's workflow on one machine. Results, if any, will not generalize to teams or to other

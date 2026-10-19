@@ -212,3 +212,19 @@ def test_patch_evidence_cap_is_enforced(tmp_path):
     with pytest.raises(SchemaError, match="evidence full"):
         log.append(_patch(lid, evidence(quote="One quote too many for it")))
     assert log.verify() == 5
+
+
+def test_known_gap_bare_active_patch_passes_with_legacy_evidence(tmp_path):
+    # Pins today's behaviour; see LIMITATIONS.md "Provisional promotion". Migrated lessons carry
+    # self-quoted `legacy:` user_file evidence, which the store still counts as user-origin, so a
+    # bare status PATCH is not refused. Fixing this (ignore `legacy:` in _has_user_evidence)
+    # must flip this test deliberately.
+    log = DeltaLog(tmp_path / "deltas.jsonl")
+    legacy = [{"quote": "Use python3, not python, for scripts", "origin": "user_file",
+               "session_id": "legacy:abc123"}]
+    d = add_draft(scope=GLOBAL, evidence=legacy)
+    log.append(d, ts="2026-01-01T00:00:00Z")
+    bare = {"op": "PATCH", "lesson_id": d["lesson_id"], "fields": {"status": "active"}}
+    log.check_draft(bare)
+    log.append(bare)
+    assert log.state()[d["lesson_id"]]["status"] == "active"
