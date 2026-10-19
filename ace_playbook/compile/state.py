@@ -218,6 +218,11 @@ def update(data_dir: str | Path, session_id: str, fn: Callable[[dict], dict],
                 if attempt == LOCK_TRIES - 1:
                     return None, "skipped:locked"
                 time.sleep(LOCK_SLEEP)
+        try:                                    # the lock file must still be the one we hold (not replaced or unlinked)
+            if os.fstat(fd).st_ino != os.lstat(str(path) + ".lock").st_ino:
+                return None, "skipped:locked"
+        except OSError:
+            return None, "skipped:locked"
         try:
             if not _target_ok(path):
                 return None, "skipped:error"

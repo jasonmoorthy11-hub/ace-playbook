@@ -81,10 +81,16 @@ and is not sealed.
   rule (disable above 200 ms over seven days) waits for rows to carry `dur_ms` and is reported as
   `not computable` on every run; the 1% hook-error rule needs a sample of 100 (rows count fires, not hook calls) and is
   reported `not computable` below it.
-- Demotions are not lifted yet: the newest `demotions.jsonl` row is a proposal's cap and nothing clears it (the integration with
-  the promotion ladder will let a newer operator approval row do that). `demotions.jsonl` is hash-chained but unkeyed, so any
-  local process can append a valid lowering row and silence a proposal; it can only lower, and `compile report` lists every cap
-  in its `Demotions` section.
+- Demotions are not lifted yet: a proposal's cap is the lowest `to_mode` in `demotions.jsonl` (a `disabled` row is final) and
+  nothing clears it (the integration with the promotion ladder will let a newer operator approval row do that).
+- Every input of the offline pass can be written by a local process: transcripts, `shadow.jsonl` (including its `mode`),
+  `shadow.log`, `labels.jsonl`, `demotions.jsonl` (hash-chained but unkeyed), `offline_state.json`, the approved copy's
+  `approved_at` and `deltas.jsonl`. Demotions can so be caused by forged inputs and suppressed by deleting or truncating the
+  file. The hook's safety is that a copy above `observe` needs a matching approvals row and demotions never raise a mode; the
+  operator's controls are the TTY listing at promotion and the `Demotions` section of `compile report`.
+- `tp_candidate` rows must never feed the ladder (the agent can print a guard-looking line into its own tool output in observe
+  and warn mode). The shell-mode rule cannot yet exclude `isMeta` or compact-summary user records (events carry no flag); only the
+  whole-record `<bash-input>` shape guards it.
 
 ## Security and scrubbing
 

@@ -100,11 +100,27 @@ def label_map(cfg: Config) -> tuple[dict[str, str], int | None]:
     return ({}, broken) if broken is not None else (labels.effective(rows), None)
 
 
-def hook_errors(cfg: Config, rows: list[dict], since: str) -> tuple[int, int]:
-    """(`error:` lines of shadow.log stamped at or after `since`, shadow rows stamped at or after it)."""
-    text = (demotions.read_regular(cfg.path("shadow.log"), 2_000_000) or b"").decode("utf-8", "replace")
-    errors = sum(ln[:20] >= since and ln[21:].startswith("error:") for ln in text.splitlines())
-    return errors, sum(r["ts"] >= since for r in rows)
+def hook_errors(cfg: Config, rows: list[dict], since: str) -> tuple[int, int, bool]:
+    """(`error:` lines of shadow.log stamped at or after `since`, shadow rows stamped at or after it, log full). A log at the
+    hook's size cap has stopped recording errors, so its error rate cannot be trusted."""
+    from . import shadow
+    raw = demotions.read_regular(cfg.path("shadow.log"), 2 * shadow.LOG_CAP) or b""
+    errors = sum(ln[:20] >= since and ln[21:].startswith("error:") for ln in raw.decode("utf-8", "replace").splitlines())
+    return errors, sum(r["ts"] >= since for r in rows), len(raw) >= shadow.LOG_CAP
+
+
+def lesson_statuses(cfg: Config) -> tuple[dict | None, str]:
+    """({lesson id: status}, "ok"); (None, "skipped (no store)") without deltas.jsonl; (None, "chain invalid") when the log
+    fails verification (no lesson check is then made)."""
+    if not cfg.deltas.exists():
+        return None, "skipped (no store)"
+    from ..store import DeltaLog
+    log = DeltaLog(cfg.deltas)
+    try:
+        log.verify()
+        return {k: v.get("status") for k, v in log.state().items()}, "ok"
+    except ValueError:                                            # includes store.schema.SchemaError
+        return None, "chain invalid"
 
 
 def demotion_summary(cfg: Config) -> dict:

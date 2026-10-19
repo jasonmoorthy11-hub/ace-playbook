@@ -379,3 +379,18 @@ def test_a_broken_demotions_chain_is_logged_once_not_on_every_call(w, run):
     for _ in range(5):
         run(cs.pre_payload(RM))
     assert run.log.count("demotions:chain_broken") == 1 and len(run.rows) == 5
+
+
+def test_the_mode_disabled_and_demoted_skip_lines_are_logged_once_not_on_every_call(w, run):
+    from ace_playbook.compile import demotions
+    p = w.props["rm_rf_nonscratch"]
+    cs.approve_file(w.cfg, p, mode="warn")                                  # not allowed yet: skipped on every call
+    for _ in range(4):
+        run(cs.pre_payload(RM))
+    assert run.log.count(f"skipped:{p['id']}:mode_disabled") == 1
+    cs.approve_file(w.cfg, p, mode="observe")
+    demotions.append(w.data, {"proposal_id": p["id"], "from_mode": "observe", "to_mode": "disabled", "cause": "error_rate",
+                              "ref": "-", "review_required": False})
+    for _ in range(4):
+        run(cs.pre_payload(RM))
+    assert run.log.count(f"skipped:{p['id']}:demoted") == 1 and run.rows == []

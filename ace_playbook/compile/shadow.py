@@ -73,7 +73,7 @@ def approved_path(cfg, pid: str) -> Path:
     return path
 
 
-def _tail(cfg, n: int = 200) -> str:
+def _tail(cfg, n: int = 1000) -> str:
     """The last `n` bytes of shadow.log, '' when it is missing or not a regular file."""
     try:
         with os.fdopen(os.open(Path(cfg.data_dir) / "shadow.log", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as fh:
@@ -84,18 +84,23 @@ def _tail(cfg, n: int = 200) -> str:
         return ""
 
 
+def _once(cfg, log, msg: str) -> None:
+    """Write a line that repeats on every hook call only if it is not already in the last 1000 bytes of shadow.log, so it can
+    never fill the log to LOG_CAP (after which `error:` lines stop and the error-rate rule goes blind)."""
+    if msg not in _tail(cfg):
+        log(msg)
+
+
 def _demotions(cfg, log) -> tuple[list[dict], int | None]:
-    """(rows, broken_at) of demotions.jsonl, read once per hook call. A read error is logged by type and means no demotions
-    (fail open); a broken chain is logged and makes `_load_one` cap every proposal at observe (lowering is always safe).
-    A line already in the last 200 bytes of shadow.log is not written again, so a broken file cannot fill the log."""
-    once = lambda msg: None if msg in _tail(cfg) else log(msg)       # noqa: E731
+    """(rows, broken_at) of demotions.jsonl, read once per hook call. A broken chain and a read error (symlink, directory, FIFO,
+    oversize) are both logged (once) and make `_load_one` cap every proposal at observe: lowering is always safe."""
     try:
         rows, broken = demotions.read_chain(cfg.data_dir)
     except Exception as exc:
-        once(f"demotions:{type(exc).__name__}")
-        return [], None
+        _once(cfg, log, f"demotions:{type(exc).__name__}")
+        return [], 0
     if broken is not None:
-        once("demotions:chain_broken")
+        _once(cfg, log, "demotions:chain_broken")
     return rows, broken
 
 
@@ -108,12 +113,12 @@ def _load_one(cfg, path: Path, pid: str, log, dem: tuple[list[dict], int | None]
         if body is None or body["id"] != pid:
             return log(f"skipped:{pid}:invalid:{mode if body is None else 'id'}")
         if mode not in ALLOWED_MODES:
-            return log(f"skipped:{pid}:mode_disabled")
+            return _once(cfg, log, f"skipped:{pid}:mode_disabled")
         cap = demotions.effective_cap(dem[0], pid)
         if dem[1] is not None:
             cap = demotions.lower("observe", cap)
         if cap == "disabled":
-            return log(f"skipped:{pid}:demoted")
+            return _once(cfg, log, f"skipped:{pid}:demoted")
         mode = demotions.lower(mode, cap)
         rep = proposal.validate(body, cfg, hot=True)
         return (body, mode) if rep.ok else log(f"skipped:{pid}:invalid:{rep.failed}")
