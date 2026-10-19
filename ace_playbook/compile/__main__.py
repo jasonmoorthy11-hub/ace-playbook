@@ -182,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
     lb.add_argument("--note", help=f"at most {labels.NOTE_MAX} characters, scrubbed")
     lb.add_argument("--kind", choices=labels.KINDS, help="with --list: only this label")
     lb.add_argument("--limit", type=int, help="with --rows: how many (default 50, newest last)")
-    rp = sub.add_parser("report", help="counts per proposal from shadow rows and labels; synthetic rows reported apart")
+    rp = sub.add_parser("report", help="counts per proposal from shadow rows and labels; synthetic kept apart")
     rp.add_argument("--days", type=int, default=14, help="days in the rows-per-day block (default 14, 1 to 3660)")
     rp.add_argument("--json", action="store_true", help="one JSON object instead of text")
     sub.add_parser("shadow", help="the hook entry (what hooks/shadow.sh runs); reads a payload on stdin").add_argument(

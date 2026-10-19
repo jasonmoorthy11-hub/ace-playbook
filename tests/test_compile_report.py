@@ -17,6 +17,7 @@ from ace_playbook.compile import state as st
 from . import compile_support as cs
 
 ROOT = Path(__file__).resolve().parent.parent
+SOURCE = ROOT / "ace_playbook" / "compile" / "report.py"
 RM = "rm -rf /w/src"
 TODAY = "2026-10-20T12:00:00Z"
 PRIV = "Private corpus (aggregate, counts only)"
@@ -73,7 +74,7 @@ def test_with_no_data_both_sections_say_no_rows_and_the_header_hashes_the_source
     code, out, err = run(w, capsys=capsys)
     assert (code, err) == (0, "") and out.count("no rows\n") == 2 and out.startswith("ace-playbook shadow report\n")
     got = re.search(r"^report_sha256: ([0-9a-f]{64})$", out, re.M).group(1)
-    assert got == hashlib.sha256(Path(report.__file__).read_bytes()).hexdigest()
+    assert got == hashlib.sha256(SOURCE.read_bytes()).hexdigest()
     assert PRIV in out and SYNTH in out
     assert "not computed here: eligible-session rates, Wilson intervals, friction, hook cost" in out
 
@@ -150,7 +151,7 @@ def test_synthetic_rows_get_their_own_table_and_never_change_the_private_one(w, 
     assert "no rows" in before and "no rows" not in out and "not computed here" in out
 
 
-@pytest.mark.parametrize("private, message", [(True, "synthetic row found in the private corpus"),
+@pytest.mark.parametrize("private, message", [(True, "row with a non-private corpus in shadow.jsonl"),
                                               (False, "non-synthetic row found in the synthetic corpus")])
 def test_the_corpus_guard_refuses_a_mixed_file_with_exit_2_and_prints_nothing_else(w, fire, capsys, private, message):
     fire()
@@ -171,15 +172,24 @@ def test_a_private_row_may_say_corpus_private(w, fire, capsys):
 
 
 def test_days_limits_the_per_day_block_but_not_the_totals(w, fire, capsys):
-    fire(day="2026-10-01")
-    fire(day="2026-10-19")
-    fire(day="2026-10-20")
+    for day in ("2026-10-01", "2026-10-18", "2026-10-19", "2026-10-20"):
+        fire(day=day)
     out = run(w, "--days", "2", capsys=capsys)[1]
     block = out.split("Rows per day (last 2 days)\n", 1)[1].split("\n\n", 1)[0].splitlines()
-    assert [ln.split() for ln in block if ln.startswith("2026")] == [["2026-10-19", pid(w), "1"], ["2026-10-20", pid(w), "1"]]
-    assert table(out, PRIV)[0][5] == "3"
-    wide = run(w, capsys=capsys)[1]                                         # default 14 days: the 1st is out, the 19th in
-    assert "2026-10-01" not in wide.split("Rows per day")[1] and "Rows per day (last 14 days)" in wide
+    assert [ln.split() for ln in block if ln.startswith("2026")] == [["2026-10-19", pid(w), "1"],
+                                                                      ["2026-10-20", pid(w), "1"]]
+    assert "2026-10-18" not in "\n".join(block) and table(out, PRIV)[0][5] == "4"
+    wide = run(w, capsys=capsys)[1].split("Rows per day")[1]               # default 14 days: 1st out, 18th in
+    assert "2026-10-01" not in wide and "2026-10-18" in wide and "(last 14 days)" in wide
+
+
+def test_a_row_dated_after_today_is_counted_in_rows_but_not_in_the_per_day_block(w, fire, capsys):
+    fire(day="2026-10-20")
+    fire(day="2026-10-21")
+    out = run(w, capsys=capsys)[1]
+    assert table(out, PRIV)[0][5] == "2" and table(out, PRIV)[0][-1] == "2026-10-21"
+    block = out.split("Rows per day", 1)[1].split("\n\n", 1)[0]
+    assert "2026-10-20" in block and "2026-10-21" not in block
 
 
 def test_json_has_the_specified_shape_and_the_same_numbers_as_the_text(w, fire, capsys):
@@ -190,16 +200,22 @@ def test_json_has_the_specified_shape_and_the_same_numbers_as_the_text(w, fire, 
     obj = json.loads(out)
     assert code == 0 and set(obj) == {"report_sha256", "days", "private", "synthetic", "labels"} and obj["days"] == 7
     assert obj["labels"] == {"chain_ok": True, "broken_at": None}
-    assert obj["report_sha256"] == hashlib.sha256(Path(report.__file__).read_bytes()).hexdigest()
+    assert obj["report_sha256"] == hashlib.sha256(SOURCE.read_bytes()).hexdigest()
     prop = obj["private"]["proposals"][pid(w)]
     assert prop == {"lesson": cs.RM_LESSON, "detector": "rm_rf_nonscratch", "event": "PreToolUse",
                     "approved_mode": "observe", "rows": 2, "cause_detector": 2, "cause_truncated": 0, "sessions": 2,
                     "days": 2, "tp": 0, "fp": 0, "unlabelled": 2, "first": "2026-10-19", "last": "2026-10-20"}
     assert obj["private"]["per_day"] == [{"date": "2026-10-19", "proposal_id": pid(w), "rows": 1},
                                          {"date": "2026-10-20", "proposal_id": pid(w), "rows": 1}]
-    assert set(obj["synthetic"]) == {"proposals", "per_day"} and obj["synthetic"]["proposals"]["P-0a1b2c3d"]["rows"] == 1
+    assert set(obj["synthetic"]) == {"proposals", "per_day"}
+    assert obj["synthetic"]["proposals"]["P-0a1b2c3d"]["rows"] == 1
     text = run(w, "--days", "7", capsys=capsys)[1]
-    assert table(text, PRIV)[0][5:9] == ["2", "2", "0", "2"]
+    for title, key in ((PRIV, "private"), (SYNTH, "synthetic")):
+        rows = {r[0]: r[1:] for r in table(text, title)}
+        assert rows == {p: [str(v[f]) for f in report.FIELDS] for p, v in obj[key]["proposals"].items()}
+        block = text.split(title + "\n", 1)[1].split("Rows per day", 1)[1].split("\n\n", 1)[0].splitlines()
+        assert [ln.split() for ln in block if ln.startswith("2026")] == [
+            [d["date"], d["proposal_id"], str(d["rows"])] for d in obj[key]["per_day"]]
 
 
 def test_private_output_holds_no_session_hash_row_id_payload_hash_or_data_path(w, fire, capsys):
@@ -217,6 +233,7 @@ def test_unreadable_missing_or_garbled_proposal_files_show_dashes_and_exit_0(w, 
     fire()
     pfile = w.data / "proposals" / (pid(w) + ".json")
     afile = w.data / "proposals" / "approved" / (pid(w) + ".json")
+    orig_p, orig_a = pfile.read_bytes(), afile.read_bytes()
     pfile.unlink()
     afile.write_text("not json")
     code, out, _ = run(w, capsys=capsys)
@@ -225,8 +242,35 @@ def test_unreadable_missing_or_garbled_proposal_files_show_dashes_and_exit_0(w, 
     afile.unlink()
     code, out, _ = run(w, capsys=capsys)
     assert code == 0 and table(out, PRIV)[0][2:5] == ["-", "-", "-"]
+    pfile.write_bytes(orig_p)
+    afile.write_bytes(orig_a)
+    assert table(run(w, capsys=capsys)[1], PRIV)[0][2:5] == ["rm_rf_nonscratch", "PreToolUse", "observe"]
     pfile.chmod(0)
-    assert run(w, capsys=capsys)[0] == 0
+    code, out, _ = run(w, capsys=capsys)
+    assert code == 0 and table(out, PRIV)[0][2:5] == ["-", "-", "observe"]
+    pfile.chmod(0o600)
+
+
+def edit_json(path: Path, fn) -> None:
+    rec = json.loads(path.read_text())
+    path.write_text(json.dumps(fn(rec) or rec))
+
+
+def test_metadata_must_be_a_known_detector_event_and_mode_never_a_free_string(w, fire, capsys):
+    fire()
+    pfile = w.data / "proposals" / (pid(w) + ".json")
+    edit_json(pfile, lambda p: p["check"].update(detector="0123456789abcdef"))
+    assert table(run(w, capsys=capsys)[1], PRIV)[0][2:5] == ["-", "PreToolUse", "observe"]
+    edit_json(pfile, lambda p: p["check"].update(detector="rm_rf_nonscratch") or p.update(event="PostToolUse"))
+    assert table(run(w, capsys=capsys)[1], PRIV)[0][2:5] == ["rm_rf_nonscratch", "-", "observe"]
+
+
+@pytest.mark.parametrize("edit", [lambda rec: ["not", "a", "record"], lambda rec: rec.update(mode="block"),
+                                  lambda rec: rec.pop("proposal_sha256")])
+def test_an_approved_copy_of_the_wrong_shape_or_with_a_mismatched_hash_shows_a_dash_mode(w, fire, capsys, edit):
+    fire()
+    edit_json(w.data / "proposals" / "approved" / (pid(w) + ".json"), edit)
+    assert table(run(w, capsys=capsys)[1], PRIV)[0][4] == "-"
 
 
 def test_a_present_proposal_and_approved_copy_fill_the_metadata_columns(w, fire, capsys):
@@ -234,10 +278,15 @@ def test_a_present_proposal_and_approved_copy_fill_the_metadata_columns(w, fire,
     assert table(run(w, capsys=capsys)[1], PRIV)[0][2:5] == ["rm_rf_nonscratch", "PreToolUse", "observe"]
 
 
-@pytest.mark.parametrize("arg", ["0", "-3"])
+@pytest.mark.parametrize("arg", ["0", "-3", "3661", "1000000"])
 def test_days_below_one_is_a_usage_error(w, capsys, arg):
     code, out, err = run(w, "--days", arg, capsys=capsys)
-    assert (code, out) == (2, "") and "--days" in err
+    assert (code, out) == (2, "") and "--days must be 1..3660" in err
+
+
+def test_the_largest_allowed_window_works(w, fire, capsys):
+    fire()
+    assert run(w, "--days", "3660", capsys=capsys)[0] == 0
 
 
 def test_report_help_renders(capsys):
@@ -258,3 +307,58 @@ def test_python_dash_m_report_runs_with_no_data(w):
     out = subprocess.run([sys.executable, "-m", "ace_playbook.compile", "--config", w.conf, "report", "--json"],
                          capture_output=True, text=True, cwd=ROOT, timeout=60)
     assert out.returncode == 0 and json.loads(out.stdout)["private"] == {"proposals": {}, "per_day": []}
+
+
+def test_identical_rows_share_a_row_id_so_one_label_counts_once(w, fire, capsys):
+    fire(sid="sess-a")
+    fire(sid="sess-a")                                                     # same fake second, session and payload
+    fire(sid="sess-b")
+    first, second, third = cs.shadow_rows(w.data)
+    assert labels.row_id(first) == labels.row_id(second) != labels.row_id(third)
+    label_rows(w, (labels.row_id(first), "tp"))
+    assert table(run(w, capsys=capsys)[1], PRIV)[0][5:13] == ["3", "3", "0", "2", "1", "1", "0", "1"]
+
+
+def test_an_unparsable_ts_counts_in_rows_only(w, fire, capsys):
+    fire()
+    cs.append_jsonl(w.cfg.path("shadow.jsonl"), {**SYN, "corpus": "private", "proposal_id": pid(w), "ts": "garbage"})
+    out = run(w, capsys=capsys)[1]
+    row = table(out, PRIV)[0]
+    assert row[5] == "2" and row[9] == "1" and row[13:] == ["2026-10-20", "2026-10-20"]
+    assert out.split("Rows per day", 1)[1].count(pid(w)) == 1
+
+
+def test_a_label_whose_ref_is_a_synthetic_rows_id_does_not_count_in_the_synthetic_table(w, capsys):
+    put_syn(w, SYN)
+    label_rows(w, (labels.row_id(SYN), "tp"))
+    row = table(run(w, capsys=capsys)[1], SYNTH)[0]
+    assert row[5] == "1" and row[10:13] == ["0", "0", "1"]
+
+
+def test_a_symlinked_shadow_file_exits_2(w, tmp_path, capsys):
+    real = tmp_path / "elsewhere.jsonl"
+    real.write_text("")
+    w.cfg.path("shadow.jsonl").symlink_to(real)
+    code, out, err = run(w, capsys=capsys)
+    assert (code, out) == (2, "") and "shadow.jsonl is a symlink or not a regular file" in err
+    assert str(tmp_path) not in err
+
+
+def test_a_directory_in_place_of_a_shadow_file_exits_2(w, capsys):
+    w.cfg.path("shadow.synthetic.jsonl").mkdir()
+    code, out, err = run(w, capsys=capsys)
+    assert (code, out) == (2, "") and "shadow.synthetic.jsonl" in err
+
+
+def test_the_corpus_guard_looks_at_raw_rows_before_the_key_filter(w, capsys):
+    put_syn(w, {"corpus": "private", "ts": "x"})
+    assert run(w, capsys=capsys)[:2] == (2, "")
+    w.cfg.path("shadow.synthetic.jsonl").unlink()
+    cs.append_jsonl(w.cfg.path("shadow.jsonl"), {"corpus": "synthetic", "ts": "x"})
+    assert run(w, capsys=capsys)[:2] == (2, "")
+
+
+def test_a_non_utf8_shadow_file_exits_2_without_a_traceback(w, capsys):
+    w.cfg.path("shadow.jsonl").write_bytes(b"\xff\xfe not utf8\n")
+    code, out, err = run(w, capsys=capsys)
+    assert (code, out) == (2, "") and err.startswith("error: ")

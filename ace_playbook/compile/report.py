@@ -4,14 +4,19 @@ Two corpora, two tables, never summed: the private `shadow.jsonl` (written by th
 `shadow.synthetic.jsonl` (every row says `corpus: synthetic`). A row in the wrong file refuses the whole report.
 tp/fp come from `labels.jsonl` (newest row per ref wins, `incident` rows ignored, a broken chain ignores every
 label). No session hash, row id, payload hash or path is printed. Rates and hook cost need the offline pass.
-Imports: stdlib, `..canon`, `..config`, `.labels`; `proposal` and `shadow` load lazily (hook path).
+Both shadow files are read here through a no-follow, regular-file-only reader. Imports: stdlib, `..canon`,
+`..config`, `.labels`; `catalogue`, `proposal` and `shadow` load lazily (hook path).
 """
 
 from __future__ import annotations
 
+import contextlib
+import errno
 import hashlib
 import json
+import os
 import re
+import stat
 import sys
 from collections import Counter
 from datetime import date, timedelta
@@ -23,7 +28,8 @@ from . import labels
 
 PRIVATE, SYNTHETIC = "shadow.jsonl", "shadow.synthetic.jsonl"
 KEYS = ("ts", "session", "proposal_id", "payload_sha256")
-PID, LID, WORD = re.compile(r"P-[0-9a-f]{8}"), re.compile(r"L-[0-9a-f]{8}"), re.compile(r"[A-Za-z0-9_|*]{1,40}")
+PID, LID = re.compile(r"P-[0-9a-f]{8}"), re.compile(r"L-[0-9a-f]{8}")
+MAX_DAYS = 3660
 FIELDS = ("lesson", "detector", "event", "approved_mode", "rows", "cause_detector", "cause_truncated", "sessions",
           "days", "tp", "fp", "unlabelled", "first", "last")
 HEADS = ("proposal", "lesson", "detector", "event", "approved_mode", "rows", "detector", "truncated", "sessions",
@@ -37,8 +43,13 @@ def source_sha256() -> str:
     return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
-def _tok(value: object, rx: re.Pattern) -> str:
+def _match(value: object, rx: re.Pattern) -> str:
     return value if isinstance(value, str) and rx.fullmatch(value) else "-"
+
+
+def _pick(value: object, allowed: object) -> str:
+    """`value` only when it is one of the known names, else `-` (a hand-edited file prints nothing of its own)."""
+    return value if isinstance(value, str) and value in allowed else "-"
 
 
 def _day(ts: str) -> str | None:
@@ -48,19 +59,37 @@ def _day(ts: str) -> str | None:
         return None
 
 
-def _check(rows: list[dict], want: str, message: str) -> list[dict]:
-    """The corpus guard: private rows may omit `corpus` (or say private); synthetic rows must say synthetic."""
-    ok = (lambda r: r.get("corpus", "private") == "private") if want == "private" else (
-        lambda r: r.get("corpus") == "synthetic")
-    if not all(ok(r) for r in rows):
-        raise labels.Refusal(message, 2)
-    return rows
+def _read(path: Path) -> list[dict]:
+    """JSONL objects of a regular file (no symlink, FIFO or directory: exit 2); a missing file is no rows."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return []
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise labels.Refusal(f"{path.name} is a symlink or not a regular file", 2) from None
+        raise
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise labels.Refusal(f"{path.name} is a symlink or not a regular file", 2)
+    with os.fdopen(fd, "rb") as fh:
+        text = fh.read().decode()                                   # strict: bad bytes are a ValueError, exit 2
+    recs = []
+    for line in text.splitlines():
+        with contextlib.suppress(ValueError):
+            recs.append(json.loads(line))
+    return [r for r in recs if isinstance(r, dict)]
 
 
 def read_corpora(cfg: Config) -> tuple[list[dict], list[dict]]:
-    private = _check(labels.shadow_rows(cfg), "private", "synthetic row found in the private corpus")
-    synthetic = [r for r in labels._read(cfg.path(SYNTHETIC)) if all(isinstance(r.get(k), str) for k in KEYS)]
-    return private, _check(synthetic, "synthetic", "non-synthetic row found in the synthetic corpus")
+    """(private rows, synthetic rows). The corpus guard runs on every raw object, before the key filter."""
+    private, synthetic = _read(cfg.path(PRIVATE)), _read(cfg.path(SYNTHETIC))
+    if any(r.get("corpus", "private") != "private" for r in private):
+        raise labels.Refusal("row with a non-private corpus in shadow.jsonl", 2)
+    if any(r.get("corpus") != "synthetic" for r in synthetic):
+        raise labels.Refusal("non-synthetic row found in the synthetic corpus", 2)
+    full = lambda rows: [r for r in rows if all(isinstance(r.get(k), str) for k in KEYS)]  # noqa: E731
+    return full(private), full(synthetic)
 
 
 def label_map(cfg: Config) -> tuple[dict[str, str], int | None]:
@@ -68,23 +97,24 @@ def label_map(cfg: Config) -> tuple[dict[str, str], int | None]:
     rows, broken = labels.read_chain(cfg)
     if broken is not None:
         return {}, broken
-    return {r["ref"]: r["label"] for r in rows if r.get("label") in ("tp", "fp") and isinstance(r.get("ref"), str)}, None
+    marked = [r for r in rows if r.get("label") in ("tp", "fp") and isinstance(r.get("ref"), str)]
+    return {r["ref"]: r["label"] for r in marked}, None
 
 
 def _meta(cfg: Config, pid: str) -> tuple[str, str, str]:
-    """(detector, event, approved mode) from the proposal files; `-` for anything missing, broken or unsafe."""
-    from . import proposal, shadow
+    """(detector, event, approved mode) from the proposal files; `-` for anything missing, broken, unsafe or unknown."""
+    from . import catalogue, proposal, shadow
     det = ev = mode = "-"
     if not PID.fullmatch(pid):
         return det, ev, mode
     try:
         p = proposal.load(proposal.proposal_path(cfg, pid))
-        det, ev = _tok(p["check"]["detector"], WORD), _tok(p["event"], WORD)
+        det, ev = _pick(p["check"]["detector"], catalogue.CATALOGUE), _pick(p["event"], shadow.EVENTS.values())
     except (ValueError, OSError, KeyError, TypeError):
         pass
     try:
         body, approved = shadow.pending_body(proposal.load(shadow.approved_path(cfg, pid)))
-        mode = _tok(approved, WORD) if body is not None else "-"
+        mode = _pick(approved, shadow.MODES) if body is not None else "-"
     except (ValueError, OSError):
         pass
     return det, ev, mode
@@ -95,21 +125,24 @@ def summarize(cfg: Config, rows: list[dict], labs: dict[str, str], now: str, day
     by: dict[str, list[dict]] = {}
     for r in rows:
         by.setdefault(r["proposal_id"] if PID.fullmatch(r["proposal_id"]) else "invalid", []).append(r)
-    cutoff = date.fromisoformat(now[:10]) - timedelta(days=days - 1)
+    today = date.fromisoformat(now[:10])
+    cutoff = today - timedelta(days=days - 1)
     props, per_day = {}, Counter()
     for pid in sorted(by):
         rs = by[pid]
         dates = [d for d in (_day(r["ts"]) for r in rs) if d]
-        marks, causes = Counter(labs.get(labels.row_id(r)) for r in rs), Counter(r.get("cause") for r in rs)
+        ids = {labels.row_id(r) for r in rs}                         # rows sharing an id collapse for labelling
+        marks, causes = Counter(labs.get(i) for i in ids), Counter(r.get("cause") for r in rs)
         det, ev, mode = _meta(cfg, pid)
-        props[pid] = {"lesson": next((v for v in (_tok(r.get("lesson_id"), LID) for r in rs) if v != "-"), "-"),
+        props[pid] = {"lesson": next((v for v in (_match(r.get("lesson_id"), LID) for r in rs) if v != "-"), "-"),
                       "detector": det, "event": ev, "approved_mode": mode, "rows": len(rs),
                       "cause_detector": causes["detector"], "cause_truncated": causes["truncated"],
                       "sessions": len({r["session"] for r in rs}), "days": len(set(dates)),
-                      "tp": marks["tp"], "fp": marks["fp"], "unlabelled": len(rs) - marks["tp"] - marks["fp"],
+                      "tp": marks["tp"], "fp": marks["fp"], "unlabelled": sum(labels.row_id(r) not in labs for r in rs),
                       "first": min(dates, default="-"), "last": max(dates, default="-")}
-        per_day.update(Counter((d, pid) for d in dates if date.fromisoformat(d) >= cutoff))
-    return {"proposals": props, "per_day": [{"date": d, "proposal_id": p, "rows": n} for (d, p), n in sorted(per_day.items())]}
+        per_day.update(Counter((d, pid) for d in dates if cutoff <= date.fromisoformat(d) <= today))
+    return {"proposals": props,
+            "per_day": [{"date": d, "proposal_id": p, "rows": n} for (d, p), n in sorted(per_day.items())]}
 
 
 def _grid(head: tuple[str, ...], body: list[list[str]]) -> list[str]:
@@ -123,8 +156,8 @@ def _section(title: str, source: str, data: dict, days: int) -> list[str]:
         return [*out, "no rows", ""]
     out += _grid(HEADS, [[pid, *(str(p[f]) for f in FIELDS)] for pid, p in data["proposals"].items()])
     out += ["", f"Rows per day (last {days} days)"]
-    out += _grid(("date", "proposal_id", "rows"), [[d["date"], d["proposal_id"], str(d["rows"])] for d in data["per_day"]]
-                 ) if data["per_day"] else ["no rows in window"]
+    body = [[d["date"], d["proposal_id"], str(d["rows"])] for d in data["per_day"]]
+    out += _grid(("date", "proposal_id", "rows"), body) if body else ["no rows in window"]
     return [*out, ""]
 
 
@@ -141,8 +174,8 @@ def render(sha: str, days: int, private: dict, synthetic: dict, broken: int | No
 def run(cfg: Config, days: int, as_json: bool = False, now: str | None = None) -> int:
     """Entry of `compile report`: exit 0 (also with no rows), 2 for usage, a corpus mix-up or an unsafe file."""
     try:
-        if days < 1:
-            raise labels.Refusal("--days must be at least 1", 2)
+        if not 1 <= days <= MAX_DAYS:
+            raise labels.Refusal(f"--days must be 1..{MAX_DAYS}", 2)
         now = now or now_iso()
         priv_rows, syn_rows = read_corpora(cfg)
         labs, broken = label_map(cfg)
