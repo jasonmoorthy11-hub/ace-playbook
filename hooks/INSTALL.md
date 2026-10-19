@@ -176,6 +176,7 @@ Approve a proposal first, by hand at a terminal (nothing else can do it):
 cd "$ACE_PLAYBOOK_HOME"
 python3 -m ace_playbook.compile propose --lesson L-xxxxxxxx --detector rm_rf_nonscratch
 python3 -m ace_playbook.compile approve P-xxxxxxxx --mode observe    # lists provenance, asks y/N on /dev/tty
+# (a lesson whose evidence is migrated legacy text prints a banner and asks a second y/N)
 ```
 
 Only `--mode observe` exists in this step; `warn` and `block` are refused. Then add these two entries to
@@ -219,10 +220,16 @@ want the wiring in place for later.
 
 What it writes, all under `data_dir` and mode 0600: `shadow.jsonl` (append-only, one row per fire:
 `ts`, `proposal_id`, `lesson_id`, `mode`, `event`, `tool_name`, `session` (a 16-character hash),
-`payload_sha256`, `would_fire`, `tier`; never the command text), `shadow.log` (one type-only line per
+`payload_sha256`, `would_fire`, `cause` (`detector` or `truncated`), `tier`; never the command text), `shadow.log` (one type-only line per
 skipped proposal or error, capped at 1 MB), `shadow_state/` (per-session detector state, hashed file
 names) and `proposals/approved/` (your approved copies). Every call re-validates each approved proposal
 from disk; a missing, edited, oversize or symlinked file is skipped and its id is logged.
+
+Two things to know. The matcher is `Bash` only, narrower than the design's list (no approvable proposal
+looks at Read, Edit or Write yet, and every extra matcher is another Python start per call). And Python
+writes bytecode into `__pycache__` folders inside `$ACE_PLAYBOOK_HOME` the first time it imports the
+package (`-I` does not stop that); set `PYTHONDONTWRITEBYTECODE=1` in the hook's environment if you want
+the checkout left untouched.
 
 Check it by hand: `echo '{"session_id":"t1","tool_name":"Bash","tool_input":{"command":"rm -rf /w/src"}}'
 | hooks/shadow.sh pre` prints nothing; `shadow.jsonl` gains a row only if an approved proposal matches.

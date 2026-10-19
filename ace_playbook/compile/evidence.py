@@ -10,20 +10,18 @@ No inject/keys/reflect imports: a leaf JSONL reader and `norm` live here instead
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import hashlib
 import json
 import os
 import re
+import stat
 from pathlib import Path
 
 from ..atomic import write_private
-from ..clean.transcript import parse_records, read_records
+from ..canon import GENESIS, ID_RE, canonical, now_iso, record_hash
 from ..config import Config
-from ..scrub import LESSON, scan
-from ..scrub.quarantine import mask
-from ..store import DeltaLog
-from ..store.schema import GENESIS, ID_RE, LIVE_STATUSES, USER_ORIGINS, canonical, now_iso, record_hash
 from . import catalogue
 from .events import events_from_records, hash16
 
@@ -101,15 +99,13 @@ def _jsonl(path) -> list[dict]:
         lines = Path(path).read_text().splitlines()
     except OSError:
         return []
-    out = []
+    recs = []
     for line in lines:
         try:
-            rec = json.loads(line)
+            recs.append(json.loads(line))
         except ValueError:
-            continue
-        if isinstance(rec, dict):
-            out.append(rec)
-    return out
+            pass
+    return [r for r in recs if isinstance(r, dict)]
 
 
 def _exposure(cfg: Config) -> dict[str, dict[str, bool]]:
@@ -147,6 +143,7 @@ def _transcript(cfg: Config, session_id: str) -> Path | None:
 
 def _offsets(path: Path, quotes: list[str]) -> list[dict]:
     """Where each quote sits in the normalised text of a user message (index among user messages)."""
+    from ..clean.transcript import parse_records, read_records      # offline only: keeps the hook path light
     turns = [norm(t.text) for t in parse_records(read_records(path), 2000).turns
              if t.role == "user" and t.origin == "user_message"]
     out = []
@@ -174,6 +171,7 @@ def _payload(event, name: str, state) -> dict | None:
 
 def _first_fire(path: Path, names: list[str]) -> dict | None:
     """First fire of a mapped detector in the transcript that has a minimizable payload."""
+    from ..clean.transcript import read_records
     state = None
     for ev in events_from_records(read_records(path)):
         fires, new, _ = catalogue.evaluate(ev, state, names=names, strict=True)
@@ -186,6 +184,8 @@ def _first_fire(path: Path, names: list[str]) -> dict | None:
 
 
 def _scrubbed(cfg: Config, payload: dict) -> tuple[dict, int]:
+    from ..scrub import LESSON, scan
+    from ..scrub.quarantine import mask
     leaves = [payload["tool_name"], *payload["tool_input"].values()]
     hits = scan(canonical(payload), LESSON, cfg.deny_terms) + [h for s in leaves for h in scan(s, LESSON, cfg.deny_terms)]
     if not hits:
@@ -211,6 +211,7 @@ def _make(cfg, lid, inc, session, kind, origin, offsets, label, shown, cited, no
 
 
 def _lesson_cards(cfg, lid, les, expo, cited, labels, now) -> tuple[list[dict], list[dict]]:
+    from ..store.schema import LIVE_STATUSES, USER_ORIGINS
     no = lambda reason, **kw: ([], [{"lesson_id": lid, "reason": reason, **kw}])        # noqa: E731
     if les is None or les["status"] not in LIVE_STATUSES:
         return no("lesson_unknown" if les is None else "lesson_not_live")
@@ -256,9 +257,10 @@ def _lesson_cards(cfg, lid, les, expo, cited, labels, now) -> tuple[list[dict], 
 
 
 def private_dir(base: Path) -> None:
-    fresh = not base.exists()
+    """A 0700 directory. A wider real directory of ours is tightened; a symlink is never chmod'ed."""
     base.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if fresh:
+    info = os.lstat(base)
+    if info.st_mode & 0o777 != 0o700 and stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid():
         os.chmod(base, 0o700)
 
 
@@ -266,10 +268,8 @@ def _write(cfg: Config, card: dict) -> None:
     path = card_path(cfg, card["id"])
     private_dir(path.parent)
     if path.exists():                                   # idempotent: keep the first `created`
-        try:
+        with contextlib.suppress(OSError, ValueError, AttributeError):
             card["created"] = json.loads(path.read_text()).get("created", card["created"])
-        except (OSError, ValueError, AttributeError):
-            pass
     text = json.dumps(card, indent=1, sort_keys=True) + "\n"
     if not path.exists() or path.read_text() != text:
         write_private(path, text)
@@ -283,6 +283,7 @@ def build_cards(cfg: Config, lesson_id: str | None = None, *, write: bool = True
     verification. Cards are written (0600) only when `write` is true."""
     if lesson_id is not None and not (isinstance(lesson_id, str) and ID_RE.fullmatch(lesson_id)):
         raise ValueError("lesson id must look like L-xxxxxxxx")
+    from ..store import DeltaLog
     log = DeltaLog(cfg.deltas, tuple(cfg.deny_terms))
     log.verify()
     lessons, expo, labels = log.state(), _exposure(cfg), _labels(cfg)
@@ -294,7 +295,6 @@ def build_cards(cfg: Config, lesson_id: str | None = None, *, write: bool = True
         got, why = _lesson_cards(cfg, lid, lessons.get(lid), expo, cited, labels, now or now_iso())
         cards += got
         refused += why
-    if write:
-        for c in cards:
-            _write(cfg, c)
+    for c in cards if write else []:
+        _write(cfg, c)
     return sorted(cards, key=lambda c: (c["lesson_id"], c["id"])), refused

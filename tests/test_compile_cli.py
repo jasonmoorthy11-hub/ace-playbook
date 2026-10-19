@@ -184,9 +184,9 @@ class FakeTty:
 @pytest.fixture
 def tty(monkeypatch):
     """stdin looks like a terminal; the /dev/tty prompt is answered from `ask.answer` and recorded."""
-    ask = type("Ask", (), {"answer": "y", "asked": []})()
+    ask = type("Ask", (), {"answer": "y", "answers": [], "asked": []})()
     monkeypatch.setattr(sys, "stdin", FakeTty())
-    monkeypatch.setattr(cli, "_ask", lambda prompt: ask.asked.append(prompt) or ask.answer)
+    monkeypatch.setattr(cli, "_ask", lambda prompt: (ask.asked.append(prompt), ask.answers.pop(0) if ask.answers else ask.answer)[1])
     return ask
 
 
@@ -219,6 +219,7 @@ def test_approve_lists_the_provenance_asks_on_the_tty_and_writes_a_0600_copy(wor
            {k: v for k, v in p.items() if k not in ("reviewed_by", "mode")}
     for needle in (*p["provenance"]["cards"], p["lesson_id"], p["check"]["detector"], p["provenance"]["source_sha256"]):
         assert needle in out
+    assert "legacy" not in out.lower()                              # a standard card: no banner, one question
     assert json.loads(written.read_text()) == p                    # the pending file is left alone
 
 
@@ -262,6 +263,42 @@ def test_unapprove_needs_a_terminal_removes_the_copy_and_reports_a_missing_one(w
     assert code == 1 and "not approved" in err
 
 
+@pytest.fixture
+def legacy(tmp_path, monkeypatch, capsys):
+    """A migrated lesson (self-quoted `legacy:` evidence) whose card exists only through a human incident label."""
+    w = cs.make_world(tmp_path, monkeypatch, legacy=True)
+    w.conf = str(tmp_path / "c.json")
+    Path(w.conf).write_text(json.dumps({"data_dir": str(w.cfg.data_dir), "transcripts_root": str(w.cfg.transcripts_root)}))
+    cs.write_labels(w.cfg, [{"ref": w.ref("later"), "label": "incident"}])
+    code, out, _ = run(w, "propose", "--lesson", w.lesson_id, "--detector", "rm_rf_nonscratch", capsys=capsys)
+    assert code == 0
+    w.pid = Path(out.splitlines()[-1]).stem
+    return w
+
+
+BANNER = "This lesson's stored evidence is self-quoted legacy text; the human incident label is the only evidence."
+
+
+def test_approve_prints_the_legacy_banner_and_needs_a_second_yes(legacy, tty, capsys):
+    code, out, _ = run(legacy, "approve", legacy.pid, "--mode", "observe", capsys=capsys)
+    assert code == 0 and BANNER in out and len(tty.asked) == 2
+    assert tty.asked[0].startswith(f"Approve {legacy.pid} in observe mode?") and tty.asked[1].endswith("[y/N] ")
+    assert (approved_dir(legacy) / (legacy.pid + ".json")).exists()
+
+
+@pytest.mark.parametrize("answers", [["y", "n"], ["y", ""], ["n"]])
+def test_approve_of_a_legacy_lesson_writes_nothing_unless_both_answers_are_yes(legacy, tty, capsys, answers):
+    tty.answers = list(answers)
+    code, out, err = run(legacy, "approve", legacy.pid, "--mode", "observe", capsys=capsys)
+    assert code == 1 and "not approved" in err and not approved_dir(legacy).exists()
+    assert len(tty.asked) == len(answers)                           # a "no" stops the questions
+
+
+def test_a_standard_proposal_gets_one_question_and_no_banner(world, written, tty, capsys):
+    code, out, _ = run(world, "approve", written.stem, "--mode", "observe", capsys=capsys)
+    assert code == 0 and BANNER not in out and len(tty.asked) == 1
+
+
 def test_compile_shadow_runs_the_hook_entry_and_always_returns_0(world, tmp_path, monkeypatch, capsys):
     import io
     monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(b"garbage")))
@@ -278,15 +315,23 @@ def test_module_runs_as_python_dash_m(world):
     assert out.returncode == 0 and out.stdout.startswith("id ")
 
 
-def test_no_inject_keys_reflect_or_network_modules_are_imported():
-    heavy = ("ace_playbook.inject", "ace_playbook.keys", "ace_playbook.reflect", "subprocess", "socket", "ssl",
-             "http.client", "urllib.request")
-    code = (f"import sys; sys.path.insert(0, {str(ROOT)!r}); import ace_playbook.compile.evidence, "
-            f"ace_playbook.compile.proposal, ace_playbook.compile.__main__, ace_playbook.compile.shadow; "
-            f"print(','.join(m for m in {heavy!r} if m in sys.modules))")
+def test_importing_the_hook_path_modules_loads_no_sqlite_store_scrub_cleaner_inject_or_network():
+    heavy = ("sqlite3", "ace_playbook.store", "ace_playbook.scrub", "ace_playbook.clean", "ace_playbook.inject",
+             "ace_playbook.keys", "ace_playbook.reflect", "subprocess", "socket", "ssl", "http.client", "urllib.request")
+    code = (f"import sys; sys.path.insert(0, {str(ROOT)!r}); import ace_playbook.compile.shadow, "
+            f"ace_playbook.compile.state, ace_playbook.compile.evidence, ace_playbook.compile.proposal, "
+            f"ace_playbook.compile.__main__; "
+            f"print(','.join(sorted(m for m in sys.modules if any(m == h or m.startswith(h + '.') for h in {heavy!r}))))")
     out = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip() == ""
+
+
+def test_the_offline_functions_still_load_their_heavy_parts_on_demand():
+    code = (f"import sys; sys.path.insert(0, {str(ROOT)!r}); import ace_playbook.compile.propscrub; "
+            f"print('ace_playbook.scrub' in sys.modules)")
+    out = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True, timeout=60)
+    assert out.stdout.strip() == "True"
 
 
 def test_step2_and_4_sources_do_not_import_inject_keys_reflect_or_spawn_anything():

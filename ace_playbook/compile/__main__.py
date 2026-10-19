@@ -15,8 +15,10 @@ from pathlib import Path
 
 from .. import config as cfgmod
 from ..atomic import write_private
-from ..store.schema import SchemaError
 from . import evidence, proposal, shadow
+
+LEGACY_BANNER = ("This lesson's stored evidence is self-quoted legacy text; "
+                 "the human incident label is the only evidence.")
 
 
 def _steps(rep: proposal.Report) -> None:
@@ -113,7 +115,12 @@ def cmd_approve(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
     print(f"  evidence cards: {', '.join(p['provenance']['cards'])}")
     print(f"  source_sha256:  {p['provenance']['source_sha256']}")
     print(f"  message:        {p['message']}")
-    if _ask(f"Approve {p['id']} in observe mode? [y/N] ").lower() not in ("y", "yes"):
+    legacy = any(c["provenance"] == "legacy" for c in evidence.load_cards(cfg, p["lesson_id"])
+                 if c["id"] in p["provenance"]["cards"])
+    if legacy:
+        print("  " + LEGACY_BANNER)
+    asks = [f"Approve {p['id']} in observe mode? [y/N] "] + (["Legacy evidence: approve anyway? [y/N] "] if legacy else [])
+    if not all(_ask(a).lower() in ("y", "yes") for a in asks):
         print("error: not approved", file=sys.stderr)
         return 1
     evidence.private_dir(dest.parent)
@@ -162,7 +169,7 @@ def main(argv: list[str] | None = None) -> int:
     except proposal.ProposalError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    except (SchemaError, ValueError) as exc:
+    except ValueError as exc:                                 # includes store.schema.SchemaError
         print(f"error: {exc}", file=sys.stderr)
         return 2
     except OSError as exc:                                   # type only: an errno message would carry a path

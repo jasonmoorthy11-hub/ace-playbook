@@ -10,9 +10,10 @@ from typing import Any
 
 # The injectable-text rule lives in the stdlib-only leaf module; re-exported for existing imports.
 from ..textrules import FENCE, unsafe_text_reason  # noqa: F401
+# Canonical JSON, the clock string, record hashes and the id pattern live in the stdlib-only leaf `canon`.
+from ..canon import GENESIS, ID_RE, canonical, now_iso, record_hash  # noqa: F401
 
 SCHEMA_VERSION = 1
-GENESIS = "0" * 64
 
 OPS = ("ADD", "PATCH", "MERGE", "NARROW", "RETIRE", "NOOP")
 STATUSES = ("active", "dormant", "superseded", "retired", "compiled", "quarantined", "provisional")
@@ -24,7 +25,6 @@ RETIRE_TARGETS = ("retired", "compiled", "dormant", "quarantined")
 LIVE_STATUSES = frozenset({"active", "provisional"})
 FROZEN_STATUSES = frozenset({"retired", "superseded"})
 
-ID_RE = re.compile(r"^L-[0-9a-f]{8}$")
 KEY_RE = re.compile(r"^[a-z0-9][a-z0-9._\-]{0,63}$")
 
 TEXT_MIN, TEXT_MAX = 8, 400
@@ -46,19 +46,6 @@ def make_lesson_id(scope: dict, text: str) -> str:
     key = scope.get("key", "") if scope.get("type") == "project" else ""
     digest = hashlib.sha256(f"{scope.get('type')}|{key}|{text.strip()}".encode()).hexdigest()
     return "L-" + digest[:8]
-
-
-def now_iso() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
-
-def canonical(obj: Any) -> str:
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-
-
-def record_hash(record: dict) -> str:
-    body = {k: v for k, v in record.items() if k != "hash"}
-    return hashlib.sha256(canonical(body).encode()).hexdigest()
 
 
 def _inj_text(f: dict, keys: tuple[str, ...], errs: list[str]) -> None:

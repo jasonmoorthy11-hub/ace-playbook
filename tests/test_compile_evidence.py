@@ -252,3 +252,19 @@ def test_verify_card_detects_tampering(world):
     assert evm.verify_card({**c, "provenance": "legacy"}) is not None
     assert evm.verify_card({**c, "extra": 1}) is not None
     assert evm.verify_card({**c, "self_report": False}) is not None
+
+
+def test_private_dir_tightens_a_wider_directory_of_ours_and_never_chmods_a_symlink(tmp_path):
+    d = tmp_path / "wide"
+    d.mkdir(mode=0o755)
+    os.chmod(d, 0o755)
+    evm.private_dir(d)
+    assert mode(d) == 0o700
+    target = tmp_path / "target"
+    target.mkdir()
+    os.chmod(target, 0o755)
+    (tmp_path / "link").symlink_to(target)
+    evm.private_dir(tmp_path / "link")
+    assert mode(target) == 0o755                                    # left alone: the link is not ours to tighten
+    evm.private_dir(tmp_path / "new" / "deep")
+    assert mode(tmp_path / "new" / "deep") == 0o700

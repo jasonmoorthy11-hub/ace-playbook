@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 from .. import config as cfgmod
-from ..store.schema import canonical, now_iso
+from ..canon import canonical, now_iso
 from . import catalogue, evidence, proposal
 from . import state as state_mod
 from .events import event_from_hook
@@ -81,7 +81,7 @@ def _load_one(cfg, path: Path, pid: str, log) -> tuple[dict, str] | None:
             return log(f"skipped:{pid}:invalid:{mode if body is None else 'id'}")
         if mode not in ALLOWED_MODES:
             return log(f"skipped:{pid}:mode_disabled")
-        rep = proposal.validate(body, cfg)
+        rep = proposal.validate(body, cfg, hot=True)
         return (body, mode) if rep.ok else log(f"skipped:{pid}:invalid:{rep.failed}")
     except Exception as exc:                                  # type only; a bad file never stops the others
         return log(f"skipped:{pid}:invalid:{type(exc).__name__}")
@@ -156,12 +156,12 @@ def _applies(p: dict, event: str, tool: str) -> bool:
     return p["event"] == event and bool({"*", tool} & set(p["matcher"].split("|")))
 
 
-def _row(p: dict, mode: str, event: str, ev, sid: str, raw: bytes) -> dict:
+def _row(p: dict, mode: str, cause: str, event: str, ev, sid: str, raw: bytes) -> dict:
     tu = ev.tool_uses[0] if ev.tool_uses else None
     phash = evidence.payload_hash({"tool_name": tu.name, "tool_input": tu.input}) if tu else hashlib.sha256(raw).hexdigest()
     return {"ts": now_iso(), "proposal_id": p["id"], "lesson_id": p["lesson_id"], "mode": mode, "event": event,
             "tool_name": tu.name if tu else "", "session": state_mod.session_hash(sid), "payload_sha256": phash,
-            "would_fire": True, "tier": "live"}
+            "would_fire": True, "cause": cause, "tier": "live"}
 
 
 def _run(cfg, argv: list, log) -> None:
@@ -185,16 +185,18 @@ def _run(cfg, argv: list, log) -> None:
         return
     fired = _evaluate(cfg, ev, sid, sorted({p["check"]["detector"] for p, _ in todo}), log)
     cut = any(tu.truncated for tu in ev.tool_uses)
-    hits = [(p, m) for p, m in todo if p["check"]["detector"] in fired or (cut and p["check"]["on_truncated"] == "fire")]
-    for p, mode in hits:
+    hits = [(p, m, "detector" if p["check"]["detector"] in fired else "truncated") for p, m in todo
+            if p["check"]["detector"] in fired or (cut and p["check"]["on_truncated"] == "fire")]
+    for p, mode, cause in hits:
         try:
-            _append(Path(cfg.data_dir) / "shadow.jsonl", json.dumps(_row(p, mode, event, ev, sid, raw), sort_keys=True) + "\n")
+            _append(Path(cfg.data_dir) / "shadow.jsonl",
+                    json.dumps(_row(p, mode, cause, event, ev, sid, raw), sort_keys=True) + "\n")
         except OSError as exc:                                # still act on the decision below
             log(f"error:row:{type(exc).__name__}")
-    for p, mode in hits:
+    for p, mode, _cause in hits:
         if mode == "warn":
             sys.stderr.write(p["message"] + "\n")
-    block = next((p["message"] for p, mode in hits if mode == "block"), None)
+    block = next((p["message"] for p, mode, _cause in hits if mode == "block"), None)
     if block is not None and not (event == "Stop" and payload.get("stop_hook_active")):
         out = ({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                        "permissionDecisionReason": block}}

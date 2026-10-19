@@ -300,3 +300,20 @@ def test_load_refuses_symlinks_fifos_oversize_and_non_json(ctx, tmp_path):
         with pytest.raises(prop.ProposalError) as e:
             prop.load(f)
         assert e.value.step == "schema"
+
+
+# ------------------------------------------------------------------ legacy cards need their incident label
+def test_a_legacy_card_is_only_accepted_with_a_matching_incident_label(tmp_path, monkeypatch):
+    w = cs.make_world(tmp_path, monkeypatch, legacy=True)
+    cs.write_labels(w.cfg, [{"ref": w.ref("later"), "label": "incident"}])
+    cards, _ = evm.build_cards(w.cfg)
+    (card,) = cards
+    assert card["provenance"] == "legacy"
+    p = prop.build(w.cfg, w.lesson_id, "rm_rf_nonscratch", cards, now="2026-10-20T03:12:00Z")
+    assert prop.validate(p, w.cfg, {card["id"]: card}).ok
+    forged = {**card, "label_ref": "lab:deadbeef"}                      # hand-written: valid shape, no such label
+    p2 = prop.build(w.cfg, w.lesson_id, "rm_rf_nonscratch", [forged], now="2026-10-20T03:12:00Z")
+    rep = prop.validate(p2, w.cfg, {forged["id"]: forged})
+    assert rep.failed == "schema" and "incident label" in rep.detail("schema")
+    (w.cfg.path("labels.jsonl")).write_text("")                           # the labels chain emptied: the real card fails too
+    assert prop.validate(p, w.cfg, {card["id"]: card}).failed == "schema"

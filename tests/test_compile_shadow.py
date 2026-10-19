@@ -19,7 +19,7 @@ from . import compile_support as cs
 
 RM = "rm -rf /w/src"
 ROW_KEYS = {"ts", "proposal_id", "lesson_id", "mode", "event", "tool_name", "session", "payload_sha256",
-            "would_fire", "tier"}
+            "would_fire", "cause", "tier"}
 
 
 class Runner:
@@ -64,7 +64,7 @@ def test_a_matching_rm_in_observe_mode_writes_one_row_and_prints_nothing(w, run)
     assert set(row) == ROW_KEYS
     pid = w.props["rm_rf_nonscratch"]["id"]
     assert (row["proposal_id"], row["lesson_id"], row["mode"], row["event"]) == (pid, cs.RM_LESSON, "observe", "PreToolUse")
-    assert (row["tool_name"], row["would_fire"], row["tier"]) == ("Bash", True, "live")
+    assert (row["tool_name"], row["would_fire"], row["cause"], row["tier"]) == ("Bash", True, "detector", "live")
     assert row["session"] == st.session_hash("sess-live-1") and len(row["payload_sha256"]) == 64
     assert row["payload_sha256"] == evidence.payload_hash({"tool_name": "Bash", "tool_input": {"command": RM}})
     assert oct((w.data / "shadow.jsonl").stat().st_mode & 0o777) == "0o600"
@@ -92,7 +92,9 @@ def test_the_same_payload_twice_appends_two_rows(w, run):
 def test_a_truncated_command_fires_when_the_proposal_says_on_truncated_fire(w, run):
     assert w.props["rm_rf_nonscratch"]["check"]["on_truncated"] == "fire"
     run(cs.pre_payload("echo " + "a" * 70000))
-    assert len(run.rows) == 1
+    assert len(run.rows) == 1 and run.rows[0]["cause"] == "truncated"
+    run(cs.pre_payload(RM + " # " + "a" * 70000))                  # cut AND the detector fires on the kept prefix
+    assert [r["cause"] for r in run.rows] == ["truncated", "detector"]
 
 
 def test_each_proposal_gets_its_own_row_and_on_truncated_ignore_is_honoured(tmp_path, monkeypatch, capsys):
@@ -105,6 +107,20 @@ def test_each_proposal_gets_its_own_row_and_on_truncated_ignore_is_honoured(tmp_
     assert [x["proposal_id"] for x in r.rows[1:]] == [w2.props["rm_rf_nonscratch"]["id"]]
     r(cs.pre_payload(RM))
     assert len(r.rows) == 4                                       # both detectors fire on a real rm -rf
+
+
+def test_the_hook_loads_proposals_without_the_scrub_engine(w, run, monkeypatch):
+    import ace_playbook.compile.propscrub as ps
+    monkeypatch.setattr(ps, "error", lambda *a: pytest.fail("the hot path must not rerun the scrub step"))
+    run(cs.pre_payload(RM))
+    assert len(run.rows) == 1
+    p = w.props["rm_rf_nonscratch"]
+    assert [d for _, ok, d in proposal_validate(w, p, hot=True).results][-2] == "hash-bound, not rerun"
+
+
+def proposal_validate(w, p, **kw):
+    from ace_playbook.compile import proposal
+    return proposal.validate(p, w.cfg, **kw)
 
 
 # ------------------------------------------------------------------ payload handling

@@ -2,8 +2,8 @@
 
 No model writes a check, matcher or message: `build` fills a template from the catalogue row and the admitted
 cards. `validate` fails closed in this order and names the failing step: schema, message (inert_reason),
-regressions (none may fire), replay (must fire), scrub, path. New proposals are ALWAYS `observe` (mode changes
-are steps 3 and 4); a block-capable detector must carry `check.on_truncated: "fire"`. No inject/keys/reflect imports.
+regressions (none may fire), replay (must fire), scrub, path. New proposals are ALWAYS `observe`; a block-capable
+detector must carry `check.on_truncated: "fire"`. Stdlib-only imports on the hook path (scrub loads lazily).
 """
 
 from __future__ import annotations
@@ -17,10 +17,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..atomic import write_private
+from ..canon import ID_RE, canonical, now_iso
 from ..config import Config
-from ..scrub import LESSON, scan
-from ..scrub.quarantine import quarantine
-from ..store.schema import ID_RE, canonical, now_iso
 from ..textrules import inert_reason
 from . import catalogue, evidence
 from .events import event_from_hook
@@ -140,6 +138,12 @@ def _cards(p: dict, cfg: Config, cards: dict | None) -> dict:
     return cards if cards is not None else {c["id"]: c for c in evidence.load_cards(cfg, p["lesson_id"])}
 
 
+def _labelled(c: dict, cfg: Config) -> bool:
+    """A legacy card is only as good as its human `incident` label: ref = card id, label_ref = hash prefix."""
+    row = evidence._labels(cfg).get(c["id"])
+    return bool(row) and c["label_ref"] == "lab:" + row["hash"][:8]
+
+
 def _schema(p: object, cfg: Config, cards: dict | None) -> str | None:
     if not isinstance(p, dict) or set(p) != KEYS:
         return "keys differ from the proposal schema"
@@ -181,6 +185,8 @@ def _schema(p: object, cfg: Config, cards: dict | None) -> str | None:
         c = known.get(i)
         if c is None or evidence.verify_card(c) or c["lesson_id"] != p["lesson_id"] or c["detector"] != chk["detector"]:
             return "provenance card missing or inconsistent"
+        if c["provenance"] == "legacy" and not _labelled(c, cfg):
+            return "legacy card has no matching incident label in the labels chain"
     rx, rp = p["regression_examples"], p["replay"]
     if not isinstance(rx, list) or not isinstance(rp, dict):
         return "regression_examples or replay malformed"
@@ -232,19 +238,9 @@ def _replay(p: dict, cfg: Config, cards: dict | None) -> str | None:
     return None if fires(p["check"], rp) else "replay payload does not fire"
 
 
-def _hits(p: dict, cfg: Config) -> list:
-    """Scrub hits over every string of the proposal. Fields step 1 proved to be a bare digest or a timestamp
-    are exempt: the LESSON lint flags every hex run over 12 characters and every ISO time."""
-    q = json.loads(canonical(p))
-    q["created"] = ""
-    q["provenance"].update(source_sha256="", lesson_evidence=[])
-    q["replay"].update({"payload_sha256": ""} if "payload_sha256" in q["replay"] else {})
-    return [h for t in _leaves(q) for h in scan(t, LESSON, cfg.deny_terms)]
-
-
 def _scrub(p: dict, cfg: Config) -> str | None:
-    hits = _hits(p, cfg)
-    return "scrub hit (" + ", ".join(sorted({h.rule for h in hits})) + ")" if hits else None
+    from . import propscrub                          # lazy: the scrub engine stays out of the hook path
+    return propscrub.error(p, cfg)
 
 
 def _path(p: dict, cfg: Config, given: Path | None) -> str | None:
@@ -253,14 +249,17 @@ def _path(p: dict, cfg: Config, given: Path | None) -> str | None:
     return None if ok else "file is not at proposals/<id>.json under the data directory"
 
 
-def validate(p: object, cfg: Config, cards: dict | None = None, path: Path | None = None) -> Report:
-    """Run the six steps in order; later steps are `skipped` once one fails. `cards` overrides the disk lookup."""
+def validate(p: object, cfg: Config, cards: dict | None = None, path: Path | None = None,
+             hot: bool = False) -> Report:
+    """Run the six steps in order; later steps are `skipped` once one fails. `cards` overrides the disk lookup.
+    `hot` (the shadow hook) does not rerun the scrub step: it needs the scrub engine, and the approved file's
+    proposal_sha256 already binds the text that passed scrub when the proposal was written."""
     rep = Report()
     steps = (lambda: _schema(p, cfg, cards), lambda: _message(p), lambda: _regressions(p),
              lambda: _replay(p, cfg, cards), lambda: _scrub(p, cfg), lambda: _path(p, cfg, path))
     for name, fn in zip(STEPS, steps):
-        if rep.failed:
-            rep.results.append((name, None, "skipped"))
+        if rep.failed or (hot and name == "scrub"):
+            rep.results.append((name, None, "skipped") if rep.failed else (name, True, "hash-bound, not rerun"))
             continue
         try:
             err = fn()
@@ -290,8 +289,8 @@ def write(cfg: Config, p: dict, cards: dict | None = None) -> Path:
     rep = validate(p, cfg, cards)
     if not rep.ok:
         if rep.failed == "scrub":
-            quarantine(cfg.quarantine, "proposal", {"id": p["id"]}, canonical(p), _hits(p, cfg), "proposal scrub hit",
-                       deny_terms=tuple(cfg.deny_terms))
+            from . import propscrub
+            propscrub.to_quarantine(p, cfg)
         raise ProposalError(rep.failed, rep.detail(rep.failed), rep)
     path = proposal_path(cfg, p["id"])
     evidence.private_dir(path.parent)
