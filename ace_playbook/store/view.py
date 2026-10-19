@@ -35,8 +35,15 @@ def _new_lesson(d: dict, ts: str) -> dict:
     }
 
 
+LEGACY_PREFIX = "legacy:"
+
+
 def _has_user_evidence(lesson: dict) -> bool:
-    return any(e["origin"] in USER_ORIGINS for e in lesson["evidence"])
+    """User-origin evidence that a person typed. Migrated `legacy:` items are self-quoted by
+    the migration, so they never count here (an ADD of a live status is checked by origin only)."""
+    return any(e["origin"] in USER_ORIGINS
+               and not str(e.get("session_id") or "").startswith(LEGACY_PREFIX)
+               for e in lesson["evidence"])
 
 
 def _require(state: dict, lid: str, *, allow_frozen: bool = False) -> dict:
@@ -56,7 +63,7 @@ def _apply_patch(lesson: dict, f: dict) -> None:
         if k == "evidence":
             continue
         if k == "status" and v in LIVE_STATUSES and not _has_user_evidence(lesson):
-            raise SchemaError("live status requires user-origin evidence")
+            raise SchemaError("live status requires user-origin evidence that is not legacy-migrated")
         lesson[k] = v.strip() if isinstance(v, str) and k in ("text", "applies_when") else v
 
 

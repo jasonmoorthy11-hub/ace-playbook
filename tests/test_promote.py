@@ -214,17 +214,61 @@ def test_patch_evidence_cap_is_enforced(tmp_path):
     assert log.verify() == 5
 
 
-def test_known_gap_bare_active_patch_passes_with_legacy_evidence(tmp_path):
-    # Pins today's behaviour; see LIMITATIONS.md "Provisional promotion". Migrated lessons carry
-    # self-quoted `legacy:` user_file evidence, which the store still counts as user-origin, so a
-    # bare status PATCH is not refused. Fixing this (ignore `legacy:` in _has_user_evidence)
-    # must flip this test deliberately.
-    log = DeltaLog(tmp_path / "deltas.jsonl")
-    legacy = [{"quote": "Use python3, not python, for scripts", "origin": "user_file",
-               "session_id": "legacy:abc123"}]
-    d = add_draft(scope=GLOBAL, evidence=legacy)
+LEGACY = [{"quote": "Use python3, not python, for scripts", "origin": "user_file",
+           "session_id": "legacy:abc123"}]
+
+
+def _legacy_lesson(log, status=None, **extra):
+    d = add_draft(scope=GLOBAL, evidence=LEGACY, **({"status": status} if status else {}), **extra)
     log.append(d, ts="2026-01-01T00:00:00Z")
-    bare = {"op": "PATCH", "lesson_id": d["lesson_id"], "fields": {"status": "active"}}
-    log.check_draft(bare)
-    log.append(bare)
-    assert log.state()[d["lesson_id"]]["status"] == "active"
+    return d["lesson_id"]
+
+
+def test_bare_active_patch_is_refused_when_only_legacy_evidence(tmp_path):
+    # Migrated `legacy:` evidence is self-quoted, so it cannot justify a live status on a PATCH.
+    log = DeltaLog(tmp_path / "deltas.jsonl")
+    lid = _legacy_lesson(log)
+    bare = {"op": "PATCH", "lesson_id": lid, "fields": {"status": "active"}}
+    with pytest.raises(SchemaError, match="live status requires user-origin evidence"):
+        log.append(bare)
+    assert log.state()[lid]["status"] == "provisional" and log.verify() == 1
+
+
+def test_patch_active_allowed_with_nonlegacy_user_evidence(tmp_path):
+    log = DeltaLog(tmp_path / "deltas.jsonl")
+    lid = _legacy_lesson(log)
+    log.append(_patch(lid, evidence("user_message", "I typed this one myself"), status="active"))
+    assert log.state()[lid]["status"] == "active"
+    # a non-legacy item already on the lesson also suffices for a later bare PATCH
+    d = add_draft("Second lesson with typed evidence", GLOBAL)
+    log.append(d)
+    log.append({"op": "PATCH", "lesson_id": d["lesson_id"], "fields": {"status": "active"}})
+    assert log.state()[d["lesson_id"]]["status"] == "active" and log.verify() == 4
+
+
+def test_existing_log_with_add_active_legacy_still_rebuilds_and_verifies(tmp_path):
+    log = DeltaLog(tmp_path / "deltas.jsonl")
+    lid = _legacy_lesson(log, status="active")  # ADD active on legacy evidence: origin-only rule
+    other = _legacy_lesson_text(log, "Another migrated lesson stays provisional")
+    log.append({"op": "PATCH", "lesson_id": lid, "fields": {"pinned": True}})
+    log.append({"op": "PATCH", "lesson_id": lid, "fields": {"text": "Use python3 for scripts, always"}})
+    log.append({"op": "NOOP", "lesson_id": lid, "counters": {"shown": 1}})
+    assert log.verify() == 5
+    db = tmp_path / "view.sqlite"
+    state = log.rebuild_view(db)
+    assert state[lid]["status"] == "active" and state[lid]["pinned"]
+    assert state[other]["status"] == "provisional"
+    assert view.view_head(db) == log.head_hash()
+
+
+def _legacy_lesson_text(log, text):
+    d = add_draft(text, GLOBAL, evidence=[{**LEGACY[0], "quote": text, "session_id": "legacy:def456"}])
+    log.append(d, ts="2026-01-02T00:00:00Z")
+    return d["lesson_id"]
+
+
+def test_promote_cli_still_succeeds_on_a_legacy_only_lesson(env, capsys):
+    conf, log = env
+    lid = _legacy_lesson(log)
+    assert run(conf, "promote", lid, "--evidence-quote", QUOTE) == 0
+    assert log.state()[lid]["status"] == "active" and log.verify() == 2

@@ -73,13 +73,17 @@ neither; the nightly sweep runs under launchd instead.
 
 ## Provisional promotion
 
-The store-level rule for a live status still counts migrated `legacy:` evidence (origin
-`user_file`, self-quoted by the migration) as user-origin evidence. A hand-written `PATCH` with
-`status: active` and no typed quote is therefore not refused by the log. The `promote` CLI is the
-only sanctioned path and always attaches the operator's typed quote, but the log does not enforce
-that. The one-line fix (ignore `legacy:` session ids in `_has_user_evidence`) is deferred because
-it would also re-judge the 7 lessons the migration activated by override, which needs an
-operator decision.
+A `PATCH` that sets a live status (`active` or `provisional`) is refused unless the lesson holds
+user-origin evidence that is not migrated: evidence whose session id starts with `legacy:` is
+self-quoted by the migration and does not count. So a bare `PATCH {status: active}` on a migrated
+lesson fails, and the `promote` CLI, which attaches the operator's typed quote, is the way through.
+
+An `ADD` with a live status is still validated by origin only (`user_message` or `user_file`),
+which is what the migration's override activations relied on. Existing `ADD active` records with
+`legacy:` evidence are therefore still valid: `verify()` and a view rebuild of an existing log are
+unaffected (covered by a test). The remaining gap is that nothing stops a new hand-written
+`ADD` with a live status and self-quoted `user_file` evidence; the log checks origin, not who
+typed the quote.
 
 ## Single user
 
