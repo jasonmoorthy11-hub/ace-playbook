@@ -17,7 +17,7 @@ from ..store.schema import unsafe_text_reason
 # Well-known file names that may appear bare. Everything else dotted is host-like.
 KNOWN_FILES = frozenset(
     "README.md CHANGELOG.md LICENSE.md setup.py conftest.py pyproject.toml package.json "
-    "SKILL.md CLAUDE.md reflect.log".split())  # reflect.log: named by the injector's health line
+    "SKILL.md CLAUDE.md".split())
 
 _DOTTED = re.compile(r"(?<![\w.-])([\w-]+(?:\.[\w-]+)+)")
 _IPV4 = re.compile(r"(?<![\w.])\d{1,3}(?:\.\d{1,3}){3}(?![\w])")

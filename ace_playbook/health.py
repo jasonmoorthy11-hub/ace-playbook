@@ -16,6 +16,7 @@ from .scrub import LESSON, OUTBOUND, redact, scan
 
 WARN_AFTER = 3
 MAX_ERROR_CHARS = 200
+READ_LIMIT = 4096
 NO_RECORD = "no health record"
 
 
@@ -34,25 +35,33 @@ def _write_private(path, payload: dict) -> None:
     """Atomic replace; the file is created 0600 and never readable by others."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
     try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fd = -1
-            fh.write(json.dumps(payload, sort_keys=True) + "\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-    finally:
-        if fd >= 0:
-            os.close(fd)
-    os.replace(tmp, path)
+        try:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fd = -1
+                fh.write(json.dumps(payload, sort_keys=True) + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+        finally:
+            if fd >= 0:
+                os.close(fd)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def read(cfg: Config) -> dict | None:
     """The parsed health record, or None if it is missing, unreadable or not a JSON object."""
     try:
-        rec = json.loads(health_path(cfg).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        with open(health_path(cfg), "rb") as fh:
+            rec = json.loads(fh.read(READ_LIMIT))  # a real record is well under 1 KiB
+    except (OSError, ValueError, RecursionError):  # ValueError covers bad JSON and bad UTF-8
         return None
     return rec if isinstance(rec, dict) else None
 
@@ -64,9 +73,19 @@ def failures(cfg: Config) -> int:
     return n if isinstance(n, int) and not isinstance(n, bool) and n > 0 else 0
 
 
-def record(cfg: Config, ok: bool, error: str = "", now: float | None = None) -> None:
-    """Write the outcome of one sweep run. Swallows every error."""
+def _describe(exc: BaseException) -> str:
     try:
+        return f"{type(exc).__name__}: {exc}"
+    except Exception:  # noqa: BLE001 - a hostile __str__ must not lose the record
+        return type(exc).__name__
+
+
+def record(cfg: Config, ok: bool, error: str = "", now: float | None = None,
+           exc: BaseException | None = None) -> None:
+    """Write the outcome of one sweep run. Swallows every error, including a failing str(exc)."""
+    try:
+        if exc is not None:
+            error = _describe(exc)
         stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
         _write_private(health_path(cfg), {
             "last_run": stamp, "ok": bool(ok),
@@ -82,6 +101,7 @@ def warning_line(cfg: Config) -> str | None:
         n = failures(cfg)
         if n < WARN_AFTER:
             return None
-        return f"- ace-playbook: nightly sweep failed {min(n, 99999)} times in a row; see reflect.log"
+        return (f"- ace-playbook: nightly sweep failed {min(n, 99999)} times in a row; "
+                "see the reflect log in the data dir")
     except Exception:  # noqa: BLE001 - a bad health file adds nothing
         return None

@@ -101,15 +101,16 @@ def build(cfg: Config, session_id: str, cwd: str, now: float | None = None) -> I
     try:
         ensure_view(cfg)
     except SchemaError:
+        # Intended: a log that fails verification injects nothing, health warning included.
         inj.refused = "delta_log_failed_verification"
         return inj
     lines: list[str] = []
     budget = min(cfg.inject_max_chars, MAX_INJECT_CHARS) - len(HEADER) - len(FOOTER) - 2
     warning = health.warning_line(cfg)
-    if warning and not inert_reason(warning):
+    if warning and not inert_reason(warning) and len(warning) + 1 <= budget:
         budget -= len(warning) + 1  # reserved first: lessons are dropped before the warning is
     else:
-        warning = None
+        warning = None  # does not fit under inject_max_chars: the cap always wins
     for les in select_candidates(cfg, key, now):
         reason = inert_reason(les["text"], les["applies_when"])
         if reason:

@@ -19,6 +19,8 @@ from .store import DeltaLog, SchemaError
 MIN_BYTES = 2000
 # Per-transcript or sweep-level outcomes that count as a failed night: API errors (including a
 # spend/usage cap, which the API answers with a 4xx or 429), a missing key, a broken delta log.
+# parse_error, refusal and truncated are deliberately excluded: they are model-output problems
+# on one transcript, not a broken setup, and would otherwise raise false alarms.
 FAILED = {"retryable", "retry_exhausted", "failed_final", "skipped_no_key", "refused_chain_invalid"}
 
 
@@ -85,7 +87,7 @@ def run_sweep(cfg: Config, client: ReflectorClient | None = None, max_n: int = 2
         out = _sweep(cfg, client, max_n, dry_run, idle_minutes, now, problems)
     except Exception as exc:
         if not dry_run:
-            health.record(cfg, False, f"{type(exc).__name__}: {exc}")
+            health.record(cfg, False, exc=exc)
         raise
     if not dry_run:
         health.record(cfg, not problems, "; ".join(problems))

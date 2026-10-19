@@ -10,6 +10,8 @@ citations.jsonl
 reflections.jsonl
 queue.jsonl
 reflect.log
+health.json
+health.json.tmp
 config.local.json
 *.key
 anthropic_api_key
