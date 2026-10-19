@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from ace_playbook.compile import __main__ as cli
-from ace_playbook.compile import evidence, proposal
+from ace_playbook.compile import approvals, evidence, proposal
 
 from . import compile_support as cs
 
@@ -201,9 +201,17 @@ def test_approve_refuses_without_a_terminal_and_writes_nothing(world, written, c
 
 
 @pytest.mark.parametrize("mode", ["warn", "block"])
-def test_approve_refuses_warn_and_block_pointing_at_the_ladder(world, written, tty, capsys, mode):
-    code, _, err = run(world, "approve", written.stem, "--mode", mode, capsys=capsys)
-    assert code == 2 and "ladder" in err and tty.asked == [] and not approved_dir(world).exists()
+def test_approve_warn_and_block_go_through_the_ladder_and_refuse_a_proposal_never_approved(world, written, tty, capsys, mode):
+    extra = ["--opus-reviewed", "abc1234"] if mode == "block" else []
+    code, out, err = run(world, "approve", written.stem, "--mode", mode, *extra, capsys=capsys)
+    assert code == 1 and f"not in {'observe' if mode == 'warn' else 'warn'}" in out and "not promoted" in err
+    assert tty.asked == [] and not approved_dir(world).exists()
+
+
+def test_approve_observe_rejects_the_promotion_only_flags(world, written, tty, capsys):
+    for flag in (["--raw-checked"], ["--opus-reviewed", "abc1234"]):
+        assert run(world, "approve", written.stem, "--mode", "observe", *flag, capsys=capsys)[0] == 2
+    assert tty.asked == [] and not approved_dir(world).exists()
 
 
 def test_approve_lists_the_provenance_asks_on_the_tty_and_writes_a_0600_copy(world, written, tty, capsys):
@@ -238,6 +246,7 @@ def test_approve_is_idempotent_and_the_hook_accepts_the_copy(world, written, tty
     first = dest.read_bytes()
     code, out, _ = run(world, "approve", pid, "--mode", "observe", capsys=capsys)
     assert code == 0 and "already approved" in out and dest.read_bytes() == first and len(tty.asked) == 1
+    assert len(approvals.read_chain(world.cfg.data_dir)[0]) == 1
     assert [(p["id"], m) for p, m in shadow.load_approved(world.cfg, lambda msg: None)] == [(pid, "observe")]
 
 
@@ -320,7 +329,8 @@ def test_importing_the_hook_path_modules_loads_no_sqlite_store_scrub_cleaner_inj
              "ace_playbook.keys", "ace_playbook.reflect", "subprocess", "socket", "ssl", "http.client", "urllib.request")
     code = (f"import sys; sys.path.insert(0, {str(ROOT)!r}); import ace_playbook.compile.shadow, "
             f"ace_playbook.compile.state, ace_playbook.compile.evidence, ace_playbook.compile.proposal, "
-            f"ace_playbook.compile.labels, ace_playbook.compile.report, ace_playbook.compile.__main__; "
+            f"ace_playbook.compile.labels, ace_playbook.compile.report, ace_playbook.compile.approvals, "
+            f"ace_playbook.compile.ladder, ace_playbook.compile.__main__; "
             f"print(','.join(sorted(m for m in sys.modules if any(m == h or m.startswith(h + '.') for h in {heavy!r}))))")
     out = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
@@ -336,7 +346,7 @@ def test_the_offline_functions_still_load_their_heavy_parts_on_demand():
 
 def test_step2_and_4_sources_do_not_import_inject_keys_reflect_or_spawn_anything():
     banned = {"inject", "keys", "reflect", "subprocess", "socket", "urllib", "http", "ssl", "requests", "migrate"}
-    for name in ("evidence.py", "proposal.py", "__main__.py", "shadow.py", "labels.py", "report.py"):
+    for name in ("evidence.py", "proposal.py", "__main__.py", "shadow.py", "labels.py", "report.py", "approvals.py", "ladder.py"):
         for node in ast.walk(ast.parse((COMPILE / name).read_text())):
             if isinstance(node, ast.Import):
                 mods = {a.name.split(".")[0] for a in node.names}
@@ -350,6 +360,6 @@ def test_step2_and_4_sources_do_not_import_inject_keys_reflect_or_spawn_anything
 
 def test_step2_and_4_modules_stay_within_their_line_budgets():
     for name, cap in (("evidence.py", 300), ("proposal.py", 300), ("__main__.py", 300), ("shadow.py", 300),
-                      ("labels.py", 240), ("report.py", 300)):
+                      ("labels.py", 240), ("report.py", 300), ("approvals.py", 150), ("ladder.py", 300)):
         assert len((COMPILE / name).read_text().splitlines()) <= cap, name
     assert os.access(COMPILE / "__main__.py", os.R_OK) and proposal.PROPOSALS == "proposals"

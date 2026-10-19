@@ -1,10 +1,10 @@
 """CLI: `python -m ace_playbook.compile cards|propose|validate|approve|unapprove|label|report|shadow` (docs/design/compiler.md 10).
 
 No network, no model, stdlib only. Exit codes: 0 ok, 1 a proposal failed validation or was not approved (the
-step is named), 2 usage, configuration, store or id errors. `approve` and `unapprove` need a terminal and
-`approve` only does `--mode observe`; `label` writes human labels (labels.py; `--list` and `--rows` need no terminal);
-`report` prints per-proposal shadow counts with labels (report.py; exit 2 on a corpus mix-up);
-the review and promotion commands come in later steps.
+step is named), 2 usage, configuration, store or id errors. `approve` and `unapprove` need a terminal; `approve`
+appends every approval to the hash-chained `approvals.jsonl` (approvals.py) and `--mode warn|block` is the promotion
+ladder (ladder.py, imported on demand); `label` writes human labels (labels.py; `--list` and `--rows` need no
+terminal); `report` prints per-proposal shadow counts with labels (report.py; exit 2 on a corpus mix-up).
 """
 
 from __future__ import annotations
@@ -18,7 +18,8 @@ from pathlib import Path
 from .. import config as cfgmod
 from .. import ttyio
 from ..atomic import write_private
-from . import evidence, labels, proposal, report, shadow
+from ..canon import now_iso
+from . import approvals, evidence, labels, proposal, report, shadow
 
 LEGACY_BANNER = ("This lesson's stored evidence is self-quoted legacy text; "
                  "the human incident label is the only evidence.")
@@ -89,10 +90,29 @@ def _need_tty(what: str) -> bool:
     return False
 
 
+def _confirm(prompts: list[str]) -> bool:
+    return all(_ask(a).lower() in ("y", "yes") for a in prompts)
+
+
+def _provenance(cfg: cfgmod.Config, p: dict) -> bool:
+    """Print what the operator is approving; True when a cited card is legacy (the banner is printed too)."""
+    print(f"{p['id']}  lesson {p['lesson_id']}  detector {p['check']['detector']}  on {p['event']} matcher {p['matcher']}")
+    print(f"  evidence cards: {', '.join(p['provenance']['cards'])}")
+    print(f"  source_sha256:  {p['provenance']['source_sha256']}")
+    print(f"  message:        {p['message']}")
+    legacy = any(c["provenance"] == "legacy" for c in evidence.load_cards(cfg, p["lesson_id"])
+                 if c["id"] in p["provenance"]["cards"])
+    if legacy:
+        print("  " + LEGACY_BANNER)
+    return legacy
+
+
 def cmd_approve(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
     if args.mode != "observe":
-        print("error: only --mode observe is available; warn and block are reached through the promotion ladder "
-              "(docs/design/compiler.md 7.3), which lands in a later step", file=sys.stderr)
+        from . import ladder                                  # lazy: the promotion rules stay off the hook path
+        return ladder.run(cfg, args, lambda prompt: _ask(prompt), _need_tty)
+    if args.opus_reviewed or args.raw_checked:
+        print("error: --opus-reviewed and --raw-checked apply to --mode block and warn only", file=sys.stderr)
         return 2
     if not _need_tty("approve"):
         return 2
@@ -103,28 +123,41 @@ def cmd_approve(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
         _steps(rep)
         print(f"error: validation failed at step '{rep.failed}'", file=sys.stderr)
         return 1
+    rows, broken = approvals.read_chain(cfg.data_dir)
+    if broken:
+        print(f"error: approvals.jsonl chain broken at row {broken}", file=sys.stderr)
+        return 1
     dest = shadow.approved_path(cfg, args.id)
     try:
-        old, mode = shadow.pending_body(proposal.load(dest)) if dest.exists() else (None, "")
+        rec = proposal.load(dest) if dest.exists() else None
+        old, mode = shadow.pending_body(rec) if rec is not None else (None, "")
     except proposal.ProposalError:                            # an unreadable old copy is simply replaced
-        old, mode = None, ""
-    if old == p and mode == "observe":
+        rec, old, mode = None, None, ""
+    verdict = approvals.verify_copy(rec, rows) if old == p and mode == "observe" else None
+    if verdict == "ok":
         print(f"already approved: {args.id} (observe)")
         return 0
-    print(f"{p['id']}  lesson {p['lesson_id']}  detector {p['check']['detector']}  on {p['event']} matcher {p['matcher']}")
-    print(f"  evidence cards: {', '.join(p['provenance']['cards'])}")
-    print(f"  source_sha256:  {p['provenance']['source_sha256']}")
-    print(f"  message:        {p['message']}")
-    legacy = any(c["provenance"] == "legacy" for c in evidence.load_cards(cfg, p["lesson_id"])
-                 if c["id"] in p["provenance"]["cards"])
-    if legacy:
-        print("  " + LEGACY_BANNER)
-    asks = [f"Approve {p['id']} in observe mode? [y/N] "] + (["Legacy evidence: approve anyway? [y/N] "] if legacy else [])
-    if not all(_ask(a).lower() in ("y", "yes") for a in asks):
+    legacy = _provenance(cfg, p)                              # the same block and prompts for a fresh approval and a back-fill
+    asks = ["Legacy evidence: approve anyway? [y/N] "] if legacy else []
+    if verdict == "missing":                                  # predates the chain: record it; "mismatch" is approved afresh below
+        if rec["approved_at"] > now_iso():
+            print("error: the copy's approved_at is in the future; nothing was written", file=sys.stderr)
+            return 1
+        if not _confirm([f"Record the approval of {args.id} in observe mode (approved {rec['approved_at']})? [y/N] "] + asks):
+            print("error: not approved", file=sys.stderr)
+            return 1
+        approvals.append(cfg.data_dir, {"ts": rec["approved_at"], "proposal_id": args.id, "mode": "observe",
+                                        "proposal_sha256": rec["proposal_sha256"]})
+        print(f"ok: recorded the existing observe approval of {args.id} in approvals.jsonl")
+        return 0
+    if not _confirm([f"Approve {p['id']} in observe mode? [y/N] "] + asks):
         print("error: not approved", file=sys.stderr)
         return 1
+    new = shadow.approved_record(p)
+    approvals.append(cfg.data_dir, {"ts": new["approved_at"], "proposal_id": p["id"], "mode": "observe",
+                                    "proposal_sha256": new["proposal_sha256"]})
     evidence.private_dir(dest.parent)
-    write_private(dest, json.dumps(shadow.approved_record(p), indent=1, sort_keys=True) + "\n")
+    write_private(dest, json.dumps(new, indent=1, sort_keys=True) + "\n")
     print(f"ok: approved {p['id']} in observe mode\n{dest}")
     return 0
 
@@ -133,9 +166,33 @@ def cmd_unapprove(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
     if not _need_tty("unapprove"):
         return 2
     dest = shadow.approved_path(cfg, args.id)
-    if not dest.exists():
+    try:
+        newest = approvals.newest(approvals.read_chain(cfg.data_dir)[0], args.id)
+    except (ValueError, OSError):
+        newest = None
+    has_copy = dest.exists()
+    if not has_copy and (newest is None or newest["mode"] == "revoked"):
         print(f"error: {args.id} is not approved", file=sys.stderr)
         return 1
+    if not _confirm([f"Remove the approval of {args.id}? [y/N] "]):
+        print("error: not removed", file=sys.stderr)
+        return 1
+    try:                                                      # a revocation row makes a restored copy "mismatch" in the hook
+        rec = proposal.load(dest) if has_copy else None
+        sha = rec.get("proposal_sha256") if isinstance(rec, dict) else None
+    except proposal.ProposalError:
+        sha = None
+    try:
+        approvals.append(cfg.data_dir, {"proposal_id": args.id, "mode": "revoked",
+                                        "proposal_sha256": sha if isinstance(sha, str) and len(sha) == 64 else "-"})
+    except (ValueError, OSError) as exc:                      # removing the copy matters more than the row
+        print(f"warning: revocation row not written ({exc if isinstance(exc, ValueError) else type(exc).__name__}); "
+              f"repair approvals.jsonl, then re-run unapprove {args.id}", file=sys.stderr)
+        if not has_copy:
+            return 1
+    if not has_copy:
+        print(f"ok: revocation recorded for {args.id} (no copy present)")
+        return 0
     os.unlink(dest)
     print(f"ok: {args.id} is no longer approved (the proposal file is kept)")
     return 0
@@ -163,9 +220,13 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("--detector", required=True)
     pr.add_argument("--dry-run", action="store_true", help="print the proposal, write nothing")
     sub.add_parser("validate", help="run the ordered validation on a proposal file").add_argument("path")
-    ap_ok = sub.add_parser("approve", help="TTY only: copy a validated proposal to proposals/approved/ in observe mode")
+    ap_ok = sub.add_parser("approve", help="TTY only: copy a validated proposal to proposals/approved/ in observe mode, "
+                           "or promote it (warn: 14 days, 5 human TPs, 0 FPs; block: the same again in warn)")
     ap_ok.add_argument("id")
-    ap_ok.add_argument("--mode", required=True, help="observe is the only mode this step allows")
+    ap_ok.add_argument("--mode", required=True, choices=("observe", "warn", "block"))
+    ap_ok.add_argument("--raw-checked", action="store_true",
+                       help="edit_unread_session: each TP was checked against the raw transcript")
+    ap_ok.add_argument("--opus-reviewed", metavar="SHA", help="block only: the commit sha of the Opus review (7 to 40 hex)")
     sub.add_parser("unapprove", help="TTY only: remove the approved copy of a proposal").add_argument("id")
     lb = sub.add_parser("label", help="TTY only: record a human incident, tp or fp label; --list and --rows read")
     act = lb.add_mutually_exclusive_group(required=True)

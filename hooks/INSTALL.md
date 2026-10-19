@@ -161,7 +161,7 @@ same check runs in this repo's CI.
 Delete the three hook entries from `settings.json` and boot out the launchd job. Your data
 directory is plain files (`deltas.jsonl` is the source of truth); delete or keep it.
 
-## 7. Stage 2 shadow hook (observe mode)
+## 7. Stage 2 shadow hook (observe, warn, block)
 
 Optional, and separate from the three hooks above. `hooks/shadow.sh` evaluates the proposals you
 approved (see `docs/design/compiler.md`, section 7) against each Bash call and records what **would**
@@ -183,7 +183,7 @@ A lesson whose evidence is migrated legacy text first needs
 `python3 -m ace_playbook.compile label --incident --lesson L-xxxxxxxx --session <id>`, which shows the incident
 and asks y/N on /dev/tty; only then does `propose` have a card for it.
 
-Only `--mode observe` exists in this step; `warn` and `block` are refused. Then add these two entries to
+Then add these two entries to
 the same `"hooks"` object of your user-level `settings.json` (adjust the path to your checkout):
 
 ```json
@@ -224,10 +224,22 @@ want the wiring in place for later.
 
 What it writes, all under `data_dir` and mode 0600: `shadow.jsonl` (append-only, one row per fire:
 `ts`, `proposal_id`, `lesson_id`, `mode`, `event`, `tool_name`, `session` (a 16-character hash),
-`payload_sha256`, `would_fire`, `cause` (`detector` or `truncated`), `tier`; never the command text), `shadow.log` (one type-only line per
+`payload_sha256`, `would_fire`, `cause` (`detector` or `truncated`), `tier`; never the command text), `approvals.jsonl` (hash-chained, one row per approval), `shadow.log` (one type-only line per
 skipped proposal or error, capped at 1 MB), `shadow_state/` (per-session detector state, hashed file
 names) and `proposals/approved/` (your approved copies). Every call re-validates each approved proposal
 from disk; a missing, edited, oversize or symlinked file is skipped and its id is logged.
+
+**Warn and block.** A proposal reaches `warn` only through `python3 -m ace_playbook.compile approve P-xxxxxxxx --mode warn`, at
+a terminal, after at least 14 days in observe with at least 5 true positives you labelled yourself (`compile label --tp`)
+and no false positive; the command lists every counted fire and label, checks the rules again on current code and asks
+`y/N`. In warn mode the hook still records the fire and prints the stored message on stderr (a debug-log echo), and it also
+prints one `hookSpecificOutput.additionalContext` JSON object on stdout, which is the only channel the model sees on exit 0
+(it arrives as a system reminder next to the tool result). `--mode block --opus-reviewed <sha>` repeats the rules in warn
+for strong detectors that allow it and makes the hook answer `permissionDecision: "deny"`, which stops the tool call; a
+block wins over any warn in the same call. Every approval is a row in the hash-chained `approvals.jsonl`; the hook runs a
+`warn` or `block` copy at that mode only while the newest row for it carries the same hash and mode. A copy edited by hand
+(or with no row, or with a broken `approvals.jsonl`) falls back to observe and logs `approvals:<id>:missing`, `:mismatch` or
+`approvals:chain_broken` in `shadow.log`; a hand edit of the copy alone never enforces. If `approve --mode warn` reports a `forged label` (a label with no fire row in `shadow.jsonl`), restore the missing shadow row or truncate `labels.jsonl` to the row before the forged one and re-label; if it reports `copy not backed by the approvals chain`, run `approve --mode observe` to record the copy.
 
 Two things to know. The matcher is `Bash` only, narrower than the design's list (no approvable proposal
 looks at Read, Edit or Write yet, and every extra matcher is another Python start per call). And Python

@@ -58,10 +58,12 @@ RESULTS.md:62), alongside `edit_unread_turn` and `rm_rf` (RESULTS.md:34). The ve
 | `compile/proposal.py` | Proposal schema, ordered validation, replay/regression runner, writer (section 6) | 299 (built, step 2) |
 | `compile/propscrub.py` | The scrub step and quarantine path of `proposal.write`, split out and imported lazily so the hook path never loads the scrub engine (step 4) | 34 |
 | `ace_playbook/canon.py` | Stdlib-only leaf: `canonical`, `now_iso`, `record_hash`, `GENESIS`, `ID_RE`; `store/schema.py` re-exports them (step 4, see 7.2) | 29 |
-| `compile/shadow.py` | Hook entry point: load approved proposals, re-validate, evaluate, append `shadow.jsonl` rows, print the decision as JSON on stdout (block mode only); always returns 0 (section 7) | ~220; 220 (built, step 4) |
+| `compile/shadow.py` | Hook entry point: load approved proposals, re-validate, check the approvals row of a warn or block copy, evaluate, append `shadow.jsonl` rows, print the decision as JSON on stdout (block deny, or warn `additionalContext`); always returns 0 (section 7) | ~220; 220 (step 4), 259 (step 5b) |
+| `compile/approvals.py` | The hash-chained `approvals.jsonl`: `read_chain`, `newest`, `append` (locked, chain verified from the fd, duplicate skip), `verify_copy`; stdlib and `canon` only, on the hook path (step 5b) | 117 |
+| `compile/ladder.py` | The promotion rules: pure `check` over rows (TP and FP re-derivation, 14 days, 5 human TPs, 0 FPs, strength, source hash, cap) and `run`, the `approve --mode warn\|block` flow with the TP listing; imported lazily by the CLI (step 5b) | 235 |
 | `compile/offline.py` | Nightly pass: run signal detectors over finished transcripts, finalize session-level detectors, label pre-fill, demotions | ~250 |
 | `compile/report.py` | shadow.jsonl to results tables, effect estimates (section 8) | ~260; 193 for the minimal first cut (built, step 4c) |
-| `compile/__main__.py` | CLI: `cards`, `propose`, `validate` (step 2); `approve --mode observe`, `unapprove`, `shadow pre\|stop` (step 4); `label` (step 4b); `report` (step 4c); later `packet`, `review-record`, `replay-synthetic` and `approve --mode warn\|block` | 98, then 181 (step 4), ~230 when complete |
+| `compile/__main__.py` | CLI: `cards`, `propose`, `validate` (step 2); `approve --mode observe`, `unapprove`, `shadow pre\|stop` (step 4); `label` (step 4b); `report` (step 4c); later `packet`, `review-record`, `replay-synthetic` and `approve --mode warn\|block` | 98, then 181 (step 4), 266 (step 5b: observe rows, back-fill, unapprove revocation, warn and block through `ladder.run`) |
 | `ace_playbook/textrules.py` | Leaf module (stdlib `re`, `string` only): `unsafe_text_reason`, `inert_reason` and their regexes, moved out of `store/schema.py` and `inject/sanitize.py`, which re-export them (step 1, see 7.2) | ~120 moved |
 | `hooks/shadow.sh` | One script, two registrations (PreToolUse, Stop); never `exec`s, always `exit 0` | 19 lines (built, step 4; a test pins it to the block in section 7) |
 
@@ -390,7 +392,7 @@ registration only resets per-turn state and logs observe rows.
 | Mode | On fire | Output (Python and wrapper exit are 0 in every row) | Notes |
 |---|---|---|---|
 | observe | append `would_fire` row | none | the agent sees nothing |
-| warn | row + one stderr line: the stored message | stderr only | see open question 1 on whether the model sees it |
+| warn | row + stdout `hookSpecificOutput.additionalContext` (model-visible), stderr echo | one JSON object on stdout; the same message on stderr | open question 1, resolved in code (step 5b) |
 | block (PreToolUse) | row + `permissionDecision: "deny"` JSON carrying the stored message | stdout JSON | tool call is not run |
 | block (Stop) | not reachable in Stage 2 (validation rejects it) | none | the guard stays specified for a later Stop detector: emit nothing when `stop_hook_active` is true, which prevents a loop |
 | any error | type-only log line | none | fail open; a broken store never blocks a session |
@@ -470,6 +472,47 @@ does must use the same formula.
 | observe to warn | strong detectors only; `edit_unread_session` additionally needs a labelled sample in which each TP was checked against the raw transcript for a parser-missed read | at least 14 days in observe; at least 5 human-confirmed TPs and 0 FPs since entering observe; replay passes on current code; lesson still `active` | human `approve --mode warn`: the CLI checks the rule and lists every counted TP for TTY confirmation (below) |
 | warn to block | strong detectors whose catalogue row allows block, PreToolUse only | the same counts again, fresh, in warn; a new Opus review of the warn-period data; evasion candidates reviewed | human `approve --mode block`, with the same TP listing |
 | any mode to disabled | always | lesson leaves `active`; detector `source_sha256` changes; hook error rate above 1% or p95 above 200 ms over seven days | nightly pass (lowering only) |
+
+**As built (step 5b, 2026-10-19).** `compile/approvals.py` keeps `data_dir/approvals.jsonl`, a hash chain from
+`canon.GENESIS` (same scheme as `labels.jsonl`) of rows `{ts, v: 1, proposal_id, proposal_sha256, mode, reviewed_by:
+"operator-tty", tp_refs, fp_refs, review_sha, prev_hash, hash}`: enums, ids, hashes, timestamps and lists of row ids only.
+Every `approve` appends one row (`proposal_sha256` is the approved copy's own hash, so a row binds id, content and mode;
+the same hash and mode twice appends nothing) and `unapprove` appends a `revoked` row (`proposal_sha256` = the removed
+copy's hash, or `-`; also when the copy is already gone but the newest row is not revoked), so putting the old bytes
+back reads as `mismatch`. `approve --mode observe` on a copy that already exists and matches, but has no row for the
+proposal at all (the first live approval predates the chain), prints the same provenance block and prompts as a fresh
+approval (the legacy banner and second prompt included), refuses a copy whose `approved_at` is in the future, and appends
+the missing row with `ts` = the copy's `approved_at`, so the observe clock is not reset. That row is the only way a
+pre-chain copy starts a window: `approve --mode warn` never trusts the copy's own `approved_at`; when the newest row says
+otherwise (`mismatch`: demoted, revoked, or a copy edited down) it approves afresh (new `approved_at`, full listing, row
+`ts` = now). The hook honours a copy in `warn` or `block` only when the newest row for
+its proposal has the same `proposal_sha256` and `mode` (`verify_copy`); otherwise it runs the proposal in observe and logs
+`approvals:<id>:missing|mismatch`. A broken chain (or an unreadable file) puts every above-observe copy back to observe and
+logs `approvals:chain_broken` once. An `observe` copy needs no row. The chain is tamper-evident against hand edits of the copy
+(a hand-edited `mode: "block"` falls back to observe even with a recomputed `proposal_sha256`); it is unkeyed
+(`canon.record_hash`), so a process that also appends a recomputed row can still enforce: a forged approvals row is the
+residual risk in section 9. A cut last line stays a refusal (the operator truncates the file to its last complete line).
+`approve --mode warn` runs `ladder.check` and prints, before asking, every counted TP and FP as one line: `fire <ts>  session
+<hash16>  row <row_id>  label <at>  chain #<n>[  [after last approval]]` (`n` is the 1-based row in `labels.jsonl`). A label is
+always newer than the approval row that opens its window (it labels a fire after that row), so the per-line tag is printed
+only when some counted label does NOT postdate the newest approvals row; when all do, one line says `all N counted labels
+postdate the last approval row (<ts>)`. Then each failed rule, and exits 1; if all hold it asks `Promote
+<id> to warn mode? N TPs, 0 FPs listed above. [y/N]` and on `y` appends the row with the listed `tp_refs` and `fp_refs`
+and writes the approved copy. The rules: copy in observe for at least 14 days (window start = the newest approvals row of
+the proposal, which must be an `observe` row; with no row at all the ladder refuses and says to run `approve --mode observe`, which
+records it; a newer row of another mode, a `revoked` row, or a copy the chain does not back, `copy not backed by the approvals chain`, refuses); at
+least 5 TPs, counted only from human `tp` rows (newest human row per ref wins) whose ref is the `row_id` of a live
+`shadow.jsonl` fire of this proposal run in observe, with `window start <= fire ts <= now`; a counted label dated before its
+fire or after now is refused; 0 FPs, where a ref's label is its newest
+human row, else its newest row of any reason code (an auto `fp` blocks; `tp_candidate` never counts); validation passes on
+current code; the lesson is `active`; the detector is strong and its catalogue `compilable` reaches the mode; the
+proposal's `source_sha256` equals the catalogue's; `edit_unread_session` also needs `--raw-checked`. A counted label with no
+fire row (`forged label`, every offending ref listed), a broken labels chain and a broken approvals chain are refused; the repair for a forged label is to restore the missing shadow row, or to truncate `labels.jsonl` to the row before the forged one and re-label. If the approved copy cannot be written after the row was appended, the error says so and the hook keeps running observe (row before copy is the fail-safe order). `--mode block` applies the same
+rules with the window starting at the newest approvals row, which must be a `warn` row (`not in warn` otherwise), counting
+fires run in warn, a `block`-capable `PreToolUse`
+detector, and a required `--opus-reviewed <sha>` (7 to 40 lowercase hex) stored as `review_sha` and named in the prompt.
+`ladder.run(..., cap=)` refuses with `demoted:<cap>` when the cap is below the requested mode; the CLI passes none until the
+step 5a demotions reader is wired in. Warn delivery is resolved: see section 11 question 1.
 
 **Demotion** is automatic and only ever lowers a mode. The nightly pass appends to
 `demotions.jsonl` (each record names the label or metric that caused it): block to warn on one FP;
@@ -613,7 +656,10 @@ Residual risks, stated plainly: the agent runs with the user's permissions and c
 `data_dir`, so it could append a demotion or delete an approved file to evade a block; the controls
 above make that visible in the report, not impossible. The same holds for **label forgery**: the
 agent can append a `tp` label, so promotion rests on the human reading the TP listing at `approve`,
-not on the file. Block mode is the first time ace-playbook hooks can stop the agent, which
+not on the file. The same holds for **approvals forgery**: `approvals.jsonl` is hash-chained but unkeyed, so a local process
+that appends a correctly chained row for a `warn` or `block` copy it also writes makes the hook enforce it, on the agent
+itself (limited to proposals that pass validation, so never an arbitrary check); the row is visible in the file, nothing
+prevents it. Block mode is the first time ace-playbook hooks can stop the agent, which
 contradicted SECURITY.md:36 ("Hooks never block a session"), the "hooks fail open and stay out of
 the way" wording at README.md:79 and the `onFailure` paragraph at hooks/INSTALL.md:96-97. All three
 were amended on 2026-10-19 (see Amendments): stage-1 hooks never block; stage-2 shadow hooks block
@@ -659,6 +705,9 @@ reminders; no cross-session learning by the hook; no block mode during the step 
    approval. Confirmed live on 2026-10-19: a throwaway project-local PreToolUse hook printing one marker
    through `additionalContext` and another on stderr (exit 0) was run in a headless session; the model
    reported the `additionalContext` marker and nothing from stderr.*
+   *Resolved in code (step 5b): `shadow._run` prints one `additionalContext` JSON object for warn hits. The live check covered
+   PreToolUse only; Stop delivery follows the hooks reference (`hookSpecificOutput.additionalContext` on Stop) and is not
+   verified live, and no Stop detector is approvable today. The Stop JSON is still emitted.*
 2. **Randomized arms.** Measuring "with versus without" means the check is off (observe) in about
    half of sessions during the randomized phase. Do you accept that for `rm_rf_nonscratch`, given
    that guard-destructive.sh still covers root and home deletes? This is the same kind of decision

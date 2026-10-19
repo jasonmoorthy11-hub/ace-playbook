@@ -277,13 +277,17 @@ def real_world(tmp_path, detectors=("rm_rf_nonscratch",), approve: bool = True):
     return w
 
 
-def approve_file(cfg, p: dict, mode: str = "observe") -> Path:
-    """Write the approved copy the way `compile approve` does (without the TTY)."""
+def approve_file(cfg, p: dict, mode: str = "observe", *, row: bool = False, ts: str | None = None) -> Path:
+    """Write the approved copy the way `compile approve` does (without the TTY); `row` also appends its approvals row."""
     from ace_playbook.atomic import write_private
-    from ace_playbook.compile import shadow
+    from ace_playbook.compile import approvals, shadow
     path = Path(cfg.data_dir) / "proposals" / "approved" / (p["id"] + ".json")
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    write_private(path, json.dumps(shadow.approved_record(p, mode), indent=1, sort_keys=True) + "\n")
+    rec = shadow.approved_record(p, mode)
+    write_private(path, json.dumps(rec, indent=1, sort_keys=True) + "\n")
+    if row:
+        approvals.append(cfg.data_dir, {"proposal_id": p["id"], "proposal_sha256": rec["proposal_sha256"], "mode": mode,
+                                         **({"ts": ts} if ts else {})})
     return path
 
 

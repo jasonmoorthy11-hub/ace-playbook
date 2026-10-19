@@ -3,10 +3,13 @@
 hooks/shadow.sh calls `main(["pre"|"stop"])`. It reads one payload on stdin (cap 256 KiB), loads the approved
 proposals, re-validates each from disk, runs the detectors they name and appends one row per fire to
 `data_dir/shadow.jsonl`. It ALWAYS returns 0 and never raises: a failure is one type-only line in
-`data_dir/shadow.log`. Observe mode prints nothing; warn prints the stored message on stderr; block prints the
-deny (PreToolUse) or block (Stop) JSON on stdout. Only observe can be approved today (ALLOWED_MODES); the
-warn and block paths exist for the ladder of a later step and are reached only by tests. Rows hold enums,
-ids, hashes and a timestamp, never payload text. Stdlib plus this package; no inject/keys/reflect/network.
+`data_dir/shadow.log`. Observe mode prints nothing. Warn echoes the stored message on stderr and prints ONE
+`hookSpecificOutput.additionalContext` JSON on stdout (the only channel the model sees on exit 0; verified live for
+PreToolUse only, Stop follows the hooks reference and no Stop detector is approvable today); block prints the
+deny (PreToolUse) or block (Stop) JSON instead and wins over warn. A copy above observe is honoured only when the
+newest `approvals.jsonl` row matches its hash and mode (`approvals.verify_copy`); otherwise it runs in observe and
+the log says why. Rows hold enums, ids, hashes and a timestamp, never payload text. Stdlib plus this package; no
+inject/keys/reflect/network.
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ from pathlib import Path
 
 from .. import config as cfgmod
 from ..canon import canonical, now_iso
-from . import catalogue, evidence, proposal
+from . import approvals, catalogue, evidence, proposal
 from . import state as state_mod
 from .events import event_from_hook
 
@@ -28,7 +31,7 @@ MAX_STDIN, MAX_FILES, MAX_FILE_BYTES, LOG_CAP = 262144, 50, 16384, 1000000
 APPROVED = "approved"
 EVENTS = {"pre": "PreToolUse", "stop": "Stop"}
 MODES = ("observe", "warn", "block")
-ALLOWED_MODES = ("observe",)         # the ladder (docs/design/compiler.md 7.3) is a later step; tests widen this
+ALLOWED_MODES = ("observe", "warn", "block")   # warn and block also need a matching approvals.jsonl row (7.3)
 EXTRA_KEYS = {"approved_at", "proposal_sha256"}
 
 
@@ -72,17 +75,47 @@ def approved_path(cfg, pid: str) -> Path:
     return path
 
 
-def _load_one(cfg, path: Path, pid: str, log) -> tuple[dict, str] | None:
+class _Approvals:
+    """The approvals chain, read at most once per hook call and only if a copy above observe needs it."""
+
+    def __init__(self, cfg, log) -> None:
+        self.cfg, self.log, self.loaded, self.rows, self.problem = cfg, log, False, [], None
+
+    def check(self, rec: dict) -> str:
+        """`ok`, `missing`, `mismatch` or `chain_broken` for one approved record (a read error counts as missing)."""
+        if not self.loaded:
+            self.loaded = True
+            try:
+                self.rows, broken = approvals.read_chain(self.cfg.data_dir)
+                self.problem = "chain_broken" if broken else None
+            except Exception as exc:                          # type only; fail toward observe
+                self.log(f"error:approvals:{type(exc).__name__}")
+                self.problem = "missing"
+            if self.problem == "chain_broken":
+                self.log("approvals:chain_broken")
+        return self.problem or approvals.verify_copy(rec, self.rows)
+
+
+def _load_one(cfg, path: Path, pid: str, log, appr: _Approvals | None = None) -> tuple[dict, str] | None:
     try:
         if os.lstat(path).st_size > MAX_FILE_BYTES:
             return log(f"skipped:{pid}:oversize")
-        body, mode = pending_body(proposal.load(path))
+        rec = proposal.load(path)
+        body, mode = pending_body(rec)
         if body is None or body["id"] != pid:
             return log(f"skipped:{pid}:invalid:{mode if body is None else 'id'}")
         if mode not in ALLOWED_MODES:
             return log(f"skipped:{pid}:mode_disabled")
         rep = proposal.validate(body, cfg, hot=True)
-        return (body, mode) if rep.ok else log(f"skipped:{pid}:invalid:{rep.failed}")
+        if not rep.ok:
+            return log(f"skipped:{pid}:invalid:{rep.failed}")
+        if mode != "observe":                                 # warn and block need a matching approvals row
+            verdict = (appr or _Approvals(cfg, log)).check(rec)
+            if verdict != "ok":
+                if verdict != "chain_broken":
+                    log(f"approvals:{pid}:{verdict}")
+                mode = "observe"
+        return body, mode
     except Exception as exc:                                  # type only; a bad file never stops the others
         return log(f"skipped:{pid}:invalid:{type(exc).__name__}")
 
@@ -99,12 +132,12 @@ def load_approved(cfg, log) -> list[tuple[dict, str]]:
         return []
     if len(names) > MAX_FILES:
         log("skipped:too_many_files")
-    out = []
+    out, appr = [], _Approvals(cfg, log)
     for name in names[:MAX_FILES]:
         if not proposal.PID.fullmatch(name[:-5]):
             log("skipped:file_name")
             continue
-        item = _load_one(cfg, base / name, name[:-5], log)
+        item = _load_one(cfg, base / name, name[:-5], log, appr)
         if item:
             out.append(item)
     return out
@@ -193,14 +226,20 @@ def _run(cfg, argv: list, log) -> None:
                     json.dumps(_row(p, mode, cause, event, ev, sid, raw), sort_keys=True) + "\n")
         except OSError as exc:                                # still act on the decision below
             log(f"error:row:{type(exc).__name__}")
-    for p, mode, _cause in hits:
-        if mode == "warn":
-            sys.stderr.write(p["message"] + "\n")
+    warns = [p["message"] for p, mode, _cause in hits if mode == "warn"]
+    for msg in warns:                                         # the user-visible echo; the model never sees stderr
+        sys.stderr.write(msg + "\n")
     block = next((p["message"] for p, mode, _cause in hits if mode == "block"), None)
-    if block is not None and not (event == "Stop" and payload.get("stop_hook_active")):
+    out = None
+    if event == "Stop" and payload.get("stop_hook_active"):   # a loop guard: nothing on stdout, fires still recorded
+        pass
+    elif block is not None:                                   # block wins over warn
         out = ({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                        "permissionDecisionReason": block}}
                if event == "PreToolUse" else {"decision": "block", "reason": block})
+    elif warns:                                               # the model-visible channel (design 11 question 1)
+        out = {"hookSpecificOutput": {"hookEventName": event, "additionalContext": "\n".join(warns)}}
+    if out is not None:
         sys.stdout.write(json.dumps(out, sort_keys=True) + "\n")
 
 

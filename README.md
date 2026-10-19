@@ -91,7 +91,8 @@ and the operator approves it at a terminal with `approve <id> --mode observe`. T
 (`hooks/shadow.sh`, [INSTALL.md](hooks/INSTALL.md) section 7) then evaluates approved proposals on each
 Bash call, re-validating them from disk every time, and appends what **would** have fired to
 `shadow.jsonl` (ids, hashes and a timestamp, never the command). In observe mode it prints nothing,
-changes nothing and cannot block; warn and block exist in the code but cannot be approved yet.
+changes nothing and cannot block; `approve --mode warn|block` is the promotion ladder (14 days, 5 human-labelled true
+positives and no false positive, a hash-chained `approvals.jsonl`; warn reaches the model through `additionalContext`).
 `compile label` records human labels at a terminal in a hash-chained `labels.jsonl`: an `incident` label is
 the only way a legacy lesson gets an evidence card, and `tp`/`fp` labels on shadow rows feed the ladder.
 `compile report` prints counts per proposal from the shadow rows and those human labels; synthetic rows are reported

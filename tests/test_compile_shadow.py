@@ -229,30 +229,25 @@ def test_a_mode_edited_to_block_in_the_file_is_rejected(w, run):
     assert run(cs.pre_payload(RM)) == (0, "", "") and run.rows == []
 
 
-def test_a_properly_approved_warn_or_block_record_is_still_off_until_the_ladder_exists(w, run):
-    p = w.props["rm_rf_nonscratch"]
-    assert shadow.ALLOWED_MODES == ("observe",)
-    cs.approve_file(w.cfg, p, "block")
+def test_a_mode_outside_the_ladder_is_skipped_as_disabled(w, run, monkeypatch):
+    monkeypatch.setattr(shadow, "ALLOWED_MODES", ("observe",))
+    cs.approve_file(w.cfg, w.props["rm_rf_nonscratch"], "block", row=True)
     assert run(cs.pre_payload(RM)) == (0, "", "") and run.rows == [] and "mode_disabled" in run.log
 
 
-# ------------------------------------------------------------------ warn and block (reachable only through tests)
-@pytest.fixture
-def ladder(monkeypatch):
-    monkeypatch.setattr(shadow, "ALLOWED_MODES", ("observe", "warn", "block"))
-
-
-def test_warn_prints_only_the_stored_message_on_stderr(w, run, ladder):
+# ------------------------------------------------------------------ warn and block (hook rules: test_compile_approvals.py)
+def test_warn_prints_the_stored_message_on_stderr_and_as_additional_context(w, run):
     p = w.props["rm_rf_nonscratch"]
-    cs.approve_file(w.cfg, p, "warn")
-    code, out, err = run(cs.pre_payload("rm -rf /w/src/unique-marker-1234"))
-    assert code == 0 and out == "" and err == p["message"] + "\n"
-    assert "unique-marker" not in err and run.rows[0]["mode"] == "warn"
+    cs.approve_file(w.cfg, p, "warn", row=True)
+    code, out, err = run(cs.pre_payload(RM + "/unique-marker-1234"))
+    assert code == 0 and err == p["message"] + "\n"
+    assert json.loads(out)["hookSpecificOutput"]["additionalContext"] == p["message"]
+    assert "unique-marker" not in err + out and run.rows[0]["mode"] == "warn"
 
 
-def test_block_emits_the_deny_json_on_stdout_and_nothing_on_stderr(w, run, ladder):
+def test_block_emits_the_deny_json_on_stdout_and_nothing_on_stderr(w, run):
     p = w.props["rm_rf_nonscratch"]
-    cs.approve_file(w.cfg, p, "block")
+    cs.approve_file(w.cfg, p, "block", row=True)
     code, out, err = run(cs.pre_payload(RM))
     assert code == 0 and err == ""
     assert json.loads(out) == {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
