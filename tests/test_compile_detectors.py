@@ -96,12 +96,12 @@ def test_no_compilable_detector_reads_stop():
             assert not any(c.startswith("Stop") for c in row.consumes), row.name
 
 
-def test_source_sha256_changes_with_any_reachable_source(monkeypatch):
+def test_source_sha256_changes_with_the_leaf_modules(monkeypatch):
     before = {n: r.source_sha256 for n, r in cat.CATALOGUE.items()}
     assert all(re.fullmatch(r"[0-9a-f]{64}", h) for h in before.values()) and len(set(before.values())) == len(before)
     texts = cat._source_texts()
-    assert len(texts) == 5 and all(texts)
-    for i in range(len(texts)):          # events, shell, textrules, detectors, catalogue: any edit moves every hash
+    assert len(texts) == 3 and all(texts)
+    for i in range(len(texts)):          # events, shell, textrules: any edit moves every hash (per-detector rules: test_compile_srchash)
         changed = tuple(t + "# edit" if j == i else t for j, t in enumerate(texts))
         monkeypatch.setattr(cat, "_source_texts", lambda changed=changed: changed)
         assert all(r.source_sha256 != before[n] for n, r in cat.CATALOGUE.items()), i

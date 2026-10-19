@@ -6,14 +6,13 @@ metadata (strength, tier, consumes, state, compilable, lessons) and runs them.
 
 from __future__ import annotations
 
-import hashlib
+import copy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
 from .. import textrules
-from . import detectors as det
-from . import events, shell
+from . import detectors, events, shell, srchash
 from .detectors import (Fire, advance, blank_state, commit_without_push, edit_unread_session, edit_unread_turn,
                         exitplan_question_block, preclaim_audit_block, rm_rf, rm_rf_nonscratch, unparseable,
                         user_correction)
@@ -21,9 +20,8 @@ from .events import Event
 
 
 def _source_texts() -> tuple[str, ...]:
-    """Full source of every module a detector's behaviour depends on (patched in tests)."""
-    files = [Path(m.__file__) for m in (events, shell, textrules, det)] + [Path(__file__)]
-    return tuple(p.read_text() for p in files)
+    """Full text of the three leaf modules every detector depends on, hashed whole (patched in tests)."""
+    return tuple(srchash.module_text(Path(m.__file__)) for m in (events, shell, textrules))
 
 
 @dataclass(frozen=True)
@@ -39,8 +37,16 @@ class Detector:
 
     @property
     def source_sha256(self) -> str:
-        """Name plus the full source of events, shell, textrules, detectors, catalogue: any edit invalidates approvals."""
-        return hashlib.sha256("\0".join((self.name, *_source_texts())).encode()).hexdigest()
+        """Row name, fire name and metadata, plus the text of detectors.py and catalogue.py minus the other rows' fire
+        bodies and the registry literal, plus the three leaf modules (srchash.py). Raises ValueError unless the fire is
+        the top-level function of detectors.py that carries its name (a lambda, a wrapper, a partial or a callable
+        instance fails closed, for this row only: a nameless fire is left out of the other rows' list of fires)."""
+        name = getattr(self.fire, "__name__", None)
+        if not isinstance(name, str) or getattr(detectors, name, None) is not self.fire:
+            raise ValueError(f"fire of {self.name} is not detectors.{name}")
+        meta = {k: getattr(self, k) for k in ("strength", "tier", "consumes", "state", "compilable", "lessons")}
+        fires = [n for r in CATALOGUE.values() if isinstance(n := getattr(r.fire, "__name__", None), str)]
+        return srchash.digest(self.name, meta, name, fires, _source_texts())
 
 
 _EDIT_USES = tuple(f"PreToolUse:{t}" for t in ("Read", "Edit", "Write", "MultiEdit", "NotebookEdit"))
@@ -67,6 +73,19 @@ CATALOGUE: dict[str, Detector] = {d.name: d for d in (
 )}
 
 
+def stale(name: str, sha: str) -> bool:
+    """True when `sha` is not the current hash of row `name`: unknown row, changed source, or a row that cannot be hashed."""
+    try:
+        return name not in CATALOGUE or CATALOGUE[name].source_sha256 != sha
+    except ValueError:
+        return True
+
+
+def source_table() -> dict[str, str]:
+    """name -> source_sha256 for every catalogue row (the seal command); raises ValueError if any row cannot be hashed."""
+    return {n: row.source_sha256 for n, row in CATALOGUE.items()}
+
+
 def evaluate(event: Event, state: dict | None, names=None,
              strict: bool = False) -> tuple[list[Fire], dict, list[tuple[str, str]]]:
     """Run catalogue detectors on the pre-event state, then advance: (fires, new_state, errors).
@@ -80,7 +99,7 @@ def evaluate(event: Event, state: dict | None, names=None,
         if row.tier == "offline" and event.tier != "offline":
             continue
         try:
-            f = row.fire(event, state)
+            f = row.fire(event, copy.deepcopy(state))
         except Exception as exc:
             if strict:
                 raise
