@@ -56,14 +56,14 @@ def span(events: list, i: int) -> list:
 
 
 def prompt_hashes(text: str) -> set[str]:
-    """hash16 of prompt tokens, in memory only (quotes, trailing .,;: stripped; `~` expanded; trailing `/` dropped); never of
+    """hash16 of prompt tokens, in memory only (quotes, trailing .,;: stripped; `~/` expanded; trailing `/` dropped); never of
     a token under 2 characters or made only of `/`, `~` and `.` (`/`, `~`, `.`, `..`, `//`)."""
     out = set()
     for tok in text.split():
         t = tok.rstrip(".,;:").strip("'\"`").rstrip(".,;:")
         if len(t) < 2 or not t.strip("/.~"):
             continue                                       # trivial tokens are skipped BEFORE `~` could be expanded to home
-        for v in (t, os.path.expanduser(t)):
+        for v in (t, os.path.expanduser(t) if t.startswith("~/") else t):
             out |= {hash16(x) for x in (v, v.rstrip("/")) if len(x) >= 2}
     return out
 

@@ -23,7 +23,7 @@ FILE, MAX_BYTES = "demotions.jsonl", 1 << 20
 LADDER = ("disabled", "observe", "warn", "block")                   # lowest first
 CAUSES = ("label_fp", "label_fp_pair", "lesson_inactive", "source_sha256", "error_rate", "evasion_pair")
 KEYS = {"ts", "v", "proposal_id", "from_mode", "to_mode", "cause", "ref", "review_required", "prev_hash", "hash"}
-PID = re.compile(r"P-[0-9a-f]{8}")
+PID, STAMP = re.compile(r"P-[0-9a-f]{8}"), re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
 
 
 def lower(mode: str, cap: str | None) -> str:
@@ -46,7 +46,7 @@ def read_regular(path: Path, cap: int) -> bytes | None:
 def _ok(row: dict, prev: str) -> bool:                              # shape, enums, ladder direction, hash link
     try:
         return (set(row) == KEYS and row["v"] == 1 and PID.fullmatch(row["proposal_id"]) is not None
-                and row["cause"] in CAUSES and isinstance(row["ref"], str) and isinstance(row["ts"], str)
+                and row["cause"] in CAUSES and isinstance(row["ref"], str) and STAMP.fullmatch(row["ts"]) is not None
                 and isinstance(row["review_required"], bool)
                 and LADDER.index(row["to_mode"]) <= LADDER.index(row["from_mode"])
                 and row["prev_hash"] == prev and row["hash"] == record_hash(row))

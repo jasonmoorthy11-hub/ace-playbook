@@ -20,7 +20,7 @@ from ..atomic import write_private
 from ..canon import now_iso
 from . import approvals, evidence, labels, proposal, shadow
 
-RANK = {"none": 0, "observe": 1, "warn": 2, "block": 3}
+RANK = {"none": 0, "disabled": 0, "observe": 1, "warn": 2, "block": 3}
 PREV = {"warn": "observe", "block": "warn"}
 MIN_DAYS, MIN_TPS = 14, 5
 REVIEW_SHA = re.compile(r"[0-9a-f]{7,40}")

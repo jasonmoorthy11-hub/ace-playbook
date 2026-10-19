@@ -36,6 +36,13 @@ def forge(data, *specs):
     (data / dm.FILE).write_text("\n".join(lines) + "\n")
 
 
+def test_a_row_whose_ts_is_not_a_stamp_breaks_the_chain(tmp_path):
+    for ts in ("yesterday", "2026-10-19", "２０２６-10-19T00:00:00Z", 5):
+        row = {"ts": ts, "v": 1, **fields(), "prev_hash": GENESIS}
+        (tmp_path / dm.FILE).write_text(json.dumps({**row, "hash": record_hash(row)}, sort_keys=True) + "\n")
+        assert dm.read_chain(tmp_path) == ([], 0)
+
+
 def test_append_chains_rows_from_genesis_and_writes_0600(tmp_path):
     a = dm.append(tmp_path, fields())
     b = dm.append(tmp_path, fields(from_mode="warn", to_mode="observe", ref="ffff0000"))
@@ -89,7 +96,7 @@ def test_a_repeat_of_the_newest_row_for_a_proposal_is_not_appended(tmp_path):
     assert len(dm.read_chain(tmp_path)[0]) == 3
 
 
-def test_effective_cap_is_the_newest_valid_row_of_that_proposal(tmp_path):
+def test_effective_cap_is_the_lowest_valid_row_of_that_proposal(tmp_path):
     dm.append(tmp_path, fields())
     dm.append(tmp_path, fields(from_mode="warn", to_mode="observe", ref="ffff0000"))
     dm.append(tmp_path, fields(proposal_id=OTHER, to_mode="disabled", cause="error_rate", ref="-"))

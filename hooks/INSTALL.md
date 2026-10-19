@@ -150,7 +150,7 @@ API error (including a spend or usage cap), a missing key or a delta log that fa
 Check it with `PYTHONPATH="$ACE_PLAYBOOK_HOME" python3 -m ace_playbook.inject --health` (prints
 `no health record` before the first run). After 3 failures in a row the SessionStart block adds
 one line telling you to read the reflect log (`reflect.log`) in the data dir. If the launchd job
-is set up with `--dry-run`, no health record is written and `--health` prints `no health record`;
+is set up with `--dry-run`, no health record is written (unless the offline pass fails) and `--health` prints `no health record`;
 that is expected and is not a sign of health.
 
 ## 5. Optional: git pre-commit scrub

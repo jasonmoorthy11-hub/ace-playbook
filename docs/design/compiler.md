@@ -487,8 +487,8 @@ hash-chained `demotions.jsonl` (`compile/demotions.py`): `{ts, v, proposal_id, f
 review_required, prev_hash, hash}`, `to_mode` never above `from_mode`, a repeat of the newest row skipped. The hook reads the
 file once per call: `disabled` skips the proposal, any other cap lowers its mode, a broken chain caps every proposal at
 `observe` (measurement continues), and so does a read error (symlink, directory, FIFO, oversize), logged by type: the hook fails
-safe, not open. The "skipped" lines for a demoted or not-yet-allowed proposal and the demotions lines are written once per
-1000 bytes of `shadow.log`, so they cannot fill it to its cap and blind the error-rate rule. The pass appends `label_fp` (block to
+safe, not open. The "skipped" lines for a demoted or not-yet-allowed proposal, the `approvals:` lines and the demotions lines are written
+once per 8 KiB of `shadow.log` (its tail, read once per hook call; `error:` lines are never throttled), so they cannot fill it to its cap and blind the error-rate rule. The pass appends `label_fp` (block to
 warn, warn to observe), `label_fp_pair` (two effective FPs within 30 days: observe, `review_required`) counting FPs since the
 later of approval and the proposal's last demotion (an `evasion_pair` row does not restart them; two FPs more than 30 days
 apart lower one rung each in the same run); and the disable causes `lesson_inactive` (store status `dormant`, `retired`,
@@ -572,8 +572,9 @@ fire row (`forged label`, every offending ref listed), a broken labels chain and
 rules with the window starting at the newest approvals row, which must be a `warn` row (`not in warn` otherwise), counting
 fires run in warn, a `block`-capable `PreToolUse`
 detector, and a required `--opus-reviewed <sha>` (7 to 40 lowercase hex) stored as `review_sha` and named in the prompt.
-`ladder.run(..., cap=)` refuses with `demoted:<cap>` when the cap is below the requested mode; the CLI passes none until the
-step 5a demotions reader is wired in. Warn delivery is resolved: see section 11 question 1.
+`ladder.run(..., cap=)` refuses with `demoted:<cap>` when the cap is below the requested mode; the CLI passes the proposal's
+`demotions.jsonl` cap (`effective_cap`; a broken demotions chain or a read error counts as `observe`), so a demoted proposal
+cannot be promoted past it. Warn delivery is resolved: see section 11 question 1.
 
 **Demotion** is automatic and only ever lowers a mode. The nightly pass appends to
 `demotions.jsonl` (each record names the label or metric that caused it): block to warn on one FP;

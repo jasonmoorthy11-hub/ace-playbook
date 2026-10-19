@@ -20,7 +20,7 @@ from .. import config as cfgmod
 from .. import ttyio
 from ..atomic import write_private
 from ..canon import now_iso
-from . import approvals, evidence, labels, proposal, report, shadow
+from . import approvals, demotions, evidence, labels, proposal, report, shadow
 
 LEGACY_BANNER = ("This lesson's stored evidence is self-quoted legacy text; "
                  "the human incident label is the only evidence.")
@@ -108,10 +108,20 @@ def _provenance(cfg: cfgmod.Config, p: dict) -> bool:
     return legacy
 
 
+def _cap(cfg: cfgmod.Config, pid: str) -> str | None:
+    """The demotion cap of `pid`; a broken demotions chain or a read error caps at observe, like the hook."""
+    try:
+        rows, broken = demotions.read_chain(cfg.data_dir)
+    except Exception:
+        return "observe"
+    cap = demotions.effective_cap(rows, pid)
+    return demotions.lower("observe", cap) if broken is not None else cap
+
+
 def cmd_approve(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
     if args.mode != "observe":
         from . import ladder                                  # lazy: the promotion rules stay off the hook path
-        return ladder.run(cfg, args, lambda prompt: _ask(prompt), _need_tty)
+        return ladder.run(cfg, args, lambda prompt: _ask(prompt), _need_tty, cap=_cap(cfg, args.id))
     if args.opus_reviewed or args.raw_checked:
         print("error: --opus-reviewed and --raw-checked apply to --mode block and warn only", file=sys.stderr)
         return 2

@@ -361,6 +361,15 @@ def test_a_tilde_slash_in_the_prompt_never_matches_a_fire_on_the_home_directory(
         assert rule("observe", [{"human": prompt}, fire], key=hash16("/h")) is None
 
 
+def test_a_named_user_tilde_token_is_not_expanded_to_that_users_home():
+    import os, pwd  # noqa: E401
+    me = pwd.getpwuid(os.getuid()).pw_name
+    home = os.path.expanduser(f"~{me}/x")
+    assert home != f"~{me}/x"                                                          # the expansion would have happened
+    assert offline.prompt_hashes(f"look at ~{me}/x") & {hash16(home)} == set()
+    assert hash16(f"~{me}/x") in offline.prompt_hashes(f"look at ~{me}/x")
+
+
 def test_join_treats_a_use_in_the_same_second_as_the_row_as_at_or_before_it():
     t = offline.tsec
     uses = [(t("2026-10-18T10:00:01.100Z"), 0, "early"), (t("2026-10-18T10:00:06.400Z"), 1, "same second")]
