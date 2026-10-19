@@ -176,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
     lb.add_argument("--session", metavar="SESSION_ID", help="the raw session id; only its hash is stored")
     lb.add_argument("--note", help=f"at most {labels.NOTE_MAX} characters, scrubbed")
     lb.add_argument("--kind", choices=labels.KINDS, help="with --list: only this label")
-    lb.add_argument("--limit", type=int, default=50, help="with --rows: how many (default 50, newest last)")
+    lb.add_argument("--limit", type=int, help="with --rows: how many (default 50, newest last)")
     sub.add_parser("shadow", help="the hook entry (what hooks/shadow.sh runs); reads a payload on stdin").add_argument(
         "event", choices=["pre", "stop"])
     args = ap.parse_args(argv)
