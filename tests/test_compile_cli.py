@@ -172,6 +172,105 @@ def test_the_whole_flow_changes_nothing_outside_the_data_dir(world, tmp_path, mo
     assert after == outside
 
 
+# ------------------------------------------------------------------ approve / unapprove / shadow
+class FakeTty:
+    def isatty(self):
+        return True
+
+    def read(self, *a):
+        return ""
+
+
+@pytest.fixture
+def tty(monkeypatch):
+    """stdin looks like a terminal; the /dev/tty prompt is answered from `ask.answer` and recorded."""
+    ask = type("Ask", (), {"answer": "y", "asked": []})()
+    monkeypatch.setattr(sys, "stdin", FakeTty())
+    monkeypatch.setattr(cli, "_ask", lambda prompt: ask.asked.append(prompt) or ask.answer)
+    return ask
+
+
+def approved_dir(world):
+    return world.cfg.data_dir / "proposals" / "approved"
+
+
+def test_approve_refuses_without_a_terminal_and_writes_nothing(world, written, capsys):
+    pid = written.stem
+    code, _, err = run(world, "approve", pid, "--mode", "observe", capsys=capsys)
+    assert code == 2 and "terminal" in err and not approved_dir(world).exists()
+
+
+@pytest.mark.parametrize("mode", ["warn", "block"])
+def test_approve_refuses_warn_and_block_pointing_at_the_ladder(world, written, tty, capsys, mode):
+    code, _, err = run(world, "approve", written.stem, "--mode", mode, capsys=capsys)
+    assert code == 2 and "ladder" in err and tty.asked == [] and not approved_dir(world).exists()
+
+
+def test_approve_lists_the_provenance_asks_on_the_tty_and_writes_a_0600_copy(world, written, tty, capsys):
+    pid = written.stem
+    p = json.loads(written.read_text())
+    code, out, _ = run(world, "approve", pid, "--mode", "observe", capsys=capsys)
+    dest = approved_dir(world) / (pid + ".json")
+    rec = json.loads(dest.read_text())
+    assert code == 0 and tty.asked == [f"Approve {pid} in observe mode? [y/N] "]
+    assert oct(dest.stat().st_mode & 0o777) == "0o600" and oct(approved_dir(world).stat().st_mode & 0o777) == "0o700"
+    assert (rec["reviewed_by"], rec["mode"]) == ("operator-tty", "observe") and rec["approved_at"].endswith("Z")
+    assert {k: v for k, v in rec.items() if k not in ("reviewed_by", "mode", "approved_at", "proposal_sha256")} == \
+           {k: v for k, v in p.items() if k not in ("reviewed_by", "mode")}
+    for needle in (*p["provenance"]["cards"], p["lesson_id"], p["check"]["detector"], p["provenance"]["source_sha256"]):
+        assert needle in out
+    assert json.loads(written.read_text()) == p                    # the pending file is left alone
+
+
+@pytest.mark.parametrize("answer", ["n", "", "no", "yes please"])
+def test_approve_without_a_y_writes_nothing(world, written, tty, capsys, answer):
+    tty.answer = answer
+    code, _, err = run(world, "approve", written.stem, "--mode", "observe", capsys=capsys)
+    assert code == 1 and "not approved" in err and not approved_dir(world).exists()
+
+
+def test_approve_is_idempotent_and_the_hook_accepts_the_copy(world, written, tty, capsys):
+    from ace_playbook.compile import shadow
+    pid = written.stem
+    run(world, "approve", pid, "--mode", "observe", capsys=capsys)
+    dest = approved_dir(world) / (pid + ".json")
+    first = dest.read_bytes()
+    code, out, _ = run(world, "approve", pid, "--mode", "observe", capsys=capsys)
+    assert code == 0 and "already approved" in out and dest.read_bytes() == first and len(tty.asked) == 1
+    assert [(p["id"], m) for p, m in shadow.load_approved(world.cfg, lambda msg: None)] == [(pid, "observe")]
+
+
+def test_approve_refuses_an_invalid_proposal_and_a_bad_id(world, written, tty, capsys):
+    p = json.loads(written.read_text())
+    p["message"] = "ACE nope"
+    written.write_text(json.dumps(p))
+    code, out, err = run(world, "approve", written.stem, "--mode", "observe", capsys=capsys)
+    assert code == 1 and "step 'message'" in err and tty.asked == [] and not approved_dir(world).exists()
+    for bad in ("../../x", "P-xyz", "p-00000000"):
+        assert run(world, "approve", bad, "--mode", "observe", capsys=capsys)[0] == 2
+
+
+def test_unapprove_needs_a_terminal_removes_the_copy_and_reports_a_missing_one(world, written, tty, capsys, monkeypatch):
+    pid = written.stem
+    run(world, "approve", pid, "--mode", "observe", capsys=capsys)
+    dest = approved_dir(world) / (pid + ".json")
+    monkeypatch.setattr(sys, "stdin", type("NoTty", (), {"isatty": lambda s: False})())
+    assert run(world, "unapprove", pid, capsys=capsys)[0] == 2 and dest.exists()
+    monkeypatch.setattr(sys, "stdin", FakeTty())
+    assert run(world, "unapprove", pid, capsys=capsys)[0] == 0 and not dest.exists() and written.exists()
+    code, _, err = run(world, "unapprove", pid, capsys=capsys)
+    assert code == 1 and "not approved" in err
+
+
+def test_compile_shadow_runs_the_hook_entry_and_always_returns_0(world, tmp_path, monkeypatch, capsys):
+    import io
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(b"garbage")))
+    assert run(world, "shadow", "pre", capsys=capsys)[:2] == (0, "")
+    with pytest.raises(SystemExit) as e:
+        cli.main(["--config", world.conf, "shadow", "sideways"])
+    assert e.value.code == 2
+
+
 # ------------------------------------------------------------------ hygiene
 def test_module_runs_as_python_dash_m(world):
     out = subprocess.run([sys.executable, "-m", "ace_playbook.compile", "--config", world.conf, "cards"],
@@ -183,16 +282,16 @@ def test_no_inject_keys_reflect_or_network_modules_are_imported():
     heavy = ("ace_playbook.inject", "ace_playbook.keys", "ace_playbook.reflect", "subprocess", "socket", "ssl",
              "http.client", "urllib.request")
     code = (f"import sys; sys.path.insert(0, {str(ROOT)!r}); import ace_playbook.compile.evidence, "
-            f"ace_playbook.compile.proposal, ace_playbook.compile.__main__; "
+            f"ace_playbook.compile.proposal, ace_playbook.compile.__main__, ace_playbook.compile.shadow; "
             f"print(','.join(m for m in {heavy!r} if m in sys.modules))")
     out = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip() == ""
 
 
-def test_step2_sources_do_not_import_inject_keys_reflect_or_spawn_anything():
+def test_step2_and_4_sources_do_not_import_inject_keys_reflect_or_spawn_anything():
     banned = {"inject", "keys", "reflect", "subprocess", "socket", "urllib", "http", "ssl", "requests", "migrate"}
-    for name in ("evidence.py", "proposal.py", "__main__.py"):
+    for name in ("evidence.py", "proposal.py", "__main__.py", "shadow.py"):
         for node in ast.walk(ast.parse((COMPILE / name).read_text())):
             if isinstance(node, ast.Import):
                 mods = {a.name.split(".")[0] for a in node.names}
@@ -204,7 +303,7 @@ def test_step2_sources_do_not_import_inject_keys_reflect_or_spawn_anything():
             assert not (mods & banned), (name, mods & banned)
 
 
-def test_step2_modules_stay_within_their_line_budgets():
-    for name, cap in (("evidence.py", 300), ("proposal.py", 300), ("__main__.py", 200)):
+def test_step2_and_4_modules_stay_within_their_line_budgets():
+    for name, cap in (("evidence.py", 300), ("proposal.py", 300), ("__main__.py", 200), ("shadow.py", 300)):
         assert len((COMPILE / name).read_text().splitlines()) <= cap, name
     assert os.access(COMPILE / "__main__.py", os.R_OK) and proposal.PROPOSALS == "proposals"

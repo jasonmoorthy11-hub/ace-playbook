@@ -175,3 +175,112 @@ def test_prune_queue_rewrites_0600_even_under_umask_000(env, tmp_path):
         os.umask(old)
     assert cfg.queue.stat().st_mode & 0o777 == 0o600
     assert [e["session_id"] for e in read_jsonl(cfg.queue)] == ["zz"]
+
+
+# ------------------------------------------------------------------- shadow.sh (docs/design/compiler.md 7, 9)
+SYSTEM_PY = "/usr/bin/python3"
+needs_system_py = pytest.mark.skipif(not os.access(SYSTEM_PY, os.X_OK), reason="no /usr/bin/python3")
+
+
+@pytest.fixture
+def shadow_env(tmp_path):
+    from . import compile_support as cs
+    w = cs.real_world(tmp_path)
+    return w, {**os.environ, "ACE_PLAYBOOK_CONFIG": w.conf, "ACE_PLAYBOOK_HOME": str(ROOT), "ACE_PYTHON": sys.executable}
+
+
+def run_shadow(env, payload, *args, cwd=None, raw=None):
+    data = raw if raw is not None else json.dumps(payload)
+    return subprocess.run([str(HOOKS / "shadow.sh"), *args], input=data, capture_output=True, text=True,
+                          env=env, cwd=cwd, timeout=30)
+
+
+def rm_payload(command="rm -rf /w/src"):
+    from . import compile_support as cs
+    return cs.pre_payload(command)
+
+
+def test_shadow_script_is_the_design_block_verbatim_and_never_execs():
+    doc = (ROOT / "docs" / "design" / "compiler.md").read_text()
+    head = doc.index("## 7. shadow.py and hooks/shadow.sh")
+    block = doc[doc.index("```bash\n", head) + len("```bash\n"):]
+    block = block[:block.index("```")]
+    script = HOOKS / "shadow.sh"
+    text = script.read_text()
+    assert text == block and os.access(script, os.X_OK)
+    code = [ln for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+    assert code[-1] == "exit 0" and not any(ln.split()[0] == "exec" for ln in code)
+    assert '[ -n "$ACE_HOME" ] || exit 0' in text and 'cd "$ACE_HOME" || exit 0' in text
+    assert "-I -P -c pass" in text and "ace_playbook.compile.shadow import main" in text
+
+
+def test_shadow_script_evaluates_a_payload_and_prints_nothing_in_observe_mode(shadow_env):
+    from . import compile_support as cs
+    w, e = shadow_env
+    p = run_shadow(e, rm_payload(), "pre")
+    assert (p.returncode, p.stdout, p.stderr) == (0, "", "")
+    assert len(cs.shadow_rows(w.data)) == 1
+    p = run_shadow(e, rm_payload("rm -rf /tmp/scratch/x"), "pre")
+    assert p.returncode == 0 and len(cs.shadow_rows(w.data)) == 1
+
+
+@needs_system_py
+def test_shadow_script_under_the_system_python_exits_0_and_still_evaluates(shadow_env):
+    from . import compile_support as cs
+    w, e = shadow_env
+    p = run_shadow({**e, "ACE_PYTHON": SYSTEM_PY}, rm_payload(), "pre")
+    assert (p.returncode, p.stdout) == (0, "")
+    assert len(cs.shadow_rows(w.data)) == 1
+
+
+def test_shadow_script_with_no_argument_or_a_missing_interpreter_exits_0(shadow_env):
+    from . import compile_support as cs
+    w, e = shadow_env
+    assert run_shadow(e, rm_payload()).returncode == 0
+    p = run_shadow({**e, "ACE_PYTHON": "/nonexistent/python3"}, rm_payload(), "pre")
+    assert (p.returncode, p.stdout) == (0, "")
+    assert cs.shadow_rows(w.data) == []
+
+
+@pytest.mark.parametrize("module", ["raise RuntimeError('boom')\n",
+                                    "def main(argv):\n    print('junk')\n    return 2\n",
+                                    "import sys\ndef main(argv):\n    sys.exit(2)\n"])
+def test_shadow_script_exits_0_when_the_module_crashes_or_returns_2(tmp_path, module):
+    home = tmp_path / "home"
+    (home / "ace_playbook" / "compile").mkdir(parents=True)
+    (home / "ace_playbook" / "__init__.py").write_text("")
+    (home / "ace_playbook" / "compile" / "__init__.py").write_text("")
+    (home / "ace_playbook" / "compile" / "shadow.py").write_text(module)
+    e = {**os.environ, "ACE_PLAYBOOK_HOME": str(home), "ACE_PYTHON": sys.executable}
+    p = run_shadow(e, rm_payload(), "pre")
+    assert p.returncode == 0                                   # exit 2 would mean "block" to the harness
+
+
+@pytest.mark.parametrize("command", [None, "rm -rf /w/src", "rm -rf /tmp/scratch/x", "echo $(id) `id`"])
+def test_shadow_script_stdout_is_empty_or_valid_json(shadow_env, command):
+    w, e = shadow_env
+    p = run_shadow(e, None, "pre", raw="}{ garbage") if command is None else run_shadow(e, rm_payload(command), "pre")
+    assert p.returncode == 0 and (p.stdout == "" or isinstance(json.loads(p.stdout), dict))
+
+
+@pytest.mark.parametrize("interpreter", [sys.executable, pytest.param(SYSTEM_PY, marks=needs_system_py)])
+def test_shadow_script_never_imports_modules_planted_in_the_working_directory(shadow_env, tmp_path, interpreter):
+    from . import compile_support as cs
+    w, e = shadow_env
+    cwd = tmp_path / "project"
+    (cwd / "ace_playbook" / "compile").mkdir(parents=True)
+    marker = tmp_path / "marker"
+    trap = f"open({str(marker)!r}, 'a').write('imported')\n"
+    (cwd / "json.py").write_text(trap)
+    (cwd / "ace_playbook" / "__init__.py").write_text(trap)
+    (cwd / "ace_playbook" / "compile" / "shadow.py").write_text(trap + "def main(argv):\n    return 2\n")
+    p = run_shadow({**e, "ACE_PYTHON": interpreter}, rm_payload(), "pre", cwd=cwd)
+    assert p.returncode == 0 and not marker.exists()
+    assert len(cs.shadow_rows(w.data)) == 1                     # the real module ran, not the planted one
+
+
+def test_shadow_script_does_not_expand_payload_text_in_the_shell(shadow_env, tmp_path):
+    w, e = shadow_env
+    marker = tmp_path / "pwned"
+    p = run_shadow(e, rm_payload(f"rm -rf $(touch {marker}) `touch {marker}`"), "pre")
+    assert p.returncode == 0 and p.stdout == "" and p.stderr == "" and not marker.exists()

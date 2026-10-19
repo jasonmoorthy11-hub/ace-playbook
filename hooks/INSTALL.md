@@ -161,9 +161,80 @@ same check runs in this repo's CI.
 Delete the three hook entries from `settings.json` and boot out the launchd job. Your data
 directory is plain files (`deltas.jsonl` is the source of truth); delete or keep it.
 
+## 7. Stage 2 shadow hook (observe mode)
+
+Optional, and separate from the three hooks above. `hooks/shadow.sh` evaluates the proposals you
+approved (see `docs/design/compiler.md`, section 7) against each Bash call and records what **would**
+have fired. In observe mode it prints nothing, changes nothing and never blocks: the wrapper does not
+`exec` Python and always exits 0 (exit 2 would mean "block" to Claude Code), and Python runs isolated
+(`-I`, plus `-P` where it exists) from `$ACE_PLAYBOOK_HOME`, so a `json.py` in the project you are
+working in is never imported. It works on the system Python 3.9 too (no `-P` there).
+
+Approve a proposal first, by hand at a terminal (nothing else can do it):
+
+```sh
+cd "$ACE_PLAYBOOK_HOME"
+python3 -m ace_playbook.compile propose --lesson L-xxxxxxxx --detector rm_rf_nonscratch
+python3 -m ace_playbook.compile approve P-xxxxxxxx --mode observe    # lists provenance, asks y/N on /dev/tty
+```
+
+Only `--mode observe` exists in this step; `warn` and `block` are refused. Then add these two entries to
+the same `"hooks"` object of your user-level `settings.json` (adjust the path to your checkout):
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/ace-playbook/hooks/shadow.sh pre",
+            "timeout": 5,
+            "onFailure": "continue"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/ace-playbook/hooks/shadow.sh stop",
+            "timeout": 5,
+            "onFailure": "continue"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+The `Stop` entry goes next to the existing citation hook. In this step it does nothing yet: no approvable
+proposal names a `Stop` event, so the script finds nothing to evaluate and exits. Register it only if you
+want the wiring in place for later.
+
+What it writes, all under `data_dir` and mode 0600: `shadow.jsonl` (append-only, one row per fire:
+`ts`, `proposal_id`, `lesson_id`, `mode`, `event`, `tool_name`, `session` (a 16-character hash),
+`payload_sha256`, `would_fire`, `tier`; never the command text), `shadow.log` (one type-only line per
+skipped proposal or error, capped at 1 MB), `shadow_state/` (per-session detector state, hashed file
+names) and `proposals/approved/` (your approved copies). Every call re-validates each approved proposal
+from disk; a missing, edited, oversize or symlinked file is skipped and its id is logged.
+
+Check it by hand: `echo '{"session_id":"t1","tool_name":"Bash","tool_input":{"command":"rm -rf /w/src"}}'
+| hooks/shadow.sh pre` prints nothing; `shadow.jsonl` gains a row only if an approved proposal matches.
+
+**Remove it.** Delete the two entries from `settings.json`. To stop evaluation without touching settings,
+create `data_dir/proposals/DISABLED` (any content) or run `python3 -m ace_playbook.compile unapprove
+P-xxxxxxxx` at a terminal. `shadow.jsonl`, `shadow.log` and `shadow_state/` are plain files you can delete.
+
 ## What the hooks write
 
 All under `data_dir`: `deltas.jsonl` (+ `.lock`), `playbook.sqlite` (disposable view),
 `injections.jsonl`, `citations.jsonl`, `reflections.jsonl`, `queue.jsonl`, `quarantine.jsonl`,
-`health.json`, `reflect.log`. None of them should ever be committed to a public repository; the repo's
-`.gitignore` already excludes them.
+`health.json`, `reflect.log`; with the shadow hook also `shadow.jsonl`, `shadow.log` and `shadow_state/`.
+None of them should ever be committed to a public repository; keep `data_dir` outside any checkout (the
+repo's `.gitignore` lists the stage 1 files only).

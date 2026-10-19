@@ -241,6 +241,62 @@ def make_world(tmp_path, monkeypatch, *, origin: str | None = "origin", sessions
     return World(cfg, lid, fx)
 
 
+# ---------------------------------------------------------------- step 4: a real-catalogue world for the shadow hook
+RM_LESSON = "L-b3d1fba9"   # the catalogue's own mapping: a subprocess cannot monkeypatch, so it must validate as is
+
+
+def real_world(tmp_path, detectors=("rm_rf_nonscratch",), approve: bool = True):
+    """data_dir with hand-built cards for RM_LESSON, one written proposal per detector and (optionally) its
+    approved observe copy. Returns a namespace: cfg, conf (config file path), data, props {detector: proposal}."""
+    from types import SimpleNamespace
+    from ace_playbook.compile import evidence as evm, proposal as prop
+    from ace_playbook.config import Config
+    cfg = Config(data_dir=tmp_path / "data")
+    Path(cfg.data_dir).mkdir(parents=True)
+    conf = tmp_path / "config.json"
+    conf.write_text(json.dumps({"data_dir": str(cfg.data_dir)}))
+    w = SimpleNamespace(cfg=cfg, conf=str(conf), props={}, data=Path(cfg.data_dir))
+    for det in detectors:
+        payload = json.loads(EXAMPLES.read_text())["detectors"][det]["fire"]
+        ph, inc = evm.payload_hash(payload), evm.sid("sess-live-incident")
+        card = {"id": evm.card_id(RM_LESSON, inc, ph), "v": 1, "lesson_id": RM_LESSON, "provenance": "standard",
+                "origin_session": evm.sid("sess-live-origin"), "incident_session": inc, "incident_kind": "later",
+                "label_ref": None, "quote_offsets": [{"user_turn": 0, "start": 0, "end": 20,
+                                                      "quote_sha256": "0123456789abcdef"}],
+                "detector": det, "detector_sha256": "0" * 64, "tier": "offline", "incident_ts": "2026-10-01T00:00:00Z",
+                "payload_sha256": ph, "payload_ref": payload, "replayable": True,
+                "lesson_shown_in_incident_session": True, "agent_cited": False, "self_report": True,
+                "scrub": {"profile": "LESSON", "hits": 0}, "created": "2026-10-01T00:00:00Z"}
+        evm.private_dir(w.data / "cards")
+        (w.data / "cards" / (card["id"] + ".json")).write_text(json.dumps(card))
+        p = prop.build(cfg, RM_LESSON, det, [card])
+        prop.write(cfg, p, {card["id"]: card})
+        w.props[det] = p
+        if approve:
+            approve_file(cfg, p)
+    return w
+
+
+def approve_file(cfg, p: dict, mode: str = "observe") -> Path:
+    """Write the approved copy the way `compile approve` does (without the TTY)."""
+    from ace_playbook.atomic import write_private
+    from ace_playbook.compile import shadow
+    path = Path(cfg.data_dir) / "proposals" / "approved" / (p["id"] + ".json")
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    write_private(path, json.dumps(shadow.approved_record(p, mode), indent=1, sort_keys=True) + "\n")
+    return path
+
+
+def pre_payload(command: str, sid: str = "sess-live-1", tool: str = "Bash") -> dict:
+    return {"hook_event_name": "PreToolUse", "session_id": sid, "tool_name": tool,
+            "tool_input": {"command": command}, "tool_use_id": "toolu_1"}
+
+
+def shadow_rows(data) -> list[dict]:
+    p = Path(data) / "shadow.jsonl"
+    return [json.loads(line) for line in p.read_text().splitlines()] if p.exists() else []
+
+
 if __name__ == "__main__":  # python -m tests.compile_support <rebuild-lab>/ace/step0
     PARITY.parent.mkdir(exist_ok=True)
     PARITY.write_text(dump_parity(regen_parity(sys.argv[1])))

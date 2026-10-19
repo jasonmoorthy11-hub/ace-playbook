@@ -43,7 +43,8 @@ staying as prose the agent may ignore. The compile step and the evaluation harne
 | `hooks/` | Hook scripts, a nightly sweep, a launchd example and `INSTALL.md` (nothing is installed for you) |
 | `ace_playbook/fixtures` | Seeded synthetic corpus generator, a frozen seed-1 copy, `DATASHEET.md` |
 
-Planned and **not built**: the compiler, curator and refiner, the replay and task-suite
+Planned and **not built**: enforcement by the compiler (only its shadow hook in observe mode exists,
+see below), the curator and refiner, the replay and task-suite
 evaluation harness, the judge. See [PREREGISTRATION.md](PREREGISTRATION.md).
 
 ### Migration
@@ -80,6 +81,17 @@ injected block is advisory data, not instructions; hooks fail open and stay out 
 (stage-1 hooks never block; stage-2 shadow hooks block only a proposal the operator promoted to
 block mode after the observe/warn ladder, see [docs/design/compiler.md](docs/design/compiler.md)).
 [SECURITY.md](SECURITY.md) has the threat model.
+
+### Compiler (stage 2, shadow mode, in progress)
+
+`ace_playbook/compile` turns a well-evidenced lesson into a spec-only JSON proposal that names one
+human-written detector from a fixed catalogue (`python -m ace_playbook.compile cards|propose|validate`),
+and the operator approves it at a terminal with `approve <id> --mode observe`. The shadow hook
+(`hooks/shadow.sh`, [INSTALL.md](hooks/INSTALL.md) section 7) then evaluates approved proposals on each
+Bash call, re-validating them from disk every time, and appends what **would** have fired to
+`shadow.jsonl` (ids, hashes and a timestamp, never the command). In observe mode it prints nothing,
+changes nothing and cannot block; warn and block exist in the code but cannot be approved yet. No
+model writes a check, a hook or a setting, and nothing is installed for you.
 
 ## Run it
 

@@ -56,12 +56,12 @@ RESULTS.md:62), alongside `edit_unread_turn` and `rm_rf` (RESULTS.md:34). The ve
 | `compile/state.py` | Rolling per-session state file under `data_dir/shadow_state/`, locked (`LOCK_NB`), atomic, hashed name, 0600/0700, FIFO- and symlink-safe | ~235 |
 | `compile/evidence.py` | Evidence cards (section 5): admission, legacy path, scrub, `cards/` writer | 300 (built, step 2) |
 | `compile/proposal.py` | Proposal schema, ordered validation, replay/regression runner, writer (section 6) | 299 (built, step 2) |
-| `compile/shadow.py` | Hook entry point: load approved proposals, evaluate, print the decision as JSON on stdout; always exits 0 (section 7) | ~220 |
+| `compile/shadow.py` | Hook entry point: load approved proposals, re-validate, evaluate, append `shadow.jsonl` rows, print the decision as JSON on stdout (block mode only); always returns 0 (section 7) | ~220; 218 (built, step 4) |
 | `compile/offline.py` | Nightly pass: run signal detectors over finished transcripts, finalize session-level detectors, label pre-fill, demotions | ~250 |
 | `compile/report.py` | shadow.jsonl to results tables, effect estimates (section 8) | ~260 |
-| `compile/__main__.py` | CLI: `cards`, `propose`, `validate` (98 lines, built, step 2); later `packet`, `review-record`, `approve`, `label`, `report`, `replay-synthetic` | 98, ~180 when complete |
+| `compile/__main__.py` | CLI: `cards`, `propose`, `validate` (step 2); `approve --mode observe`, `unapprove`, `shadow pre\|stop` (step 4); later `packet`, `review-record`, `label`, `report`, `replay-synthetic` and `approve --mode warn\|block` | 98, then 174 (step 4), ~230 when complete |
 | `ace_playbook/textrules.py` | Leaf module (stdlib `re`, `string` only): `unsafe_text_reason`, `inert_reason` and their regexes, moved out of `store/schema.py` and `inject/sanitize.py`, which re-export them (step 1, see 7.2) | ~120 moved |
-| `hooks/shadow.sh` | One script, two registrations (PreToolUse, Stop); never `exec`s, always `exit 0` | ~12 |
+| `hooks/shadow.sh` | One script, two registrations (PreToolUse, Stop); never `exec`s, always `exit 0` | 19 lines (built, step 4; a test pins it to the block in section 7) |
 
 Data lives under the existing `data_dir` (config.py:20, 69-70), never under `~/.claude`
 (config.py:1): `detector_events.jsonl`, `cards/` (one `E-xxxxxxxx.json` per card), `proposals/`, `proposals/reviews/`,
@@ -79,6 +79,14 @@ Data lives under the existing `data_dir` (config.py:20, 69-70), never under `~/.
 - The proposal schema is `check {detector, params, on_truncated}` and `provenance {cards, lesson_evidence, source_sha256}` (no separate `detector_sha256`); `P-` ids hash lesson, event, matcher, detector, params, cards and `source_sha256`, not message or clock.
 - Hashes in a proposal stay full length; the scrub step scans every string except fields step 1 proved to be a bare digest or timestamp, because the LESSON lint flags any hex run over 12 characters and any ISO time.
 - Regression and replay examples are single payloads run on a fresh state (`ace_playbook/fixtures/compile/examples.json`); only `rm_rf_nonscratch` and `rm_rf` have examples and message templates so far.
+
+**Step 4 as built (deviations, one line each).**
+- `compile approve` exists in minimal form: `--mode observe` only (warn and block exit 2 pointing at the ladder), TTY only, no review record and no `approvals.jsonl` hash chain yet (both step 3 work). The approved copy `proposals/approved/<id>.json` is the proposal plus `reviewed_by: "operator-tty"`, `approved_at`, `mode` and `proposal_sha256`, a hash over every other field: it catches an edit made after approval, not a deliberate edit that recomputes the hash, so the file is the trust root until the chain lands.
+- The hook loads a record only if the hash matches, `mode` is in `shadow.ALLOWED_MODES` (`("observe",)`, widened only by tests, so a hand-edited `mode: "block"` is skipped), and `proposal.validate` passes on the body (all six steps, replay included) on every call. It measures about 1 ms in-process and 40 ms per wrapper call (p95 42 ms on 3.14, 122 ms on the system 3.9).
+- A `shadow.jsonl` row is `{ts, proposal_id, lesson_id, mode, event, tool_name, session, payload_sha256, would_fire, tier}`: `session` is the bare `sha256[:16]` of the session id (the section 7.1 example's `sid:` prefix, `v`, `row_id`, `corpus`, `arm`, `hits`, `dur_ms` and `target_hashes` are not written yet); `payload_sha256` is `evidence.payload_hash` of `{tool_name, tool_input}`, so it joins to an evidence card.
+- With no approved proposal matching the event and tool, the hook exits before touching `shadow_state/`, so the Stop registration does not reset per-turn state yet (only `edit_unread_turn` needs it and it cannot be approved). No kill-switch config key; `proposals/DISABLED` is the switch. No arm, no `demotions.jsonl`, no `approvals.jsonl` check.
+- When the state lock is skipped or the state directory is unusable, detectors with `state == "none"` still run on a blank state and stateful ones stay silent.
+- `python -m ace_playbook.compile.shadow pre` and `python -m ace_playbook.compile shadow pre` both work; the wrapper imports `ace_playbook.compile.shadow.main` directly.
 
 ## 4. detectors.py: the catalogue
 
