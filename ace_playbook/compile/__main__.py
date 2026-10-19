@@ -19,7 +19,7 @@ from .. import config as cfgmod
 from .. import ttyio
 from ..atomic import write_private
 from ..canon import now_iso
-from . import approvals, evidence, labels, modes, proposal, report, shadow
+from . import approvals, demotions, evidence, labels, modes, proposal, report, shadow
 
 LEGACY_BANNER = ("This lesson's stored evidence is self-quoted legacy text; "
                  "the human incident label is the only evidence.")
@@ -107,12 +107,6 @@ def _provenance(cfg: cfgmod.Config, p: dict) -> bool:
     return legacy
 
 
-def _lifting(cfg: cfgmod.Config, pid: str, rows: list[dict], ts: str) -> list[dict]:
-    """Demotion rows of `pid` in force that a new approvals row stamped `ts` would lift (stamped strictly before it)."""
-    return [r for r in modes.read_demotions(cfg.data_dir)[0] if r["proposal_id"] == pid
-            and not modes.lifted(r, modes.anchor(rows, pid, now_iso())) and modes.lifted(r, {"ts": ts})]
-
-
 def cmd_approve(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
     if args.mode != "observe":
         from . import ladder                                  # lazy: the promotion rules stay off the hook path
@@ -130,7 +124,7 @@ def cmd_approve(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
         print(f"error: validation failed at step '{rep.failed}'", file=sys.stderr)
         return 1
     rows, broken = approvals.read_chain(cfg.data_dir)
-    if broken:
+    if broken is not None:
         print(f"error: approvals.jsonl chain broken at row {broken}", file=sys.stderr)
         return 1
     dest = shadow.approved_path(cfg, args.id)
@@ -140,10 +134,13 @@ def cmd_approve(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
     except proposal.ProposalError:                            # an unreadable old copy is simply replaced
         rec, old, mode = None, None, ""
     verdict = approvals.verify_copy(rec, rows) if old == p and mode == "observe" else None
-    if verdict == "missing" and any(r["proposal_id"] == args.id for r in modes.read_demotions(cfg.data_dir)[0]):
-        verdict = None                      # no back-fill under demotions (the copy's stamp is agent-writable): approve afresh
-    if verdict == "ok" and not _lifting(cfg, args.id, rows, now_iso()):     # else an approval newer than a demotion lifts it
-        print(f"already approved: {args.id} (observe)")
+    drows, dbroken = modes.read_demotions(cfg.data_dir)
+    live = modes.in_force(drows, args.id, rows, now_iso())
+    if verdict == "missing" and (dbroken is not None or any(r["proposal_id"] == args.id for r in drows)):
+        verdict = None          # no back-fill under demotions, or an unreadable file (the copy's stamp is agent-writable)
+    if verdict == "ok" and not [r for r in live if modes.lifted(r, {"ts": now_iso()})]:      # else a newer approval lifts them
+        print(f"capped at {demotions.effective_cap(live, args.id)} by {len(live)} row(s) not liftable now (re-run in a second)"
+              if live else f"already approved: {args.id} (observe)")
         return 0
     legacy = _provenance(cfg, p)                              # the same block and prompts for a fresh approval and a back-fill
     asks = ["Legacy evidence: approve anyway? [y/N] "] if legacy else []
@@ -159,7 +156,10 @@ def cmd_approve(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
         print(f"ok: recorded the existing observe approval of {args.id} in approvals.jsonl")
         return 0
     new = shadow.approved_record(p)
-    lift = _lifting(cfg, args.id, rows, new["approved_at"])
+    lift = [r for r in live if modes.lifted(r, {"ts": new["approved_at"]})]
+    if dbroken is not None:
+        print(f"  demotions.jsonl is {'unreadable' if dbroken == 'unreadable' else f'broken at row {dbroken}'}: rows from the "
+              "break on are not listed (the chain keeps capping at observe until it is repaired)")
     for r in lift:                                            # a fresh observe row lifts every older demotion: show each
         print(f"  lifts demotion: {r['to_mode']}  {r['cause']}  {r['ts']}")
     if not _confirm([f"Approve {p['id']} in observe mode{f', lifting {len(lift)} demotion row(s)' if lift else ''}? [y/N] "] + asks):

@@ -196,8 +196,8 @@ def run(cfg, args, ask: Callable[[str], str], need_tty: Callable[[str], bool], n
         _need(rep.failed != "schema", "validation failed at step 'schema'")
         arows, abroken = approvals.read_chain(cfg.data_dir)
         lrows, lbroken = labels.read_chain(cfg)
-        _need(not abroken, f"approvals.jsonl chain broken at row {abroken}")
-        _need(not lbroken, f"labels.jsonl chain broken at row {lbroken}")
+        _need(abroken is None, f"approvals.jsonl chain broken at row {abroken}")
+        _need(lbroken is None, f"labels.jsonl chain broken at row {lbroken}")
         drows, dbroken = modes.read_demotions(cfg.data_dir)           # a read error is the resolver's broken path
         resolved = modes.resolve(p["id"], copy, arows, None, drows, dbroken, now)
         from . import catalogue

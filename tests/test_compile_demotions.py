@@ -347,7 +347,7 @@ def test_a_demotion_to_warn_lowers_a_block_proposal_and_a_symlinked_file_caps_at
     (w.data / dm.FILE).unlink()
     (w.data / dm.FILE).symlink_to(tmp_path / "elsewhere.jsonl")
     out, _, log = hook(w, monkeypatch, capsys)
-    assert cs.shadow_rows(w.data)[-1]["mode"] == "observe" and "demotions:OSError" in log      # fail safe, not fail open
+    assert cs.shadow_rows(w.data)[-1]["mode"] == "observe" and "error:demotions:OSError" in log      # fail safe, not fail open
 
 
 def test_the_hook_reads_the_demotions_file_once_per_call(tmp_path, monkeypatch, capsys):
@@ -391,4 +391,4 @@ def test_an_unreadable_demotions_file_caps_a_block_approval_at_observe(tmp_path,
     w = cs.offline_world(tmp_path, "block")
     (w.data / dm.FILE).mkdir()                                              # not a regular file
     out, err, log = hook(w, monkeypatch, capsys)
-    assert cs.shadow_rows(w.data)[-1]["mode"] == "observe" and (out, err) == ("", "") and "demotions:IsADirectoryError" in log
+    assert cs.shadow_rows(w.data)[-1]["mode"] == "observe" and (out, err) == ("", "") and "error:demotions:IsADirectoryError" in log

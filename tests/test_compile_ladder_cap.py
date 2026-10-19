@@ -70,3 +70,13 @@ def test_a_back_fill_is_not_offered_under_a_demotion_row_a_fresh_approval_that_l
     assert "lifting 1 demotion row(s)" in tty.asked[-1] and row["mode"] == "observe" and row["ts"] >= rec["approved_at"]
     assert modes.resolve(written.stem, copy_of(world, written.stem), [row], None, demotions.read_chain(world.cfg.data_dir)[0],
                          None, "2099-01-01T00:00:00Z").cap is None                    # the row is lifted
+
+
+@pytest.mark.parametrize("kind", ["broken", "unreadable"])
+def test_no_back_fill_under_a_broken_or_unreadable_demotions_file(world, written, tty, capsys, kind):
+    cs.approve_file(world.cfg, json.loads(written.read_text()), "observe")           # a copy and no approvals row
+    path = world.cfg.data_dir / demotions.FILE
+    path.write_text("not json\n") if kind == "broken" else path.symlink_to(world.cfg.data_dir / "nowhere")
+    code, out, _ = run(world, "approve", written.stem, "--mode", "observe", capsys=capsys)
+    assert code == 0 and "recorded" not in out and "demotions.jsonl is " + ("broken at row 0" if kind == "broken" else "unreadable") in out
+    assert tty.asked[-1].startswith(f"Approve {written.stem} in observe mode?")

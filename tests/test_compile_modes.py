@@ -1,6 +1,6 @@
 """modes.resolve (docs/design/compiler.md 7.3, "Mode resolution"): one answer for the hook, the ladder, the offline pass and the report.
 
-An operator approval lifts every demotion row at or before it; the cap is the lowest row AFTER the newest approval."""
+An operator approval lifts every demotion row stamped strictly before it; the cap is the lowest row stamped at or after it."""
 
 import dataclasses
 import json
@@ -290,6 +290,23 @@ def test_approve_observe_without_a_demotion_in_force_shows_no_lift_notice(ready,
     assert code == 0 and "lifts demotion" not in out and "lifting" not in tty.asked[-1]
 
 
+# ------------------------------------------------------------------ chain refusals
+def test_a_garbage_first_line_of_approvals_is_a_clean_refusal_on_the_observe_and_the_warn_paths(ready, tty, capsys):
+    (ready.cfg.data_dir / approvals.FILE).write_text("not json\n")
+    for mode in ("observe", "warn"):
+        code, out, err = run(ready, "approve", ready.pid, "--mode", mode, capsys=capsys)
+        assert code == 1 and "approvals.jsonl chain broken at row 1" in out + err and "Traceback" not in out + err
+    assert tty.asked == []
+
+
+def test_approve_observe_says_so_when_the_only_demotion_row_cannot_be_lifted_yet(observed, tty, capsys):
+    dm.append(observed.cfg.data_dir, fields(proposal_id=observed.pid, from_mode="observe", to_mode="observe",
+                                            ts=shift(observed.entry, 1)))                 # in force, newer than now
+    code, out, _ = run(observed, "approve", observed.pid, "--mode", "observe", capsys=capsys)
+    assert code == 0 and "capped at observe by 1 row(s) not liftable now" in out and "already approved" not in out
+    assert tty.asked == [] and len(approvals.read_chain(observed.cfg.data_dir)[0]) == 1
+
+
 # ------------------------------------------------------------------ the report
 def test_the_report_marks_lifted_rows_and_shows_the_resolved_and_the_approved_mode(tmp_path):
     w = cs.offline_world(tmp_path, "warn")
@@ -334,6 +351,18 @@ def test_a_meta_correction_after_a_fire_never_auto_labels(mode, key):
     evs = with_meta([{"human": "tidy"}, RM], key, "I told you not to delete that again")
     i = next(n for n, e in enumerate(evs) if e.tool_uses)
     assert offline.classify(mode, evs, i, evs[i].tool_uses[0], hash16("/w/src")) is None
+
+
+@pytest.mark.parametrize("key", META_KEYS)
+def test_a_meta_prompt_naming_the_target_is_not_a_prompt_target_and_does_not_cut_the_span(key):
+    meta = {"type": "user", "isSidechain": False, key: True, "message": {"role": "user", "content": "clean /w/src please"}}
+    evs = list(events_from_records(cs.records([{"human": "tidy"}]) + [meta] + cs.records([RM])))
+    i = next(n for n, e in enumerate(evs) if e.tool_uses)
+    assert offline.classify("observe", evs, i, evs[i].tool_uses[0], hash16("/w/src")) is None
+    plain = list(events_from_records(cs.records([{"human": "tidy"}, {"human": "clean /w/src please"}, RM])))
+    assert offline.classify("observe", plain, 2, plain[2].tool_uses[0], hash16("/w/src")) == "auto_fp_prompt_target"
+    after = list(events_from_records([*cs.records([RM]), meta, *cs.records([{"human": "a"}, {"human": "b"}, {"human": "c"}])]))
+    assert offline.span(after, 0)[-1].user_text == "b"                                       # the second REAL prompt ends it
 
 
 @pytest.mark.parametrize("key", META_KEYS)

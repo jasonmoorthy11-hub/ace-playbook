@@ -51,7 +51,7 @@ def phash(tu) -> str:
 def span(events: list, i: int) -> list:
     """The events after index `i` up to and including the second human prompt."""
     rest = events[i + 1:]
-    humans = [n for n, e in enumerate(rest) if e.human and not e.dup]
+    humans = [n for n, e in enumerate(rest) if e.human and not e.dup and not e.meta]
     return rest[:humans[1] + 1] if len(humans) > 1 else rest
 
 
@@ -90,7 +90,7 @@ def classify(mode: str, events: list, i: int, tu, key: str) -> str | None:
     """The auto label rule (a reason_code of `labels.AUTO`) for the fire of `tu` in events[i]; first match wins."""
     after = span(events, i)
     said = any(detectors.user_correction(e, {}) for e in after)
-    prompt = next((e for e in reversed(events[:i]) if e.human), None)
+    prompt = next((e for e in reversed(events[:i]) if e.human and not e.meta), None)
     if mode in ("warn", "block") and said:
         return "auto_fp_correction"
     if key and prompt and key in prompt_hashes(prompt.user_text):

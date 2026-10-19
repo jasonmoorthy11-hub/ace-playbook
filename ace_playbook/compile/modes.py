@@ -21,7 +21,7 @@ Broken = Optional[Union[int, str]]   # None: the chain is intact; an index: brok
 class Resolution:
     mode: str                      # what the hook runs: `demotions.lower(approved_mode, cap)`
     approved_mode: str             # what the copy and the approvals chain allow
-    cap: str | None                # lowest `to_mode` of the demotion rows after the newest approval, None without
+    cap: str | None                # lowest `to_mode` of the demotion rows stamped at or after the newest approval, None without
     window_start: str              # start of the counting window ("" when none is known)
     source: str                    # what set `window_start`: approval | demotion | copy | none
     problems: tuple[str, ...] = ()  # approvals:missing|mismatch|chain_broken, revoked, no_copy, demotions:chain_broken|unreadable
@@ -54,6 +54,12 @@ def anchor(rows: list[dict], pid: str, now: str, broken: Broken = None) -> dict 
 def lifted(row: dict, ref: dict | None) -> bool:
     """A demotion row stamped strictly before the approval `ref` is lifted by it (a tie keeps it: re-approve a second later)."""
     return ref is not None and row["ts"] < ref["ts"]
+
+
+def in_force(drows: list[dict], pid: str, arows: list[dict], now: str, abroken: Broken = None) -> list[dict]:
+    """The demotion rows of `pid` that no approval has lifted (those `resolve` counts toward the cap)."""
+    ref = anchor(arows, pid, now, abroken)
+    return [r for r in drows if r["proposal_id"] == pid and not lifted(r, ref)]
 
 
 def _approved(pid: str, copy: dict | None, rows: list[dict], broken: Broken) -> tuple[str, list[str]]:

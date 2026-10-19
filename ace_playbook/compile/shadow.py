@@ -108,12 +108,13 @@ class _Once:
             self.tail += "\n" + msg + "\n"
 
 
-def _demotions(cfg, once) -> tuple[list[dict], modes.Broken]:
-    """(rows, broken_at) of demotions.jsonl, read once per call; a read error is logged (type only) and counts as `unreadable`."""
+def _demotions(cfg, log) -> tuple[list[dict], modes.Broken]:
+    """(rows, broken_at) of demotions.jsonl, read once per call; a read error is logged (type only, unthrottled: it counts
+    toward the error rate like `error:approvals:`) and counts as `unreadable`."""
     try:
         return demotions.read_chain(cfg.data_dir)
     except Exception as exc:
-        once(f"demotions:{type(exc).__name__}")
+        log(f"error:demotions:{type(exc).__name__}")
         return [], "unreadable"
 
 
@@ -159,7 +160,7 @@ def load_approved(cfg, log) -> list[tuple[dict, str]]:
         return []
     if len(names) > MAX_FILES:
         once("skipped:too_many_files")
-    out, appr, dem, now = [], _Approvals(cfg, log), (_demotions(cfg, once) if names else ([], None)), now_iso()
+    out, appr, dem, now = [], _Approvals(cfg, log), (_demotions(cfg, log) if names else ([], None)), now_iso()
     for name in names[:MAX_FILES]:
         if not proposal.PID.fullmatch(name[:-5]):
             once("skipped:file_name")
