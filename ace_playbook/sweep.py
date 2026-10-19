@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from . import health
+from .atomic import write_private
 from .config import Config
 from .filelock import locked
 from .inject.ledger import read_jsonl
@@ -70,9 +70,7 @@ def prune_queue(cfg: Config) -> None:
     with locked(cfg.queue):
         done = reflected_ids(cfg)
         keep = [e for e in queue_entries(cfg) if Path(e.get("transcript_path") or "").stem not in done]
-        tmp = cfg.queue.with_name(cfg.queue.name + ".tmp")
-        tmp.write_text("".join(json.dumps(e, sort_keys=True) + "\n" for e in keep))
-        os.replace(tmp, cfg.queue)
+        write_private(cfg.queue, "".join(json.dumps(e, sort_keys=True) + "\n" for e in keep))
 
 
 def run_sweep(cfg: Config, client: ReflectorClient | None = None, max_n: int = 20,

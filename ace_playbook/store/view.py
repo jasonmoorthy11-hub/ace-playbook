@@ -128,27 +128,31 @@ def rebuild(records: list[dict], db_path: Path) -> dict[str, dict]:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = db_path.with_name(f"{db_path.name}.{os.getpid()}.tmp")
     tmp.unlink(missing_ok=True)
-    os.close(create_private(tmp))  # sqlite would create it with the umask; accepts an empty file
-    con = sqlite3.connect(tmp)
     try:
-        con.executescript(DDL)
-        for les in state.values():
-            con.execute(
-                "INSERT INTO lessons VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (les["id"], les["text"], les["scope_type"], les["scope_key"], les["kind"],
-                 les["applies_when"], les["status"], int(les["pinned"]),
-                 int(les["holdout_exempt"]), les["created"], les["updated"], les["shown"],
-                 les["cited"], les["helpful"], les["harmful"], les["violated"],
-                 json.dumps(sorted({e["origin"] for e in les["evidence"]})),
-                 json.dumps(les["merged_from"]), les["superseded_by"], les["retire_reason"]))
-            con.execute("INSERT INTO lessons_fts VALUES (?,?,?)",
-                        (les["id"], les["text"], les["applies_when"]))
-        head = records[-1]["hash"] if records else ""
-        con.execute("INSERT INTO meta VALUES ('log_head', ?)", (head,))
-        con.commit()
-    finally:
-        con.close()
-    os.replace(tmp, db_path)
+        os.close(create_private(tmp))  # sqlite would create it with the umask; accepts an empty file
+        con = sqlite3.connect(tmp)
+        try:
+            con.executescript(DDL)
+            for les in state.values():
+                con.execute(
+                    "INSERT INTO lessons VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (les["id"], les["text"], les["scope_type"], les["scope_key"], les["kind"],
+                     les["applies_when"], les["status"], int(les["pinned"]),
+                     int(les["holdout_exempt"]), les["created"], les["updated"], les["shown"],
+                     les["cited"], les["helpful"], les["harmful"], les["violated"],
+                     json.dumps(sorted({e["origin"] for e in les["evidence"]})),
+                     json.dumps(les["merged_from"]), les["superseded_by"], les["retire_reason"]))
+                con.execute("INSERT INTO lessons_fts VALUES (?,?,?)",
+                            (les["id"], les["text"], les["applies_when"]))
+            head = records[-1]["hash"] if records else ""
+            con.execute("INSERT INTO meta VALUES ('log_head', ?)", (head,))
+            con.commit()
+        finally:
+            con.close()
+        os.replace(tmp, db_path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)  # never leave a half-built view behind
+        raise
     return state
 
 

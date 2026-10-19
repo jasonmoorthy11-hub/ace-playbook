@@ -161,3 +161,17 @@ def test_pre_commit_script_blocks_staged_secret_and_passes_clean(env, tmp_path):
     _git(repo, "add", "leak.py")
     p = subprocess.run([script], cwd=repo, env=e, capture_output=True, text=True)
     assert p.returncode == 1 and "github_token" in p.stdout and fakes.github() not in p.stdout
+
+
+def test_prune_queue_rewrites_0600_even_under_umask_000(env, tmp_path):
+    _, cfg = env
+    cfg.queue.parent.mkdir(parents=True, exist_ok=True)
+    cfg.queue.write_text(json.dumps({"session_id": "zz", "transcript_path": str(tmp_path / "gone")}) + "\n")
+    os.chmod(cfg.queue, 0o644)
+    old = os.umask(0)
+    try:
+        prune_queue(cfg)
+    finally:
+        os.umask(old)
+    assert cfg.queue.stat().st_mode & 0o777 == 0o600
+    assert [e["session_id"] for e in read_jsonl(cfg.queue)] == ["zz"]

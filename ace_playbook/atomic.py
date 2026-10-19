@@ -18,20 +18,23 @@ def create_private(tmp: Path) -> int:
 
 
 def write_private(path: Path, text: str) -> None:
-    """Atomically replace `path` with `text`; the result is 0600 and the tmp never lingers."""
+    """Atomically replace `path` with `text`; the result is 0600 and the tmp never lingers.
+
+    A leftover symlink at the tmp path fails closed (ELOOP) until it is removed.
+    """
     path = Path(path)
     tmp = path.with_name(path.name + ".tmp")
     fd = create_private(tmp)
     try:
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fd = -1
-                fh.write(text)
-                fh.flush()
-                os.fsync(fh.fileno())
-        finally:
-            if fd >= 0:
-                os.close(fd)
+            fh = os.fdopen(fd, "w", encoding="utf-8")
+        except BaseException:
+            os.close(fd)  # fdopen failed, so it did not take ownership of the fd
+            raise
+        with fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
         os.replace(tmp, path)
     except BaseException:
         try:

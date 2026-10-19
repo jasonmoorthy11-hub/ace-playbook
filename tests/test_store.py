@@ -267,3 +267,14 @@ def test_rebuilt_view_db_is_0600_under_umask_000(tmp_path):
     finally:
         os.umask(old)
     assert _mode(tmp_path / "view.sqlite") == 0o600
+
+
+def test_failed_view_rebuild_leaves_no_tmp_and_the_old_db_untouched(tmp_path, monkeypatch):
+    db = tmp_path / "view.sqlite"
+    rebuild([], db)
+    before = db.read_bytes()
+    monkeypatch.setattr(view, "DDL", "THIS IS NOT SQL;")
+    with pytest.raises(Exception):
+        rebuild([], db)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["view.sqlite"]
+    assert db.read_bytes() == before
