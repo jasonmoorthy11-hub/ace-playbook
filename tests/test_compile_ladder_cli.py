@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ace_playbook.compile import approvals, catalogue, labels, ladder, shadow
+from ace_playbook.compile import approvals, catalogue, demotions, labels, ladder, shadow
 from ace_playbook.compile import __main__ as cli
 
 from . import compile_support as cs
@@ -78,7 +78,7 @@ def test_a_copy_edited_down_to_observe_is_approved_afresh_not_back_filled(observ
     assert (rows[2]["ts"], rows[2]["proposal_sha256"]) == (rec["approved_at"], rec["proposal_sha256"])
 
 
-def test_unapprove_appends_a_revocation_so_restoring_the_old_warn_copy_runs_observe(ready, tty, capsys, monkeypatch):
+def test_unapprove_appends_a_revocation_so_restoring_the_old_warn_copy_is_skipped(ready, tty, capsys, monkeypatch):
     w = ready
     assert run(w, "approve", w.pid, "--mode", "warn", capsys=capsys)[0] == 0
     dest = approved_dir(w) / (w.pid + ".json")
@@ -92,9 +92,10 @@ def test_unapprove_appends_a_revocation_so_restoring_the_old_warn_copy_runs_obse
     dest.write_bytes(old)                                                           # the agent puts the old bytes back
     monkeypatch.setenv("ACE_PLAYBOOK_CONFIG", w.conf)
     monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(json.dumps(cs.pre_payload(cs.RM_CMD)).encode())))
+    before = len(cs.shadow_rows(w.cfg.data_dir))
     assert shadow.main(["pre"]) == 0
-    assert capsys.readouterr().out == "" and cs.shadow_rows(w.cfg.data_dir)[-1]["mode"] == "observe"
-    assert f"approvals:{w.pid}:mismatch" in (w.cfg.data_dir / "shadow.log").read_text()
+    assert capsys.readouterr().out == "" and len(cs.shadow_rows(w.cfg.data_dir)) == before   # revoked: skipped, not run in observe
+    assert f"skipped:{w.pid}:revoked" in (w.cfg.data_dir / "shadow.log").read_text()
 
 
 def test_unapprove_asks_first_and_a_broken_chain_does_not_stop_the_removal(observed, tty, capsys):
@@ -257,11 +258,14 @@ def test_an_inactive_lesson_a_failed_validation_and_a_stale_detector_source_each
     assert code == 1 and "step 'schema'" in err and tty.asked == []
 
 
-def test_a_demotion_cap_below_the_requested_mode_refuses(ready, tty):
+@pytest.mark.parametrize("cap,code", [("observe", 1), ("warn", 0)])
+def test_a_demotion_cap_below_the_requested_mode_refuses(ready, tty, cap, code):
+    """The cap comes from demotions.jsonl through the resolver (an `evasion_pair` row caps without resetting the counters)."""
+    demotions.append(ready.cfg.data_dir, {"proposal_id": ready.pid, "from_mode": "block", "to_mode": cap, "cause": "evasion_pair",
+                                          "ref": "0123abcd", "review_required": True, "ts": shift(ready.entry, 1)})
     args = SimpleNamespace(id=ready.pid, mode="warn", opus_reviewed=None, raw_checked=False)
-    assert ladder.run(ready.cfg, args, lambda q: "y", lambda what: True, cap="observe") == 1
-    assert copy_of(ready, ready.pid)["mode"] == "observe"
-    assert ladder.run(ready.cfg, args, lambda q: "y", lambda what: True, cap="warn") == 0
+    assert ladder.run(ready.cfg, args, lambda q: "y", lambda what: True) == code
+    assert copy_of(ready, ready.pid)["mode"] == ("observe" if code else "warn")
 
 
 def test_a_missing_tty_is_exit_2_and_nothing_is_read(ready, capsys, monkeypatch):
@@ -362,9 +366,10 @@ def test_a_broken_chain_at_unapprove_is_repaired_then_unapprove_is_rerun(ready, 
     dest.write_bytes(old)                                                          # the old warn copy comes back
     monkeypatch.setenv("ACE_PLAYBOOK_CONFIG", w.conf)
     monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(json.dumps(cs.pre_payload(cs.RM_CMD)).encode())))
+    before = len(cs.shadow_rows(w.cfg.data_dir))
     assert shadow.main(["pre"]) == 0
-    assert capsys.readouterr().out == "" and cs.shadow_rows(w.cfg.data_dir)[-1]["mode"] == "observe"
-    assert f"approvals:{w.pid}:mismatch" in (w.cfg.data_dir / "shadow.log").read_text()
+    assert capsys.readouterr().out == "" and len(cs.shadow_rows(w.cfg.data_dir)) == before   # revoked: skipped, not run in observe
+    assert f"skipped:{w.pid}:revoked" in (w.cfg.data_dir / "shadow.log").read_text()
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file modes")

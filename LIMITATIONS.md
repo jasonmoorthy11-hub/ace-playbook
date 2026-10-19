@@ -83,17 +83,21 @@ and is not sealed.
   rule (disable above 200 ms over seven days) waits for rows to carry `dur_ms` and is reported as
   `not computable` on every run; the 1% hook-error rule needs a sample of 100 (rows count fires, not hook calls) and is
   reported `not computable` below it.
-- Demotions are not lifted yet: a proposal's cap is the lowest `to_mode` in `demotions.jsonl` (a `disabled` row is final) and
-  nothing clears it: `approve --mode warn|block` is refused with `demoted:<cap>`, and the only way out is to truncate
-  `demotions.jsonl` to before the row (the chain is append-only); a later wave adds a lift.
+- An operator approval lifts demotions: a proposal's cap is the lowest `to_mode` among the `demotions.jsonl` rows stamped at or after its
+  newest `approvals.jsonl` row, so `approve --mode observe` (TTY, which lists each row it lifts) on a demoted proposal,
+  `disabled` included, lifts the strictly older rows (a same-second row stays: re-approve a second later) and restarts the
+  ladder from observe; until then `approve --mode warn|block` is refused with `demoted:<cap>`. The agent
+  cannot write a valid approval row without the TTY, except by forging the unkeyed chain (the stated residual). A restored copy
+  after `unapprove` is skipped (`revoked`), not run in observe.
+  The `from_mode` check in `demotions.append` is a guard the nightly pass cannot trip, not a control.
 - Every input of the offline pass can be written by a local process: transcripts, `shadow.jsonl` (including its `mode`),
   `shadow.log`, `labels.jsonl`, `demotions.jsonl` (hash-chained but unkeyed), `offline_state.json`, the approved copy's
   `approved_at` and `deltas.jsonl`. Demotions can so be caused by forged inputs and suppressed by deleting or truncating the
-  file. The hook's safety is that a copy above `observe` needs a matching approvals row and demotions never raise a mode; the
+  file. The hook's safety is that a copy above `observe` needs a matching approvals row and only an operator approval lifts a demotion; the
   operator's controls are the TTY listing at promotion and the `Demotions` section of `compile report`.
 - `tp_candidate` rows must never feed the ladder (the agent can print a guard-looking line into its own tool output in observe
-  and warn mode). The shell-mode rule cannot yet exclude `isMeta` or compact-summary user records (events carry no flag); only the
-  whole-record `<bash-input>` shape guards it.
+  and warn mode). The shell-mode rule skips meta records (`isMeta`, compact summary, transcript-only) and
+  needs the whole-record `<bash-input>` shape.
 
 ## Security and scrubbing
 

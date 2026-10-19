@@ -1,11 +1,10 @@
 """CLI: `python -m ace_playbook.compile cards|propose|validate|approve|unapprove|label|report|offline|shadow` (docs/design/compiler.md 10).
 
-No network, no model, stdlib only. Exit codes: 0 ok, 1 a proposal failed validation or was not approved (the
-step is named), 2 usage, configuration, store or id errors. `approve` and `unapprove` need a terminal; `approve`
-appends every approval to the hash-chained `approvals.jsonl` (approvals.py) and `--mode warn|block` is the promotion
-ladder (ladder.py, imported on demand); `label` writes human labels (labels.py; `--list` and `--rows` need no
-terminal); `report` prints per-proposal shadow counts with labels (report.py; exit 2 on a corpus mix-up);
-`offline` is the nightly pass (offline.py; counts only, `--dry-run` writes nothing).
+No network, no model, stdlib only. Exit codes: 0 ok, 1 a proposal failed validation or was not approved (the step is
+named), 2 usage, configuration, store or id errors. `approve` and `unapprove` need a terminal; `approve` appends every
+approval to the hash-chained `approvals.jsonl` (approvals.py) and `--mode warn|block` is the promotion ladder (ladder.py,
+imported on demand); `label` writes human labels (labels.py; `--list`, `--rows` need no terminal); `report` prints per-proposal
+shadow counts with labels (report.py; exit 2 on a corpus mix-up); `offline` is the nightly pass (offline.py; `--dry-run` writes nothing).
 """
 
 from __future__ import annotations
@@ -20,7 +19,7 @@ from .. import config as cfgmod
 from .. import ttyio
 from ..atomic import write_private
 from ..canon import now_iso
-from . import approvals, demotions, evidence, labels, proposal, report, shadow
+from . import approvals, evidence, labels, modes, proposal, report, shadow
 
 LEGACY_BANNER = ("This lesson's stored evidence is self-quoted legacy text; "
                  "the human incident label is the only evidence.")
@@ -108,20 +107,10 @@ def _provenance(cfg: cfgmod.Config, p: dict) -> bool:
     return legacy
 
 
-def _cap(cfg: cfgmod.Config, pid: str) -> str | None:
-    """The demotion cap of `pid`; a broken demotions chain or a read error caps at observe, like the hook."""
-    try:
-        rows, broken = demotions.read_chain(cfg.data_dir)
-    except Exception:
-        return "observe"
-    cap = demotions.effective_cap(rows, pid)
-    return demotions.lower("observe", cap) if broken is not None else cap
-
-
 def cmd_approve(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
     if args.mode != "observe":
         from . import ladder                                  # lazy: the promotion rules stay off the hook path
-        return ladder.run(cfg, args, lambda prompt: _ask(prompt), _need_tty, cap=_cap(cfg, args.id))
+        return ladder.run(cfg, args, lambda prompt: _ask(prompt), _need_tty)
     if args.opus_reviewed or args.raw_checked:
         print("error: --opus-reviewed and --raw-checked apply to --mode block and warn only", file=sys.stderr)
         return 2
@@ -135,7 +124,7 @@ def cmd_approve(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
         print(f"error: validation failed at step '{rep.failed}'", file=sys.stderr)
         return 1
     rows, broken = approvals.read_chain(cfg.data_dir)
-    if broken:
+    if broken is not None:
         print(f"error: approvals.jsonl chain broken at row {broken}", file=sys.stderr)
         return 1
     dest = shadow.approved_path(cfg, args.id)
@@ -145,11 +134,15 @@ def cmd_approve(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
     except proposal.ProposalError:                            # an unreadable old copy is simply replaced
         rec, old, mode = None, None, ""
     verdict = approvals.verify_copy(rec, rows) if old == p and mode == "observe" else None
-    if verdict == "ok":
-        print(f"already approved: {args.id} (observe)")
+    drows, dbroken = modes.read_demotions(cfg.data_dir)
+    live = modes.in_force(drows, args.id, rows, now_iso(), broken)
+    if verdict == "missing" and (dbroken is not None or any(r["proposal_id"] == args.id for r in drows)):
+        verdict = None          # no back-fill under demotions, or an unreadable file (the copy's stamp is agent-writable)
+    if verdict == "ok" and not [r for r in live if modes.lifted(r, {"ts": now_iso()})]:      # else a newer approval lifts them
+        print("\n".join(filter(None, [modes.chain_notice(dbroken),
+                                  modes.capped(live, now_iso()) if live else f"already approved: {args.id} (observe)"])))
         return 0
-    legacy = _provenance(cfg, p)                              # the same block and prompts for a fresh approval and a back-fill
-    asks = ["Legacy evidence: approve anyway? [y/N] "] if legacy else []
+    asks = ["Legacy evidence: approve anyway? [y/N] "] if _provenance(cfg, p) else []      # same block for approval and back-fill
     if verdict == "missing":                                  # predates the chain: record it; "mismatch" is approved afresh below
         if rec["approved_at"] > now_iso():
             print("error: the copy's approved_at is in the future; nothing was written", file=sys.stderr)
@@ -161,10 +154,17 @@ def cmd_approve(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
                                         "proposal_sha256": rec["proposal_sha256"]})
         print(f"ok: recorded the existing observe approval of {args.id} in approvals.jsonl")
         return 0
-    if not _confirm([f"Approve {p['id']} in observe mode? [y/N] "] + asks):
+    new = shadow.approved_record(p)
+    lift = [r for r in live if modes.lifted(r, {"ts": new["approved_at"]})]
+    if dbroken is not None:
+        print("  " + modes.chain_notice(dbroken))
+    for r in lift:                                            # a fresh observe row lifts every older demotion: show each
+        print(f"  lifts demotion: {r['to_mode']}  {r['cause']}  {r['ts']}")
+    if rest := [r for r in live if r not in lift]:            # e.g. a future-dated row: this approval leaves the cap in place
+        print("  still " + modes.capped(rest, new["approved_at"]))
+    if not _confirm([f"Approve {p['id']} in observe mode{f', lifting {len(lift)} demotion row(s)' if lift else ''}? [y/N] "] + asks):
         print("error: not approved", file=sys.stderr)
         return 1
-    new = shadow.approved_record(p)
     approvals.append(cfg.data_dir, {"ts": new["approved_at"], "proposal_id": p["id"], "mode": "observe",
                                     "proposal_sha256": new["proposal_sha256"]})
     evidence.private_dir(dest.parent)

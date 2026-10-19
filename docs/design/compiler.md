@@ -63,6 +63,7 @@ RESULTS.md:62), alongside `edit_unread_turn` and `rm_rf` (RESULTS.md:34). The ve
 | `compile/ladder.py` | The promotion rules: pure `check` over rows (TP and FP re-derivation, 14 days, 5 human TPs, 0 FPs, strength, source hash, cap) and `run`, the `approve --mode warn\|block` flow with the TP listing; imported lazily by the CLI (step 5b) | 235 |
 | `compile/offline.py` | Nightly pass: run signal detectors over finished transcripts, finalize session-level detectors, label pre-fill, evasion candidates, demotions, `shadow_state` cleanup (section 7.3) | ~250; 290 (built, step 5a) |
 | `compile/demotions.py` | Hash-chained, append-only `demotions.jsonl` (stdlib and `canon` only, read by the hook): reader, `effective_cap`, `lower`, locked writer; plus the pure FP and evasion rules `decide` and `pair_ref` the nightly pass uses | 149 (built, step 5a) |
+| `compile/modes.py` | `resolve` and the frozen `Resolution`: the one answer to "what does this proposal run at" for the hook, the ladder, the offline pass and the report (7.3, "Mode resolution"); stdlib, `approvals`, `demotions` only, on the hook path (step 5c) | 94 |
 | `compile/report.py` | shadow.jsonl to results tables, effect estimates (section 8) | ~260; 193 for the minimal first cut (built, step 4c) |
 | `compile/__main__.py` | CLI: `cards`, `propose`, `validate` (step 2); `approve --mode observe`, `unapprove`, `shadow pre\|stop` (step 4); `label` (step 4b); `report` (step 4c); `offline [--dry-run] [--since DAYS] [--idle-minutes N]` (step 5a); later `packet`, `review-record`, `replay-synthetic` and `approve --mode warn\|block` | 98, then 181 (step 4), 266 (step 5b: observe rows, back-fill, unapprove revocation, warn and block through `ladder.run`) |
 | `ace_playbook/textrules.py` | Leaf module (stdlib `re`, `string` only): `unsafe_text_reason`, `inert_reason` and their regexes, moved out of `store/schema.py` and `inject/sanitize.py`, which re-export them (step 1, see 7.2) | ~120 moved |
@@ -505,26 +506,63 @@ row with `review_required` and the current mode (no lowering). Regular `shadow_s
 nothing. A session is marked done in `offline_state.json` only when its detector rows were written and, if it has shadow rows,
 the label stage succeeded.
 
-*Demotions are not lifted yet.* `effective_cap` is the LOWEST `to_mode` over a proposal's valid rows (a `disabled` row is
-final) and a row whose `from_mode` is above the proposal's cap so far is invalid and breaks the chain there, so nothing raises a
-cap and nothing writes such a row. Today the cap is permanent: `approve --mode warn|block` on a demoted proposal is refused with
-`demoted:<cap>` (also after an observe to observe `label_fp_pair` row, which two auto FP labels can cause), and until a lift
-exists in a later wave the operator's only way out is to truncate `demotions.jsonl` to before the row (the chain is append-only,
-so there is no other edit). `compile report` has a `Demotions` section
-(newest cap, cause, time, `review_required` if any row asked, row count per proposal; a broken chain is one visible line), so a
-silenced proposal shows.
+*Demotions are lifted by an operator approval.* A demotion row caps its proposal until the operator approves it again: the
+cap is the LOWEST `to_mode` over the rows stamped at or after the proposal's newest `approvals.jsonl` row (rows stamped strictly
+BEFORE that approval are lifted by it; a row in the same second as the approval is NOT lifted, and the operator re-approves a
+second later; with no approvals row every row counts), so `approve --mode observe` on a demoted proposal
+(including a `disabled` one) writes a fresh observe row and restarts the ladder from observe, and `approve --mode warn|block`
+on a proposal that is in its previous rung is refused with `demoted:<cap>` only while a row in force caps it. `approve --mode
+observe` prints every row it would lift (`to_mode`, `cause`, `ts`) and says so in the `y/N` prompt, also on a demoted warn or
+block copy, and it does not back-fill a pre-chain copy while any demotion row of the proposal exists (the back-fill row would
+take its `ts` from the agent-writable copy): it approves afresh, with that prompt. The agent cannot
+write a valid approval row without the TTY, except by forging the unkeyed chain (the stated residual, section 9). The cap is
+no longer a rule of chain validity (a later demotion from a lifted mode must stay a valid row); `append` keeps a guard
+against a row whose `from_mode` is above the mode `modes.resolve` gave the proposal (the nightly pass always passes the
+resolved mode, so it should never fire: a guard, not a control). A cause that is still true after a lift (the same `to_mode`,
+`cause` and `ref`, e.g. every disable cause) is written again: the pass and `append` dedupe only against rows in force. `compile report` has a `Demotions` section (every row,
+its cap, cause, time, `review_required` and `lifted` yes/no; a broken chain is one visible line), so a silenced proposal shows.
+
+**Mode resolution (as built, integration).** `compile/modes.py` holds `resolve(pid, copy_rec, approvals_rows, approvals_broken,
+demotion_rows, demotions_broken, now)` and the frozen `Resolution(mode, approved_mode, cap, window_start, source, problems)`;
+the hook (`shadow._load_one`), the ladder (`ladder.check`/`run`), the nightly pass (`offline.current_mode`, `demote`) and the
+report (`_meta`, `demotion_summary`) all call it, so they cannot disagree. Rules: `approved_mode` is the copy's mode when
+`verify_copy` says `ok`; an observe copy needs no row; a warn or block copy with no row or another hash runs observe
+(`approvals:missing|mismatch`); a broken or unreadable approvals chain runs observe (`approvals:chain_broken`); a newest row
+that is `revoked`, or no copy, disables the proposal (`revoked|no_copy`; the hook logs `skipped:<id>:revoked`, and
+`skipped:<id>:demoted` for a `disabled` cap). `cap` is the lowest `to_mode` of the rows stamped at or after the newest
+approvals row stamped at or before `now` (a broken approvals chain lifts nothing); a broken or unreadable demotions chain caps at observe
+(`demotions:chain_broken|unreadable`). `mode = lower(approved_mode, cap)`. `window_start` is the newest approvals row, else
+(the pre-chain observe case only) the copy's `approved_at`, then the newest counter-resetting demotion (any cause but
+`evasion_pair`) after it; a stamp after `now` is ignored, not clamped, for the window (it still caps, fail safe); `source` names
+which of `approval|demotion|copy` set it (`none` when nothing did). The ladder counts from `window_start` and refuses with
+`demoted:<cap>` when the cap is below the requested mode; `ladder.run` and `check` no longer take a `cap`. Both chains are read
+at most once per hook call, and `approvals.jsonl` is now read on every call that has an approved file (a revocation must
+stop a copy; the read is capped at 1 MiB, no-follow). A real nightly pass stamps each demotion row when it is appended
+(`demotions.append`), not when the pass started. `Event.meta` (`isMeta`, `isCompactSummary`, `isVisibleInTranscriptOnly`)
+changes nothing about `human`; its consumers check it themselves: `user_correction`, `shell_keys`, the prompt-target rule,
+`span` and the offline turn reset of `edit_unread_turn` (a transcript-only record is not "the user asked for exactly this", and it does not end a span). An unreadable
+`demotions.jsonl` is logged `error:demotions:<Type>` (unthrottled, counts toward the error rate like `error:approvals:<Type>`);
+`demotions:chain_broken` stays throttled. `approve --mode observe` never back-fills while a demotion row exists or the
+demotions file is broken or unreadable (it prints one line saying so and approves afresh), and says `capped at <cap> by <n>
+row(s) not liftable now (re-run in a second)` when the only rows in force tie the clock second, `capped at <cap> until <ts>`
+for a later one, and `still capped ...` after the lift lines when a row it does not lift stays. Operator messages and the
+report text count `demotions.jsonl` rows from 1, like `approvals.jsonl` (the report JSON `broken_at` stays 0-based). The evasion `flagged` check of
+`offline.demote` deliberately looks at ALL rows, lifted ones included: an evasion pair is one event keyed by the newer
+candidate's id (the lift prompt listed it), any new candidate makes a new ref, and re-flagging the same pair after every lift
+would pin the mode. `compile report` shows `approved_mode` (the copy's own)
+and `mode` (resolved). A copy restored after `unapprove` is now skipped (`revoked`) instead of running in observe.
 
 *Trust.* Every input of the offline pass can be written by a local process: the transcripts, `shadow.jsonl` (including its
 `mode`), `shadow.log`, `labels.jsonl`, `demotions.jsonl` (unkeyed), `offline_state.json`, the approved copy's `approved_at` and
 `deltas.jsonl`. Demotions can therefore be both caused (forged rows, labels or log lines) and suppressed (delete or truncate
 the file, forge rows). The hook's own safety is that a copy above `observe` needs a matching approvals row and demotions never
-raise a mode beyond what the chain allows; the operator's controls are the TTY listing at promotion and this report's
+raise a mode (only an operator approval lifts them); the operator's controls are the TTY listing at promotion and this report's
 `Demotions` section. A window start after now (a forged `approved_at` or demotion stamp) is ignored when FPs are counted. The
 1% error-rate rule is also skipped when `shadow.log` has reached its size cap (`error_rate: not computable (log full)`), and a
 deltas log that fails verification gives `lesson_check: chain invalid` (an error, no disable). `tp_candidate` rows must never
 feed the ladder: the agent can print a guard-looking line into its own tool output in observe and warn mode. `shell_keys`
-cannot yet exclude `isMeta` or compact-summary user records (the event carries no flag), so the whole-record `<bash-input>`
-shape is its only guard. A failed offline pass (an exception or `errors > 0`) is recorded as a health failure by
+skips `meta` records (`isMeta`, compact summary, transcript-only) and still requires the whole-record `<bash-input>`
+shape. A failed offline pass (an exception or `errors > 0`) is recorded as a health failure by
 `nightly_sweep.py` whatever `--dry-run` says about reflection, unless `--offline-dry-run` is given.
 
 **Mode ladder.**
@@ -554,7 +592,7 @@ its proposal has the same `proposal_sha256` and `mode` (`verify_copy`); otherwis
 logs `approvals:chain_broken` once. An `observe` copy needs no row. The chain is tamper-evident against hand edits of the copy
 (a hand-edited `mode: "block"` falls back to observe even with a recomputed `proposal_sha256`); it is unkeyed
 (`canon.record_hash`), so a process that also appends a recomputed row can still enforce: a forged approvals row is the
-residual risk in section 9. A cut last line stays a refusal (the operator truncates the file to its last complete line).
+residual risk in section 9 (step 5c: an operator approval also lifts older demotions, see "Mode resolution"). A cut last line stays a refusal (the operator truncates the file to its last complete line).
 `approve --mode warn` runs `ladder.check` and prints, before asking, every counted TP and FP as one line: `fire <ts>  session
 <hash16>  row <row_id>  label <at>  chain #<n>[  [after last approval]]` (`n` is the 1-based row in `labels.jsonl`). A label is
 always newer than the approval row that opens its window (it labels a fire after that row), so the per-line tag is printed
@@ -574,9 +612,9 @@ fire row (`forged label`, every offending ref listed), a broken labels chain and
 rules with the window starting at the newest approvals row, which must be a `warn` row (`not in warn` otherwise), counting
 fires run in warn, a `block`-capable `PreToolUse`
 detector, and a required `--opus-reviewed <sha>` (7 to 40 lowercase hex) stored as `review_sha` and named in the prompt.
-`ladder.run(..., cap=)` refuses with `demoted:<cap>` when the cap is below the requested mode; the CLI passes the proposal's
-`demotions.jsonl` cap (`effective_cap`; a broken demotions chain or a read error counts as `observe`), so a demoted proposal
-cannot be promoted past it. Warn delivery is resolved: see section 11 question 1.
+`ladder.check` refuses with `demoted:<cap>` when the resolver's cap (`modes.resolve`: the lowest `demotions.jsonl` row after the
+newest approval; a broken demotions chain or a read error counts as `observe`) is below the requested mode, so a demoted
+proposal cannot be promoted past it until the operator approves it again. Warn delivery is resolved: see section 11 question 1.
 
 **Demotion** is automatic and only ever lowers a mode. The nightly pass appends to
 `demotions.jsonl` (each record names the label or metric that caused it): block to warn on one FP;
@@ -718,7 +756,9 @@ exploratory (PREREGISTRATION.md:6-7).
 
 Residual risks, stated plainly: the agent runs with the user's permissions and can edit
 `data_dir`, so it could append a demotion or delete an approved file to evade a block; the controls
-above make that visible in the report, not impossible. The same holds for **label forgery**: the
+above make that visible in the report, not impossible. An operator approval lifts demotions (every row stamped strictly before the
+newest approvals row); the agent cannot write a valid approval row without the TTY, except by forging the unkeyed chain, the
+stated residual. The same holds for **label forgery**: the
 agent can append a `tp` label, so promotion rests on the human reading the TP listing at `approve`,
 not on the file. The same holds for **approvals forgery**: `approvals.jsonl` is hash-chained but unkeyed, so a local process
 that appends a correctly chained row for a `warn` or `block` copy it also writes makes the hook enforce it, on the agent

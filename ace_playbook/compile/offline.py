@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ..atomic import write_private
-from . import catalogue, demotions, detectors, evidence, labels, report, shadow
+from . import catalogue, demotions, detectors, evidence, labels, modes, report, shadow
 from . import state as state_mod
 from .events import end_event, events_from_records, hash16
 from .report import _read as read_jsonl
@@ -51,7 +51,7 @@ def phash(tu) -> str:
 def span(events: list, i: int) -> list:
     """The events after index `i` up to and including the second human prompt."""
     rest = events[i + 1:]
-    humans = [n for n, e in enumerate(rest) if e.human and not e.dup]
+    humans = [n for n, e in enumerate(rest) if e.human and not e.dup and not e.meta]
     return rest[:humans[1] + 1] if len(humans) > 1 else rest
 
 
@@ -74,9 +74,9 @@ def rm_keys(segments) -> set[str]:
 
 
 def shell_keys(events: list) -> set[str]:
-    """rm targets of the operator's own shell-mode entries: user records whose WHOLE text is one `<bash-input>` block."""
+    """rm targets of the operator's own shell-mode entries: non-meta user records whose WHOLE text is one `<bash-input>` block."""
     return set().union(set(), *(rm_keys(command_segments(m.group(1))) for e in events if e.rtype == "user"
-                                and not (e.tool_results or e.dup or e.queued) and (m := SHELL.fullmatch(e.user_text))))
+                                and not (e.tool_results or e.dup or e.queued or e.meta) and (m := SHELL.fullmatch(e.user_text))))
 
 
 def guard_blocked(events: list, tool_id: str) -> bool:
@@ -90,7 +90,7 @@ def classify(mode: str, events: list, i: int, tu, key: str) -> str | None:
     """The auto label rule (a reason_code of `labels.AUTO`) for the fire of `tu` in events[i]; first match wins."""
     after = span(events, i)
     said = any(detectors.user_correction(e, {}) for e in after)
-    prompt = next((e for e in reversed(events[:i]) if e.human), None)
+    prompt = next((e for e in reversed(events[:i]) if e.human and not e.meta), None)
     if mode in ("warn", "block") and said:
         return "auto_fp_correction"
     if key and prompt and key in prompt_hashes(prompt.user_text):
@@ -199,16 +199,13 @@ def write_labels(cfg, picks: list[tuple[dict, str]], now: float, dry: bool) -> t
     return done, labels.effective(rows + added)
 
 
-def current_mode(copy: tuple[dict, str, str], drows: list[dict], until: str = "~") -> tuple[str, str]:
-    """(current mode, window start) of an approved copy (proposal, mode, approved_at): the mode lowered by its cap; the latest
-    of approval and its non-evasion demotions at or before `until` (a forged future stamp must not blind FP counting)."""
-    pid, own = copy[0]["id"], [r for r in drows if r["proposal_id"] == copy[0]["id"]]
-    stamps = (copy[2], *(r["ts"] for r in own if r["cause"] != "evasion_pair"))
-    return demotions.lower(copy[1], demotions.effective_cap(own, pid)), max([t for t in stamps if t <= until] or [""])
+def current_mode(copy: tuple[dict, str, dict], arows: list[dict], abroken, drows: list[dict], until: str = "~") -> modes.Resolution:
+    """`modes.resolve` for an approved copy (proposal, mode, record) as of `until` (a stamp after it cannot blind FP counting)."""
+    return modes.resolve(copy[0]["id"], copy[2], arows, abroken, drows, None, until)
 
 
-def demote(cfg, rows: list[dict], labs: dict[str, str], cands: list[dict], now: float, dry: bool, out: dict) -> None:
-    """Append design 7.3's demotion rows for every approved proposal (counts to `out`)."""
+def demote(cfg, rows: list[dict], labs: dict[str, str], cands: list[dict], now: float, dry: bool, out: dict, fixed=True) -> None:
+    """Append design 7.3's demotion rows (counts to `out`); `fixed` stamps `iso(now)`, else `append` stamps at append time."""
     drows, broken = demotions.read_chain(cfg.data_dir)
     if broken is not None:
         raise ValueError("demotions.jsonl chain broken")
@@ -219,12 +216,15 @@ def demote(cfg, rows: list[dict], labs: dict[str, str], cands: list[dict], now: 
     sure = n >= MIN_SAMPLE and not full
     out["error_rate"] = ("not computable (log full)" if full else f"computed (n={n})" if sure
                          else f"not computable (n={n}, need {MIN_SAMPLE})")
+    arows, abroken = modes.read_approvals(cfg.data_dir)         # unreadable counts as broken: the resolver caps at observe
     for copy in shadow.approved_records(cfg):
         try:
-            p = copy[0]
-            pid, det = p["id"], p["check"]["detector"]
-            cur, since = current_mode(copy, drows, iso(now))
-            fps = [(r["ts"], labels.row_id(r)) for r in rows if r["proposal_id"] == pid and r["ts"] >= since
+            pid, det = (p := copy[0])["id"], p["check"]["detector"]
+            res = current_mode(copy, arows, abroken, drows, iso(now))
+            after = (a := modes.anchor(arows, pid, iso(now), abroken)) and a["ts"]     # rows before it are lifted: they hide no cause
+            if (cur := res.mode) == "disabled":                # revoked or disabled: nothing left to lower
+                continue
+            fps = [(r["ts"], labels.row_id(r)) for r in rows if r["proposal_id"] == pid and r["ts"] >= res.window_start
                    and labs.get(labels.row_id(r)) == "fp"]
             ref = demotions.pair_ref([c for c in cands if c.get("proposal_id") == pid], 14)
             flagged = any(r["proposal_id"] == pid and r["cause"] == "evasion_pair" and r["ref"] == ref for r in drows)
@@ -232,9 +232,9 @@ def demote(cfg, rows: list[dict], labs: dict[str, str], cands: list[dict], now: 
             disable = ("lesson_inactive" if (lessons or {}).get(p["lesson_id"]) in WITHDRAWN else
                        "source_sha256" if stale else "error_rate" if sure and errors > 0.01 * n else None)
             for f in demotions.decide(pid, cur, disable=disable, fps=sorted(set(fps)), evasion=None if flagged else ref):
-                f = {**f, "ts": iso(now)}
-                if demotions.duplicate(drows, f) is None:
-                    drows.append(f if dry else demotions.append(cfg.data_dir, f))
+                f = {**f, "ts": iso(now)} if fixed else f
+                if demotions.duplicate(drows, f, after) is None:
+                    drows.append({"ts": iso(time.time()), **f} if dry else demotions.append(cfg.data_dir, f, current=cur, after=after))
                     out["demotions"] += 1
         except (KeyError, TypeError, ValueError, OSError):
             out["errors"] += 1
@@ -251,7 +251,7 @@ def stage(out: dict):
 def run(cfg, *, dry_run: bool = False, since_days: int = 7, idle_minutes: float = 60.0, now: float | None = None) -> dict:
     """The offline pass; counts only. A session is marked done only when its rows were written and, if it has shadow rows,
     the label stage succeeded."""
-    now = time.time() if now is None else now
+    explicit, now = now is not None, time.time() if now is None else now
     out = {"transcripts": 0, "skipped": 0, "detector_events": 0, "labels": dict.fromkeys(labels.AUTO, 0), "demotions": 0,
            "evasion_candidates": 0, "state_removed": 0, "errors": 0, "lesson_check": "not run", "error_rate": "not run",
            "p95_rule": P95}
@@ -294,7 +294,7 @@ def run(cfg, *, dry_run: bool = False, since_days: int = 7, idle_minutes: float 
                 write_private(cfg.path(SEEN), json.dumps({**done, **keep}, sort_keys=True) + "\n")
     if corpus:                                                 # an unreadable corpus is not "no fires": never demote on it
         with stage(out):
-            demote(cfg, rows, labs, old_ca + new_ca, now, dry_run, out)
+            demote(cfg, rows, labs, old_ca + new_ca, now, dry_run, out, explicit)
     with stage(out):
         out["state_removed"] = state_mod.prune(cfg.data_dir, now - 7 * DAY, dry_run)
     return out

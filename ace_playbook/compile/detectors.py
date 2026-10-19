@@ -180,7 +180,7 @@ def commit_without_push(event: Event, state: dict) -> Fire | None:
 
 
 def user_correction(event: Event, state: dict) -> Fire | None:
-    if event.tier != "offline" or not event.human or event.dup:
+    if event.tier != "offline" or not event.human or event.dup or event.meta:
         return None
     t = event.user_text
     return _fire("user_correction", int(len(t) <= 800 and bool(CORRECTION.search(t))), event)
@@ -203,7 +203,7 @@ def advance(event: Event, state: dict | None) -> dict:
         s["pending"].pop(tr.id, None)
     seen, turn = set(s["seen_paths"]), set(s["turn_paths"])
     # turn reset: a human prompt offline, Stop live (the live hooks are PreToolUse and Stop only)
-    if (event.tier == "offline" and event.human and not event.queued) or event.hook == "Stop":
+    if (event.tier == "offline" and event.human and not event.queued and not event.meta) or event.hook == "Stop":
         turn.clear()
     for name in event.read_files:
         if isinstance(name, str):
