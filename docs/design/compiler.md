@@ -449,6 +449,18 @@ reason_code, at, prev_hash, hash}` (`ref` is a `row_id` or a detector event id),
 - **Unlabeled** fires count toward neither side. Agent self-tags (`helpful`, `harmful`, `violated`,
   reflect/runner.py:20) and `[L-id]` citations are never inputs.
 
+**As built (step 4b, 2026-10-19).** `python3 -m ace_playbook.compile label` (`compile/labels.py`) writes
+`labels.jsonl` rows `{ref, label, reason_code: "human", at, prev_hash, hash}`, plus `lesson_id` and `session`
+(`sid:` hash, never the raw id) on an `incident` and an optional `note` (at most 200 characters, scrubbed with the
+LESSON profile; a hit refuses the row). `ref` is the card id of the incident (`--incident --lesson --session`) or
+the shadow `row_id` = sha256(ts, session, proposal_id, payload_sha256)[:8] (`--tp ID`, `--fp ID`, ids from `--rows`).
+Writing needs a TTY and a `y` on /dev/tty; the whole chain is verified before each append and a broken chain refuses
+the write. `--list [--kind K]` verifies and prints, `--rows` prints shadow rows with their ids; neither needs a TTY.
+The write opens the file `O_NOFOLLOW`, takes `flock`, and verifies the chain from that locked fd. `row_id` is
+computed on read from the stored shadow row (the bare `session` hash as stored, `ts|session|proposal_id|payload_sha256`
+joined with `|`, sha256, first 8 hex, no `r:` prefix); shadow.py writes no `row_id`, so a future hook that
+does must use the same formula.
+
 **Mode ladder.**
 
 | Step | Allowed for | Rule to move up (all must hold) | Who acts |

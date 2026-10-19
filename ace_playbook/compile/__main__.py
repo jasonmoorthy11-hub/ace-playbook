@@ -1,8 +1,9 @@
-"""CLI: `python -m ace_playbook.compile cards|propose|validate|approve|unapprove|shadow` (docs/design/compiler.md 10).
+"""CLI: `python -m ace_playbook.compile cards|propose|validate|approve|unapprove|label|shadow` (docs/design/compiler.md 10).
 
 No network, no model, stdlib only. Exit codes: 0 ok, 1 a proposal failed validation or was not approved (the
 step is named), 2 usage, configuration, store or id errors. `approve` and `unapprove` need a terminal and
-`approve` only does `--mode observe`; the review, label and promotion commands come in later steps.
+`approve` only does `--mode observe`; `label` writes human labels (labels.py; `--list` and `--rows` need no terminal);
+the review and promotion commands come in later steps.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from pathlib import Path
 
 from .. import config as cfgmod
 from ..atomic import write_private
-from . import evidence, proposal, shadow
+from . import evidence, labels, proposal, shadow
 
 LEGACY_BANNER = ("This lesson's stored evidence is self-quoted legacy text; "
                  "the human incident label is the only evidence.")
@@ -141,6 +142,10 @@ def cmd_unapprove(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_label(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
+    return labels.run(cfg, args, lambda prompt: _ask(prompt), _need_tty)
+
+
 def cmd_shadow(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
     return shadow.main([args.event], cfg)
 
@@ -159,13 +164,26 @@ def main(argv: list[str] | None = None) -> int:
     ap_ok.add_argument("id")
     ap_ok.add_argument("--mode", required=True, help="observe is the only mode this step allows")
     sub.add_parser("unapprove", help="TTY only: remove the approved copy of a proposal").add_argument("id")
+    lb = sub.add_parser("label", help="TTY only: record a human incident, tp or fp label; --list and --rows read")
+    act = lb.add_mutually_exclusive_group(required=True)
+    act.add_argument("--incident", action="store_true", help="the first mapped fire in a session is this lesson's incident "
+                     "(needs --lesson and --session)")
+    act.add_argument("--tp", metavar="ROW_ID", help="a shadow.jsonl row (see --rows) is a true positive")
+    act.add_argument("--fp", metavar="ROW_ID", help="a shadow.jsonl row (see --rows) is a false positive")
+    act.add_argument("--list", action="store_true", help="print labels.jsonl and verify its hash chain")
+    act.add_argument("--rows", action="store_true", help="print shadow.jsonl rows with their row ids")
+    lb.add_argument("--lesson", metavar="L-xxxxxxxx")
+    lb.add_argument("--session", metavar="SESSION_ID", help="the raw session id; only its hash is stored")
+    lb.add_argument("--note", help=f"at most {labels.NOTE_MAX} characters, scrubbed")
+    lb.add_argument("--kind", choices=labels.KINDS, help="with --list: only this label")
+    lb.add_argument("--limit", type=int, help="with --rows: how many (default 50, newest last)")
     sub.add_parser("shadow", help="the hook entry (what hooks/shadow.sh runs); reads a payload on stdin").add_argument(
         "event", choices=["pre", "stop"])
     args = ap.parse_args(argv)
     try:
         cfg = cfgmod.load(args.config)
         return {"cards": cmd_cards, "propose": cmd_propose, "validate": cmd_validate, "approve": cmd_approve,
-                "unapprove": cmd_unapprove, "shadow": cmd_shadow}[args.cmd](cfg, args)
+                "unapprove": cmd_unapprove, "label": cmd_label, "shadow": cmd_shadow}[args.cmd](cfg, args)
     except proposal.ProposalError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

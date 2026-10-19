@@ -179,6 +179,10 @@ python3 -m ace_playbook.compile approve P-xxxxxxxx --mode observe    # lists pro
 # (a lesson whose evidence is migrated legacy text prints a banner and asks a second y/N)
 ```
 
+A lesson whose evidence is migrated legacy text first needs
+`python3 -m ace_playbook.compile label --incident --lesson L-xxxxxxxx --session <id>`, which shows the incident
+and asks y/N on /dev/tty; only then does `propose` have a card for it.
+
 Only `--mode observe` exists in this step; `warn` and `block` are refused. Then add these two entries to
 the same `"hooks"` object of your user-level `settings.json` (adjust the path to your checkout):
 

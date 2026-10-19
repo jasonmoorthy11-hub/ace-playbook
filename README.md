@@ -91,8 +91,10 @@ and the operator approves it at a terminal with `approve <id> --mode observe`. T
 (`hooks/shadow.sh`, [INSTALL.md](hooks/INSTALL.md) section 7) then evaluates approved proposals on each
 Bash call, re-validating them from disk every time, and appends what **would** have fired to
 `shadow.jsonl` (ids, hashes and a timestamp, never the command). In observe mode it prints nothing,
-changes nothing and cannot block; warn and block exist in the code but cannot be approved yet. No
-model writes a check, a hook or a setting, and nothing is installed for you.
+changes nothing and cannot block; warn and block exist in the code but cannot be approved yet.
+`compile label` records human labels at a terminal in a hash-chained `labels.jsonl`: an `incident` label is
+the only way a legacy lesson gets an evidence card, and `tp`/`fp` labels on shadow rows feed the ladder.
+No model writes a check, a hook or a setting, and nothing is installed for you.
 
 ## Run it
 
