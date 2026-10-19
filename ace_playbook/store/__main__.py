@@ -27,7 +27,10 @@ def run(args: argparse.Namespace) -> int:
     if args.cmd == "promote":
         rc = promote.promote(log, args)
         if rc == 0 and not args.dry_run:
-            log.rebuild_view(cfg.sqlite)
+            try:
+                log.rebuild_view(cfg.sqlite)
+            except Exception:
+                print("promoted; view rebuild failed, run `rebuild`")
         return rc
     if args.cmd in ("pin", "unpin"):
         log.append({"op": "PATCH", "lesson_id": args.lesson_id,
@@ -63,7 +66,8 @@ def main(argv: list[str] | None = None) -> int:
         sub.add_parser(name).add_argument("lesson_id")
     pr = sub.add_parser("promote", help="operator-only: provisional -> active with a typed quote")
     pr.add_argument("lesson_id")
-    pr.add_argument("--evidence-quote", required=True)
+    pr.add_argument("--evidence-quote",
+                    help="your own words (12-400 chars); omit to be prompted on the terminal")
     pr.add_argument("--dry-run", action="store_true")
     sub.add_parser("provisional", help="list provisional lessons, newest first").add_argument(
         "--limit", type=int)

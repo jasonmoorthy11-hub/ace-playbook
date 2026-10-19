@@ -5,6 +5,7 @@ import pytest
 
 from ace_playbook.store import DeltaLog, SchemaError, view
 from ace_playbook.store import __main__ as cli
+from ace_playbook.store import promote as promote_mod
 
 from . import fakes
 from .helpers import GLOBAL, add_draft, evidence
@@ -272,3 +273,110 @@ def test_promote_cli_still_succeeds_on_a_legacy_only_lesson(env, capsys):
     lid = _legacy_lesson(log)
     assert run(conf, "promote", lid, "--evidence-quote", QUOTE) == 0
     assert log.state()[lid]["status"] == "active" and log.verify() == 2
+
+
+def _full_lesson(log):
+    ev = [{"quote": f"Typed quote number {i} here", "origin": "user_message"} for i in range(5)]
+    d = add_draft("Lesson that already holds five evidence items", GLOBAL, evidence=ev)
+    log.append(d, ts="2026-01-01T00:00:00Z")
+    return d["lesson_id"]
+
+
+def test_append_time_refusal_evidence_full_leaves_log_untouched(env, capsys):
+    conf, log = env
+    lid = _full_lesson(log)
+    before = log.path.read_bytes()
+    refused(capsys, run(conf, "promote", lid, "--evidence-quote", QUOTE), "evidence full")
+    assert log.path.read_bytes() == before and log.verify() == 1
+
+
+def test_dry_run_simulates_the_fold(env, capsys):
+    conf, log = env
+    lid = _full_lesson(log)
+    before = log.path.read_bytes()
+    refused(capsys, run(conf, "promote", lid, "--evidence-quote", QUOTE, "--dry-run"),
+            "evidence full")
+    assert log.path.read_bytes() == before
+
+
+def test_patch_adding_legacy_tagged_evidence_cannot_justify_active(tmp_path):
+    log = DeltaLog(tmp_path / "deltas.jsonl")
+    lid = _legacy_lesson(log)
+    fake = [{"quote": "Looks typed but is tagged legacy", "origin": "user_file",
+             "session_id": "legacy:zzz999"}]
+    with pytest.raises(SchemaError, match="live status requires user-origin evidence"):
+        log.append(_patch(lid, fake, status="active"))
+    assert log.state()[lid]["status"] == "provisional" and log.verify() == 1
+
+
+def test_malformed_lesson_id_is_refused_before_lookup(env, capsys):
+    conf, log = env
+    seed(log)
+    refused(capsys, run(conf, "promote", "not-an-id; rm", "--evidence-quote", QUOTE), "L-xxxxxxxx")
+
+
+def _answers(monkeypatch, *answers):
+    asked = []
+    queue = list(answers)
+
+    def fake(text):
+        asked.append(text)
+        if not queue:
+            raise EOFError
+        return queue.pop(0)
+
+    monkeypatch.setattr(promote_mod, "_prompt", fake)
+    return asked
+
+
+def test_interactive_prompts_for_quote_then_confirms(env, monkeypatch, capsys):
+    conf, log = env
+    lid = seed(log)
+    asked = _answers(monkeypatch, QUOTE, "y")
+    assert run(conf, "promote", lid) == 0
+    assert asked[0].startswith("Evidence quote (your own words, 12-400 chars): ")
+    assert asked[1] == f"Promote {lid}? [y/N] "
+    assert log.read()[-1]["fields"]["evidence"][0]["quote"] == QUOTE
+    assert log.state()[lid]["status"] == "active"
+
+
+def test_interactive_default_answer_does_not_promote(env, monkeypatch, capsys):
+    conf, log = env
+    lid = seed(log)
+    before = log.path.read_bytes()
+    _answers(monkeypatch, QUOTE, "")
+    refused_rc = run(conf, "promote", lid)
+    assert refused_rc == 2 and "not confirmed" in capsys.readouterr().err.splitlines()[-1]
+    assert log.path.read_bytes() == before
+
+
+def test_interactive_without_a_readable_terminal_refuses(env, monkeypatch, capsys):
+    conf, log = env
+    lid = seed(log)
+    before = log.path.read_bytes()
+    _answers(monkeypatch)  # first prompt raises EOFError
+    assert run(conf, "promote", lid) == 2
+    assert capsys.readouterr().err.splitlines()[-1] == "error: could not read from the terminal"
+    assert log.path.read_bytes() == before
+
+
+def test_interactive_quote_is_still_scrubbed(env, monkeypatch, capsys):
+    conf, log = env
+    lid = seed(log)
+    _answers(monkeypatch, f"Yes that is right for {DENY} work", "y")
+    assert run(conf, "promote", lid) == 2
+    assert "scrub" in capsys.readouterr().err.splitlines()[-1]
+
+
+def test_view_rebuild_failure_after_promote_is_a_clean_message(env, monkeypatch, capsys):
+    conf, log = env
+    lid = seed(log)
+
+    def boom(*_a, **_k):
+        raise RuntimeError("/secret/path exploded")
+
+    monkeypatch.setattr(DeltaLog, "rebuild_view", boom)
+    assert run(conf, "promote", lid, "--evidence-quote", QUOTE) == 0
+    out = capsys.readouterr()
+    assert "promoted; view rebuild failed, run `rebuild`" in out.out
+    assert "secret" not in out.out + out.err and log.state()[lid]["status"] == "active"

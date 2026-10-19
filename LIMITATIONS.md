@@ -85,6 +85,14 @@ unaffected (covered by a test). The remaining gap is that nothing stops a new ha
 `ADD` with a live status and self-quoted `user_file` evidence; the log checks origin, not who
 typed the quote.
 
+The `promote` TTY check proves a terminal is attached to stdin, not that a person typed: a pty
+wrapper can pass it. It stops hooks, pipes and plain subprocesses, not a determined local process.
+
+Migrated dormant lessons (legacy-only evidence) cannot be revived by a bare `PATCH` either, and
+`promote` accepts only `provisional` lessons; reviving a dormant one is an operator decision for
+later. `verify()` checks schema and the hash chain but does not fold the log, so `rebuild` is the
+compatibility check after any change to a view-level rule.
+
 ## Single user
 
 One person's workflow on one machine. Results, if any, will not generalize to teams or to other
