@@ -35,7 +35,7 @@ MAX_COUNTER_INCR = 1000
 
 ADD_FIELDS = {"text", "scope", "kind", "applies_when", "evidence", "status", "pinned",
               "holdout_exempt"}
-PATCH_FIELDS = {"text", "kind", "applies_when", "pinned", "holdout_exempt", "status"}
+PATCH_FIELDS = {"text", "kind", "applies_when", "pinned", "holdout_exempt", "status", "evidence"}
 
 
 class SchemaError(ValueError):
@@ -143,6 +143,10 @@ def _check_patch(f: dict, errs: list[str]) -> None:
         errs.append("bad kind")
     if "status" in f and f["status"] not in STATUSES:
         errs.append("bad status")
+    if "evidence" in f:  # a PATCH may only ADD evidence items, never replace or remove
+        origins = _check_evidence(f["evidence"], errs)
+        if f.get("status") in LIVE_STATUSES and not USER_ORIGINS & set(origins):
+            errs.append("live status requires evidence with a user_message or user_file origin")
     for flag in ("pinned", "holdout_exempt"):
         if flag in f and not isinstance(f[flag], bool):
             errs.append(f"{flag} must be bool")

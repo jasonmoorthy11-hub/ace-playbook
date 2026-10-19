@@ -1,4 +1,4 @@
-"""CLI: `python -m ace_playbook.store rebuild|verify|list|search|pin|unpin|stats`."""
+"""CLI: `python -m ace_playbook.store rebuild|verify|list|search|pin|unpin|stats|promote|provisional`."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import sys
 from collections import Counter
 
 from .. import config as cfgmod
-from . import DeltaLog, view
+from . import DeltaLog, promote, view
 from .schema import SchemaError
 
 
@@ -22,6 +22,13 @@ def run(args: argparse.Namespace) -> int:
     if args.cmd == "verify":
         print(f"ok: {log.verify()} records, chain intact")
         return 0
+    if args.cmd == "provisional":
+        return promote.provisional(log, args.limit)
+    if args.cmd == "promote":
+        rc = promote.promote(log, args)
+        if rc == 0 and not args.dry_run:
+            log.rebuild_view(cfg.sqlite)
+        return rc
     if args.cmd in ("pin", "unpin"):
         log.append({"op": "PATCH", "lesson_id": args.lesson_id,
                     "fields": {"pinned": args.cmd == "pin"}})
@@ -54,6 +61,12 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("search").add_argument("query")
     for name in ("pin", "unpin"):
         sub.add_parser(name).add_argument("lesson_id")
+    pr = sub.add_parser("promote", help="operator-only: provisional -> active with a typed quote")
+    pr.add_argument("lesson_id")
+    pr.add_argument("--evidence-quote", required=True)
+    pr.add_argument("--dry-run", action="store_true")
+    sub.add_parser("provisional", help="list provisional lessons, newest first").add_argument(
+        "--limit", type=int)
     try:
         return run(ap.parse_args(argv))
     except SchemaError as e:

@@ -13,8 +13,8 @@ from pathlib import Path
 from typing import Iterable
 
 from ..atomic import create_private
-from .schema import (COUNTERS, FROZEN_STATUSES, LIVE_STATUSES, USER_ORIGINS, SchemaError,
-                     make_lesson_id)
+from .schema import (COUNTERS, FROZEN_STATUSES, LIVE_STATUSES, MAX_EVIDENCE, USER_ORIGINS,
+                     SchemaError, make_lesson_id)
 
 USED_COUNTERS = {"cited", "helpful", "violated"}
 
@@ -48,7 +48,13 @@ def _require(state: dict, lid: str, *, allow_frozen: bool = False) -> dict:
 
 
 def _apply_patch(lesson: dict, f: dict) -> None:
+    if "evidence" in f:  # append-only; added before the status check so it can count
+        if len(lesson["evidence"]) + len(f["evidence"]) > MAX_EVIDENCE:
+            raise SchemaError(f"{lesson['id']} evidence full (max {MAX_EVIDENCE})")
+        lesson["evidence"] = lesson["evidence"] + [dict(e) for e in f["evidence"]]
     for k, v in f.items():
+        if k == "evidence":
+            continue
         if k == "status" and v in LIVE_STATUSES and not _has_user_evidence(lesson):
             raise SchemaError("live status requires user-origin evidence")
         lesson[k] = v.strip() if isinstance(v, str) and k in ("text", "applies_when") else v

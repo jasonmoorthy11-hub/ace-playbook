@@ -110,6 +110,8 @@ echo '{"session_id":"demo","cwd":"/work/acme-widgets","source":"startup"}' \
   | PYTHONPATH=. python3 -m ace_playbook.inject start
 ```
 
+Promoting provisional lessons is a human-only step. `python -m ace_playbook.store provisional [--limit N]` lists them (id and the first 80 characters, newest first); `python -m ace_playbook.store promote L-xxxxxxxx --evidence-quote "your own words"` then appends one PATCH that sets the lesson `active` and adds your quote as `user_message` evidence (session `promote-cli`). It refuses unless stdin is a terminal, the lesson exists and is `provisional`, the quote is 12 to 400 characters, and the quote passes the outbound scrub (secrets and your configured deny terms) and the injectable-text rule (printable ASCII, no `===`). `--dry-run` prints the record without writing. A PATCH may add evidence items, never remove them, and a lesson holds at most five.
+
 `PYTHONPATH=. python3 -m ace_playbook.inject --health` prints the nightly sweep's `health.json` (last run, ok, consecutive failures, last error) or `no health record`; it reads no stdin, API key or store. After 3 failed nights in a row the injected block carries one warning line.
 
 No API call is made anywhere in the tests or the commands above. The reflector needs a key file
