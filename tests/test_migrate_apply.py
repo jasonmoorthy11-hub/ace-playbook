@@ -6,7 +6,7 @@ import pytest
 
 from .migrate_support import Env
 
-T_ARROW = 'Use python3 - never plain python -> the "python" alias is missing in acme-widgets'
+T_ARROW = 'Use python3 - never plain python to the "python" alias is missing in acme-widgets'
 T_BTICK_ACTIVE = "Quote the path with `cp` when the folder name has spaces in it"
 T_BTICK_DORMANT = "Wrap the `find` call in quotes when the pattern has a wildcard"
 T_DOMAIN = "Edit config.yaml before restarting the worker process"
@@ -31,10 +31,10 @@ def applied(env):
 
 def test_apply_stores_expected_counts_by_status_and_kind(applied):
     st = applied.stored()
-    assert Counter(les["status"] for les in st.values()) == {"active": 3, "provisional": 4, "dormant": 3}
+    assert Counter(les["status"] for les in st.values()) == {"active": 4, "provisional": 3, "dormant": 3}
     assert Counter(les["kind"] for les in st.values()) == {
         "gotcha": 7, "rule": 1, "fact": 1, "hook_candidate": 1}
-    assert applied.count("active") == 3 and applied.count("provisional") == 4
+    assert applied.count("active") == 4 and applied.count("provisional") == 3
     assert applied.count("dormant") == 3 and applied.count("hook_candidate") == 1
 
 
@@ -56,7 +56,7 @@ def test_dry_run_never_creates_the_store_and_writes_all_outputs(env):
         assert (env.out / name).exists(), name
     assert "DRY RUN" in env.read("MIGRATION_REPORT.md").splitlines()[0]
     assert "DRY RUN" in env.read("review_packet.md").splitlines()[0]
-    assert env.count("active") == 3
+    assert env.count("active") == 4
 
 
 def test_dry_run_leaves_an_existing_store_untouched(applied):
@@ -110,11 +110,11 @@ def test_inert_kinds_bare_domain_angle_and_arrow(applied):
     ids = applied.id_map()
     assert ids["auto-a0000004"]["inert_reason"] == "domain"
     assert ids["auto-a0000005"]["inert_reason"] == "angle_brackets"
-    assert ids["auto-a0000001"]["inert_reason"] == "angle_brackets"  # "->" contains '>'
+    assert ids["auto-a0000001"]["inert_reason"] is None  # arrows become words, never "->"
     assert applied.by_text(T_DOMAIN)["status"] == "provisional"
     assert applied.by_text(T_ANGLE)["status"] == "provisional"
-    assert applied.by_text(T_ARROW)["status"] == "provisional"
-    assert applied.count("angle_brackets") == 2 and applied.count("domain") == 1
+    assert applied.by_text(T_ARROW)["status"] == "active"
+    assert applied.count("angle_brackets") == 1 and applied.count("domain") == 1
 
 
 def test_normalized_text_is_what_is_stored(applied):

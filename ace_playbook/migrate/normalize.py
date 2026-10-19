@@ -11,13 +11,13 @@ import unicodedata
 
 CHAR_MAP = {
     "—": "-", "–": "-", "−": "-",              # em dash, en dash, minus
-    "→": "->", "⇒": "->", "⟶": "->",           # arrows
-    "←": "<-",
+    "→": " to ", "⇒": " to ", "⟶": " to ",     # arrows: words, never "->" (">" fails the
+    "←": " from ",                                  # injector's angle_brackets rule)
     "‘": "'", "’": "'",                             # curly single quotes
     "“": '"', "”": '"',                             # curly double quotes
     "…": "...",
     "×": "x",
-    "≥": ">=", "≤": "<=", "≠": "!=",
+    "≥": " at least ", "≤": " at most ", "≠": "!=",  # no "<" or ">" in output
     " ": " ", " ": " ", " ": " ",              # NBSP, thin, narrow NBSP
     "•": "-", "·": "-",                             # bullet, middle dot
     "✓": "ok", "✔": "ok",
