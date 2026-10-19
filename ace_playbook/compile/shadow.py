@@ -107,7 +107,7 @@ class _Once:
         self.tail = _tail(self.cfg) if self.tail is None else self.tail
         if msg not in self.tail:
             self.log(msg)
-            self.tail += msg
+            self.tail += "\n" + msg + "\n"
 
 
 def _demotions(cfg, once) -> tuple[list[dict], int | None]:
