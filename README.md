@@ -43,8 +43,23 @@ staying as prose the agent may ignore. The compile step and the evaluation harne
 | `hooks/` | Hook scripts, a nightly sweep, a launchd example and `INSTALL.md` (nothing is installed for you) |
 | `ace_playbook/fixtures` | Seeded synthetic corpus generator, a frozen seed-1 copy, `DATASHEET.md` |
 
-Planned and **not built**: the compiler, curator and refiner, migration of any existing lesson
-set, the replay and task-suite evaluation harness, the judge. See [PREREGISTRATION.md](PREREGISTRATION.md).
+Planned and **not built**: the compiler, curator and refiner, the replay and task-suite
+evaluation harness, the judge. See [PREREGISTRATION.md](PREREGISTRATION.md).
+
+### Migration
+
+`ace_playbook/migrate` is a one-shot importer for an existing set of legacy lesson files. It
+reads the legacy files, a file of already classified records and optional hand overrides, all
+named by command-line flags, and either reports what it would do (`--dry-run`, which never
+touches the store) or appends the lessons to the delta log (`--apply`, safe to repeat: a second
+run adds nothing). It makes no network calls; every verdict comes from its input files. Its
+outputs (report, review packet, id map, handoff file) hold lesson text or provenance and are
+private: they go to the `--out-dir` you choose and are never committed.
+
+```sh
+uv run python -m ace_playbook.migrate --legacy-glob 'DIR/lessons-*.json' \
+  --classified classified.jsonl --out-dir OUT --dry-run
+```
 
 Design rules that shape the code: no model output is applied as a rewrite; lessons are minted only
 from evidence the user actually wrote; a scrub hit sends the whole lesson to quarantine; the
