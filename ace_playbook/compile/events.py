@@ -10,11 +10,12 @@ from __future__ import annotations
 
 import hashlib
 import os
-import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Iterator
 
-MAX_CMD = 65536    # longest command kept; longer ones are cut (fails toward silence)
+from .shell import command_segments, git_subcommand  # noqa: F401  (re-exported)
+
+MAX_CMD = 65536    # longest command kept; a longer one is cut AND marked truncated (-> `unparseable`)
 MAX_TEXT = 20000   # longest prompt or tool-result text kept
 MAX_PATH = 4096
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit")
@@ -35,6 +36,15 @@ class ToolUse:
     name: str
     input: dict
     exists: bool | None = None   # live tier only: did the target path exist at PreToolUse?
+    truncated: bool = False      # a length cap cut the command or path: detectors saw only a prefix
+    _segs: list | None = field(default=None, init=False, repr=False, compare=False)
+
+    def segments(self) -> list:
+        """Token segments of the Bash command, computed once per tool use."""
+        if self._segs is None:
+            cmd = self.input.get("command")
+            self._segs = command_segments(cmd) if self.name == "Bash" and isinstance(cmd, str) else []
+        return self._segs
 
 
 @dataclass
@@ -77,11 +87,16 @@ def _s(v: Any, cap: int = MAX_TEXT) -> str:
     return v[:cap] if isinstance(v, str) else ""
 
 
-def _pick_input(raw: Any) -> dict:
-    """Keep only the string fields the detectors read; everything else is ignored."""
+def _pick_input(raw: Any) -> tuple[dict, bool]:
+    """Keep only the string fields the detectors read (everything else is ignored).
+
+    Returns (fields, truncated): truncated is True when a length cap cut a field, so the
+    detectors saw only a prefix. The caller marks the ToolUse so the cut is visible, never silent.
+    """
     if not isinstance(raw, dict):
-        return {}
-    return {k: raw[k][:cap] for k, cap in _INPUT_KEYS.items() if isinstance(raw.get(k), str)}
+        return {}, False
+    kept = {k: raw[k][:cap] for k, cap in _INPUT_KEYS.items() if isinstance(raw.get(k), str)}
+    return kept, any(len(raw[k]) > len(v) for k, v in kept.items())
 
 
 def _result_text(content: Any) -> str:
@@ -122,10 +137,12 @@ def event_from_hook(payload: Any, probe: Callable[[str], bool] = os.path.lexists
         return e
     e.hook, e.session_id = _s(payload.get("hook_event_name"), 64), _s(payload.get("session_id"), 256)
     name, tid = _s(payload.get("tool_name"), 128), _s(payload.get("tool_use_id"), 128)
-    inp = _pick_input(payload.get("tool_input"))
+    inp, cut = _pick_input(payload.get("tool_input"))
     if e.hook == "PreToolUse":
-        tu = ToolUse(tid, name, inp)
+        tu = ToolUse(tid, name, inp, truncated=cut)
         if name in EDIT_TOOLS and inp.get("file_path"):
+            # note: lexists runs on an agent-chosen path (a stat on a slow mount counts against the
+            # hook's 5 s timeout; docs/design/compiler.md step 4)
             tu.exists = _probe(probe, inp["file_path"])
         e.tool_uses.append(tu)
     elif e.hook == "PostToolUse":
@@ -163,7 +180,8 @@ def event_from_record(rec: Any, tool_index: dict | None = None) -> Event:
     if e.rtype == "assistant" and isinstance(content, list):
         for b in content:
             if isinstance(b, dict) and b.get("type") == "tool_use":
-                tu = ToolUse(str(b.get("id")), str(b.get("name")), _pick_input(b.get("input")))
+                inp, cut = _pick_input(b.get("input"))
+                tu = ToolUse(str(b.get("id")), str(b.get("name")), inp, truncated=cut)
                 tool_index[tu.id] = tu
                 e.tool_uses.append(tu)
     elif e.rtype == "user":
@@ -205,55 +223,3 @@ def events_from_records(records: Iterable[Any], include_sidechain: bool = False)
                 e.dup = True
         yield e
 
-
-# ---------------------------------------------------------------- command tokenizer (scanlib port)
-_HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n.*?\n\s*\2\s*(?:\n|$)", re.S)
-_QUOTED = re.compile(r"\"(?:\\.|[^\"\\])*\"|'[^']*'")
-_SIMPLE = re.compile(r"^[\w./~$@%+=:,-]*$")
-
-
-def _mask(m: re.Match) -> str:
-    inner = m.group(0)[1:-1]
-    return inner if _SIMPLE.match(inner) else "Q"
-
-
-MAX_HEREDOCS = 32   # _HEREDOC is quadratic on many unterminated heredocs; the rest is dropped
-
-
-def _bound(cmd: str) -> str:
-    i = -2
-    for _ in range(MAX_HEREDOCS + 1):
-        i = cmd.find("<<", i + 2)
-        if i < 0:
-            return cmd
-    return cmd[:i]
-
-
-def command_segments(cmd: str | None) -> list[list[str]]:
-    """Split a Bash command into token lists, ignoring heredoc bodies and quoted prose.
-
-    Quoted single tokens (paths) are kept; other quoted strings become the token Q. The text is
-    only ever split by regex: never executed, expanded or passed to a shell.
-    """
-    cmd = _HEREDOC.sub("\n", _bound(cmd or ""))
-    cmd = _QUOTED.sub(_mask, cmd)
-    segs = []
-    for part in re.split(r"&&|\|\||;|\||\n|\(|\)|`", cmd):
-        toks = part.split()
-        while toks and (re.match(r"^\w+=\S*$", toks[0]) or toks[0] in ("sudo", "time", "nohup", "command", "exec")):
-            toks = toks[1:]
-        if toks:
-            segs.append(toks)
-    return segs
-
-
-def git_subcommand(toks: list[str]) -> tuple[str | None, list[str]]:
-    """('push', [args]) for ['git','-C','x','push','--force'] else (None, [])."""
-    if not toks or toks[0] != "git":
-        return None, []
-    i = 1
-    while i < len(toks) and toks[i].startswith("-"):
-        i += 2 if toks[i] in ("-C", "-c", "--git-dir", "--work-tree") else 1
-    if i >= len(toks):
-        return None, []
-    return toks[i], toks[i + 1:]

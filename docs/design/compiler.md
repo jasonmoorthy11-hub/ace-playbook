@@ -49,9 +49,10 @@ RESULTS.md:62), alongside `edit_unread_turn` and `rm_rf` (RESULTS.md:34). The ve
 
 | File | Role | Budget |
 |---|---|---|
-| `compile/events.py` | `Event`, `ToolUse`, `ToolResult` (port of step0/scanlib.py:24-52); two adapters: hook payload to Event, transcript record to Event (port of scanlib.py:80-126); `command_segments`, `git_subcommand` (scanlib.py:231-266) | ~220 lines |
+| `compile/events.py` | `Event`, `ToolUse`, `ToolResult` (port of step0/scanlib.py:24-52); two adapters: hook payload to Event, transcript record to Event (port of scanlib.py:80-126); input caps with a `truncated` mark | ~230 lines |
+| `compile/shell.py` | `command_segments`, `git_subcommand` (scanlib.py:231-266), rewritten linear-time: one pass for quotes and heredocs, at most 32 heredoc openers, `&` and shell keywords split or strip (step 1 fix wave) | ~125 |
 | `compile/detectors.py` | Pure detector functions and the catalogue (section 4) | ~300 |
-| `compile/state.py` | Rolling per-session state file, locked, atomic, hashed name | ~90 |
+| `compile/state.py` | Rolling per-session state file under `data_dir/shadow_state/`, locked (`LOCK_NB`), atomic, hashed name, 0600/0700, FIFO- and symlink-safe | ~235 |
 | `compile/evidence.py` | Evidence cards (section 5) | ~260 |
 | `compile/proposal.py` | Proposal schema, validation, replay/regression runner, writer (section 6) | ~300 |
 | `compile/shadow.py` | Hook entry point: load approved proposals, evaluate, print the decision as JSON on stdout; always exits 0 (section 7) | ~220 |
@@ -64,7 +65,8 @@ RESULTS.md:62), alongside `edit_unread_turn` and `rm_rf` (RESULTS.md:34). The ve
 Data lives under the existing `data_dir` (config.py:20, 69-70), never under `~/.claude`
 (config.py:1): `detector_events.jsonl`, `evidence/cards.jsonl`, `proposals/`, `proposals/reviews/`,
 `proposals/approved/`, `approvals.jsonl`, `demotions.jsonl`, `labels.jsonl`, `shadow.jsonl`,
-`shadow.synthetic.jsonl`, `shadow_state/`. Frozen CI fixtures live in `ace_playbook/fixtures/frozen/`.
+`shadow.synthetic.jsonl`, `shadow_state/`. Frozen CI fixtures live in `ace_playbook/fixtures/frozen/` (the seed-1 corpus that
+`generate.py` writes) and `ace_playbook/fixtures/parity/` (`step0_parity.json`, which the generator does not write).
 
 ## 4. detectors.py: the catalogue
 
@@ -84,7 +86,7 @@ function body (used to invalidate approvals when the code changes).
 
 | Detector | Step 0 strength / eligible rate | Tier | Consumes | State | Fires when | Compilable |
 |---|---|---|---|---|---|---|
-| `rm_rf_nonscratch` | strong, 7/97 = 7.2%, 9 events (RESULTS.md:52) | live + offline | PreToolUse `Bash` | none | some segment of `tool_input.command` is `rm` with recursive and force flags and a target (detectors.py:52-59), and at least one target fails the `SCRATCH` regex (detectors.py:38-40, 115-119); the regex has no boundary after `/tmp`, so `/tmp/../x` counts as scratch (evasion, 7.3) | yes, up to block |
+| `rm_rf_nonscratch` | strong, 7/97 = 7.2%, 9 events (RESULTS.md:52) | live + offline | PreToolUse `Bash` | none | some segment of `tool_input.command` is `rm` with recursive and force flags and a target (detectors.py:52-59), and at least one target fails the `SCRATCH` regex (detectors.py:38-40, 115-119); each target is `normpath`ed first and a temp root must end at `/` or end of string, so `/tmp/../x` and `/tmpfoo` are not scratch (a deliberate deviation from Step 0, which had no boundary; `/bin/rm`, `\rm` and the wrappers env, nice, xargs, doas, busybox, command, exec, sudo count too) | yes, up to block |
 | `rm_rf` | weak, 8/97 = 8.2% (RESULTS.md:51) | live + offline | PreToolUse `Bash` | none | same, any target (detectors.py:115-117) | observe only |
 | `edit_unread_session` | strong, 11/97 = 11.3%, 15 events (RESULTS.md:49) | live + offline | PreToolUse `Read`, `Edit`, `Write`, `MultiEdit`, `NotebookEdit`; offline also attachments `file`, `edited_text_file`, `compact_file_reference` (scanlib.py:94-96) | set of sha256[:16] path hashes read or written this session, capped at 5,000 | Edit/Write/MultiEdit on a path not in the set, basename not in `AUTOLOADED`, not under `/.claude/plans/` (detectors.py:45, 79-90); offline: tool result not an error and not "file created" (detectors.py:100-107); live: path exists (`os.path.lexists`) | observe only until a labelled sample shows true positives (below), then up to warn; block only through the 7.3 warn-to-block rule |
 | `edit_unread_turn` | weak, 13/97 = 13.4% (RESULTS.md:50) | live + offline | as above, plus Stop (turn reset) | per-turn set, cleared at each human prompt (detectors.py:74-75); live clears at Stop | as above, against the turn set | observe only |
@@ -92,6 +94,10 @@ function body (used to invalidate approvals when the code changes).
 | `preclaim_audit_block` | strong, 60/97 = 61.9%, 269 events (RESULTS.md:55) | offline only | transcript user record | none | text starts "Stop hook feedback" and the bracket names `stop-mid-task-audit.sh` (detectors.py:28, 173-186, 202-203) | no: already a hook; double-counts when both variants fire (detectors.py:265) |
 | `commit_without_push` | weak, 3/97 = 3.1% (RESULTS.md:62) | live state + offline finalize | PreToolUse `Bash`; finalized at session end | counts of `git commit`, `git push` via `git_subcommand` (detectors.py:122-132) | session ended with commit > 0 and push == 0 (detectors.py:142-143) | observe only (session-level; no tool call to gate) |
 | `user_correction` | weak (detectors.py:274-275) | offline only | human prompt, <= 800 chars | none | `CORRECTION` regex (detectors.py:29-34, 225-230) | no: an FP/TP signal (section 7.3), never a check |
+
+`NotebookEdit` registers its path as read in the live tier only; offline it is ignored, as in Step 0. The live tier resets its turn set at
+Stop, never at UserPromptSubmit (only PreToolUse and Stop are registered). A ninth row, `unparseable` (weak, observe, live + offline),
+fires when an input cap cut a command or path, so a long-padding evasion is visible instead of silent.
 
 **Why `edit_unread_session` starts observe-only.** The harness itself rejects an Edit of a file the
 agent has not read, so an Edit that *succeeded* offline most likely means the parser missed a read
@@ -133,7 +139,8 @@ fire. All are invented, taken from or modelled on step0/tests/test_detectors.py.
 `step0/detectors.py` lives in the private rebuild-lab repo, so CI cannot import it. The parity
 test instead runs the ported functions over the synthetic session scenarios of test_detectors.py
 (rebuilt as fixtures) and asserts the counts frozen in
-`ace_playbook/fixtures/frozen/step0_parity.json`: one entry per scenario and detector, plus
+`ace_playbook/fixtures/parity/step0_parity.json`: one entry per scenario and detector, a `deviations` section listing every
+scenario where the port deliberately differs from Step 0 (step0 count, port count, reason; never changed silently), plus
 `step0_commit` (the rebuild-lab commit the counts were generated at) and the generator's
 `source_sha256`. The operator regenerates the JSON by hand from a rebuild-lab checkout when Step 0
 changes; a separate local-only check recomputes it from `step0/detectors.py` and fails if the file is
@@ -429,9 +436,11 @@ warn to observe on one FP; two FPs within 30 days in any mode to observe, with r
 Counters reset after any demotion. Two evasion candidates in 14 days (after a block, a different
 command touching the same target hash within the next five tool calls, which is the
 unanticipated-path failure in report:45) flags the proposal for review without demoting it.
-Known evasion shapes are counted as candidates offline: a deleted target whose text begins with
-`/tmp` but contains `..` (the `SCRATCH` regex has no boundary after `/tmp`), a `bash -c` body
-(invisible to the tokenizer, detectors.py:255), and the same target reached through a symlink.
+Known evasion shapes are counted as candidates offline: a deleted target that reaches a temp root only
+through a symlink or an unresolved `$VAR`, a `bash -c` body (invisible to the tokenizer,
+detectors.py:255), and the same target reached through a symlink. Out of scope for the step 1
+tokenizer and recorded here as further candidates: `find ... -delete`, `find ... -exec rm -rf`, `xargs` fed from a pipe, `python -c` with `shutil.rmtree`, shell functions or aliases
+wrapping `rm`, and anything past the 64 KB input cap (reported as `unparseable`).
 
 **Label forgery.** `labels.jsonl` drives promotion and the agent, running as the user, can append
 to files in `data_dir`: a forged TP label is self-report by another route. TTY-only `compile label`

@@ -1,10 +1,8 @@
-"""The eight catalogue detectors: payload fixtures in both tiers, catalogue shape, Step 0 parity."""
+"""The eight catalogue detectors: payload fixtures in both tiers, catalogue shape."""
 
 import copy
 import dataclasses
-import hashlib
 import json
-import os
 import re
 
 import pytest
@@ -73,6 +71,7 @@ def test_catalogue_rows_match_the_design_table():
         "preclaim_audit_block": ("strong", "offline", "none"),
         "commit_without_push": ("weak", "live+offline", "observe"),
         "user_correction": ("weak", "offline", "none"),
+        "unparseable": ("weak", "live+offline", "observe"),
     }
     assert list(d.CATALOGUE) == list(expect)
     assert d.CATALOGUE["rm_rf_nonscratch"].lessons == ("L-b3d1fba9",)
@@ -99,27 +98,32 @@ def test_no_compilable_detector_reads_stop():
             assert not any(c.startswith("Stop") for c in row.consumes), row.name
 
 
-def test_source_sha256_is_a_stable_function_body_hash():
-    row = d.CATALOGUE["rm_rf_nonscratch"]
-    assert re.fullmatch(r"[0-9a-f]{64}", row.source_sha256) and row.source_sha256 == row.source_sha256
-    assert len({r.source_sha256 for r in d.CATALOGUE.values()}) == len(d.CATALOGUE)
+def test_source_sha256_changes_with_any_reachable_source(monkeypatch):
+    before = {n: r.source_sha256 for n, r in d.CATALOGUE.items()}
+    assert all(re.fullmatch(r"[0-9a-f]{64}", h) for h in before.values()) and len(set(before.values())) == len(before)
+    texts = d._source_texts()
+    assert len(texts) == 4 and all(texts)
+    for i in range(len(texts)):          # events, shell, textrules, detectors: a helper edit moves every hash
+        changed = tuple(t + "# edit" if j == i else t for j, t in enumerate(texts))
+        monkeypatch.setattr(d, "_source_texts", lambda changed=changed: changed)
+        assert all(r.source_sha256 != before[n] for n, r in d.CATALOGUE.items()), i
 
 
 @pytest.mark.parametrize("target,scratch", [
     ("/tmp/x", True), ("/private/tmp/x", True), ("/var/folders/ab/c", True), ("$TMPDIR/x", True),
     ("tmp/x", True), ("./tmp/x", True), ("node_modules", True), ("pkg/.venv/", True), ("a/__pycache__", True),
     ("/w/src", False), ("src", False), ("Q", False), ("/", False), ("~/proj", False),
-    # documented evasions (docs/design/compiler.md 4, 7.3): no boundary after /tmp, ".." not resolved
-    ("/tmp/../w/src", True), ("/tmpfoo/x", True),
+    ("/tmp", True), ("/tmp/./x", True), ("${TMPDIR}/x", True), ("$TMPDIRX/x", False),
+    ("/tmpfoo/x", False), ("/private/tmpx", False),
 ])
 def test_scratch_regex(target, scratch):
     assert bool(d.SCRATCH.search(target)) is scratch
 
 
-def test_tmp_dotdot_evasion_is_a_known_miss_for_the_detector():
-    steps = [{"human": "x"}, {"tool": "Bash", "input": {"command": "rm -rf /tmp/../w/src"}}]
-    counts = cs.run_offline(steps)
-    assert counts["rm_rf"] == 1 and counts["rm_rf_nonscratch"] == 0
+@pytest.mark.parametrize("target", ["/tmp/../w/src", "/tmpfoo/x", "/tmp/x/../../w", "/var/folders/../w"])
+def test_dotdot_and_unbounded_prefixes_are_not_scratch_after_normpath(target):
+    steps = [{"human": "x"}, {"tool": "Bash", "input": {"command": "rm -rf " + target}}]
+    assert cs.run_offline(steps)["rm_rf_nonscratch"] == 1
 
 
 # ------------------------------------------------------------------ rm detectors
@@ -166,7 +170,7 @@ def hook(tool, path, exists=True, event="PreToolUse"):
 
 
 def step(event, st):
-    _, st = d.evaluate(event, st)
+    _, st, _ = d.evaluate(event, st, strict=True)
     return st
 
 
@@ -209,6 +213,26 @@ def test_multiedit_fires_and_notebookedit_registers_a_path():
     assert d.edit_unread_session(hook("Edit", "/w/n.ipynb"), st) is None
 
 
+def test_user_prompt_submit_does_not_reset_the_turn_set():
+    st = step(hook("Read", "/w/a.py"), state_mod.new_state("s"))
+    st = step(ev.event_from_hook({"hook_event_name": "UserPromptSubmit", "prompt": "next task"}), st)
+    assert d.edit_unread_turn(hook("Edit", "/w/a.py"), st) is None
+
+
+def test_notebookedit_registers_live_only():
+    nb = {"hook_event_name": "PreToolUse", "tool_name": "NotebookEdit", "tool_input": {"notebook_path": "/w/n.ipynb"}}
+    live = step(ev.event_from_hook(nb, probe=lambda p: True), state_mod.new_state("s"))
+    assert live["seen_paths"] == [ev.hash16("/w/n.ipynb")]
+    rec = {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t", "name": "NotebookEdit", "input": {"notebook_path": "/w/n.ipynb"}}]}}
+    assert step(ev.event_from_record(rec), state_mod.new_state("s"))["seen_paths"] == []
+
+
+def test_hook_name_bracket_is_capped_before_the_regex():
+    st = state_mod.new_state("s")
+    long = "Stop hook feedback:\n[" + "a" * 600 + " stop-mid-task-audit.sh]: x"
+    assert d.preclaim_audit_block(stop_event(long), st) is None
+
+
 def test_stop_resets_the_turn_set_but_not_the_session_set():
     st = step(hook("Read", "/w/a.py"), state_mod.new_state("s"))
     assert d.edit_unread_turn(hook("Edit", "/w/a.py"), st) is None
@@ -225,7 +249,7 @@ def test_offline_attachment_reads_count_as_reads():
     evs = list(ev.events_from_records(cs.records(steps)))
     total = 0
     for e in evs:
-        fires, st = d.evaluate(e, st)
+        fires, st, _ = d.evaluate(e, st, strict=True)
         total += sum(f.count for f in fires if f.detector == "edit_unread_session")
     assert total == 0
 
@@ -234,9 +258,9 @@ def test_offline_fire_waits_for_the_result_and_skips_errors_and_new_files():
     st = state_mod.new_state("s")
     a, r = list(ev.events_from_records(cs.records(
         [{"tool": "Edit", "input": {"file_path": "/w/a.py"}, "result": "updated"}])))
-    fires, st = d.evaluate(a, st)
+    fires, st, _ = d.evaluate(a, st, strict=True)
     assert fires == [] and "t0" in st["pending"]
-    fires, st = d.evaluate(r, st)
+    fires, st, _ = d.evaluate(r, st, strict=True)
     assert {f.detector for f in fires} == {"edit_unread_session", "edit_unread_turn"} and st["pending"] == {}
 
 
@@ -275,7 +299,7 @@ def test_advance_and_detectors_do_not_mutate_their_input_state():
     e = hook("Edit", "/w/a.py")
     d.edit_unread_session(e, st)
     d.advance(e, st)
-    d.evaluate(e, st)
+    d.evaluate(e, st, strict=True)
     assert st == frozen
 
 
@@ -347,53 +371,20 @@ def test_commit_counts_accumulate_in_state_and_fire_only_at_session_end():
 
 def test_evaluate_runs_the_catalogue_in_order_and_filters_by_name():
     e = bash("cd /w && rm -rf /w/src")
-    fires, st = d.evaluate(e, state_mod.new_state("s"))
+    fires, st, _ = d.evaluate(e, state_mod.new_state("s"), strict=True)
     assert [f.detector for f in fires] == ["rm_rf_nonscratch", "rm_rf"] and st["events"] == 1
-    fires, _ = d.evaluate(e, state_mod.new_state("s"), names=["rm_rf"])
+    fires, _, _ = d.evaluate(e, state_mod.new_state("s"), names=["rm_rf"], strict=True)
     assert [f.detector for f in fires] == ["rm_rf"]
     with pytest.raises(KeyError):
         d.evaluate(e, state_mod.new_state("s"), names=["nope"])
 
 
-def test_a_detector_that_raises_is_swallowed_so_the_hook_stays_silent(monkeypatch):
+def test_a_raising_detector_is_reported_and_strict_mode_reraises(monkeypatch):
     def boom(event, state):
         raise RuntimeError("bug")
 
     monkeypatch.setitem(d.CATALOGUE, "rm_rf", dataclasses.replace(d.CATALOGUE["rm_rf"], fire=boom))
-    fires, _ = d.evaluate(bash("rm -rf /w/src"), state_mod.new_state("s"))
-    assert [f.detector for f in fires] == ["rm_rf_nonscratch"]
-
-
-# ------------------------------------------------------------------ Step 0 parity (frozen JSON)
-FROZEN = json.loads(cs.PARITY.read_text())
-
-
-def test_frozen_parity_records_the_step0_commit_and_source_hashes():
-    assert FROZEN["step0_commit"] == "17f3891b402aab2b39bfe6c6737460cb3de99216"
-    assert re.fullmatch(r"[0-9a-f]{64}", FROZEN["source_sha256"])
-    assert re.fullmatch(r"[0-9a-f]{64}", FROZEN["scanlib_sha256"])
-    assert FROZEN["detectors"] == list(cs.PARITY_DETECTORS)
-    assert set(cs.PARITY_DETECTORS) == set(d.CATALOGUE)
-
-
-def test_frozen_parity_covers_every_fixture_scenario_and_nothing_else():
-    assert set(FROZEN["scenarios"]) == set(cs.scenarios())
-    for counts in FROZEN["scenarios"].values():
-        assert set(counts) == set(cs.PARITY_DETECTORS)
-
-
-@pytest.mark.parametrize("name", sorted(FROZEN["scenarios"]))
-def test_port_matches_frozen_step0_counts(name):
-    got = cs.run_offline(cs.scenarios()[name])
-    want = FROZEN["scenarios"][name]
-    assert {k: got.get(k, 0) for k in cs.PARITY_DETECTORS} == want
-
-
-def test_frozen_parity_is_not_stale_against_local_step0():
-    """Local only: needs a rebuild-lab checkout, e.g. ACE_STEP0_DIR=<rebuild-lab>/ace/step0."""
-    step0 = os.environ.get("ACE_STEP0_DIR")
-    if not step0 or not os.path.isfile(os.path.join(step0, "detectors.py")):
-        pytest.skip("ACE_STEP0_DIR not set; the private Step 0 checkout is not available (CI)")
-    fresh = cs.regen_parity(step0)
-    assert fresh["source_sha256"] == hashlib.sha256(open(os.path.join(step0, "detectors.py"), "rb").read()).hexdigest()
-    assert fresh == FROZEN, "step0_parity.json is stale: rerun python -m tests.compile_support <step0 dir>"
+    fires, _, errors = d.evaluate(bash("rm -rf /w/src"), state_mod.new_state("s"))
+    assert [f.detector for f in fires] == ["rm_rf_nonscratch"] and errors == [("rm_rf", "RuntimeError")]
+    with pytest.raises(RuntimeError):
+        d.evaluate(bash("rm -rf /w/src"), state_mod.new_state("s"), strict=True)

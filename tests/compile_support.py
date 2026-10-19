@@ -17,7 +17,7 @@ from ace_playbook.compile import detectors, state as state_mod
 from ace_playbook.compile.events import end_event, event_from_hook, events_from_records
 
 FIXTURE = Path(__file__).parent / "fixtures" / "compile_payloads.json"
-PARITY = Path(__file__).resolve().parent.parent / "ace_playbook" / "fixtures" / "frozen" / "step0_parity.json"
+PARITY = Path(__file__).resolve().parent.parent / "ace_playbook" / "fixtures" / "parity" / "step0_parity.json"
 STEP0_COMMIT = "17f3891b402aab2b39bfe6c6737460cb3de99216"
 PARITY_DETECTORS = ("rm_rf", "rm_rf_nonscratch", "edit_unread_session", "edit_unread_turn",
                     "exitplan_question_block", "preclaim_audit_block", "commit_without_push",
@@ -60,10 +60,12 @@ def records(steps: list[dict], sid: str = SID) -> list[dict]:
 
 
 def hook_payloads(steps: list[dict], sid: str = SID) -> list[dict]:
-    """The same scenario as live hook payloads (prompts and PreToolUse only)."""
+    """The same scenario as live hook payloads: PreToolUse, prompts, and a Stop ending each turn."""
     out: list[dict] = []
     for i, step in enumerate(steps):
         if "human" in step:
+            if any("human" in s for s in steps[:i]):
+                out.append({"hook_event_name": "Stop", "session_id": sid})
             out.append({"hook_event_name": "UserPromptSubmit", "session_id": sid, "prompt": _text(step)})
         elif "tool" in step:
             out.append({"hook_event_name": "PreToolUse", "session_id": sid, "tool_name": step["tool"],
@@ -75,7 +77,7 @@ def _tally(events, state=None) -> Counter:
     counts: Counter = Counter()
     state = state if state is not None else state_mod.new_state(SID)
     for ev in events:
-        fires, state = detectors.evaluate(ev, state)
+        fires, state, _errors = detectors.evaluate(ev, state, strict=True)
         for f in fires:
             counts[f.detector] += f.count
     return counts
@@ -117,26 +119,49 @@ def scenarios() -> dict[str, list[dict]]:
 
 
 def regen_parity(step0_dir: str) -> dict:
+    """Frozen expectations: `scenarios` holds PORT counts; `deviations` lists every scenario where
+    the port differs from the real Step 0, with both counts and the fixture's stated reason.
+    An unexplained difference raises: a parity change is never recorded silently."""
     d = Path(step0_dir)
+    reasons = {p["id"]: p.get("deviation") for p in load_fixture()["payloads"] + load_fixture()["extras"]}
+    scen, devs = {}, {}
+    for name, steps in scenarios().items():
+        step0, port = step0_counts(step0_dir, steps), {k: run_offline(steps).get(k, 0) for k in PARITY_DETECTORS}
+        scen[name] = port
+        diff = [k for k in PARITY_DETECTORS if step0[k] != port[k]]
+        if diff and not reasons.get(name):
+            raise AssertionError(f"unexplained parity deviation in {name}: step0={step0} port={port}")
+        if reasons.get(name) and not diff:
+            raise AssertionError(f"{name} declares a deviation but matches Step 0")
+        if diff:
+            devs[name] = {"step0": {k: step0[k] for k in diff}, "port": {k: port[k] for k in diff},
+                          "reason": reasons[name]}
     return {
         "v": 1,
         "step0_commit": STEP0_COMMIT,
         "source_sha256": hashlib.sha256((d / "detectors.py").read_bytes()).hexdigest(),
         "scanlib_sha256": hashlib.sha256((d / "scanlib.py").read_bytes()).hexdigest(),
         "detectors": list(PARITY_DETECTORS),
-        "scenarios": {name: step0_counts(step0_dir, steps) for name, steps in scenarios().items()},
+        "scenarios": scen,
+        "deviations": devs,
     }
 
 
 def dump_parity(data: dict) -> str:
-    """One line per scenario, so the file stays short and diffs read well."""
-    head = [f" {json.dumps(k)}: {json.dumps(v)}," for k, v in sorted(data.items()) if k != "scenarios"]
-    rows = sorted(data["scenarios"].items())
-    body = [f"  {json.dumps(n)}: {json.dumps(c, sort_keys=True)}" + ("," if i < len(rows) - 1 else "")
-            for i, (n, c) in enumerate(rows)]
-    return "\n".join(["{", *head, ' "scenarios": {', *body, " }", "}"]) + "\n"
+    """One line per scenario and per deviation, so the file stays short and diffs read well."""
+    keys = ("scenarios", "deviations")
+    lines = ["{"] + [f" {json.dumps(k)}: {json.dumps(v)}," for k, v in sorted(data.items()) if k not in keys]
+    for n, key in enumerate(keys):
+        rows = sorted(data[key].items())
+        lines.append(f' "{key}": {{' if rows else f' "{key}": {{}}' + ("," if n == 0 else ""))
+        lines += [f"  {json.dumps(k)}: {json.dumps(v, sort_keys=True)}" + ("," if i < len(rows) - 1 else "")
+                  for i, (k, v) in enumerate(rows)]
+        if rows:
+            lines.append(" }," if n == 0 else " }")
+    return "\n".join([*lines, "}"]) + "\n"
 
 
 if __name__ == "__main__":  # python -m tests.compile_support <rebuild-lab>/ace/step0
+    PARITY.parent.mkdir(exist_ok=True)
     PARITY.write_text(dump_parity(regen_parity(sys.argv[1])))
     print(f"wrote {PARITY}")

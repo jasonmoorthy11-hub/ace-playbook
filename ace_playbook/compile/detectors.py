@@ -1,27 +1,28 @@
 """The detector catalogue (docs/design/compiler.md 4): pure `(event, state) -> Fire | None`.
 
-Ported from Step 0 (the private rebuild-lab `ace/step0/detectors.py`); frozen counts in
-`ace_playbook/fixtures/frozen/step0_parity.json` keep the port honest. No I/O, no clock, no
-environment: a detector reads the state it is given and never mutates it. State changes come
-from `advance(event, state)`, which returns a new dict; `evaluate` runs both in the right order.
-
-Two tiers feed the same functions. Live events (hook payloads) carry `tier == "live"`; offline
-events (transcript records) carry `tier == "offline"` and are authoritative for measurement.
+Ported from Step 0; `ace_playbook/fixtures/parity/step0_parity.json` freezes its counts and lists
+every hardening that changes one under `deviations`. No I/O, clock or environment: a detector
+never mutates its state; `advance` returns the next one and `evaluate` runs both. Live events
+(hook payloads) carry `tier == "live"`, offline ones (transcript records) `tier == "offline"`.
 """
 
 from __future__ import annotations
 
 import hashlib
+import posixpath
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
-from .events import EDIT_TOOLS, Event, command_segments, git_subcommand, hash16
+from .. import textrules
+from . import events, shell
+from .events import EDIT_TOOLS, Event, hash16
 
 MAX_PATHS = 5000
 MAX_PENDING = 200
+BRACKET_CAP = 512   # SH_NAME is quadratic on long [\w.-] runs, so the bracket is cut first
 AUTOLOADED = {"CLAUDE.md", "MEMORY.md", "AGENTS.md"}   # loaded into context by the harness at start
-_READ_TOOLS = ("Read", "NotebookEdit")
 
 HOOK_ERR = re.compile(r"^(?:PreToolUse|PostToolUse):\S+ hook error: \[([^\]]*)\]\s*(.*)", re.S)
 SH_NAME = re.compile(r"([\w.-]+\.sh|[\w.-]+\.py)")
@@ -32,10 +33,10 @@ CORRECTION = re.compile(
     r"(i|we) (already )?(said|asked|told you) (you )?(to|not|that)|as i said|like i said|"
     r"not again|do(ing)? (that|this|it) again|(asked|told) you (to|not|already))\b|"
     r"\byou (did|made|forgot|broke|missed|ignored|skipped|used|added)\b[^.?!\n]{0,40}\bagain\b", re.I)
-# Scratch targets. Known evasions, kept for parity with Step 0 (design 4, 7.3): there is no
-# boundary after "/tmp", so "/tmp/../x" and "/tmpfoo" count as scratch; ".." is never resolved.
-SCRATCH = re.compile(r"^(/tmp|/private/tmp|/var/folders|\$TMPDIR|\$\{TMPDIR|tmp/|\.?/?tmp/)|"
-                     r"(^|/)(node_modules|\.next|dist|build|__pycache__|\.pytest_cache|\.cache|"
+# Scratch targets, tested after normpath(). Unlike Step 0 a temp root must end at a path boundary
+# ("/tmpfoo" is not scratch) and ".." is resolved ("/tmp/../x" is "/x"): parity deviations.
+SCRATCH = re.compile(r"^(?:(?:/tmp|/private/tmp|/var/folders|\$TMPDIR|\$\{TMPDIR[^}]*\})(?:/|$)|\.?/?tmp/)|"
+                     r"(?:^|/)(?:node_modules|\.next|dist|build|__pycache__|\.pytest_cache|\.cache|"
                      r"coverage|\.turbo|scratchpad|\.venv)/?$")
 
 
@@ -52,24 +53,20 @@ def blank_state() -> dict:
             "events": 0, "truncated": False, "pending": {}}
 
 
-# ---------------------------------------------------------------- helpers
 def _fire(name: str, count: int, event: Event, key: str = "") -> Fire | None:
     return Fire(name, count, event.tier, key) if count else None
 
 
-def _bash_cmds(event: Event) -> list[str]:
-    return [tu.input["command"] for tu in event.tool_uses
-            if tu.name == "Bash" and isinstance(tu.input.get("command"), str)]
-
-
-def _flags(toks: list[str]) -> list[str]:
-    return [t for t in toks[1:] if t.startswith("-")]
+def _segments(event: Event):
+    """Every token segment of every Bash command in the event (cached on each ToolUse)."""
+    for tu in event.tool_uses:
+        yield from tu.segments()
 
 
 def _rm_rf_targets(toks: list[str]) -> list[str] | None:
-    if not toks or toks[0] != "rm":
+    if not toks or posixpath.basename(toks[0].lstrip("\\")) != "rm":
         return None
-    fl = _flags(toks)
+    fl = [t for t in toks[1:] if t.startswith("-")]
     rec = any(f == "--recursive" or (not f.startswith("--") and re.search(r"[rR]", f)) for f in fl)
     frc = any(f == "--force" or (not f.startswith("--") and "f" in f) for f in fl)
     targets = [t for t in toks[1:] if not t.startswith("-")]
@@ -78,15 +75,14 @@ def _rm_rf_targets(toks: list[str]) -> list[str] | None:
 
 def _rm_hits(event: Event, nonscratch: bool) -> tuple[int, str]:
     count, key = 0, ""
-    for cmd in _bash_cmds(event):
-        for toks in command_segments(cmd):
-            targets = _rm_rf_targets(toks)
-            if not targets:
-                continue
-            bad = [t for t in targets if not SCRATCH.search(t)] if nonscratch else targets
-            if bad:
-                count += 1
-                key = key or hash16(bad[0])
+    for toks in _segments(event):
+        targets = _rm_rf_targets(toks)
+        if not targets:
+            continue
+        bad = [t for t in targets if not SCRATCH.search(posixpath.normpath(t))] if nonscratch else targets
+        if bad:
+            count += 1
+            key = key or hash16(bad[0])
     return count, key
 
 
@@ -100,7 +96,8 @@ def _auto(path: str) -> bool:
 
 
 def _walk(event: Event, turn: set, seen: set) -> list[tuple]:
-    """[(tool_use, in_turn, in_session)] per Edit/Write/MultiEdit; registers each path as it goes."""
+    """[(tool_use, in_turn, in_session)] per Edit/Write/MultiEdit; registers paths as it goes.
+    NotebookEdit registers in the live tier only (Step 0 ignores it offline; design 4)."""
     out = []
     for tu in event.tool_uses:
         path = _tool_path(tu)
@@ -110,7 +107,7 @@ def _walk(event: Event, turn: set, seen: set) -> list[tuple]:
         if tu.name in EDIT_TOOLS:
             auto = _auto(path)
             out.append((tu, auto or h in turn, auto or h in seen))
-        if tu.name in EDIT_TOOLS or tu.name in _READ_TOOLS:
+        if tu.name in EDIT_TOOLS or tu.name == "Read" or (tu.name == "NotebookEdit" and event.tier == "live"):
             turn.add(h)
             seen.add(h)
     return out
@@ -139,7 +136,11 @@ def _unread(event: Event, state: dict, col: int, name: str) -> Fire | None:
     return _fire(name, n, event, key)
 
 
-# ---------------------------------------------------------------- detectors
+def _hook_name(bracket: str | None) -> str:
+    found = SH_NAME.findall((bracket or "")[:BRACKET_CAP])
+    return found[-1] if found else ""
+
+
 def rm_rf_nonscratch(event: Event, state: dict) -> Fire | None:
     n, key = _rm_hits(event, nonscratch=True)
     return _fire("rm_rf_nonscratch", n, event, key)
@@ -164,8 +165,7 @@ def exitplan_question_block(event: Event, state: dict) -> Fire | None:
     n = 0
     for tr in event.tool_results:
         m = HOOK_ERR.match(tr.text)
-        found = SH_NAME.findall(m.group(1)) if m else []
-        n += bool(found) and found[-1] == "pretooluse-exitplan-question-check.sh"
+        n += bool(m) and _hook_name(m.group(1)) == "pretooluse-exitplan-question-check.sh"
     return _fire("exitplan_question_block", n, event)
 
 
@@ -173,8 +173,7 @@ def preclaim_audit_block(event: Event, state: dict) -> Fire | None:
     if event.tier != "offline" or not event.user_text.startswith("Stop hook feedback"):
         return None
     m = STOP_FB.match(event.user_text)
-    found = SH_NAME.findall(m.group(1) or "") if m else []
-    return _fire("preclaim_audit_block", int(bool(found) and found[-1] == "stop-mid-task-audit.sh"), event)
+    return _fire("preclaim_audit_block", int(bool(m) and _hook_name(m.group(1)) == "stop-mid-task-audit.sh"), event)
 
 
 def commit_without_push(event: Event, state: dict) -> Fire | None:
@@ -191,7 +190,18 @@ def user_correction(event: Event, state: dict) -> Fire | None:
     return _fire("user_correction", int(len(t) <= 800 and bool(CORRECTION.search(t))), event)
 
 
-# ---------------------------------------------------------------- catalogue
+def unparseable(event: Event, state: dict) -> Fire | None:
+    """A length cap cut a command or path, so the detectors saw a prefix only: an evasion candidate."""
+    cut = [tu for tu in event.tool_uses if tu.truncated]
+    return _fire("unparseable", len(cut), event, hash16(cut[0].id) if cut else "")
+
+
+def _source_texts() -> tuple[str, ...]:
+    """Full source of every module a detector's behaviour depends on (patched in tests)."""
+    files = [Path(m.__file__) for m in (events, shell, textrules)] + [Path(__file__)]
+    return tuple(p.read_text() for p in files)
+
+
 @dataclass(frozen=True)
 class Detector:
     name: str
@@ -202,44 +212,37 @@ class Detector:
     fire: Callable[[Event, dict], Fire | None]
     compilable: str          # highest mode a proposal may reach: block | warn | observe | none
     lessons: tuple = ()
-    deps: tuple = ()         # regexes, sets and helpers the function reads; they join the hash
 
     @property
     def source_sha256(self) -> str:
-        """Hash of the function body plus its declared dependencies (invalidates approvals)."""
-        import inspect
-        parts = [inspect.getsource(self.fire)]
-        for dep in self.deps:
-            parts.append(dep.pattern if hasattr(dep, "pattern") else
-                         inspect.getsource(dep) if callable(dep) else repr(sorted(dep)))
-        return hashlib.sha256("\0".join(parts).encode()).hexdigest()
+        """Name plus the full source of events, shell, textrules, detectors: any edit invalidates approvals."""
+        return hashlib.sha256("\0".join((self.name, *_source_texts())).encode()).hexdigest()
 
 
 _EDIT_USES = tuple(f"PreToolUse:{t}" for t in ("Read", "Edit", "Write", "MultiEdit", "NotebookEdit"))
-_ATTACH = ("attachment:file", "attachment:edited_text_file", "attachment:compact_file_reference")
+_ATTACH = tuple("attachment:" + t for t in ("file", "edited_text_file", "compact_file_reference"))
 _RM = ("L-b3d1fba9",)
 
 CATALOGUE: dict[str, Detector] = {d.name: d for d in (
     Detector("rm_rf_nonscratch", "strong", "live+offline", ("PreToolUse:Bash",), "none",
-             rm_rf_nonscratch, "block", _RM, (SCRATCH, _rm_hits, _rm_rf_targets)),
-    Detector("rm_rf", "weak", "live+offline", ("PreToolUse:Bash",), "none",
-             rm_rf, "observe", _RM, (_rm_hits, _rm_rf_targets)),
+             rm_rf_nonscratch, "block", _RM),
+    Detector("rm_rf", "weak", "live+offline", ("PreToolUse:Bash",), "none", rm_rf, "observe", _RM),
     Detector("edit_unread_session", "strong", "live+offline", _EDIT_USES + _ATTACH, "path_hash_set",
-             edit_unread_session, "warn", (), (AUTOLOADED, _walk, _unread)),
+             edit_unread_session, "warn"),
     Detector("edit_unread_turn", "weak", "live+offline", _EDIT_USES + _ATTACH + ("Stop",), "turn_path_hash_set",
-             edit_unread_turn, "observe", (), (AUTOLOADED, _walk, _unread)),
+             edit_unread_turn, "observe"),
     Detector("exitplan_question_block", "strong", "offline", ("transcript:tool_result",), "none",
-             exitplan_question_block, "none", (), (HOOK_ERR, SH_NAME)),
+             exitplan_question_block, "none"),
     Detector("preclaim_audit_block", "strong", "offline", ("transcript:user",), "none",
-             preclaim_audit_block, "none", (), (STOP_FB, SH_NAME)),
+             preclaim_audit_block, "none"),
     Detector("commit_without_push", "weak", "live+offline", ("PreToolUse:Bash", "session_end"), "git_counts",
-             commit_without_push, "observe", (), ()),
+             commit_without_push, "observe"),
     Detector("user_correction", "weak", "offline", ("transcript:human_prompt",), "none",
-             user_correction, "none", (), (CORRECTION,)),
+             user_correction, "none"),
+    Detector("unparseable", "weak", "live+offline", ("PreToolUse:*",), "none", unparseable, "observe"),
 )}
 
 
-# ---------------------------------------------------------------- state transition + driver
 def advance(event: Event, state: dict | None) -> dict:
     """Return the state after `event`. Pure: the argument is never mutated."""
     base = blank_state()
@@ -250,7 +253,8 @@ def advance(event: Event, state: dict | None) -> dict:
     for tr in event.tool_results:
         s["pending"].pop(tr.id, None)
     seen, turn = set(s["seen_paths"]), set(s["turn_paths"])
-    if (event.human and not event.queued) or event.hook == "Stop":
+    # turn reset: a human prompt offline, Stop live (the live hooks are PreToolUse and Stop only)
+    if (event.tier == "offline" and event.human and not event.queued) or event.hook == "Stop":
         turn.clear()
     for name in event.read_files:
         if isinstance(name, str):
@@ -261,11 +265,10 @@ def advance(event: Event, state: dict | None) -> dict:
             s["pending"][tu.id] = [tu.name, in_turn, in_sess]
     while len(s["pending"]) > MAX_PENDING:
         s["pending"].pop(next(iter(s["pending"])))
-    for cmd in _bash_cmds(event):
-        for toks in command_segments(cmd):
-            sub, _args = git_subcommand(toks)
-            if sub in ("commit", "push"):
-                s["git"][sub] = int(s["git"].get(sub, 0)) + 1
+    for toks in _segments(event):
+        sub, _args = shell.git_subcommand(toks)
+        if sub in ("commit", "push"):
+            s["git"][sub] = int(s["git"].get(sub, 0)) + 1
     if len(seen) > MAX_PATHS or len(turn) > MAX_PATHS:
         s["truncated"] = True                      # stop growing; detectors go silent for this session
     else:
@@ -273,18 +276,25 @@ def advance(event: Event, state: dict | None) -> dict:
     return s
 
 
-def evaluate(event: Event, state: dict | None, names=None) -> tuple[list[Fire], dict]:
-    """Run catalogue detectors on the pre-event state, then advance. A raising detector is skipped."""
+def evaluate(event: Event, state: dict | None, names=None,
+             strict: bool = False) -> tuple[list[Fire], dict, list[tuple[str, str]]]:
+    """Run catalogue detectors on the pre-event state, then advance: (fires, new_state, errors).
+
+    errors = [(detector_name, exception_type_name)]. strict=True re-raises (tests, offline pass);
+    the hook path leaves it False, logs `error:<name>` and fails open."""
     state = state if state is not None else blank_state()
     rows = CATALOGUE.values() if names is None else [CATALOGUE[n] for n in names]
-    fires = []
+    fires, errors = [], []
     for row in rows:
         if row.tier == "offline" and event.tier != "offline":
             continue
         try:
             f = row.fire(event, state)
-        except Exception:   # a buggy detector must never take the hook down
-            f = None
+        except Exception as exc:
+            if strict:
+                raise
+            errors.append((row.name, type(exc).__name__))
+            continue
         if f:
             fires.append(f)
-    return fires, advance(event, state)
+    return fires, advance(event, state), errors

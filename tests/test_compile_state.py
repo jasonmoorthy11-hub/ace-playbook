@@ -32,20 +32,20 @@ def test_session_id_must_be_a_non_empty_string(bad, tmp_path):
 @pytest.mark.parametrize("sid", HOSTILE)
 def test_path_containment_for_hostile_session_ids(tmp_path, sid):
     p = st.state_path(tmp_path, sid)
-    assert p.parent == (tmp_path / "sessions") and p.name == st.session_hash(sid) + ".json"
+    assert p.parent == (tmp_path / "shadow_state") and p.name == st.session_hash(sid) + ".json"
     state, status = st.update(tmp_path, sid, lambda s: {**s, "events": 1})
     assert status == "ok" and state["events"] == 1
-    assert p.resolve().parent == (tmp_path / "sessions").resolve()
-    assert sorted(x.name for x in tmp_path.iterdir()) == ["sessions"]
-    assert all(".." not in x.name and "/" not in x.name for x in (tmp_path / "sessions").iterdir())
+    assert p.resolve().parent == (tmp_path / "shadow_state").resolve()
+    assert sorted(x.name for x in tmp_path.iterdir()) == ["shadow_state"]
+    assert all(".." not in x.name and "/" not in x.name for x in (tmp_path / "shadow_state").iterdir())
 
 
-def test_symlinked_sessions_dir_is_refused(tmp_path):
+def test_symlinked_state_dir_is_refused(tmp_path):
     target = tmp_path / "elsewhere"
     target.mkdir()
     data = tmp_path / "data"
     data.mkdir()
-    (data / "sessions").symlink_to(target)
+    (data / "shadow_state").symlink_to(target)
     with pytest.raises(st.StateError):
         st.state_path(data, "s1")
     state, status = st.update(data, "s1", lambda s: s)
@@ -90,6 +90,7 @@ def test_oversize_file_on_disk_loads_as_truncated_without_reading_it(tmp_path):
     p = st.state_path(tmp_path, "s1")
     p.parent.mkdir(parents=True)
     p.write_text(json.dumps({"v": 1, "pad": "x" * (st.MAX_BYTES + 10)}))
+    p.chmod(0o600)
     s = st.load(tmp_path, "s1")
     assert s["truncated"] is True and s["seen_paths"] == []
 
@@ -224,6 +225,86 @@ def test_hook_path_modules_import_without_subprocess_sqlite_or_network():
     assert out.stdout.strip() == ""
 
 
+def planted(tmp_path, sid="s1"):
+    p = st.state_path(tmp_path, sid)
+    p.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return p
+
+
+def test_deeply_nested_json_state_fails_toward_silence(tmp_path):
+    p = planted(tmp_path)
+    p.write_text("[" * 100000)
+    p.chmod(0o600)
+    assert st.load(tmp_path, "s1")["truncated"] is True          # RecursionError must not escape
+    assert st.update(tmp_path, "s1", lambda s: s)[1] == "ok"      # and the next write repairs it
+
+
+def test_symlink_loop_in_the_data_dir_never_escapes_update(tmp_path):
+    (tmp_path / "a").symlink_to(tmp_path / "b")
+    (tmp_path / "b").symlink_to(tmp_path / "a")
+    assert st.update(tmp_path / "a", "s1", lambda s: s) == (None, "skipped:error")
+    assert st.load(tmp_path / "a", "s1")["truncated"] is True
+
+
+def test_fifo_at_the_state_path_cannot_stall_the_hook(tmp_path):
+    import time
+    p = planted(tmp_path)
+    os.mkfifo(p, 0o600)
+    t0 = time.monotonic()
+    assert st.load(tmp_path, "s1")["truncated"] is True
+    assert st.update(tmp_path, "s1", lambda s: s) == (None, "skipped:error")
+    assert time.monotonic() - t0 < 1.0 and stat.S_ISFIFO(os.lstat(p).st_mode)
+
+
+def test_fifo_at_the_lock_path_is_refused(tmp_path):
+    p = planted(tmp_path)
+    os.mkfifo(str(p) + ".lock", 0o600)
+    assert st.update(tmp_path, "s1", lambda s: s) == (None, "skipped:error")
+
+
+def test_state_and_lock_files_with_group_or_world_bits_are_refused(tmp_path):
+    assert st.update(tmp_path, "s1", lambda s: {**s, "events": 4})[1] == "ok"
+    p = st.state_path(tmp_path, "s1")
+    p.chmod(0o644)
+    assert st.load(tmp_path, "s1")["truncated"] is True
+    p.chmod(0o600)
+    assert st.load(tmp_path, "s1")["events"] == 4
+    os.chmod(str(p) + ".lock", 0o666)
+    assert st.update(tmp_path, "s1", lambda s: s) == (None, "skipped:error")
+
+
+def test_wide_state_dir_is_tightened_to_0700(tmp_path):
+    d = tmp_path / "shadow_state"
+    d.mkdir()
+    d.chmod(0o755)
+    assert st.update(tmp_path, "s1", lambda s: s)[1] == "ok" and mode(d) == 0o700
+
+
+def test_a_file_that_grows_while_being_read_is_refused(tmp_path, monkeypatch):
+    p = planted(tmp_path)
+    p.write_text(json.dumps({"v": 1, "pad": "x" * (st.MAX_BYTES + 10)}))
+    p.chmod(0o600)
+    real = os.fstat
+
+    def lying(fd):
+        r = real(fd)
+        return os.stat_result((r.st_mode, r.st_ino, r.st_dev, r.st_nlink, r.st_uid, r.st_gid, 0,
+                               int(r.st_atime), int(r.st_mtime), int(r.st_ctime)))
+
+    monkeypatch.setattr(st.os, "fstat", lying)
+    assert st.load(tmp_path, "s1")["truncated"] is True
+
+
+@pytest.mark.parametrize("which,exc", [("load", RecursionError), ("load", st.StateError), ("save", RuntimeError),
+                                       ("save", st.StateError)])
+def test_update_maps_internal_errors_to_skipped_error(tmp_path, monkeypatch, which, exc):
+    def boom(*a, **k):
+        raise exc("x")
+
+    monkeypatch.setattr(st, which, boom)
+    assert st.update(tmp_path, "s1", lambda s: s) == (None, "skipped:error")
+
+
 def test_state_module_imports_only_stdlib_and_no_store():
     import ast
     import ace_playbook.compile.state as mod
@@ -234,5 +315,5 @@ def test_state_module_imports_only_stdlib_and_no_store():
             names.update(a.name.split(".")[0] for a in node.names)
         elif isinstance(node, ast.ImportFrom):
             names.add(("." * node.level) + (node.module or ""))
-    allowed = {"__future__", "fcntl", "hashlib", "json", "os", "re", "time", "pathlib", "typing", ".detectors"}
+    allowed = {"__future__", "fcntl", "hashlib", "json", "os", "re", "stat", "time", "pathlib", "typing", ".detectors"}
     assert names <= allowed, names - allowed

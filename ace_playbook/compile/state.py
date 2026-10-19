@@ -1,6 +1,6 @@
 """Rolling per-session state for the live detectors (docs/design/compiler.md 4.2).
 
-One small JSON file per session under `data_dir/sessions/`, named by the hash of the session id,
+One small JSON file per session under `data_dir/shadow_state/`, named by the hash of the session id,
 so a hostile id can never traverse paths. Paths inside are stored only as sha256[:16]. Writes are
 temp-file-then-rename at 0600 under a non-blocking lock: a hook that cannot get the lock in three
 tries skips its update and fails toward silence rather than hang. Corrupt, oversize or symlinked
@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -21,6 +22,7 @@ from typing import Any, Callable
 from .detectors import MAX_PATHS, MAX_PENDING, blank_state
 
 MAX_BYTES = 262144          # 256 KiB: a full 5,000-entry state is about 200 KiB
+STATE_DIR = "shadow_state"
 LOCK_TRIES = 3
 LOCK_SLEEP = 0.01           # seconds between tries
 _HEX16 = re.compile(r"^[0-9a-f]{16}$")
@@ -43,15 +45,15 @@ def new_state(session_id: str, now: str | None = None) -> dict:
 
 
 def state_path(data_dir: str | Path, session_id: Any) -> Path:
-    """`data_dir/sessions/<hash>.json`; raises StateError for a bad id or a symlinked directory."""
+    """`data_dir/shadow_state/<hash>.json`; raises StateError for a bad id or a symlinked directory."""
     if not isinstance(session_id, str) or not session_id:
         raise StateError("session id must be a non-empty string")
-    base = Path(data_dir) / "sessions"
+    base = Path(data_dir) / STATE_DIR
     if base.is_symlink():
-        raise StateError("sessions directory is a symlink")
+        raise StateError("state directory is a symlink")
     path = base / (session_hash(session_id) + ".json")
     if path.parent.resolve() != base.resolve() or os.sep in path.name:   # the file itself may be a symlink
-        raise StateError("state path escapes the sessions directory")
+        raise StateError("state path escapes the state directory")
     return path
 
 
@@ -94,16 +96,21 @@ def _clean(obj: Any, session_id: str, now: str | None) -> dict | None:
 
 
 def load(data_dir: str | Path, session_id: str, now: str | None = None) -> dict:
-    path = state_path(data_dir, session_id)
+    """The saved state, a fresh one if there is none, or a `truncated` one if the file is unusable."""
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        path = state_path(data_dir, session_id)
+    except (OSError, RuntimeError):       # e.g. a symlink loop in data_dir
+        return _silent(session_id, now)
+    try:
+        # O_NONBLOCK: opening a FIFO planted at the state path must not stall the hook
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:
         return new_state(session_id, now)
     except OSError:                       # a symlink (ELOOP) or an unreadable file
         return _silent(session_id, now)
     try:
         info = os.fstat(fd)
-        if not (info.st_mode & 0o170000) == 0o100000 or info.st_size > MAX_BYTES:
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_BYTES or info.st_mode & 0o077:
             return _silent(session_id, now)
         raw = b""
         while len(raw) <= MAX_BYTES:
@@ -115,11 +122,32 @@ def load(data_dir: str | Path, session_id: str, now: str | None = None) -> dict:
         return _silent(session_id, now)
     finally:
         os.close(fd)
+    if len(raw) > MAX_BYTES:              # grew while we read it
+        return _silent(session_id, now)
     try:
         cleaned = _clean(json.loads(raw), session_id, now)
-    except ValueError:
+    except (ValueError, RecursionError):  # deeply nested JSON raises RecursionError
         cleaned = None
     return cleaned if cleaned is not None else _silent(session_id, now)
+
+
+def _ensure_dir(d: Path) -> None:
+    d.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = os.lstat(d)
+    if not stat.S_ISDIR(info.st_mode):
+        raise StateError("state directory is not a directory")
+    if info.st_mode & 0o077:
+        os.chmod(d, 0o700)                # an existing directory may be wider than we want
+
+
+def _target_ok(path: Path) -> bool:
+    """False if something other than a regular file (a FIFO, a symlink, a socket) sits at `path`."""
+    try:
+        return stat.S_ISREG(os.lstat(path).st_mode)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
 
 
 def _serialize(state: dict) -> bytes:
@@ -142,7 +170,7 @@ def save(data_dir: str | Path, session_id: str, state: dict) -> bool:
     if len(data) > MAX_BYTES:
         s.update(truncated=True, seen_paths=[], turn_paths=[], pending={})
         data = _serialize(s)
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _ensure_dir(path.parent)
     tmp = path.with_name(f"{path.stem}.{os.getpid()}.tmp")
     try:
         os.unlink(tmp)
@@ -168,16 +196,20 @@ def update(data_dir: str | Path, session_id: str, fn: Callable[[dict], dict],
            now: str | None = None) -> tuple[dict | None, str]:
     """Load, apply `fn`, save, all under a non-blocking lock. Returns (state, status).
 
-    Status is "ok", "skipped:locked" (three tries, 10 ms apart, then give up) or "skipped:error".
-    Exceptions raised by `fn` propagate after the lock is released.
+    Status is "ok", "skipped:locked" (three tries, 10 ms apart, then give up) or "skipped:error"
+    (bad id, symlink or FIFO in the way, wide permissions, I/O failure). Nothing but `fn`'s own
+    exceptions escapes; those propagate after the lock is released.
     """
     try:
         path = state_path(data_dir, session_id)
-        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        fd = os.open(str(path) + ".lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-    except (StateError, OSError):
+        _ensure_dir(path.parent)
+        fd = os.open(str(path) + ".lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    except (StateError, OSError, RuntimeError):
         return None, "skipped:error"
     try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077:
+            return None, "skipped:error"
         for attempt in range(LOCK_TRIES):
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -186,10 +218,16 @@ def update(data_dir: str | Path, session_id: str, fn: Callable[[dict], dict],
                 if attempt == LOCK_TRIES - 1:
                     return None, "skipped:locked"
                 time.sleep(LOCK_SLEEP)
-        new = fn(load(data_dir, session_id, now))
+        try:
+            if not _target_ok(path):
+                return None, "skipped:error"
+            current = load(data_dir, session_id, now)
+        except (StateError, OSError, RuntimeError):
+            return None, "skipped:error"
+        new = fn(current)
         try:
             save(data_dir, session_id, new)
-        except OSError:
+        except (StateError, OSError, RuntimeError):
             return None, "skipped:error"
         return new, "ok"
     finally:

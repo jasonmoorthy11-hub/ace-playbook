@@ -68,7 +68,7 @@ def test_hook_shell_metacharacters_are_data(tmp_path):
     assert e.tool_uses[0].input["command"] == cmd
     segs = ev.command_segments(cmd)
     assert segs and all(isinstance(t, str) for s in segs for t in s)
-    fires, _ = detectors.evaluate(e, state_mod.new_state("s-1"))
+    fires, _, _ = detectors.evaluate(e, state_mod.new_state("s-1"), strict=True)
     assert sorted(f.detector for f in fires) == ["rm_rf", "rm_rf_nonscratch"]
     assert not list(tmp_path.iterdir()), "nothing in the payload may have been executed"
 
@@ -241,6 +241,93 @@ def test_git_subcommand():
 def test_hash16_is_stable_and_short():
     assert ev.hash16("/w/a.py") == ev.hash16("/w/a.py") != ev.hash16("/w/b.py")
     assert re.fullmatch(r"[0-9a-f]{16}", ev.hash16("x"))
+
+
+# ------------------------------------------------------------------ tokenizer hardening (fix wave A-D)
+def fires_for(cmd, tier="live"):
+    e = ev.event_from_hook(pre(tool_input={"command": cmd}))
+    fires, _, _ = detectors.evaluate(e, state_mod.new_state("s-1"), strict=True)
+    return {f.detector: f.count for f in fires}
+
+
+SLOW_INPUTS = {
+    "unterminated-dq-with-escapes": '"' + '\\"' * 32767,
+    "heredoc-32k-delimiter": "<<" + "a" * 32768,
+    "heredoc-256-delimiter": ("<<" + "a" * 256 + "\ncat\n") * 3,
+    "many-openers-no-terminator": "<<a\n" * 16000,
+    "heredoc-repeated": ("cat <<EOF\nx\n" * 5000),
+    "dq-backslash-newline": '"\\\n' * 20000,
+    "single-quotes": "'" * 60000,
+    "64kb-padding": ("x " * 40000),
+}
+
+
+@pytest.mark.parametrize("name", sorted(SLOW_INPUTS))
+def test_evaluate_is_fast_on_hostile_commands(name):
+    import time
+    e = ev.event_from_hook(pre(tool_input={"command": SLOW_INPUTS[name]}))
+    t0 = time.monotonic()
+    detectors.evaluate(e, state_mod.new_state("s-1"), strict=True)
+    assert time.monotonic() - t0 <= 0.1, name
+
+
+def test_segments_are_computed_once_per_tool_use(monkeypatch):
+    from ace_playbook.compile import shell
+    calls = []
+    real = shell.command_segments
+    monkeypatch.setattr(ev, "command_segments", lambda c: (calls.append(c), real(c))[1])
+    e = ev.event_from_hook(pre(tool_input={"command": "git commit -m m && rm -rf /w/src"}))
+    detectors.evaluate(e, state_mod.new_state("s-1"), strict=True)
+    assert len(calls) == 1
+
+
+def test_dropped_tail_after_many_herestrings_still_fires():
+    assert "rm_rf_nonscratch" in fires_for("cat <<<x; " * 33 + "rm -rf /w/src")
+
+
+def test_cap_marks_truncated_and_emits_unparseable():
+    cmd = "x " * (ev.MAX_CMD // 2) + "; rm -rf /w/src"
+    e = ev.event_from_hook(pre(tool_input={"command": cmd}))
+    assert e.tool_uses[0].truncated is True and len(e.tool_uses[0].input["command"]) == ev.MAX_CMD
+    got = fires_for(cmd)
+    assert got.get("unparseable") == 1 and "rm_rf_nonscratch" not in got
+    assert "unparseable" not in fires_for("ls -la")
+
+
+def test_unparseable_is_a_weak_observe_catalogue_row():
+    row = detectors.CATALOGUE["unparseable"]
+    assert (row.strength, row.compilable) == ("weak", "observe")
+
+
+def test_heredoc_removal_strips_only_the_body():
+    assert "rm_rf_nonscratch" in fires_for("cat <<EOF && rm -rf /w/src\nbody\nEOF")
+    assert ev.command_segments("cat <<'EOF'\nrm -rf x\nEOF\nls") == [["cat"], ["ls"]]
+    assert ev.command_segments("cat <<EOF\nEOF\nls") == [["cat"], ["ls"]]
+
+
+def test_openers_inside_quotes_or_herestrings_are_not_heredocs():
+    assert "rm_rf_nonscratch" in fires_for('echo "<<EOF"\nrm -rf /w/src\nEOF')
+    assert "rm_rf_nonscratch" in fires_for("cat <<<EOF\nrm -rf /w/src\nEOF")
+
+
+@pytest.mark.parametrize("cmd", ["true & rm -rf /w/src", "{ rm -rf /w/src; }", "if true; then rm -rf /w/src; fi",
+                                 "! rm -rf /w/src", "while true; do rm -rf /w/src; done", "a || { rm -rf /w/src; }"])
+def test_shell_syntax_prefixes_and_background_ampersand_are_split(cmd):
+    assert fires_for(cmd).get("rm_rf_nonscratch") == 1, cmd
+
+
+def test_redirect_ampersands_are_not_separators():
+    assert ev.command_segments("ls 2>&1 | wc") == [["ls", "2>&1"], ["wc"]]
+    assert ev.command_segments("ls &> out") == [["ls", "&>", "out"]]
+    assert ev.command_segments("a && b") == [["a"], ["b"]]
+
+
+@pytest.mark.parametrize("cmd", ["/bin/rm -rf /w/src", "\\rm -rf /w/src", "env rm -rf /w/src", "nice rm -rf /w/src",
+                                 "xargs rm -rf /w/src", "doas rm -rf /w/src", "busybox rm -rf /w/src",
+                                 "command rm -rf /w/src", "exec rm -rf /w/src", "sudo rm -rf /w/src",
+                                 "env FOO=1 /usr/bin/rm -rf /w/src", "xargs -0 rm -rf /w/src"])
+def test_rm_wrappers_and_paths_are_seen(cmd):
+    assert fires_for(cmd).get("rm_rf_nonscratch") == 1, cmd
 
 
 # ------------------------------------------------------------------ source hygiene
