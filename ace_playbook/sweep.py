@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import health
 from .config import Config
 from .filelock import locked
 from .inject.ledger import read_jsonl
@@ -16,6 +17,9 @@ from .reflect.runner import reflect_transcript
 from .store import DeltaLog, SchemaError
 
 MIN_BYTES = 2000
+# Per-transcript or sweep-level outcomes that count as a failed night: API errors (including a
+# spend/usage cap, which the API answers with a 4xx or 429), a missing key, a broken delta log.
+FAILED = {"retryable", "retry_exhausted", "failed_final", "skipped_no_key", "refused_chain_invalid"}
 
 
 @dataclass
@@ -72,23 +76,45 @@ def prune_queue(cfg: Config) -> None:
 def run_sweep(cfg: Config, client: ReflectorClient | None = None, max_n: int = 20,
               dry_run: bool = False, idle_minutes: float = 60.0,
               now: float | None = None) -> list[dict]:
+    """Reflect pending transcripts, then record the outcome in health.json (not on dry runs).
+
+    An exception still propagates unchanged; health writing never raises.
+    """
+    problems: list[str] = []
+    try:
+        out = _sweep(cfg, client, max_n, dry_run, idle_minutes, now, problems)
+    except Exception as exc:
+        if not dry_run:
+            health.record(cfg, False, f"{type(exc).__name__}: {exc}")
+        raise
+    if not dry_run:
+        health.record(cfg, not problems, "; ".join(problems))
+    return out
+
+
+def _sweep(cfg: Config, client: ReflectorClient | None, max_n: int, dry_run: bool,
+           idle_minutes: float, now: float | None, problems: list[str]) -> list[dict]:
     cands = find_candidates(cfg, idle_minutes, now)[:max_n]
     if dry_run:
         return [{"path": c.path.name, "source": c.source, "status": "would_reflect"} for c in cands]
     if cands and not (cfg.api_key_path and Path(cfg.api_key_path).exists()):
         log_line(cfg, f"sweep SKIPPED no-api-key candidates={len(cands)}")
+        problems.append(f"skipped_no_key: {len(cands)} candidates, no api key file")
         return [{"status": "skipped_no_key", "candidates": len(cands)}]
     try:
         if cfg.deltas.exists():
             DeltaLog(cfg.deltas).verify()
     except SchemaError as e:
         log_line(cfg, f"sweep REFUSED delta log failed verification: {e}")
+        problems.append(f"refused_chain_invalid: {e}")
         return [{"status": "refused_chain_invalid", "candidates": len(cands)}]
     client = client or ReflectorClient(cfg)
     out = []
     for c in cands:
         res = reflect_transcript(cfg, c.path, client)
         out.append({"path": c.path.name, "source": c.source, "status": res["status"]})
+        if res["status"] in FAILED:
+            problems.append(f"{res['status']}: {res.get('error', '')}")
     prune_queue(cfg)
     log_line(cfg, f"sweep done processed={len(out)}")
     return out

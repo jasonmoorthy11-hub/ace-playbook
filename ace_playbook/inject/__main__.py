@@ -1,5 +1,8 @@
 """Hook entry points: `python -m ace_playbook.inject [start|cite]` reads hook JSON on stdin.
 
+`--health` is the exception: it reads no stdin, prints the nightly sweep's health.json (or
+"no health record") and exits; it never touches the API key or the store.
+
 Both modes fail open: any error is logged by type only and the hook exits 0
 without output, so a broken playbook never blocks a session.
 """
@@ -11,6 +14,7 @@ import sys
 import time
 
 from .. import config as cfgmod
+from .. import health
 from . import injector
 from .citations import record_citations
 
@@ -51,8 +55,20 @@ def cite(cfg, payload: dict) -> int:
     return 0
 
 
+def show_health(cfg) -> int:
+    rec = health.read(cfg)
+    print(json.dumps(rec, indent=2, sort_keys=True) if rec is not None else health.NO_RECORD)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     mode = (argv or sys.argv[1:] or ["start"])[0]
+    if mode == "--health":
+        try:
+            return show_health(cfgmod.load())
+        except Exception as exc:  # noqa: BLE001 - a human is reading: say what failed, by type only
+            print(f"health unavailable: {type(exc).__name__}", file=sys.stderr)
+            return 1
     cfg = None
     try:
         cfg = cfgmod.load()

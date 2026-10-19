@@ -110,6 +110,8 @@ echo '{"session_id":"demo","cwd":"/work/acme-widgets","source":"startup"}' \
   | PYTHONPATH=. python3 -m ace_playbook.inject start
 ```
 
+`PYTHONPATH=. python3 -m ace_playbook.inject --health` prints the nightly sweep's `health.json` (last run, ok, consecutive failures, last error) or `no health record`; it reads no stdin, API key or store. After 3 failed nights in a row the injected block carries one warning line.
+
 No API call is made anywhere in the tests or the commands above. The reflector needs a key file
 only when you run `python -m ace_playbook.reflect` or the sweep for real; see `hooks/INSTALL.md`.
 

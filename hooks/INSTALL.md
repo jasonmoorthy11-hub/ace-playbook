@@ -135,6 +135,13 @@ in a subagent folder, and have no entry in `reflections.jsonl`. Each reflection 
 call; usage is written to the ledger and the log. Remove the job with
 `launchctl bootout "gui/$(id -u)/com.example.ace-playbook-nightly"`.
 
+Each non-dry run writes `health.json` (0600) to the data directory: last run time, `ok`,
+`consecutive_failures` and a scrubbed `last_error`. A night counts as failed on an exception, an
+API error (including a spend or usage cap), a missing key or a delta log that fails verification.
+Check it with `PYTHONPATH="$ACE_PLAYBOOK_HOME" python3 -m ace_playbook.inject --health` (prints
+`no health record` before the first run). After 3 failures in a row the SessionStart block adds
+one line telling you to read `reflect.log`.
+
 ## 5. Optional: git pre-commit scrub
 
 To scan staged files in a repository before every commit (this touches only that repo's
@@ -156,5 +163,5 @@ directory is plain files (`deltas.jsonl` is the source of truth); delete or keep
 
 All under `data_dir`: `deltas.jsonl` (+ `.lock`), `playbook.sqlite` (disposable view),
 `injections.jsonl`, `citations.jsonl`, `reflections.jsonl`, `queue.jsonl`, `quarantine.jsonl`,
-`reflect.log`. None of them should ever be committed to a public repository; the repo's
+`health.json`, `reflect.log`. None of them should ever be committed to a public repository; the repo's
 `.gitignore` already excludes them.
