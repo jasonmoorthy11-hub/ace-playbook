@@ -31,10 +31,11 @@ def applied(env):
 
 def test_apply_stores_expected_counts_by_status_and_kind(applied):
     st = applied.stored()
-    assert Counter(les["status"] for les in st.values()) == {"active": 4, "provisional": 3, "dormant": 3}
+    assert Counter(les["status"] for les in st.values()) == {"provisional": 7, "dormant": 3}
     assert Counter(les["kind"] for les in st.values()) == {
         "gotcha": 7, "rule": 1, "fact": 1, "hook_candidate": 1}
-    assert applied.count("active") == 4 and applied.count("provisional") == 3
+    assert applied.count("active") == 0 and applied.count("provisional") == 7
+    assert applied.count("legacy_unverified") == 7
     assert applied.count("dormant") == 3 and applied.count("hook_candidate") == 1
 
 
@@ -56,7 +57,7 @@ def test_dry_run_never_creates_the_store_and_writes_all_outputs(env):
         assert (env.out / name).exists(), name
     assert "DRY RUN" in env.read("MIGRATION_REPORT.md").splitlines()[0]
     assert "DRY RUN" in env.read("review_packet.md").splitlines()[0]
-    assert env.count("active") == 4
+    assert env.count("active") == 0 and env.count("provisional") == 7
 
 
 def test_dry_run_leaves_an_existing_store_untouched(applied):
@@ -113,7 +114,7 @@ def test_inert_kinds_bare_domain_angle_and_arrow(applied):
     assert ids["auto-a0000001"]["inert_reason"] is None  # arrows become words, never "->"
     assert applied.by_text(T_DOMAIN)["status"] == "provisional"
     assert applied.by_text(T_ANGLE)["status"] == "provisional"
-    assert applied.by_text(T_ARROW)["status"] == "active"
+    assert applied.by_text(T_ARROW)["status"] == "provisional"  # legacy_unverified, not inert
     assert applied.count("angle_brackets") == 1 and applied.count("domain") == 1
 
 
@@ -129,7 +130,7 @@ def test_paraphrase_member_merged_into_lead_with_strongest_action(applied):
     assert member["reason_code"] == "merged_member" and member["action_out"] == "merged"
     assert lead["merged_from"] == ["auto-a000000b"] and lead["merged_into"] is None
     assert lead["action_in"] == "keep_dormant" and lead["action_out"] == "keep_active"
-    assert applied.by_text(T_LEAD)["status"] == "active"
+    assert applied.by_text(T_LEAD)["status"] == "provisional"
     assert applied.count("groups") == 1 and applied.count("members merged") == 1
 
 
@@ -151,7 +152,7 @@ def test_undated_record_is_stamped_now(applied):
 def test_handoff_has_exactly_the_route_ids(applied):
     rows = applied.handoff()
     assert [r["id"] for r in rows] == ["auto-a000000c"]
-    assert rows[0] == {"id": "auto-a000000c", "key": "initech-site", "created": "2026-07-05",
+    assert rows[0] == {"mode": "apply", "id": "auto-a000000c", "key": "initech-site", "created": "2026-07-05",
                        "text": "Ask for the staging notes in the handoff file before deploying initech-site"}
     assert applied.count("handoff records") == 1
     assert applied.id_map()["auto-a000000c"]["lesson_id"] is None
@@ -206,9 +207,10 @@ def test_missing_join_is_reported_not_raised(applied):
 def test_id_map_has_one_line_per_record_and_no_text(applied):
     lines = applied.read("id_map.jsonl").splitlines()
     assert len(lines) == 20
-    keys = {"id", "key", "action_in", "action_out", "lesson_id", "status", "kind", "inert_reason",
+    keys = {"mode", "id", "key", "action_in", "action_out", "lesson_id", "status", "kind", "inert_reason",
             "reason_code", "merged_into", "merged_from"}
     assert all(set(json.loads(ln)) == keys for ln in lines)
+    assert {json.loads(ln)["mode"] for ln in lines} == {"apply"}
     blob = applied.read("id_map.jsonl") + applied.read("MIGRATION_REPORT.md")
     for les in applied.stored().values():
         assert les["text"] not in blob
@@ -226,3 +228,21 @@ def test_report_counts_only(applied):
 def test_stored_ids_match_id_map(applied):
     mapped = {r["lesson_id"] for r in applied.id_map().values() if r["lesson_id"] and r["status"]}
     assert mapped == set(applied.stored())
+
+
+def test_keep_active_lands_provisional_legacy_unverified(applied):
+    ids = applied.id_map()
+    for lid in ("auto-a0000001", "auto-a0000011", "auto-a0000013", "auto-a000000a"):
+        assert ids[lid]["status"] == "provisional" and ids[lid]["reason_code"] == "legacy_unverified"
+        assert ids[lid]["inert_reason"] is None
+    assert ids["auto-a0000002"]["reason_code"] == "legacy_unverified"  # inert too; both recorded
+    assert ids["auto-a0000003"]["reason_code"] is None and ids["auto-a0000003"]["status"] == "dormant"
+    assert not any(les["status"] == "active" for les in applied.stored().values())
+    sec = applied.packet_section("provisional")
+    assert "auto-a0000013 | acme-widgets | legacy_unverified" in sec
+    assert "auto-a0000002 | acme-widgets | legacy_unverified; inert: code_fence_or_backtick" in sec
+
+
+def test_report_counts_legacy_unverified_under_provisional(applied):
+    rep = applied.read("MIGRATION_REPORT.md")
+    assert "- provisional: 7\n  - legacy_unverified: 7\n" in rep

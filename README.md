@@ -54,7 +54,20 @@ named by command-line flags, and either reports what it would do (`--dry-run`, w
 touches the store) or appends the lessons to the delta log (`--apply`, safe to repeat: a second
 run adds nothing). It makes no network calls; every verdict comes from its input files. Its
 outputs (report, review packet, id map, handoff file) hold lesson text or provenance and are
-private: they go to the `--out-dir` you choose and are never committed.
+private: they go to the `--out-dir` you choose and are never committed. Text and notes shown in
+the review packet and handoff file are scrub-masked first, and the files are created mode 0600.
+
+Provenance: migrated lessons carry evidence with origin `user_file`, a quote equal to the lesson
+text and a `session_id` prefixed `legacy:`. That is self-quoted, model-written provenance, so no
+migrated lesson is active unless an override row promoted it: a classified `keep_active` lands as
+`provisional` (reason `legacy_unverified`), and only an override with `"action": "keep_active"`
+yields `active`. Any future evidence-strength logic must not count `legacy:` evidence as user
+evidence. A record flagged `quarantine: true` is quarantined unless an override releases it.
+
+Wording: the normalizer turns non-ASCII arrows and inequalities into words (`to`, `from`,
+`at least`, `at most`); mapping `<-` to `from` is a wording change, not a transliteration. Plain
+ASCII `->`, `>=` and `<-` already present in legacy text are left alone and still trip the
+injector's `angle_brackets` rule, so such lessons land provisional (or stay dormant).
 
 ```sh
 uv run python -m ace_playbook.migrate --legacy-glob 'DIR/lessons-*.json' \

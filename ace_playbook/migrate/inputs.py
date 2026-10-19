@@ -29,6 +29,8 @@ class Legacy:
     """Legacy lessons by id. The first occurrence of an id supplies its text."""
     texts: dict[str, str] = field(default_factory=dict)
     created: dict[str, str] = field(default_factory=dict)
+    conflicts: set[str] = field(default_factory=set)  # ids seen again with different text
+    bad_dates: set[str] = field(default_factory=set)  # ids with a non-empty, invalid created
     files: list[str] = field(default_factory=list)
     unreadable: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
@@ -53,10 +55,14 @@ def load_legacy(pattern: str) -> Legacy:
             if not (isinstance(item, dict) and isinstance(item.get("id"), str)
                     and isinstance(item.get("text"), str)):
                 continue
-            out.texts.setdefault(item["id"], item["text"])
+            lid = item["id"]
+            if out.texts.setdefault(lid, item["text"]) != item["text"]:
+                out.conflicts.add(lid)
             day = valid_date(item.get("created"))
             if day:
-                out.created.setdefault(item["id"], day)
+                out.created.setdefault(lid, day)
+            elif item.get("created") not in (None, ""):
+                out.bad_dates.add(lid)
     return out
 
 

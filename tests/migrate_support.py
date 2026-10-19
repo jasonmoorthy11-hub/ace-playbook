@@ -53,6 +53,19 @@ class Env:
     def set_classified(self, rows: list[dict]) -> None:
         self.classified.write_text("".join(json.dumps(r) + "\n" for r in rows))
 
+    def add_lesson(self, lid: str, text: str, action: str = "keep_dormant", key: str = "acme-widgets",
+                   created: str | None = "2026-07-06", **extra) -> None:
+        """Append one invented lesson to the legacy file and the classified file."""
+        path = self.legacy_dir / "lessons-a.json"
+        legacy = json.loads(path.read_text())
+        legacy["lessons"].append({"id": lid, "text": text, "created": created})
+        path.write_text(json.dumps(legacy))
+        row = dict(self.classified_rows()[0], id=lid, key=key, created=created, proposed_action=action,
+                   reason="adding invented lessons", paraphrase_group=None, paraphrase_of=None,
+                   quarantine=False, quarantine_patterns=[])
+        row.update(extra)
+        self.set_classified([*self.classified_rows(), row])
+
     def classified_rows(self) -> list[dict]:
         return [json.loads(ln) for ln in self.classified.read_text().splitlines() if ln]
 
@@ -76,7 +89,7 @@ class Env:
 
     def count(self, name: str) -> int:
         """Value of the first '- <name>: N' line in the report."""
-        m = re.search(rf"^- {re.escape(name)}: (\d+)", self.read("MIGRATION_REPORT.md"), re.M)
+        m = re.search(rf"^\s*- {re.escape(name)}: (\d+)", self.read("MIGRATION_REPORT.md"), re.M)
         assert m, f"no '{name}' line in report"
         return int(m.group(1))
 

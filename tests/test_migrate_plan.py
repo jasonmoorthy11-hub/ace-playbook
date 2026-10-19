@@ -92,7 +92,7 @@ def test_lead_keeps_unranked_action_and_members_stand_alone(env):
     assert env.run() == 0
     ids = env.id_map()
     assert ids["auto-a000000a"]["action_out"] == "quarantine"
-    assert ids["auto-a000000b"]["merged_into"] is None and ids["auto-a000000b"]["status"] == "active"
+    assert ids["auto-a000000b"]["merged_into"] is None and ids["auto-a000000b"]["status"] == "provisional"
     assert not any(les["text"] == T_LEAD for les in env.stored().values())
 
 
@@ -119,7 +119,7 @@ def test_skipped_lead_frees_its_members(env):
     env.set_overrides([{"id": "auto-a000000a", "action": "skip"}])
     assert env.run() == 0
     assert env.id_map()["auto-a000000b"]["merged_into"] is None
-    assert env.id_map()["auto-a000000b"]["status"] == "active"
+    assert env.id_map()["auto-a000000b"]["status"] == "provisional"
 
 
 def test_identical_text_in_one_run_is_stored_once(env):

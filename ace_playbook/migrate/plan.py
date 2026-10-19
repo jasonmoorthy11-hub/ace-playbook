@@ -4,10 +4,14 @@ Evidence provenance (judgment recorded here as the brief requires): the legacy f
 the user's own memory files on the user's machine, and the lesson text itself is the only
 evidence that survives. Each migrated lesson therefore carries one evidence item whose
 quote is the lesson text, with origin `user_file` and session id `legacy:<legacy id>`.
-That origin is what lets active lessons pass the schema's live-status rule. The id map
-keeps the per-lesson provenance. This choice is to be reviewed by the orchestrator.
+That origin lets a lesson pass the schema's live-status rule, but it is self-quoted,
+model-written provenance, not user evidence. So a classified `keep_active` lands as
+`provisional` (reason code `legacy_unverified`); only an override row with action
+`keep_active`, the user's own decision, yields `active`. Any future evidence-strength
+logic must not count `legacy:` evidence as user evidence.
 
 No network access happens here. Paraphrase verdicts and actions come from the input files.
+Every text that reaches the review packet or the handoff file is scrubbed and masked first.
 """
 
 from __future__ import annotations
@@ -17,14 +21,14 @@ from dataclasses import dataclass, field
 
 from ..inject.sanitize import inert_reason
 from ..keys.resolver import normalize as normalize_key
-from ..scrub import LESSON, QuarantineRequired, scan
+from ..scrub import LESSON, QuarantineRequired, redact, scan
 from ..store import DeltaLog, SchemaError, make_lesson_id
 from .inputs import Legacy, valid_date
 from .normalize import normalize
 
 # keep_active > keep_dormant > mark_compiled when a paraphrase group merges.
 RANK = {"keep_active": 0, "keep_dormant": 1, "mark_compiled": 2}
-STORE_STATUS = {"keep_active": "active", "keep_dormant": "dormant", "mark_compiled": "dormant"}
+STORE_STATUS = {"keep_active": "provisional", "keep_dormant": "dormant", "mark_compiled": "dormant"}
 OTHER_ACTIONS = ("route_to_handoff", "retire", "drop_junk", "quarantine")
 KIND_BY_LABEL = {"reusable_gotcha": "gotcha", "engagement_bound": "gotcha",
                  "dup_of_claude_md": "rule", "stale_version_fact": "fact"}
@@ -61,7 +65,15 @@ class Plan:
     handoff: list[dict] = field(default_factory=list)
     packet: dict[str, list[dict]] = field(default_factory=lambda: {b: [] for b in BUCKETS})
     missing_join: list[str] = field(default_factory=list)
+    duplicate_ids: list[str] = field(default_factory=list)
+    unmatched_overrides: list[str] = field(default_factory=list)
     overrides_applied: int = 0
+    joined: int = 0
+    rescued: int = 0
+    forced_quarantine: int = 0
+    undated: int = 0
+    malformed_dates: int = 0
+    handoff_masked: int = 0
 
     def stored(self) -> list[Outcome]:
         return [o for o in self.outcomes if o.draft is not None]
@@ -75,52 +87,67 @@ class _Item:
     action: str
     text: str | None
     created: str | None
+    explicit: bool  # the action came from an override row
     members: list["_Item"] = field(default_factory=list)
     merged_into: str | None = None
     out: Outcome | None = None
 
 
-def _mask(text: str, deny_terms: tuple[str, ...]) -> tuple[str, list[str]]:
-    """Text with every scrub hit and deny term replaced, and the rule names that fired."""
+def safe(text: str, deny_terms: tuple[str, ...]) -> tuple[str, list[str]]:
+    """Scrub-mask any text bound for a private output; return it and the rule names that fired."""
     hits = scan(text, LESSON, deny_terms)
-    for h in sorted(hits, key=lambda h: -len(h.match)):
-        if h.match:
-            text = text.replace(h.match, "[deny-term]" if h.rule == "deny_term" else f"[hit:{h.rule}]")
+    out = redact(text, hits).replace("[REDACTED:deny_term]", "[deny-term]")
     for term in sorted(deny_terms, key=len, reverse=True):
-        text = re.sub(re.escape(term), "[deny-term]", text, flags=re.IGNORECASE)
-    return text, sorted({h.rule for h in hits})
+        out = re.sub(re.escape(term), "[deny-term]", out, flags=re.IGNORECASE)
+    return out, sorted({h.rule for h in hits})
+
+
+def _row(log: DeltaLog, item_id: str, key: str, reason: str, text: str) -> dict:
+    """A packet row with every string masked."""
+    return {"id": item_id, "key": safe(key, log.deny_terms)[0], "reason": safe(reason, log.deny_terms)[0],
+            "text": safe(text, log.deny_terms)[0]}
 
 
 def _items(records: list[dict], legacy: Legacy, overrides: dict[str, dict], plan: Plan) -> list[_Item]:
-    items = []
+    items: list[_Item] = []
+    seen: set[str] = set()
     for rec in records:
         rid = rec["id"]
+        if rid in seen:
+            plan.duplicate_ids.append(rid)
+            continue
+        seen.add(rid)
         key = str(rec.get("key") or "key_unknown")
         ov = overrides.get(rid)
         plan.overrides_applied += 1 if ov else 0
         action = str(ov["action"] if ov else rec.get("proposed_action"))
+        if not ov and rec.get("quarantine") is True and action != "quarantine":
+            action = "quarantine"  # an override is the only release path
+            plan.forced_quarantine += 1
         text = ov["text"] if ov and "text" in ov else legacy.texts.get(rid)
-        if rid not in legacy.texts:
-            plan.missing_join.append(rid)
-        created = valid_date(rec.get("created")) or legacy.created.get(rid)
-        item = _Item(rec, rid, key, action, text, created)
-        known = action in RANK or action in OTHER_ACTIONS or action == "skip"
+        plan.joined += 1 if rid in legacy.texts else 0
+        raw = rec.get("created")
+        created = valid_date(raw) or legacy.created.get(rid)
+        plan.undated += 1 if created is None else 0
+        bad = (raw not in (None, "") and not valid_date(raw)) or rid in legacy.bad_dates
+        plan.malformed_dates += 1 if bad else 0
+        item = _Item(rec, rid, key, action, text, created, bool(ov))
         if action == "skip":
             item.out = Outcome(rid, key, action, "skip", reason_code="skipped")
-        elif not known:
+        elif action not in RANK and action not in OTHER_ACTIONS:
             item.out = Outcome(rid, key, action, "error", reason_code="unknown_action")
         elif text is None:
             item.out = Outcome(rid, key, action, "error", reason_code="missing_join")
+            plan.missing_join.append(rid)
+        elif rid not in legacy.texts:
+            plan.rescued += 1
         items.append(item)
+    plan.unmatched_overrides = sorted(set(overrides) - seen)
     return items
 
 
 def _link_paraphrases(items: list[_Item]) -> None:
-    """Members merge into their lead; the lead takes the strongest action in the group.
-
-    A member only merges when it and its lead both carry a storable action. Otherwise it
-    is handled on its own, so nothing is merged into a lead that will not be stored.
-    """
+    """Tentatively link members to their lead (both must carry a storable action)."""
     live = {i.id: i for i in items if i.out is None}
     for item in items:
         lead = live.get(item.rec.get("paraphrase_of") or "")
@@ -145,20 +172,23 @@ def _applies_when(reason: object, key: str) -> str:
     return f"migrated legacy lesson ({key})"
 
 
-def _build(item: _Item, action: str, text: str, log: DeltaLog, known: set[str], plan: Plan) -> Outcome:
-    out = Outcome(item.id, item.key, item.action, action, created=item.created,
-                  merged_from=[m.id for m in item.members])
+def _build(item: _Item, text: str, log: DeltaLog, known: set[str], plan: Plan) -> Outcome:
+    group = [item, *item.members]
+    action = min((i.action for i in group), key=RANK.__getitem__)
+    promoted = action == "keep_active" and any(i.explicit and i.action == "keep_active" for i in group)
+    out = Outcome(item.id, item.key, item.action, action, created=item.created)
     if len(text) < TEXT_MIN:
         out.reason_code = "too_short"
         return out
     if len(text) > TEXT_MAX:
         out.reason_code = "too_long"
-        plan.packet["too_long"].append(
-            {"id": item.id, "key": item.key, "reason": f"{len(text)} chars", "text": text})
+        shown, rules = safe(text, log.deny_terms)
+        note = f"{len(text)} chars" + (f"; scrub hits: {', '.join(rules)}" if rules else "")
+        plan.packet["too_long"].append(_row(log, item.id, item.key, note, shown))
         return out
     scope, label = _scope(item.key), item.rec.get("label")
     when = _applies_when(item.rec.get("reason"), item.key)
-    status = STORE_STATUS[action]
+    status = "active" if promoted else STORE_STATUS[action]
     out.inert_reason = inert_reason(text, when)
     if out.inert_reason and status == "active":
         status = "provisional"
@@ -170,16 +200,15 @@ def _build(item: _Item, action: str, text: str, log: DeltaLog, known: set[str], 
     try:
         log.check_draft(draft)
     except QuarantineRequired as e:
-        masked, rules = _mask(text, log.deny_terms)
+        shown, rules = safe(text, log.deny_terms)
         out.reason_code = "scrub_hit"
         found = ", ".join(sorted(set(rules) | {h.rule for h in e.hits}))
         plan.packet["scrub_hit"].append(
-            {"id": item.id, "key": item.key, "reason": f"{e.where or 'text'}: {found}", "text": masked})
+            _row(log, item.id, item.key, f"{e.where or 'text'}: {found}", shown))
         return out
     except SchemaError as e:
         out.reason_code = "schema_error"
-        plan.packet["schema_error"].append(
-            {"id": item.id, "key": item.key, "reason": str(e), "text": text})
+        plan.packet["schema_error"].append(_row(log, item.id, item.key, str(e), text))
         return out
     out.lesson_id = lid
     if lid in known:
@@ -187,9 +216,14 @@ def _build(item: _Item, action: str, text: str, log: DeltaLog, known: set[str], 
         return out
     known.add(lid)
     out.status, out.kind, out.draft = status, kind, draft
+    why = []
+    if action == "keep_active" and not promoted:
+        out.reason_code = "legacy_unverified"
+        why.append("legacy_unverified")
+    if out.inert_reason and status == "provisional":
+        why.append(f"inert: {out.inert_reason}")
     if status == "provisional":
-        plan.packet["provisional"].append(
-            {"id": item.id, "key": item.key, "reason": out.inert_reason, "text": text})
+        plan.packet["provisional"].append(_row(log, item.id, item.key, "; ".join(why), text))
     return out
 
 
@@ -197,31 +231,50 @@ def _resolve(item: _Item, log: DeltaLog, known: set[str], plan: Plan) -> Outcome
     if item.out is not None:
         return item.out
     text = normalize(item.text or "")
-    if item.merged_into:
-        return Outcome(item.id, item.key, item.action, "merged", reason_code="merged_member",
-                       merged_into=item.merged_into, created=item.created)
     if item.action in RANK:
-        action = min([item.action] + [m.action for m in item.members], key=RANK.__getitem__)
-        return _build(item, action, text, log, known, plan)
+        return _build(item, text, log, known, plan)
     out = Outcome(item.id, item.key, item.action, item.action, created=item.created)
     if item.action == "route_to_handoff":
         out.reason_code = "handoff"
-        plan.handoff.append({"id": item.id, "key": item.key, "created": item.created, "text": text})
+        shown, rules = safe(text, log.deny_terms)
+        plan.handoff_masked += 1 if rules else 0
+        plan.handoff.append({"id": item.id, "key": safe(item.key, log.deny_terms)[0],
+                             "created": item.created, "text": shown})
     else:
         out.reason_code = item.action
         if item.action == "quarantine":
             pats = item.rec.get("quarantine_patterns")
             names = ", ".join(map(str, pats)) if isinstance(pats, list) and pats else "none"
-            plan.packet["quarantine"].append({"id": item.id, "key": item.key, "reason": "quarantined",
-                                              "text": f"<quarantined; patterns: {names}>"})
+            plan.packet["quarantine"].append(
+                _row(log, item.id, item.key, "quarantined", f"<quarantined; patterns: {names}>"))
     return out
 
 
 def build(records: list[dict], legacy: Legacy, overrides: dict[str, dict], log: DeltaLog) -> Plan:
-    """Run every gate on every record. Reads the store, never writes it."""
+    """Run every gate on every record. Reads the store, never writes it.
+
+    Leads are resolved first. A member merges only into a lead that is stored or already
+    present; if the lead fails a gate, its members are released and handled by their own
+    actions, so nothing is lost with a lead that was never stored.
+    """
     plan = Plan()
     items = _items(records, legacy, overrides, plan)
     _link_paraphrases(items)
     known = set(log.state())
-    plan.outcomes = [_resolve(i, log, known, plan) for i in items]
+    done: dict[str, Outcome] = {}
+    for item in items:
+        if item.merged_into is None:
+            done[item.id] = _resolve(item, log, known, plan)
+    for item in items:
+        if item.merged_into is None:
+            continue
+        lead = done[item.merged_into]
+        if lead.draft is not None or lead.reason_code == "already_present":
+            lead.merged_from.append(item.id)
+            done[item.id] = Outcome(item.id, item.key, item.action, "merged", reason_code="merged_member",
+                                    merged_into=item.merged_into, created=item.created)
+        else:
+            item.merged_into = None
+            done[item.id] = _resolve(item, log, known, plan)
+    plan.outcomes = [done[i.id] for i in items]
     return plan

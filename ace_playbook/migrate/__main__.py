@@ -26,13 +26,18 @@ def run(args: argparse.Namespace) -> int:
     if args.apply:
         log.verify()
     plan = planmod.build(records, legacy, overrides, log)
+    before = applymod.StoreDelta(log.head_hash(), "", len(log.read()), 0) if args.apply else None
     delta = None
+    try:
+        if args.apply:
+            applymod.commit(plan, log)
+    finally:  # a failed batch must still leave a report of what did and did not land
+        if before:
+            delta = applymod.StoreDelta(before.head_before, log.head_hash(), before.count_before,
+                                        len(log.read()))
+        applymod.write_outputs(plan, legacy, len(records), notes, Path(args.out_dir), delta)
     if args.apply:
-        before = applymod.StoreDelta(log.head_hash(), "", len(log.read()), 0)
-        applymod.commit(plan, log)
-        delta = applymod.StoreDelta(before.head_before, log.head_hash(), before.count_before, len(log.read()))
         log.verify()
-    applymod.write_outputs(plan, legacy, len(records), notes, Path(args.out_dir), delta)
     stored = len(plan.stored())
     mode = "applied" if args.apply else "DRY RUN, store untouched"
     print(f"migrate ({mode}): {len(records)} records, {stored} "
