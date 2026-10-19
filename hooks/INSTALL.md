@@ -94,10 +94,12 @@ Why these values:
 - **Stop** receives `last_assistant_message`, so citations are read from the hook payload rather
   than from the transcript file, which can lag behind the live conversation.
 - **onFailure.** `"continue"` is deliberate for all three: a broken lesson store should never
-  block a session. `"block"` makes a crashed, missing or timed-out hook stop the event, which is
-  right for a security gate but wrong for context injection. `onFailure` has no effect on `Stop`
-  or background hooks, and SessionEnd has no decision control, so the field there is
-  documentation of intent.
+  block a session (stage-1 hooks never block; stage-2 shadow hooks block only a proposal the
+  operator promoted to block mode after the observe/warn ladder, see docs/design/compiler.md).
+  `"block"` makes a crashed, missing or timed-out hook stop the event, which is right for a
+  security gate but wrong for context injection. `onFailure` has no effect on `Stop` or
+  background hooks, and SessionEnd has no decision control, so the field there is documentation
+  of intent.
 
 Optional but recommended: a `ConfigChange` hook of your own that logs edits to settings, hooks
 and skills, so any change to the hooks above is visible. This repo does not ship one.

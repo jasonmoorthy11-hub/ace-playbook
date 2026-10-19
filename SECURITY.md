@@ -33,8 +33,10 @@ of the lesson store, and the settings and hooks of the agent that consumes it.
    quarantine file), in the store writer (which refuses text with hits) and as a repo check.
 4. **Append-only, hash-chained log** with all-or-nothing atomic writes, a per-run limit on lessons
    touched and on new lessons, and a verifier for tampering.
-5. **Fail-open hooks with no network.** Hooks never block a session and never call the API; only
-   the reflector does, with no tools, from a path-configured key that is never logged.
+5. **Fail-open hooks with no network.** Stage-1 hooks never block a session; stage-2 shadow hooks
+   block only a proposal the operator promoted to block mode after the observe/warn ladder (see
+   docs/design/compiler.md; amended 2026-10-19). No hook calls the API; only the reflector does,
+   with no tools, from a path-configured key that is never logged.
 6. **Reflector prompt** tells the model to ignore instructions inside tool results. This is the
    weakest control and is not relied on.
 

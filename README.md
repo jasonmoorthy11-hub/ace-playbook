@@ -76,7 +76,9 @@ uv run python -m ace_playbook.migrate --legacy-glob 'DIR/lessons-*.json' \
 
 Design rules that shape the code: no model output is applied as a rewrite; lessons are minted only
 from evidence the user actually wrote; a scrub hit sends the whole lesson to quarantine; the
-injected block is advisory data, not instructions; hooks fail open and stay out of the way.
+injected block is advisory data, not instructions; hooks fail open and stay out of the way
+(stage-1 hooks never block; stage-2 shadow hooks block only a proposal the operator promoted to
+block mode after the observe/warn ladder, see [docs/design/compiler.md](docs/design/compiler.md)).
 [SECURITY.md](SECURITY.md) has the threat model.
 
 ## Run it
