@@ -447,6 +447,15 @@ Handled since the step 1 review waves, with parity deviations recorded in `step0
 word (`>/dev/null rm -rf x`), wrappers with options (`sudo -u root rm`, `timeout 5 rm`), backslash and `$'..'` obfuscation of the
 command word, and heredoc look-alikes (`# <<EOF`, `$((1<<2))`, `\<<EOF`) that used to hide the lines after them.
 
+The scanner is best-effort and linear, not a shell parser. Bash parsing has more corners than any tokenizer
+here covers (quoting inside `$(...)`, aliases, functions, `eval`, here-document delimiters built at run time), so
+differentials between what the scanner sees and what bash runs will exist beyond the ones found so far. Every
+differential found in review is pinned as a parity extra in `step0_parity.json` (its Step 0 count, its port count, the
+reason) and as a unit test in `tests/test_compile_shell.py`, so none can regress silently. For the ones not yet found
+the control is the ladder itself: a proposal starts in observe, reaches warn only on human-confirmed true positives,
+reaches block only after a fresh warn period and a human reading every counted TP, and every evasion candidate
+(including `unparseable`) is reviewed before any promotion.
+
 **Label forgery.** `labels.jsonl` drives promotion and the agent, running as the user, can append
 to files in `data_dir`: a forged TP label is self-report by another route. TTY-only `compile label`
 does not stop an append by the agent; it only makes the honest path human. The control is at

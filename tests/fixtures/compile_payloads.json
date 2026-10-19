@@ -70,6 +70,10 @@
     {"id": "extra/rm-backslashes-in-word", "steps": [{"human": "x"}, {"tool": "Bash", "input": {"command": "\\r\\m -rf /w/src"}}], "deviation": "all backslashes are stripped from an unquoted command word (fix wave 3)"},
     {"id": "extra/rm-ansi-quoted-word", "steps": [{"human": "x"}, {"tool": "Bash", "input": {"command": "$'rm' -rf /w/src"}}], "deviation": "$'..' is a quoted word (fix wave 3)"},
     {"id": "extra/rm-after-redirection", "steps": [{"human": "x"}, {"tool": "Bash", "input": {"command": ">/dev/null rm -rf /w/src"}}], "deviation": "leading redirections are skipped before the command word (fix wave 3)"},
+    {"id": "extra/heredoc-comment-eats-backslash", "steps": [{"human": "x"}, {"tool": "Bash", "input": {"command": "cat <<EOF # \\\nEOF\nrm -rf /w/src\nEOF"}}], "deviation": "a comment on the opener line ends the line at its first newline, backslash or not (fix wave 5)"},
+    {"id": "extra/heredoc-nested-arithmetic-shift", "steps": [{"human": "x"}, {"tool": "Bash", "input": {"command": "echo $(( (1<<2) ))\nrm -rf /w/src\n2"}}], "deviation": "arithmetic is tracked by parenthesis level, so a shift inside nested parentheses opens no heredoc (fix wave 5)"},
+    {"id": "extra/rm-backslash-newline-continuation", "steps": [{"human": "x"}, {"tool": "Bash", "input": {"command": "rm -r\\\nf /w/src"}}], "deviation": "backslash-newline joins the line (fix wave 4)"},
+    {"id": "extra/heredoc-escaped-double-backslash", "steps": [{"human": "x"}, {"tool": "Bash", "input": {"command": "cat \\\\<<EOF\nrm -rf /w/src\nEOF"}}]},
     {"id": "extra/mixed-session", "steps": [{"human": "go"}, {"tool": "Read", "input": {"file_path": "/w/a.py"}}, {"tool": "Edit", "input": {"file_path": "/w/a.py"}, "result": "updated"}, {"tool": "Edit", "input": {"file_path": "/w/b.py"}, "result": "updated"}, {"tool": "Bash", "input": {"command": "git commit -m m && rm -rf /w/out"}}, {"human": "you never listen"}]}
   ]
 }

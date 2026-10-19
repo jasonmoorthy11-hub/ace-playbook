@@ -201,3 +201,52 @@ def test_escape_handling_is_linear(name, cmd):
     t0 = time.monotonic()
     catalogue.evaluate(ev.event_from_hook(pre(cmd)), state_mod.new_state("s-1"), strict=True)
     assert time.monotonic() - t0 <= 0.1, name
+
+
+# ------------------------------------------------------------------ where the opener's command line really ends
+def test_a_comment_on_the_opener_line_eats_its_trailing_backslash():
+    # bash: `# \` is a comment, so line 1 ends there; the body is empty (line 2 is the terminator) and rm runs
+    assert rm_fires("cat <<EOF # \\\nEOF\nrm -rf /w/src\nEOF")
+    assert rm_fires("cat <<EOF # note\nEOF\nrm -rf /w/src\nEOF")
+
+
+def test_a_real_continuation_on_the_opener_line_still_extends_it():
+    assert not rm_fires("cat <<EOF \\\n  more\nrm -rf /w/src\nEOF")             # body starts after `more`
+
+
+def test_a_quoted_continuation_on_the_opener_line_is_a_real_continuation():
+    # inside double quotes backslash-newline is removed, so the line ends after `b"`; the next line is the terminator
+    assert rm_fires('cat <<EOF "a \\\nb"\nEOF\nrm -rf /w/src\nEOF')
+    assert not rm_fires('cat <<EOF "a \\\nb"\nrm -rf /w/src\nEOF')
+
+
+def test_a_quoted_newline_ends_the_command_line_only_after_the_quote():
+    assert not rm_fires('cat <<EOF "a\nb"\nrm -rf /w/src\nEOF')
+
+
+def test_two_heredocs_on_one_line_take_their_bodies_in_order():
+    assert ev.command_segments("cat <<A <<B\nx\nA\ny\nB\nls") == [["cat"], ["ls"]]
+    assert rm_fires("cat <<A <<B\nx\nA\ny\nB\nrm -rf /w/src")
+
+
+def test_an_unterminated_heredoc_hides_nothing():
+    assert rm_fires("cat <<EOF\nrm -rf /w/src")
+
+
+# ------------------------------------------------------------------ arithmetic depth by parenthesis level
+def test_parentheses_in_quotes_do_not_open_arithmetic():
+    assert not rm_fires('echo "((" ; cat <<EOF\nrm -rf /w/src\nEOF')
+
+
+def test_nested_parentheses_inside_arithmetic_keep_it_open_until_the_level_returns():
+    assert rm_fires("echo $(( (1<<2) ))\nrm -rf /w/src\n2")                 # the shift is inside, not a heredoc
+    assert not rm_fires("echo $(( (1) )) ; cat <<EOF\nrm -rf /w/src\nEOF")   # closed again: a real heredoc
+
+
+def test_a_subshell_is_not_arithmetic():
+    assert not rm_fires("( cat <<EOF\nrm -rf /w/src\nEOF\n)")
+    assert not rm_fires("( ( cat <<EOF\nrm -rf /w/src\nEOF\n) )")
+
+
+def test_arithmetic_spanning_lines_stays_open():
+    assert rm_fires("echo $((1+\n1<<2))\nrm -rf /w/src\n2")

@@ -5,7 +5,8 @@ pass handles quotes, comments and heredocs, at most MAX_HEREDOCS heredoc openers
 the rest is split by regex. Nothing is executed, expanded or passed to a shell; strings are only split.
 
 Differences from Step 0 (parity deviations only on unusual input, see step0_parity.json): a heredoc
-removes only its BODY and is not opened for `<<<`, an escaped `<<`, `<<` inside `((`, or after a comment `#`
+removes only its BODY (cut at the real end of its command line) and is not opened for `<<<`, an escaped `<<`,
+`<<` inside `((`/`$((` (tracked by paren level), or after a comment `#`
 (a word-initial, unescaped `#` drops the rest of the line; backslash-newline continues a line); `$'..'` and `$".."` are quoted words; a single `&`
 separates segments; braces, `!` and if/then/do/else/while are stripped from a segment's front, and so
 are leading redirections and the wrappers sudo, env, nice, xargs, doas, timeout, ... with their options.
@@ -20,7 +21,8 @@ MAX_HEREDOCS = 32   # openers examined per command; later `<<` are plain text (m
 
 _OPENER = re.compile(r"<<-?[ \t]*(['\"]?)(\w{1,64})(?!\w)\1")
 _SPECIAL = re.compile(r"[\"'<\n#]")
-_DQ_RUN = re.compile(r"(?:[^\"\\]+|\\[^\n])*")
+_DQ_RUN = re.compile(r"(?:[^\"\\]+|\\[\s\S])*")      # inside "..", backslash-newline is a continuation
+_PAREN = re.compile(r"\(\(|[()]")
 _ANSI_RUN = re.compile(r"(?:[^'\\]+|\\[\s\S])*")
 _SIMPLE = re.compile(r"^[\w./~$@%+=:,-]*$")
 _SPLIT = re.compile(r"&&|\|\||;|\||\n|\(|\)|`|(?<![>&])&(?![>&])")
@@ -67,11 +69,34 @@ def _escaped(s: str, p: int) -> bool:
     return (p - j) % 2 == 1
 
 
+def _parens(run: str, paren: int, arith: list[int]) -> int:
+    """Track unquoted parentheses. `arith` holds the paren level at which each open `((` / `$((` began;
+    it is non-empty exactly while a `<<` would be an arithmetic shift. Returns the new level."""
+    for m in _PAREN.finditer(run):
+        if _escaped(run, m.start()):
+            continue
+        if m.group() == "((":
+            arith.append(paren)
+            paren += 2
+        elif m.group() == "(":
+            paren += 1
+        elif paren > 0:
+            paren -= 1
+            if arith and paren == arith[-1]:
+                arith.pop()
+    return paren
+
+
 def _scan(s: str) -> str:
-    """Mask quoted strings (single tokens stay, prose becomes Q), drop comments and heredoc bodies."""
+    """Mask quoted strings (single tokens stay, prose becomes Q), drop comments and heredoc bodies.
+
+    A heredoc opener is queued and its body is cut when the scan reaches the real end of the command
+    line, the first newline that is not backslash-continued, quoted or inside a comment.
+    """
     out: list[str] = []
-    n, i, dead, ansi_dead, attempts, depth = len(s), 0, 0, 0, 0, 0   # depth: open `((` outside quotes
-    skip: dict[int, int] = {}          # newline index ending an opener line -> end of its body
+    n, i, dead, ansi_dead, attempts, paren = len(s), 0, 0, 0, 0, 0
+    arith: list[int] = []              # paren levels of the open arithmetic expressions
+    pending: list[str] = []            # heredoc delimiters waiting for the end of their command line
     while i < n:
         m = _SPECIAL.search(s, i)
         if not m:
@@ -82,14 +107,18 @@ def _scan(s: str) -> str:
         out.append(run)
         c = s[p]
         i = p + 1
-        depth = max(0, depth + run.count("((") - run.count("))"))
+        paren = _parens(run, paren, arith)
         if c == "\n":
             if run.endswith("\\") and _escaped(s, p):   # backslash-newline: both vanish, the line goes on
                 out[-1] = run[:-1]
             else:
                 out.append("\n")
-                i = skip.get(p, i)
-                depth = 0
+                while pending:             # the bodies start on the next line, in opener order
+                    t = _terminator(pending.pop(0)).search(s, i)
+                    if not t:              # unterminated: nothing is hidden
+                        pending.clear()
+                        break
+                    i = t.end()
         elif c == "#":
             if p == 0 or (s[p - 1] in " \t\n;|&(" and not _escaped(s, p - 1)):   # word-initial: a comment
                 e = s.find("\n", p)
@@ -131,14 +160,8 @@ def _scan(s: str) -> str:
         elif s.startswith("<<", p):
             o = _OPENER.match(s, p) if attempts < MAX_HEREDOCS else None
             attempts += bool(o)
-            if o and (_escaped(s, p) or depth > 0):    # `\<<`, or a shift inside `((`/`$((`
-                o = None
-            e = s.find("\n", o.end()) if o else -1
-            while e >= 0 and _escaped(s, e):         # the opener line continues past a backslash-newline
-                e = s.find("\n", e + 1)
-            t = _terminator(o.group(2)).search(s, skip.get(e, e + 1)) if e >= 0 else None
-            if t:
-                skip[e] = t.end()          # the body goes; the rest of the opening line stays
+            if o and not _escaped(s, p) and not arith:     # not `\<<`, not a shift inside `((`/`$((`
+                pending.append(o.group(2))                  # the opener goes; the rest of the line stays
                 i = o.end()
             else:
                 out.append("<<")
