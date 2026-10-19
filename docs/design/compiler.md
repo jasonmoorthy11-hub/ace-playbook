@@ -54,20 +54,31 @@ RESULTS.md:62), alongside `edit_unread_turn` and `rm_rf` (RESULTS.md:34). The ve
 | `compile/detectors.py` | Pure detector functions, `Fire`, `advance` (the state transition) (section 4) | ~230 |
 | `compile/catalogue.py` | `CATALOGUE` registry (`Detector` rows with strength, tier, consumes, state, compilable, lessons), `evaluate` (strict mode, error list), `source_sha256` over the full source of events, shell, textrules, detectors and catalogue | ~100 |
 | `compile/state.py` | Rolling per-session state file under `data_dir/shadow_state/`, locked (`LOCK_NB`), atomic, hashed name, 0600/0700, FIFO- and symlink-safe | ~235 |
-| `compile/evidence.py` | Evidence cards (section 5) | ~260 |
-| `compile/proposal.py` | Proposal schema, validation, replay/regression runner, writer (section 6) | ~300 |
+| `compile/evidence.py` | Evidence cards (section 5): admission, legacy path, scrub, `cards/` writer | 300 (built, step 2) |
+| `compile/proposal.py` | Proposal schema, ordered validation, replay/regression runner, writer (section 6) | 299 (built, step 2) |
 | `compile/shadow.py` | Hook entry point: load approved proposals, evaluate, print the decision as JSON on stdout; always exits 0 (section 7) | ~220 |
 | `compile/offline.py` | Nightly pass: run signal detectors over finished transcripts, finalize session-level detectors, label pre-fill, demotions | ~250 |
 | `compile/report.py` | shadow.jsonl to results tables, effect estimates (section 8) | ~260 |
-| `compile/__main__.py` | CLI: `cards`, `propose`, `packet`, `review-record`, `approve`, `label`, `report`, `replay-synthetic` | ~180 |
+| `compile/__main__.py` | CLI: `cards`, `propose`, `validate` (98 lines, built, step 2); later `packet`, `review-record`, `approve`, `label`, `report`, `replay-synthetic` | 98, ~180 when complete |
 | `ace_playbook/textrules.py` | Leaf module (stdlib `re`, `string` only): `unsafe_text_reason`, `inert_reason` and their regexes, moved out of `store/schema.py` and `inject/sanitize.py`, which re-export them (step 1, see 7.2) | ~120 moved |
 | `hooks/shadow.sh` | One script, two registrations (PreToolUse, Stop); never `exec`s, always `exit 0` | ~12 |
 
 Data lives under the existing `data_dir` (config.py:20, 69-70), never under `~/.claude`
-(config.py:1): `detector_events.jsonl`, `evidence/cards.jsonl`, `proposals/`, `proposals/reviews/`,
+(config.py:1): `detector_events.jsonl`, `cards/` (one `E-xxxxxxxx.json` per card), `proposals/`, `proposals/reviews/`,
 `proposals/approved/`, `approvals.jsonl`, `demotions.jsonl`, `labels.jsonl`, `shadow.jsonl`,
 `shadow.synthetic.jsonl`, `shadow_state/`. Frozen CI fixtures live in `ace_playbook/fixtures/frozen/` (the seed-1 corpus that
 `generate.py` writes) and `ace_playbook/fixtures/parity/` (`step0_parity.json`, which the generator does not write).
+
+**Step 2 as built (deviations, one line each).**
+- Step 2 also delivers `proposal.py`, `propose` and `validate` (the build-order table puts them in step 3); approve, packet, review-record and the hash chain stay in step 3.
+- Cards are one 0600 file each under `data_dir/cards/` (not `evidence/cards.jsonl`), and `payload_ref` embeds the minimized `{tool_name, tool_input}` (scrubbed, masked on a hit) instead of pointing at `evidence/payloads/`.
+- `quote_offsets` items are `{user_turn, start, end, quote_sha256}`: the ordinal among user messages and offsets into the whitespace-collapsed, case-folded text (no quote text is stored).
+- `evidence.py` copies `norm` and a JSONL reader instead of importing `reflect.provenance` and `inject.ledger`, whose package inits pull in the HTTP client and `keys`; a test pins `norm` equal to the original.
+- The reflections ledger and `detector_events.jsonl` are not read yet: mapped fires are recomputed from the transcript (the nightly writer is step 5); a fire needs a minimizable payload under 8 KiB.
+- Legacy labels (`labels.jsonl`, written by `compile label` in a later step) are verified as a `store.schema.record_hash` chain from `GENESIS`; the label `ref` is the would-be card id, which `cards` prints for every unlabelled legacy candidate.
+- The proposal schema is `check {detector, params, on_truncated}` and `provenance {cards, lesson_evidence, source_sha256}` (no separate `detector_sha256`); `P-` ids hash lesson, event, matcher, detector, params, cards and `source_sha256`, not message or clock.
+- Hashes in a proposal stay full length; the scrub step scans every string except fields step 1 proved to be a bare digest or timestamp, because the LESSON lint flags any hex run over 12 characters and any ISO time.
+- Regression and replay examples are single payloads run on a fresh state (`ace_playbook/fixtures/compile/examples.json`); only `rm_rf_nonscratch` and `rm_rf` have examples and message templates so far.
 
 ## 4. detectors.py: the catalogue
 

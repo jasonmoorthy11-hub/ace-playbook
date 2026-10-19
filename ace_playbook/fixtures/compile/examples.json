@@ -1,0 +1,23 @@
+{
+  "v": 1,
+  "note": "Synthetic regression (must NOT fire) and replay (MUST fire) payloads per detector; docs/design/compiler.md 4.1. Invented /w/... paths. Same commands as tests/fixtures/compile_payloads.json (a test keeps them in step).",
+  "detectors": {
+    "rm_rf_nonscratch": {
+      "no_fire": [
+        {"tool_name": "Bash", "tool_input": {"command": "rm -rf /tmp/scratch node_modules"}},
+        {"tool_name": "Bash", "tool_input": {"command": "grep rm -rf notes.md"}},
+        {"tool_name": "Bash", "tool_input": {"command": "rm -f file"}},
+        {"tool_name": "Bash", "tool_input": {"command": "cat <<'EOF'\nrm -rf /w/src\nEOF"}}
+      ],
+      "fire": {"tool_name": "Bash", "tool_input": {"command": "rm -rf /w/src"}}
+    },
+    "rm_rf": {
+      "no_fire": [
+        {"tool_name": "Bash", "tool_input": {"command": "rm file.txt"}},
+        {"tool_name": "Bash", "tool_input": {"command": "rm -r dir"}},
+        {"tool_name": "Bash", "tool_input": {"command": "echo \"rm -rf /w/src\""}}
+      ],
+      "fire": {"tool_name": "Bash", "tool_input": {"command": "cd /w && rm -fr build2"}}
+    }
+  }
+}

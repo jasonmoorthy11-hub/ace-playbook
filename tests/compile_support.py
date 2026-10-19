@@ -161,6 +161,86 @@ def dump_parity(data: dict) -> str:
     return "\n".join([*lines, "}"]) + "\n"
 
 
+# ---------------------------------------------------------------- step 2: synthetic world
+CARDS_FIXTURE = Path(__file__).parent / "fixtures" / "compile_cards.json"
+EXAMPLES = Path(__file__).resolve().parent.parent / "ace_playbook" / "fixtures" / "compile" / "examples.json"
+RM_CMD = "rm -rf /w/src"
+
+
+class World:
+    """A temp data_dir holding one synthetic lesson, its transcripts and ledgers (all invented)."""
+
+    def __init__(self, cfg, lesson_id: str, fx: dict) -> None:
+        self.cfg, self.lesson_id, self.fx = cfg, lesson_id, fx
+
+    def sid(self, key: str) -> str:
+        return self.fx["sessions"][key]["id"]
+
+    def ref(self, key: str, command: str = RM_CMD) -> str:
+        """The card id a fire of `command` in session `key` would get (also the label ref)."""
+        from ace_playbook.compile import evidence as evm
+        payload = {"tool_name": "Bash", "tool_input": {"command": command}}
+        return evm.card_id(self.lesson_id, evm.sid(self.sid(key)), evm.payload_hash(payload))
+
+    def add_session(self, key: str, steps: list[dict]) -> str:
+        self.fx["sessions"][key] = {"id": f"sess-syn-{key}", "steps": steps}
+        write_transcript(self.cfg, self.fx["sessions"][key])
+        return self.fx["sessions"][key]["id"]
+
+
+def write_transcript(cfg, session: dict) -> Path:
+    d = Path(cfg.transcripts_root) / "proj"
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / f"{session['id']}.jsonl"
+    p.write_text("".join(json.dumps(r) + "\n" for r in records(session["steps"], session["id"])))
+    return p
+
+
+def append_jsonl(path: Path, rec: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as fh:
+        fh.write(json.dumps(rec, sort_keys=True) + "\n")
+
+
+def write_labels(cfg, rows: list[dict]) -> None:
+    """A hash-chained labels.jsonl (record_hash chain from GENESIS)."""
+    from ace_playbook.store.schema import GENESIS, record_hash
+    prev = GENESIS
+    for r in rows:
+        row = {"reason_code": "real", "at": "2026-10-20T08:00:00Z", **r, "prev_hash": prev}
+        row["hash"] = record_hash(row)
+        prev = row["hash"]
+        append_jsonl(cfg.path("labels.jsonl"), row)
+
+
+def make_world(tmp_path, monkeypatch, *, origin: str | None = "origin", sessions=("later",), shown=("later",),
+               legacy: bool = False, status: str = "active") -> World:
+    """origin = fixture session the user said it in; sessions = later transcripts; shown = sessions whose
+    injection record lists the lesson. legacy = migrated lesson with self-quoted `legacy:` evidence."""
+    import dataclasses
+    from ace_playbook.config import Config
+    from ace_playbook.store import DeltaLog
+    from .helpers import GLOBAL, add_draft
+    fx = json.loads(CARDS_FIXTURE.read_text())
+    cfg = Config(data_dir=tmp_path / "data", transcripts_root=tmp_path / "projects")
+    Path(cfg.data_dir).mkdir(parents=True)
+    les = fx["lesson"]
+    if legacy:
+        evid = [{"quote": les["text"], "origin": "user_file", "session_id": fx["legacy_session_id"]}]
+    else:
+        evid = [{"quote": les["quote"], "origin": "user_message", "session_id": fx["sessions"][origin]["id"]}]
+    draft = add_draft(les["text"], GLOBAL, status=status, applies_when=les["applies_when"], evidence=evid)
+    DeltaLog(cfg.deltas).append(draft, ts="2026-10-01T00:00:00Z")
+    lid = draft["lesson_id"]
+    for key in ([] if legacy or origin is None else [origin]) + list(sessions):
+        write_transcript(cfg, fx["sessions"][key])
+    for key in shown:
+        append_jsonl(cfg.injections, {"session_id": fx["sessions"][key]["id"], "shown_ids": [lid], "holdout_ids": []})
+    row = catalogue.CATALOGUE["rm_rf_nonscratch"]
+    monkeypatch.setitem(catalogue.CATALOGUE, "rm_rf_nonscratch", dataclasses.replace(row, lessons=(lid,)))
+    return World(cfg, lid, fx)
+
+
 if __name__ == "__main__":  # python -m tests.compile_support <rebuild-lab>/ace/step0
     PARITY.parent.mkdir(exist_ok=True)
     PARITY.write_text(dump_parity(regen_parity(sys.argv[1])))

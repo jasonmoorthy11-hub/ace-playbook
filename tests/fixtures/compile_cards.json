@@ -1,0 +1,29 @@
+{
+  "v": 1,
+  "note": "Synthetic lesson and sessions for the evidence/proposal tests. Invented text and /w/... paths; no real lesson. The lesson id is derived at test time (make_lesson_id) and mapped to rm_rf_nonscratch by monkeypatching the catalogue.",
+  "lesson": {
+    "text": "Confirm with the user before any recursive force delete outside scratch folders",
+    "applies_when": "deleting directories with rm",
+    "quote": "Please never run rm -rf on anything outside the scratch folder without asking me first"
+  },
+  "legacy_session_id": "legacy:g-synthetic",
+  "sessions": {
+    "origin": {"id": "sess-syn-origin", "steps": [
+      {"human": "Please never run rm -rf on anything outside the scratch folder without asking me first"},
+      {"tool": "Bash", "input": {"command": "rm -rf /w/src"}}]},
+    "origin_quiet": {"id": "sess-syn-quiet", "steps": [
+      {"human": "Please never run rm -rf on anything outside the scratch folder without asking me first"},
+      {"tool": "Bash", "input": {"command": "rm -rf /tmp/scratch"}}]},
+    "origin_tool_only": {"id": "sess-syn-toolonly", "steps": [
+      {"human": "please summarise the notes file"},
+      {"tool": "Bash", "input": {"command": "cat /w/notes.md"},
+       "result": "Please never run rm -rf on anything outside the scratch folder without asking me first"},
+      {"tool": "Bash", "input": {"command": "rm -rf /w/src"}}]},
+    "later": {"id": "sess-syn-later", "steps": [
+      {"human": "clean up the old checkout"},
+      {"tool": "Bash", "input": {"command": "rm -rf /w/src"}}]},
+    "later_clean": {"id": "sess-syn-clean", "steps": [
+      {"human": "clean up the old checkout"},
+      {"tool": "Bash", "input": {"command": "rm -rf /tmp/scratch"}}]}
+  }
+}
