@@ -533,6 +533,15 @@ the separation the report requires for the README results table (report:59).
 | Hook cost | p50/p95 `dur_ms`, error count |
 | Live versus offline agreement | fires seen in one tier and not the other |
 
+**As built (step 4c, 2026-10-19).** `python3 -m ace_playbook.compile report [--days N] [--json]` (`compile/report.py`) is the
+minimal cut: per proposal, rows, rows by cause (detector, truncated), distinct sessions (a count, never the hashes), active days,
+tp, fp, unlabelled and first/last date, then rows per day for the last N days (default 14; the totals are not windowed).
+Eligible-session rates, Wilson intervals, friction and hook cost are not computed (they need the offline pass). The private
+table reads `shadow.jsonl` and the synthetic one `shadow.synthetic.jsonl`; they are never summed, and a row whose `corpus`
+disagrees with its file refuses the whole report (exit 2). tp/fp come from `labels.jsonl`, newest row per ref wins, `incident` rows
+are ignored, and a broken chain ignores every label and says so. The header prints `report_sha256`, the hash of the report
+source, so the operator can record it before observe starts.
+
 **Effect estimate.** For the compiled path, blocking prevents the action by construction, so the
 primary is false-block rate and friction, with recurrence descriptive (PREREGISTRATION.md:78-84).
 The descriptive effect is fires per eligible session with versus without the check, using a
