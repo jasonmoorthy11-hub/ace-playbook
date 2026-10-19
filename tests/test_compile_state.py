@@ -359,3 +359,15 @@ def test_prune_takes_the_lock_first_and_skips_one_that_is_held(tmp_path):
         _os.close(fd)
     assert st.prune(tmp_path, 1000.0, dry_run=True) == 1 and files["lock"].exists()
     assert st.prune(tmp_path, 1000.0) == 1 and not files["lock"].exists()
+
+
+def test_update_gives_up_when_the_lock_file_was_unlinked_under_it(tmp_path, monkeypatch):
+    lock = str(st.state_path(tmp_path, "sid")) + ".lock"
+    real, called = fcntl.flock, []
+
+    def flock_then_unlink(fd, op):
+        real(fd, op)
+        os.unlink(lock)                                                    # a prune removed the file we just locked
+    monkeypatch.setattr(st.fcntl, "flock", flock_then_unlink)
+    state, status = st.update(tmp_path, "sid", lambda s: called.append(1) or s)
+    assert (state, status, called) == (None, "skipped:locked", [])

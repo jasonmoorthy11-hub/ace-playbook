@@ -61,8 +61,10 @@ def prompt_hashes(text: str) -> set[str]:
     out = set()
     for tok in text.split():
         t = tok.rstrip(".,;:").strip("'\"`").rstrip(".,;:")
+        if len(t) < 2 or not t.strip("/.~"):
+            continue                                       # trivial tokens are skipped BEFORE `~` could be expanded to home
         for v in (t, os.path.expanduser(t)):
-            out |= {hash16(x) for x in (v, v.rstrip("/")) if len(t) >= 2 and len(x) >= 2 and x.strip("/.~")}
+            out |= {hash16(x) for x in (v, v.rstrip("/")) if len(x) >= 2}
     return out
 
 
@@ -145,9 +147,10 @@ def detector_rows(events: list, sh: str) -> list[dict]:
 
 
 def join(uses: list, t: float):
-    """(event index, tool use) of `uses` = [(seconds, i, tu)] nearest at or before `t`, else nearest after within 60 s."""
-    before = [u for u in uses if u[0] is not None and u[0] <= t]
-    after = [u for u in uses if u[0] is not None and 0 < u[0] - t <= 60]
+    """(event index, tool use) of `uses` = [(seconds, i, tu)] nearest at or before whole second `t` (stamps carry milliseconds,
+    so: before `t` + 1), else nearest after within 60 s."""
+    before = [u for u in uses if u[0] is not None and u[0] < t + 1]
+    after = [u for u in uses if u[0] is not None and t + 1 <= u[0] <= t + 60]
     pick = max(before, key=lambda u: u[0]) if before else min(after, key=lambda u: u[0]) if after else None
     return pick[1:] if pick else None
 
@@ -196,39 +199,38 @@ def write_labels(cfg, picks: list[tuple[dict, str]], now: float, dry: bool) -> t
     return done, labels.effective(rows + added)
 
 
-def current_mode(copy: tuple[dict, str, str], drows: list[dict]) -> tuple[str, str]:
-    """(current mode, window start) of an approved copy (proposal, mode, approved_at): the mode lowered by its newest demotion
-    row; the later of approval and its newest non-evasion demotion (FP counters restart there). The integration seam."""
+def current_mode(copy: tuple[dict, str, str], drows: list[dict], until: str = "~") -> tuple[str, str]:
+    """(current mode, window start) of an approved copy (proposal, mode, approved_at): the mode lowered by its cap; the latest
+    of approval and its non-evasion demotions at or before `until` (a forged future stamp must not blind FP counting)."""
     pid, own = copy[0]["id"], [r for r in drows if r["proposal_id"] == copy[0]["id"]]
-    return (demotions.lower(copy[1], demotions.effective_cap(own, pid)),
-            max([copy[2], *(r["ts"] for r in own if r["cause"] != "evasion_pair")]))
+    stamps = (copy[2], *(r["ts"] for r in own if r["cause"] != "evasion_pair"))
+    return demotions.lower(copy[1], demotions.effective_cap(own, pid)), max([t for t in stamps if t <= until] or [""])
 
 
 def demote(cfg, rows: list[dict], labs: dict[str, str], cands: list[dict], now: float, dry: bool, out: dict) -> None:
-    """Append design 7.3's demotion rows for every approved proposal (counts to `out`); a malformed copy is one error."""
+    """Append design 7.3's demotion rows for every approved proposal (counts to `out`)."""
     drows, broken = demotions.read_chain(cfg.data_dir)
     if broken is not None:
         raise ValueError("demotions.jsonl chain broken")
-    lessons = None
-    if cfg.deltas.exists():
-        from ..store import DeltaLog
-        lessons = {k: v.get("status") for k, v in DeltaLog(cfg.deltas).state().items()}
-    out["lesson_check"] = "ok" if lessons is not None else "skipped (no store)"
-    errors, fires = report.hook_errors(cfg, rows, iso(now - 7 * DAY))
+    lessons, out["lesson_check"] = report.lesson_statuses(cfg)
+    out["errors"] += out["lesson_check"] == "chain invalid"
+    errors, fires, full = report.hook_errors(cfg, rows, iso(now - 7 * DAY))
     n = errors + fires
-    out["error_rate"] = f"computed (n={n})" if n >= MIN_SAMPLE else f"not computable (n={n}, need {MIN_SAMPLE})"
+    sure = n >= MIN_SAMPLE and not full
+    out["error_rate"] = ("not computable (log full)" if full else f"computed (n={n})" if sure
+                         else f"not computable (n={n}, need {MIN_SAMPLE})")
     for copy in shadow.approved_records(cfg):
         try:
             p = copy[0]
             pid, det = p["id"], p["check"]["detector"]
-            cur, since = current_mode(copy, drows)
+            cur, since = current_mode(copy, drows, iso(now))
             fps = [(r["ts"], labels.row_id(r)) for r in rows if r["proposal_id"] == pid and r["ts"] >= since
                    and labs.get(labels.row_id(r)) == "fp"]
             ref = demotions.pair_ref([c for c in cands if c.get("proposal_id") == pid], 14)
             flagged = any(r["proposal_id"] == pid and r["cause"] == "evasion_pair" and r["ref"] == ref for r in drows)
             stale = det not in catalogue.CATALOGUE or catalogue.CATALOGUE[det].source_sha256 != p["provenance"]["source_sha256"]
             disable = ("lesson_inactive" if (lessons or {}).get(p["lesson_id"]) in WITHDRAWN else
-                       "source_sha256" if stale else "error_rate" if n >= MIN_SAMPLE and errors > 0.01 * n else None)
+                       "source_sha256" if stale else "error_rate" if sure and errors > 0.01 * n else None)
             for f in demotions.decide(pid, cur, disable=disable, fps=sorted(set(fps)), evasion=None if flagged else ref):
                 f = {**f, "ts": iso(now)}
                 if demotions.duplicate(drows, f) is None:
@@ -238,7 +240,6 @@ def demote(cfg, rows: list[dict], labs: dict[str, str], cands: list[dict], now: 
             out["errors"] += 1
 
 
-# ---------------------------------------------------------------- the pass
 @contextlib.contextmanager
 def stage(out: dict):
     try:

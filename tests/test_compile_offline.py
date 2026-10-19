@@ -354,3 +354,34 @@ def test_cli_prints_a_type_only_error_and_exits_1_when_the_pass_raises(w, monkey
     monkeypatch.setattr(offline, "run", lambda cfg, **kw: {}["secret/path"])
     code, out, err = cli_run(w, capsys=capsys)
     assert (code, out, err) == (1, "", "error: KeyError\n")
+
+
+def test_a_deltas_chain_that_fails_verification_disables_nothing_and_is_one_error(w):
+    from ace_playbook.store import DeltaLog
+    from .helpers import GLOBAL, add_draft
+    gone = add_draft("A retired global lesson about deletes", GLOBAL, status="retired")
+    DeltaLog(w.cfg.deltas).append(gone, ts="2026-10-01T00:00:00Z")
+    with open(w.cfg.deltas, "a") as fh:
+        fh.write(json.dumps({"malformed": True}) + "\n")
+    copy = {**w.props["rm_rf_nonscratch"], "lesson_id": gone["lesson_id"]}
+    write_private(w.data / "proposals" / "approved" / (w.pid + ".json"),
+                  json.dumps(shadow.approved_record(copy, "warn", "2026-10-01T00:00:00Z")) + "\n")
+    out = offline.run(w.cfg, now=cs.NOW)
+    assert (out["lesson_check"], out["errors"], out["demotions"]) == ("chain invalid", 1, 0)
+
+
+def test_an_offline_failure_is_recorded_in_health_even_when_reflection_is_a_dry_run(sweep, w, monkeypatch):
+    from ace_playbook import health as healthmod
+    monkeypatch.setattr(offline, "run", lambda cfg, **kw: {"errors": 2})
+    sweep("--dry-run")
+    rec = healthmod.read(w.cfg)
+    assert rec["ok"] is False and rec["consecutive_failures"] == 1 and "offline" in rec["last_error"]
+    sweep("--dry-run", "--offline-dry-run")                                 # a dry offline pass records nothing
+    assert healthmod.read(w.cfg)["consecutive_failures"] == 1
+    monkeypatch.setattr(offline, "run", lambda cfg, **kw: {}["x"])
+    sweep("--dry-run")
+    rec = healthmod.read(w.cfg)
+    assert rec["consecutive_failures"] == 2 and "KeyError" in rec["last_error"]
+    monkeypatch.setattr(offline, "run", lambda cfg, **kw: {"errors": 0})
+    sweep("--dry-run")
+    assert healthmod.read(w.cfg)["consecutive_failures"] == 2               # a clean pass leaves the record alone

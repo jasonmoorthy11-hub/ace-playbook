@@ -4,8 +4,7 @@ hooks/shadow.sh calls `main(["pre"|"stop"])`: one payload on stdin (cap 256 KiB)
 their detectors run, one `shadow.jsonl` row per fire; ALWAYS returns 0, failures are type-only lines in `shadow.log`.
 Observe prints nothing; warn echoes the message on stderr and prints ONE `hookSpecificOutput.additionalContext` JSON
 on stdout (verified live for PreToolUse; Stop per the hooks reference only); block prints the deny/block JSON and wins.
-A copy above observe counts only with a matching `approvals.jsonl` row (else observe, logged); `demotions.jsonl` only
-lowers (disabled skips; a broken chain caps everything at observe). Rows hold enums, ids, hashes and a timestamp.
+A copy above observe needs a matching `approvals.jsonl` row (else observe, logged); `demotions.jsonl` only lowers.
 """
 
 from __future__ import annotations
@@ -89,7 +88,7 @@ class _Approvals:
         return self.problem or approvals.verify_copy(rec, self.rows)
 
 
-def _tail(cfg, n: int = 200) -> str:
+def _tail(cfg, n: int = 1000) -> str:
     """The last `n` bytes of shadow.log, '' when it is missing or not a regular file."""
     try:
         with os.fdopen(os.open(Path(cfg.data_dir) / "shadow.log", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as fh:
@@ -100,23 +99,25 @@ def _tail(cfg, n: int = 200) -> str:
         return ""
 
 
+def _once(cfg, log, msg: str) -> None:
+    """Log a per-call repeat only if it is not in the last 1000 bytes of shadow.log: it can never fill the log to LOG_CAP."""
+    if msg not in _tail(cfg):
+        log(msg)
+
+
 def _demotions(cfg, log) -> tuple[list[dict], int | None]:
-    """(rows, broken_at) of demotions.jsonl, read once per call; a read error means no cap (fail open), a broken chain caps
-    every proposal at observe. A line already in the last 200 bytes of shadow.log is not logged again."""
-    once = lambda msg: None if msg in _tail(cfg) else log(msg)       # noqa: E731
+    """(rows, broken_at) of demotions.jsonl, read once per call; a broken chain or a read error is logged once and caps all at observe."""
     try:
         rows, broken = demotions.read_chain(cfg.data_dir)
     except Exception as exc:
-        once(f"demotions:{type(exc).__name__}")
-        return [], None
+        _once(cfg, log, f"demotions:{type(exc).__name__}")
+        return [], 0
     if broken is not None:
-        once("demotions:chain_broken")
+        _once(cfg, log, "demotions:chain_broken")
     return rows, broken
 
 
-def _load_one(cfg, path: Path, pid: str, log, appr: _Approvals | None = None,
-              dem: tuple[list[dict], int | None] | None = None) -> tuple[dict, str] | None:
-    dem = dem or ([], None)
+def _load_one(cfg, path: Path, pid: str, log, appr: _Approvals | None = None, dem=((), None)) -> tuple[dict, str] | None:
     try:
         if os.lstat(path).st_size > MAX_FILE_BYTES:
             return log(f"skipped:{pid}:oversize")
@@ -125,7 +126,7 @@ def _load_one(cfg, path: Path, pid: str, log, appr: _Approvals | None = None,
         if body is None or body["id"] != pid:
             return log(f"skipped:{pid}:invalid:{mode if body is None else 'id'}")
         if mode not in ALLOWED_MODES:
-            return log(f"skipped:{pid}:mode_disabled")
+            return _once(cfg, log, f"skipped:{pid}:mode_disabled")
         rep = proposal.validate(body, cfg, hot=True)
         if not rep.ok:
             return log(f"skipped:{pid}:invalid:{rep.failed}")
@@ -133,13 +134,13 @@ def _load_one(cfg, path: Path, pid: str, log, appr: _Approvals | None = None,
             verdict = (appr or _Approvals(cfg, log)).check(rec)
             if verdict != "ok":
                 if verdict != "chain_broken":
-                    log(f"approvals:{pid}:{verdict}")
+                    _once(cfg, log, f"approvals:{pid}:{verdict}")
                 mode = "observe"
         cap = demotions.effective_cap(dem[0], pid)            # then a demotion can only lower what the chain allows
         if dem[1] is not None:
             cap = demotions.lower("observe", cap)
         if cap == "disabled":
-            return log(f"skipped:{pid}:demoted")
+            return _once(cfg, log, f"skipped:{pid}:demoted")
         return body, demotions.lower(mode, cap)
     except Exception as exc:                                  # type only; a bad file never stops the others
         return log(f"skipped:{pid}:invalid:{type(exc).__name__}")
@@ -210,8 +211,7 @@ def _evaluate(cfg, ev, sid: str, names: list[str], log) -> set[str]:
     """Detector names that fired. State is advanced under the step 1 lock; if that is skipped, only detectors
     that need no state still run (a stateful one on a blank state would fire falsely)."""
     outs = []
-
-    def step(s: dict) -> dict:
+    def step(s: dict) -> dict:                                # noqa: E306
         outs.append(catalogue.evaluate(ev, s, names=names, strict=False))
         return outs[-1][1]
 

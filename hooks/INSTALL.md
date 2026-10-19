@@ -136,7 +136,8 @@ write nothing, or `--no-offline` to skip it).
 
 **Upgrade note.** A nightly job already started with `--dry-run` now also writes offline data (`detector_events.jsonl`, auto
 labels, demotions, evasion candidates, `shadow_state` cleanup) and still makes no API call. Add `--offline-dry-run` to keep
-the whole job read-only.
+the whole job read-only. When the offline pass raises or reports errors, `nightly_sweep.py` records a health failure (see
+`--health` below) even under `--dry-run`, because that pass is not a dry run unless `--offline-dry-run` is given.
 
 The sweep reflects up to 20 transcripts per run that are idle for an hour, larger than 2 KB, not
 in a subagent folder, and have no entry in `reflections.jsonl`. Each reflection is one Haiku 5.5

@@ -486,7 +486,9 @@ other text. No prompt text is stored. Demotions go to the
 hash-chained `demotions.jsonl` (`compile/demotions.py`): `{ts, v, proposal_id, from_mode, to_mode, cause, ref,
 review_required, prev_hash, hash}`, `to_mode` never above `from_mode`, a repeat of the newest row skipped. The hook reads the
 file once per call: `disabled` skips the proposal, any other cap lowers its mode, a broken chain caps every proposal at
-`observe` (measurement continues), a read error is logged by type and means no cap. The pass appends `label_fp` (block to
+`observe` (measurement continues), and so does a read error (symlink, directory, FIFO, oversize), logged by type: the hook fails
+safe, not open. The "skipped" lines for a demoted or not-yet-allowed proposal and the demotions lines are written once per
+1000 bytes of `shadow.log`, so they cannot fill it to its cap and blind the error-rate rule. The pass appends `label_fp` (block to
 warn, warn to observe), `label_fp_pair` (two effective FPs within 30 days: observe, `review_required`) counting FPs since the
 later of approval and the proposal's last demotion (an `evasion_pair` row does not restart them; two FPs more than 30 days
 apart lower one rung each in the same run); and the disable causes `lesson_inactive` (store status `dormant`, `retired`,
@@ -503,12 +505,25 @@ row with `review_required` and the current mode (no lowering). Regular `shadow_s
 nothing. A session is marked done in `offline_state.json` only when its detector rows were written and, if it has shadow rows,
 the label stage succeeded.
 
-*Demotions are not lifted yet.* `effective_cap` is the newest row of the proposal, so a demotion stays until a later row
-says otherwise and nothing writes such a row. The integration wave makes a newer operator approval row (`approvals.jsonl`, the
+*Demotions are not lifted yet.* `effective_cap` is the LOWEST `to_mode` over a proposal's valid rows (a `disabled` row is
+final) and a row whose `from_mode` is above the proposal's cap so far is invalid and breaks the chain there, so nothing raises a
+cap and nothing writes such a row. The integration wave makes a newer operator approval row (`approvals.jsonl`, the
 promotion ladder) clear an older demotion; this step does not implement the lift. `compile report` has a `Demotions` section
 (newest cap, cause, time, `review_required` if any row asked, row count per proposal; a broken chain is one visible line), so a
-silenced proposal shows. The chain is unkeyed: any local process can append a valid lowering row and silence a proposal (it
-can only lower, and the report shows it).
+silenced proposal shows.
+
+*Trust.* Every input of the offline pass can be written by a local process: the transcripts, `shadow.jsonl` (including its
+`mode`), `shadow.log`, `labels.jsonl`, `demotions.jsonl` (unkeyed), `offline_state.json`, the approved copy's `approved_at` and
+`deltas.jsonl`. Demotions can therefore be both caused (forged rows, labels or log lines) and suppressed (delete or truncate
+the file, forge rows). The hook's own safety is that a copy above `observe` needs a matching approvals row and demotions never
+raise a mode beyond what the chain allows; the operator's controls are the TTY listing at promotion and this report's
+`Demotions` section. A window start after now (a forged `approved_at` or demotion stamp) is ignored when FPs are counted. The
+1% error-rate rule is also skipped when `shadow.log` has reached its size cap (`error_rate: not computable (log full)`), and a
+deltas log that fails verification gives `lesson_check: chain invalid` (an error, no disable). `tp_candidate` rows must never
+feed the ladder: the agent can print a guard-looking line into its own tool output in observe and warn mode. `shell_keys`
+cannot yet exclude `isMeta` or compact-summary user records (the event carries no flag), so the whole-record `<bash-input>`
+shape is its only guard. A failed offline pass (an exception or `errors > 0`) is recorded as a health failure by
+`nightly_sweep.py` whatever `--dry-run` says about reflection, unless `--offline-dry-run` is given.
 
 **Mode ladder.**
 

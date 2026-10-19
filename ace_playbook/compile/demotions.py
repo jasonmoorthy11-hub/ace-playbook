@@ -1,9 +1,9 @@
 """Demotions (docs/design/compiler.md 7.3): `data_dir/demotions.jsonl`, hash-chained, append-only, lowering only.
 
 A row is `{ts, v: 1, proposal_id, from_mode, to_mode, cause, ref, review_required, prev_hash, hash}`, chained from
-`canon.GENESIS` like labels.jsonl. On the ladder block > warn > observe > disabled `to_mode` is at most `from_mode`; a
-row that raises is invalid and breaks the chain there. The reader is O_NOFOLLOW, regular files only, 1 MiB, strict JSON.
-`decide` holds the pure FP and evasion rules of the nightly pass. The hook reads this file: stdlib and `..canon` only.
+`canon.GENESIS` like labels.jsonl. On the ladder block > warn > observe > disabled `to_mode` is at most `from_mode`, and
+`from_mode` at most the proposal's cap so far (the lowest `to_mode`); a row that breaks either is invalid and breaks the chain
+there. O_NOFOLLOW, regular files only, 1 MiB, strict JSON. `decide` holds the pure rules. The hook reads this file: stdlib only.
 """
 
 from __future__ import annotations
@@ -43,8 +43,7 @@ def read_regular(path: Path, cap: int) -> bytes | None:
         return fh.read(cap + 1)
 
 
-def _ok(row: dict, prev: str) -> bool:
-    """Shape, enums, ladder direction and hash link of one row."""
+def _ok(row: dict, prev: str) -> bool:                              # shape, enums, ladder direction, hash link
     try:
         return (set(row) == KEYS and row["v"] == 1 and PID.fullmatch(row["proposal_id"]) is not None
                 and row["cause"] in CAUSES and isinstance(row["ref"], str) and isinstance(row["ts"], str)
@@ -56,16 +55,17 @@ def _ok(row: dict, prev: str) -> bool:
 
 
 def _parse(data: bytes) -> tuple[list[dict], int | None]:
-    rows, prev = [], GENESIS
+    rows, prev, caps = [], GENESIS, {}
     for line in data.splitlines():
         try:
             row = json.loads(line.decode("utf-8"), parse_constant=int)      # int("NaN") raises: no NaN or Infinity
         except (ValueError, RecursionError):                         # includes UnicodeDecodeError
             return rows, len(rows)
-        if not (isinstance(row, dict) and _ok(row, prev)):
+        if not (isinstance(row, dict) and _ok(row, prev)
+                and LADDER.index(row["from_mode"]) <= LADDER.index(caps.get(row["proposal_id"], "block"))):
             return rows, len(rows)
         rows.append(row)
-        prev = row["hash"]
+        prev, caps[row["proposal_id"]] = row["hash"], row["to_mode"]
     return rows, None
 
 
@@ -77,14 +77,15 @@ def read_chain(data_dir: str | Path) -> tuple[list[dict], int | None]:
 
 
 def effective_cap(rows: list[dict], proposal_id: str) -> str | None:
-    """The newest valid row's `to_mode` for the proposal, None when it has no row."""
-    return next((r["to_mode"] for r in reversed(rows) if r["proposal_id"] == proposal_id), None)
+    """The LOWEST `to_mode` over the proposal's valid rows (a `disabled` row is final until an approval-based lift exists),
+    None when it has no row."""
+    return min((r["to_mode"] for r in rows if r["proposal_id"] == proposal_id), key=LADDER.index, default=None)
 
 
 def duplicate(rows: list[dict], row: dict) -> dict | None:
     """The newest row of the proposal when it already says the same (`to_mode`, `cause`, `ref`)."""
-    last = next((r for r in reversed(rows) if r["proposal_id"] == row["proposal_id"]), None)
-    return last if last and all(last[k] == row[k] for k in ("to_mode", "cause", "ref")) else None
+    last = next((r for r in reversed(rows) if r["proposal_id"] == row.get("proposal_id")), None)
+    return last if last and all(last[k] == row.get(k) for k in ("to_mode", "cause", "ref")) else None
 
 
 def append(data_dir: str | Path, fields: dict) -> dict:
@@ -105,11 +106,12 @@ def append(data_dir: str | Path, fields: dict) -> dict:
         prev = rows[-1]["hash"] if rows else GENESIS
         row = {"ts": now_iso(), "v": 1, **fields, "prev_hash": prev}
         row["hash"] = record_hash(row)
-        if not _ok(row, prev):
-            raise ValueError("invalid demotion row")
         if (same := duplicate(rows, row)) is not None:
             return same
-        fh.write(json.dumps(row, sort_keys=True).encode() + b"\n")
+        line = json.dumps(row, sort_keys=True).encode() + b"\n"
+        if _parse(os.pread(fd, size, 0) + line)[1] is not None:       # shape, hash link, ladder and the cap of the chain
+            raise ValueError("invalid demotion row")
+        fh.write(line)
         fh.flush()
         os.fsync(fd)
     return row
@@ -131,8 +133,7 @@ def pair_ref(rows: list[dict], days: int) -> str | None:
 
 
 def decide(pid: str, cur: str, *, disable: str | None, fps: list[tuple[str, str]], evasion: str | None) -> list[dict]:
-    """Fields of the rows to append, in order: `cur` is the current mode, `disable` a disable trigger's cause, `fps` the
-    (ts, ref) of its effective FPs since its last demotion, `evasion` the ref of a new evasion pair."""
+    """Rows to append, in order: `cur` current mode, `disable` a disable cause, `fps` (ts, ref) of FPs since the last demotion."""
     def row(to: str, cause: str, ref: str, review: bool = False) -> dict:
         return {"proposal_id": pid, "from_mode": cur, "to_mode": to, "cause": cause, "ref": ref, "review_required": review}
     if cur == "disabled":

@@ -52,7 +52,7 @@ def test_auto_fp_b_expands_a_tilde_in_memory_and_also_hashes_the_raw_token(monke
     assert rule("observe", [{"human": "go for ~/w/src"}, run], key=hash16("~/w/src")) == "auto_fp_prompt_target"
 
 
-@pytest.mark.parametrize("target", ["/", "~", ".", "..", "a", "//"])
+@pytest.mark.parametrize("target", ["/", "~", ".", "..", "a", "//", "~/", "~/.", "~//", '"~/"'])
 def test_auto_fp_b_never_hashes_empty_short_or_bare_root_tokens(target):
     assert offline.prompt_hashes(f"please look at {target} now") & {hash16(target)} == set()
     assert rule("observe", [{"human": f"clean {target} please"}, RM], key=hash16(target)) is None
@@ -351,3 +351,40 @@ def test_any_non_auto_row_for_a_ref_stops_the_auto_rows(w, human):
     src = cs.put_shadow(w, "s1", CMD)
     cs.write_labels(w.cfg, [{"ref": labels.row_id(src), **human}])
     assert sum(offline.run(w.cfg, now=cs.NOW)["labels"].values()) == 0 and len(label_rows(w)) == 1
+
+
+def test_a_tilde_slash_in_the_prompt_never_matches_a_fire_on_the_home_directory(monkeypatch):
+    monkeypatch.setenv("HOME", "/h")
+    fire = {"tool": "Bash", "input": {"command": "rm -rf /h"}}
+    for prompt in ("clean ~/ please", "clean ~/. now", 'clean "~/" now', "clean ~// now", "clean ~ now"):
+        assert offline.prompt_hashes(prompt) & {hash16("/h"), hash16("/h/")} == set()
+        assert rule("observe", [{"human": prompt}, fire], key=hash16("/h")) is None
+
+
+def test_join_treats_a_use_in_the_same_second_as_the_row_as_at_or_before_it():
+    t = offline.tsec
+    uses = [(t("2026-10-18T10:00:01.100Z"), 0, "early"), (t("2026-10-18T10:00:06.400Z"), 1, "same second")]
+    assert offline.join(uses, t("2026-10-18T10:00:06Z")) == (1, "same second")        # the hook stamps whole seconds
+    assert offline.join(uses, t("2026-10-18T10:00:05Z")) == (0, "early")
+
+
+def test_a_forged_future_approved_at_or_demotion_stamp_does_not_blind_fp_counting(tmp_path):
+    from ace_playbook.compile import demotions as dm
+    w = cs.offline_world(tmp_path / "a", "block", approved_at="2027-01-01T00:00:00Z")
+    labels.append_row(w.cfg, "fp", labels.row_id(cs.put_shadow(w, "s1", CMD, "block")))
+    assert offline.run(w.cfg, now=cs.NOW)["demotions"] == 1
+    f = cs.offline_world(tmp_path / "f", "block")
+    labels.append_row(f.cfg, "fp", labels.row_id(cs.put_shadow(f, "s1", CMD, "block")))
+    dm.append(f.data, {"proposal_id": f.pid, "from_mode": "block", "to_mode": "block", "cause": "label_fp", "ref": "-",
+                       "review_required": False, "ts": "2027-01-01T00:00:00Z"})
+    assert offline.run(f.cfg, now=cs.NOW)["demotions"] == 1
+
+
+def test_a_full_shadow_log_makes_the_error_rate_not_computable_and_disables_nothing(w):
+    from ace_playbook.compile import shadow
+    line = "2026-10-18T10:00:00Z error:rm_rf:RuntimeError\n"
+    w.data.joinpath("shadow.log").write_text(line * (shadow.LOG_CAP // len(line) + 1))
+    for n in range(120):
+        cs.put_shadow(w, f"s{n}", f"echo {n}")
+    out = offline.run(w.cfg, now=cs.NOW)
+    assert out["error_rate"] == "not computable (log full)" and out["demotions"] == 0

@@ -85,7 +85,7 @@ def test_a_repeat_of_the_newest_row_for_a_proposal_is_not_appended(tmp_path):
     assert dm.append(tmp_path, fields()) == a
     dm.append(tmp_path, fields(proposal_id=OTHER))                          # another proposal does not hide the repeat
     assert dm.append(tmp_path, fields()) == a and len(dm.read_chain(tmp_path)[0]) == 2
-    dm.append(tmp_path, fields(ref="eeeeeeee"))                             # a different ref is a new row
+    dm.append(tmp_path, fields(from_mode="warn", ref="eeeeeeee"))            # a different ref is a new row
     assert len(dm.read_chain(tmp_path)[0]) == 3
 
 
@@ -326,7 +326,7 @@ def test_a_broken_demotions_chain_caps_every_proposal_at_observe_and_the_hook_st
     assert row["mode"] == "observe" and (out, err) == ("", "") and log.count("demotions:chain_broken") == 1
 
 
-def test_a_demotion_to_warn_lowers_a_block_proposal_and_an_unreadable_file_is_no_cap(tmp_path, monkeypatch, capsys):
+def test_a_demotion_to_warn_lowers_a_block_proposal_and_a_symlinked_file_caps_at_observe(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(shadow, "ALLOWED_MODES", ("observe", "warn", "block"))
     w = cs.offline_world(tmp_path, "block")
     out, _, _ = hook(w, monkeypatch, capsys)
@@ -338,7 +338,7 @@ def test_a_demotion_to_warn_lowers_a_block_proposal_and_an_unreadable_file_is_no
     (w.data / dm.FILE).unlink()
     (w.data / dm.FILE).symlink_to(tmp_path / "elsewhere.jsonl")
     out, _, log = hook(w, monkeypatch, capsys)
-    assert cs.shadow_rows(w.data)[-1]["mode"] == "block" and "demotions:OSError" in log
+    assert cs.shadow_rows(w.data)[-1]["mode"] == "observe" and "demotions:OSError" in log      # fail safe, not fail open
 
 
 def test_the_hook_reads_the_demotions_file_once_per_call(tmp_path, monkeypatch, capsys):
@@ -369,3 +369,25 @@ def test_an_evasion_pair_row_does_not_reset_the_fp_counters(tmp_path):
                              review_required=True))
     assert offline.run(w.cfg, now=cs.NOW)["demotions"] == 1
     assert [(d["cause"], d["to_mode"]) for d in chain(w)] == [("evasion_pair", "block"), ("label_fp", "warn")]
+
+
+def test_the_cap_is_the_lowest_valid_row_and_a_row_from_a_mode_the_proposal_lost_is_refused(tmp_path):
+    first = dm.append(tmp_path, fields(from_mode="block", to_mode="disabled", cause="error_rate", ref="-"))
+    with pytest.raises(ValueError):
+        dm.append(tmp_path, fields(from_mode="block", to_mode="block", cause="evasion_pair", ref="cafe0001", review_required=True))
+    rows, _ = dm.read_chain(tmp_path)
+    assert rows == [first] and dm.effective_cap(rows, PID) == "disabled"
+    assert dm.effective_cap([{"proposal_id": PID, "to_mode": "disabled"}, {"proposal_id": PID, "to_mode": "block"}], PID) == "disabled"
+    (tmp_path / "f").mkdir()
+    forge(tmp_path / "f", {"from_mode": "block", "to_mode": "disabled", "cause": "error_rate", "ref": "-"},
+          {"from_mode": "block", "to_mode": "block", "cause": "evasion_pair", "ref": "x"})
+    rows, broken = dm.read_chain(tmp_path / "f")
+    assert (len(rows), broken, dm.effective_cap(rows, PID)) == (1, 1, "disabled")
+
+
+def test_an_unreadable_demotions_file_caps_a_block_approval_at_observe(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(shadow, "ALLOWED_MODES", ("observe", "warn", "block"))
+    w = cs.offline_world(tmp_path, "block")
+    (w.data / dm.FILE).mkdir()                                              # not a regular file
+    out, err, log = hook(w, monkeypatch, capsys)
+    assert cs.shadow_rows(w.data)[-1]["mode"] == "observe" and (out, err) == ("", "") and "demotions:IsADirectoryError" in log
