@@ -655,7 +655,9 @@ reminders; no cross-session learning by the hook; no block mode during the step 
    inserted as a system reminder next to the tool result) and exit 2 / `permissionDecision: deny`
    (blocks). So warn must emit `additionalContext` JSON on stdout; the stderr write in `shadow.py`
    is kept only as the user-facing echo. This lands with the ladder (step 5) before any warn
-   approval. A live confirmation needs a throwaway hook in settings, which is a gated edit here.*
+   approval. Confirmed live on 2026-10-19: a throwaway project-local PreToolUse hook printing one marker
+   through `additionalContext` and another on stderr (exit 0) was run in a headless session; the model
+   reported the `additionalContext` marker and nothing from stderr.*
 2. **Randomized arms.** Measuring "with versus without" means the check is off (observe) in about
    half of sessions during the randomized phase. Do you accept that for `rm_rf_nonscratch`, given
    that guard-destructive.sh still covers root and home deletes? This is the same kind of decision
