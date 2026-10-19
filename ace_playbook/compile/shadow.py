@@ -4,8 +4,9 @@ hooks/shadow.sh calls `main(["pre"|"stop"])`: one payload on stdin (cap 256 KiB)
 `shadow.jsonl` row per fire; ALWAYS returns 0, failures are type-only lines in `shadow.log`. Observe prints nothing; warn echoes the message on stderr
 and prints ONE `hookSpecificOutput.additionalContext` JSON on stdout (verified live for PreToolUse; Stop per the hooks reference only); block prints
 the deny/block JSON and wins. `modes.resolve` decides the mode: a copy above observe needs a matching `approvals.jsonl` row (else observe, logged), a
-revoked proposal is skipped, `demotions.jsonl` lowers it until a newer approval lifts the older rows. Rows hold enums, ids, hashes, a timestamp and
-`dur_ms` (monotonic ms from the call's start to the row write), never payload text. Stdlib plus this package; no inject/keys/reflect/network.
+revoked proposal is skipped, `demotions.jsonl` lowers it until a newer approval lifts the older rows. Both chains are read with the chain key (chains.py): without it a chain
+holding a `v: 2` row is broken, logged once as `chain_key:missing`. Rows hold enums, ids, hashes, a timestamp and `dur_ms` (monotonic ms from the call's start to the
+row write), never payload text. Stdlib plus this package; no inject/keys/reflect/network.
 """
 
 from __future__ import annotations
@@ -20,14 +21,13 @@ from pathlib import Path
 
 from .. import config as cfgmod
 from ..canon import canonical, now_iso
-from . import approvals, catalogue, demotions, evidence, modes, proposal
+from . import approvals, catalogue, chains, demotions, evidence, modes, proposal
 from . import state as state_mod
 from .events import event_from_hook
 
 MAX_STDIN, MAX_FILES, MAX_FILE_BYTES, LOG_CAP = 262144, 50, 16384, 1000000
-APPROVED, EVENTS = "approved", {"pre": "PreToolUse", "stop": "Stop"}
+APPROVED, EVENTS, EXTRA_KEYS = "approved", {"pre": "PreToolUse", "stop": "Stop"}, {"approved_at", "proposal_sha256"}
 MODES = ALLOWED_MODES = ("observe", "warn", "block")   # warn and block also need a matching approvals.jsonl row (7.3)
-EXTRA_KEYS = {"approved_at", "proposal_sha256"}
 
 
 # ---------------------------------------------------------------- the approved record
@@ -70,15 +70,15 @@ def approved_path(cfg, pid: str) -> Path:
 
 class _Approvals:
     """The approvals chain, read at most once per hook call (and on every call: a revocation must stop a copy)."""
-    def __init__(self, cfg, log) -> None:
-        self.cfg, self.log, self.loaded, self.rows, self.broken = cfg, log, False, [], None
+    def __init__(self, cfg, log, ring: chains.Keyring | None = None) -> None:
+        self.cfg, self.log, self.ring, self.loaded, self.rows, self.broken = cfg, log, ring, False, [], None
 
     def read(self) -> tuple[list[dict], modes.Broken]:
         """(rows, broken_at): a read error is logged (type only, not throttled: `error:` lines feed the error-rate rule) and counts as `unreadable`."""
         if not self.loaded:
             self.loaded = True
             try:
-                self.rows, self.broken = approvals.read_chain(self.cfg.data_dir)
+                self.rows, self.broken = approvals.read_chain(self.cfg.data_dir, self.ring)
             except Exception as exc:
                 self.log(f"error:approvals:{type(exc).__name__}")
                 self.rows, self.broken = [], "unreadable"
@@ -108,10 +108,10 @@ class _Once:
             self.tail += "\n" + msg + "\n"
 
 
-def _demotions(cfg, log) -> tuple[list[dict], modes.Broken]:
+def _demotions(cfg, log, ring: chains.Keyring | None = None) -> tuple[list[dict], modes.Broken]:
     """(rows, broken_at) of demotions.jsonl, once per call; a read error is logged (type only, unthrottled) and is `unreadable`."""
     try:
-        return demotions.read_chain(cfg.data_dir)
+        return demotions.read_chain(cfg.data_dir, ring)
     except Exception as exc:
         log(f"error:demotions:{type(exc).__name__}")
         return [], "unreadable"
@@ -119,7 +119,7 @@ def _demotions(cfg, log) -> tuple[list[dict], modes.Broken]:
 
 def _problem(pid: str, problem: str, once) -> None:
     """Log one resolver problem once: `approvals:<id>:missing|mismatch` per proposal, the chain ones as they are."""
-    if problem.startswith("approvals:") and problem != "approvals:chain_broken":
+    if problem.startswith("approvals:") and problem not in ("approvals:chain_broken", "approvals:head_mismatch"):
         once(f"approvals:{pid}:{problem[10:]}")
     elif problem not in ("revoked", "no_copy"):
         once(problem)
@@ -159,7 +159,7 @@ def load_approved(cfg, log) -> list[tuple[dict, str]]:
         return []
     if len(names) > MAX_FILES:
         once("skipped:too_many_files")
-    out, appr, dem, now = [], _Approvals(cfg, log), (_demotions(cfg, log) if names else ([], None)), now_iso()
+    out, appr, dem, now = [], _Approvals(cfg, log, ring := chains.key_of(cfg)), (_demotions(cfg, log, ring) if names else ([], None)), now_iso()
     for name in names[:MAX_FILES]:
         if not proposal.PID.fullmatch(name[:-5]):
             once("skipped:file_name")
@@ -167,6 +167,8 @@ def load_approved(cfg, log) -> list[tuple[dict, str]]:
         item = _load_one(cfg, base / name, name[:-5], log, once, appr, dem, now)
         if item:
             out.append(item)
+    for note in chains.notes(ring, (appr.broken, dem[1])):
+        once(note)                                            # chain_key:missing, chain_heads:missing
     return out
 
 
@@ -214,7 +216,6 @@ def _evaluate(cfg, ev, sid: str, names: list[str], log) -> set[str]:
     def step(s: dict) -> dict:                                # noqa: E306
         outs.append(catalogue.evaluate(ev, s, names=names, strict=False))
         return outs[-1][1]
-
     _, status = state_mod.update(cfg.data_dir, sid, step)
     if status != "ok":
         log(status)
@@ -267,8 +268,7 @@ def _run(cfg, argv: list, log) -> None:
                     json.dumps(_row(p, mode, cause, event, ev, sid, raw, t0), sort_keys=True) + "\n")
         except OSError as exc:                                # still act on the decision below
             log(f"error:row:{type(exc).__name__}")
-    warns = [p["message"] for p, mode, _cause in hits if mode == "warn"]
-    if warns:                                                 # the user-visible echo; the model never sees stderr
+    if warns := [p["message"] for p, mode, _cause in hits if mode == "warn"]:       # the user-visible echo; the model never sees stderr
         sys.stderr.write("".join(m + "\n" for m in warns))
     block = next((p["message"] for p, mode, _cause in hits if mode == "block"), None)
     out = None

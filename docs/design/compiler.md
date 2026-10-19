@@ -57,13 +57,16 @@ RESULTS.md:62), alongside `edit_unread_turn` and `rm_rf` (RESULTS.md:34). The ve
 | `compile/evidence.py` | Evidence cards (section 5): admission, legacy path, scrub, `cards/` writer | 300 (built, step 2) |
 | `compile/proposal.py` | Proposal schema, ordered validation, replay/regression runner, writer (section 6) | 299 (built, step 2) |
 | `compile/propscrub.py` | The scrub step and quarantine path of `proposal.write`, split out and imported lazily so the hook path never loads the scrub engine (step 4) | 34 |
-| `ace_playbook/canon.py` | Stdlib-only leaf: `canonical`, `now_iso`, `record_hash`, `GENESIS`, `ID_RE`; `store/schema.py` re-exports them (step 4, see 7.2) | 29 |
+| `ace_playbook/canon.py` | Stdlib-only leaf: `canonical`, `now_iso`, `record_hash`, `GENESIS`, `ID_RE`; `store/schema.py` re-exports them (step 4, see 7.2); `keyed_hash` and `chain_key` for the keyed chains (7.3) | 29; 52 |
 | `compile/shadow.py` | Hook entry point: load approved proposals, re-validate, check the approvals row of a warn or block copy, evaluate, append `shadow.jsonl` rows, print the decision as JSON on stdout (block deny, or warn `additionalContext`); always returns 0 (section 7); since step 5a it reads `demotions.jsonl` once per call, since the integration wave it asks `modes.resolve` for the effective mode (disabled or revoked skips the proposal, a broken chain caps every proposal at observe), repeated log lines are throttled per call (`_Once`), and since step 5c every row carries `v` and `dur_ms` | ~220; 220 (step 4), 259 (step 5b), 300 (5a, integration, 5c) |
-| `compile/approvals.py` | The hash-chained `approvals.jsonl`: `read_chain`, `newest`, `append` (locked, chain verified from the fd, duplicate skip), `verify_copy`; stdlib and `canon` only, on the hook path (step 5b) | 117 |
+| `compile/approvals.py` | The hash-chained `approvals.jsonl`: `read_chain`, `newest`, `append` (locked, chain verified from the fd, duplicate skip), `verify_copy`; stdlib, `canon` and `chains` only, on the hook path (step 5b; `v: 2` keyed rows, 7.3 "Keyed chains") | 117; 131 |
 | `compile/srchash.py` | The per-detector hash behind `Detector.source_sha256`: `module_text` (on-disk text, read once), `excised_text` (exact-span replacement of other rows' fire bodies only), `detector_drop` (which fire bodies to excise) and `digest` (step 5, per-detector hash) | ~100 |
 | `compile/ladder.py` | The promotion rules: pure `check` over rows (TP and FP re-derivation, 14 days, 5 human TPs, 0 FPs, strength, source hash, cap) and `run`, the `approve --mode warn\|block` flow with the TP listing; imported lazily by the CLI (step 5b) | 235 |
 | `compile/offline.py` | Nightly pass: run signal detectors over finished transcripts, finalize session-level detectors, label pre-fill, evasion candidates, demotions, `shadow_state` cleanup (section 7.3) | ~250; 290 (built, step 5a), 300 (integration, 5c: `_session` summary rows) |
 | `compile/demotions.py` | Hash-chained, append-only `demotions.jsonl` (stdlib and `canon` only, read by the hook): reader, `effective_cap`, `lower`, locked writer; plus the pure FP and evasion rules `decide` and `pair_ref` the nightly pass uses | 149 (built, step 5a); 150 |
+| `compile/chains.py` | What the two chains share (7.3, "Keyed chains (as built)"): the `Keyring`, the signed heads file, the keyed-install marker `key_of`, `hash_ok` (the verifier rule), `head_state`, `seal`, `has_v2`, `notes`, `read_regular`; stdlib and `canon` only, on the hook path | 150 (cap 150) |
+| `compile/chains_io.py` | The re-seal of both chains under a new key with `.bak` copies and rollback, the file helpers and `need_key` for the writers; not on the hook path | 111 (cap 150) |
+| `compile/chains_cli.py` | `compile keygen` (never-keyed installs only: lists, asks, seals) and `keygen --rehead` (shows what differs from the old heads, asks y/N); not on the hook path | 126 (cap 150) |
 | `compile/modes.py` | `resolve` and the frozen `Resolution`: the one answer to "what does this proposal run at" for the hook, the ladder, the offline pass and the report (7.3, "Mode resolution"); `in_force`, `anchor`, `lifted` (an operator approvals row stamped strictly later lifts older demotions); stdlib, `approvals`, `demotions` only, on the hook path (integration wave after 5a and 5b) | 117 |
 | `compile/metrics.py` | Stdlib-only rate code behind the report: Wilson 95 % interval, nearest-rank percentile, `_session` summary rows, eligible sessions, friction, hook cost, live-versus-offline agreement (section 8); hashed into `report_sha256` together with `report.py`; never on the hook path (step 5c) | 154 |
 | `compile/synth.py` | `replay-synthetic`: the frozen invented corpus and the examples through `shadow._evaluate` with a temporary state dir into `shadow.synthetic.jsonl` only (`--out` confined by file identity); exits 1 on an `expect` disagreement; never on the hook path (step 5c) | 144 |
@@ -557,7 +560,7 @@ on a proposal that is in its previous rung is refused with `demoted:<cap>` only 
 observe` prints every row it would lift (`to_mode`, `cause`, `ts`) and says so in the `y/N` prompt, also on a demoted warn or
 block copy, and it does not back-fill a pre-chain copy while any demotion row of the proposal exists (the back-fill row would
 take its `ts` from the agent-writable copy): it approves afresh, with that prompt. The agent cannot
-write a valid approval row without the TTY, except by forging the unkeyed chain (the stated residual, section 9). The cap is
+write a valid approval row without the TTY, except by reading, replacing, redirecting or deleting the chain key (the stated residual, section 9). The cap is
 no longer a rule of chain validity (a later demotion from a lifted mode must stay a valid row); `append` keeps a guard
 against a row whose `from_mode` is above the mode `modes.resolve` gave the proposal (the nightly pass always passes the
 resolved mode, so it should never fire: a guard, not a control). A cause that is still true after a lift (the same `to_mode`,
@@ -595,7 +598,7 @@ would pin the mode. `compile report` shows `approved_mode` (the copy's own)
 and `mode` (resolved). A copy restored after `unapprove` is now skipped (`revoked`) instead of running in observe.
 
 *Trust.* Every input of the offline pass can be written by a local process: the transcripts, `shadow.jsonl` (including its
-`mode`), `shadow.log`, `labels.jsonl`, `demotions.jsonl` (unkeyed), `offline_state.json`, the approved copy's `approved_at` and
+`mode`), `shadow.log`, `labels.jsonl`, `demotions.jsonl` (keyed from `v: 2`; unkeyed `v: 1` rows before the boundary), `offline_state.json`, the approved copy's `approved_at` and
 `deltas.jsonl`. Demotions can therefore be both caused (forged rows, labels or log lines) and suppressed (delete or truncate
 the file, forge rows). The hook's own safety is that a copy above `observe` needs a matching approvals row and demotions never
 raise a mode (only an operator approval lifts them); the operator's controls are the TTY listing at promotion and this report's
@@ -632,9 +635,9 @@ otherwise (`mismatch`: demoted, revoked, or a copy edited down) it approves afre
 its proposal has the same `proposal_sha256` and `mode` (`verify_copy`); otherwise it runs the proposal in observe and logs
 `approvals:<id>:missing|mismatch`. A broken chain (or an unreadable file) puts every above-observe copy back to observe and
 logs `approvals:chain_broken` once. An `observe` copy needs no row. The chain is tamper-evident against hand edits of the copy
-(a hand-edited `mode: "block"` falls back to observe even with a recomputed `proposal_sha256`); it is unkeyed
-(`canon.record_hash`), so a process that also appends a recomputed row can still enforce: a forged approvals row is the
-residual risk in section 9 (step 5c: an operator approval also lifts older demotions, see "Mode resolution"). A cut last line stays a refusal (the operator truncates the file to its last complete line).
+(a hand-edited `mode: "block"` falls back to observe even with a recomputed `proposal_sha256`); once
+`keygen` has run it is keyed (`canon.keyed_hash`, "Keyed chains (as built)" below), so a process that also reads, replaces or redirects the key
+can still append a valid row and enforce: a forged approvals row is the residual risk in section 9 (step 5c: an operator approval also lifts older demotions, see "Mode resolution"). A cut last line stays a refusal (the operator truncates the file to its last complete line).
 `approve --mode warn` runs `ladder.check` and prints, before asking, every counted TP and FP as one line: `fire <ts>  session
 <hash16>  row <row_id>  label <at>  chain #<n>[  [after last approval]]` (`n` is the 1-based row in `labels.jsonl`). A label is
 always newer than the approval row that opens its window (it labels a fire after that row), so the per-line tag is printed
@@ -697,6 +700,86 @@ person who decides, not impossible (residual risks, section 9).
 (one-sided 95%, 1 - 0.05^(1/5)); about 29 clean TPs are needed to get under 10%. At Step 0 volume
 (`rm_rf_nonscratch` 9 events in 39 days, RESULTS.md:18, 52) the expected time to five fires is
 about 22 days even if every fire is a true positive, so "14 days" is a floor, not a forecast.
+
+#### Keyed chains (as built)
+
+`approvals.jsonl` and `demotions.jsonl` carry two row versions. A `v: 1` row is hashed with `canon.record_hash` (plain SHA-256 over the
+canonical row without `hash`). A `v: 2` row is hashed with `canon.keyed_hash`: HMAC-SHA256, key = the 32 bytes of the chain key, message =
+the canonical row without `hash`. The key set, `prev_hash` linking (genesis for the first row) and every other check are unchanged, and
+`labels.jsonl` stays unkeyed in this slice.
+
+*Keyed install* (`chains.key_of`). An install counts as keyed when `os.lstat` finds the key file OR the heads file (any file type, a dangling
+symlink included), or when the environment variable `ACE_PLAYBOOK_KEYED=1` is set (the operator carries it in the hook command in the
+Claude Code settings, behind a stronger consent gate than the data dir; `hooks/shadow.sh` does not sanitise the environment and a test
+asserts the flag reaches Python). Otherwise the install is unkeyed.
+
+*Verifier rule* (`chains.hash_ok`, `head_state`). Unkeyed: ONLY `v: 1` rows verify (plain hash, so installs from before `keygen` behave
+exactly as before) and any `v: 2` row breaks the chain at that row. Keyed with a readable key: ONLY `v: 2` rows verify (keyed hash), any
+`v: 1` row breaks the chain at that row, and the last verified row must equal the signed head. Keyed without a usable key (deleted, wrong
+mode or owner, unreadable, not 64 hex characters): both chains are broken, even empty ones, the hook logs `chain_key:missing` once and every
+writer refuses. `v` must be the int 2 or 1 (`2.0`, `"2"`, `True` never verify) and `hash` an ASCII string. An earlier draft let a `v: 1`
+prefix verify while no `v: 2` row had been seen, and a later one treated "no key file" as "unkeyed", so a process that never read the key
+could rewrite a chain as plain v1 rows (the second time after moving the key away); the marker above closes both.
+
+*Key file.* `Config.chain_key_path` (default `~/.config/ace-playbook/chain_key`, expanded at load; `null` in the config file switches it off; a
+bare `Config()` has none). `canon.chain_key` reads 64 hex characters (one trailing newline allowed) from a regular file of the current user,
+opened with `O_NOFOLLOW`, with no group or other permission bits and owner-read (0600 or 0400); a missing file, symlink, directory, FIFO, other
+owner or mode, bad length or non-hex content is `None`, and it never raises.
+
+*Heads.* Beside the key, `chain_heads.json` (0600) holds `{"approvals": <last hash>, "demotions": <last hash>, "mac": ...}`, GENESIS for an empty
+chain, where `mac` is the keyed hash of the two heads (a process without the key cannot forge a head). Every keyed `append` rewrites its head
+(temp file, fsync, `os.replace`) inside the chain file's lock, under a lock on the directory because the two chains share the file. When the
+key is readable the last verified row must equal the head: a cut tail or a rollback is `head_mismatch` and breaks the chain (the verified rows
+are returned, but the chain counts as broken, so approvals lift nothing and the demotions cap is observe); a missing, unsigned or unreadable
+heads file is `heads_missing` and breaks both chains, even empty ones. With no key the heads are not consulted. `append` refuses a chain whose
+head does not match, so a truncation is never extended into a valid-looking chain.
+
+*keygen* (TTY only) runs on a NEVER-keyed install only (no key file, no heads file under `lexists`, no `ACE_PLAYBOOK_KEYED=1`). It takes the
+approvals then the demotions file lock, reads both files ONCE and holds the locks while it lists the rows it will re-seal (one line each: ts,
+proposal id, mode or to_mode; an unverifiable tail is announced as "row N onward does not verify and will be kept as is") and asks y/N; the
+re-seal is staged from those same bytes and never re-reads the files, so a file swapped during the prompt cannot change what is sealed (a test
+rewrites the chain from the ask callback). Then it writes 32 `secrets.token_bytes` as hex to
+the key path (`O_CREAT|O_EXCL|O_NOFOLLOW`, 0600, fsync; a missing parent is created 0700, an existing one keeps its mode), writes byte-for-byte
+backups `approvals.jsonl.bak` and `demotions.jsonl.bak` (0600, `O_EXCL`) in the KEY directory, and RE-SEALS both chains under their file locks:
+every row that verifies with the plain hash is rewritten as `v: 2` (same content and order, `prev_hash` relinked, keyed hash) through a
+`tempfile.mkstemp` file in the data dir, fsynced; all temp files exist before the first `os.replace`. If anything fails the replaced files are
+put back from the kept bytes and the fresh key and the backups are removed again, so a failed run leaves nothing and can simply be run again.
+An unverifiable tail is kept byte for byte after the re-sealed rows with a warning naming its first row. Then the signed heads are written,
+the path is printed, and the `.bak` files stay (the operator's record of the pre-keygen state). There is NO resume path and keygen never
+overwrites: on a keyed install it refuses (exit 1), because re-sealing v1 rows there would sign a forgery under a new key. The table:
+never-keyed: lists, asks, seals. Keyed with a usable key and valid heads: "already exists". Keyed, key usable, heads missing or invalid:
+refuses and branches: if both chains verify under the key (a deleted heads file) it says to run `keygen --rehead` (which lists and asks; restoring
+from `.bak` would silently roll back every later revocation and demotion); if a chain is still plain v1 (killed between the replaces) it points at
+Repair (delete the key, restore both chains from the `.bak` files in the key directory, delete the `.bak` files, run keygen again). Keyed, key unusable or absent (including only the flag
+or only the heads file): refuses with the restore message (restore the key file from your backup, or move the unusable key file away,
+delete `approvals.jsonl`, `demotions.jsonl` and `chain_heads.json`, unset the flag in that shell and run keygen again, re-making every
+approval; the key file itself must go because its mere existence keeps the install keyed); the same message is the operator line of every
+writer on such an install.
+`compile keygen --rehead` (TTY) needs a usable key and holds both chain locks (approvals, then demotions) around the read and the update. It
+verifies both chains with the key (a broken chain refuses: truncate it by hand first) and compares the new heads with the OLD, MAC-valid
+ones: per chain it prints `old head not found: rows were removed or replaced after row N` plus what the chain now ends with, or the rows added
+after the old head (normal after an interrupted append), or says the old heads file is missing or invalid. In every case it asks y/N on the
+terminal before writing; there is no `--yes`. It then prints the two head hashes. Removed rows cannot be listed (they are gone); the message
+that the old head is no longer in the chain is the signal, and the prompt says to compare with a backup first.
+
+*Writers.* `append` (both modules) takes a `Keyring` (key plus heads path); with one it always writes `v: 2` and moves the head. Without one it
+refuses with `ValueError("chain key missing")` once the file holds a shape-valid `v: 2` row (`demotions.append` takes the keyring by keyword only) (garbage that only says `"v": 2` is a broken chain
+at its row, not a missing key), and on an empty or v1-only chain it keeps writing `v: 1`. `approve`, `ladder.run` and the offline pass's
+demotions go through `chains_io.need_key`: on a keyed install without a usable key they print the restore message ("this install is keyed but the key is
+unusable: restore the chain key file ... or delete approvals.jsonl, demotions.jsonl and chain_heads.json and run keygen again"), on an unkeyed
+one whose file already holds a shape-valid `v: 2` row `error: chain key missing (run: uv run python -m ace_playbook.compile keygen; a broken
+chain itself: see hooks/INSTALL.md section 7, Repair)`, and exit 1 (the offline pass counts one `errors` and still writes its other artefacts).
+`unapprove` prints the same line and exits 1 but still removes the approved copy (only the revocation row is refused; the hook already runs a
+chain it cannot verify at observe). `report` and `modes.read_*` take the keyring too.
+
+*Hook.* `shadow.load_approved` reads the key once per call and passes the keyring to both chains. The resolver maps a broken approvals chain to
+observe with no lift and a broken demotions chain to cap observe, so no break can promote. Log lines through `_Once`: `approvals:chain_broken`
+or `demotions:chain_broken` (rows), `approvals:head_mismatch` or `demotions:head_mismatch` (heads), `chain_heads:missing`, and
+`chain_key:missing` (keyed install, no usable key, a chain is broken). A chain signed with another key is a row break, not a missing key.
+
+*Repair.* A broken chain is repaired by hand: truncate the file to its last complete line (the existing rule), then `keygen --rehead`.
+
+*What it buys, and what it does not.* See the residual in section 9.
 
 ## 8. Measurement
 
@@ -828,20 +911,30 @@ exploratory (PREREGISTRATION.md:6-7).
 | Path containment | proposal ids by regex; resolved paths must sit under `data_dir/proposals[/approved]`; symlinks refused; state file names are hashes | traversal ids, symlinked approved file |
 | No network in the hook path | `compile.shadow` imports no `urllib`, `http`, `socket`, `ssl`, `subprocess`, `sqlite3` | run `python3 -I -c` importing the module and assert none is in `sys.modules`; fails until the step 1 `textrules` move |
 | Scrub before write | cards and proposals through `scan(..., LESSON, deny_terms)`, hit means quarantine (quarantine.py:20-27); shadow rows and state hold no free text by schema | planted FAKE token in a fixture replay payload |
-| Tamper evidence | hash-chained `approvals.jsonl` and `labels.jsonl`, TTY-only approve and label; hook loads only hash-matching files; report flags approved files whose hash or mtime changed without a ledger record | edited approved file is ignored |
+| Tamper evidence | hash-chained `approvals.jsonl` (HMAC-keyed from `v: 2`) and `demotions.jsonl`, hash-chained `labels.jsonl`, TTY-only approve and label; hook loads only hash-matching files; report flags approved files whose hash or mtime changed without a ledger record | edited approved file is ignored |
 | Label forgery | `approve --mode warn|block` lists every counted TP and FP for TTY confirmation, re-derived from `shadow.jsonl`; broken chain or missing fire row refuses | forged label without a fire row; broken chain link; label appended after the last approval |
 | Bounded cost | input, file count, file size and state caps; oversize means skip | oversize fixtures |
 
 Residual risks, stated plainly: the agent runs with the user's permissions and can edit
 `data_dir`, so it could append a demotion or delete an approved file to evade a block; the controls
 above make that visible in the report, not impossible. An operator approval lifts demotions (every row stamped strictly before the
-newest approvals row); the agent cannot write a valid approval row without the TTY, except by forging the unkeyed chain, the
+newest approvals row); the agent cannot write a valid approval row without the TTY, except by reading, replacing, redirecting or deleting the chain key, the
 stated residual. The same holds for **label forgery**: the
 agent can append a `tp` label, so promotion rests on the human reading the TP listing at `approve`,
-not on the file. The same holds for **approvals forgery**: `approvals.jsonl` is hash-chained but unkeyed, so a local process
-that appends a correctly chained row for a `warn` or `block` copy it also writes makes the hook enforce it, on the agent
-itself (limited to proposals that pass validation, so never an arbitrary check); the row is visible in the file, nothing
-prevents it. Block mode is the first time ace-playbook hooks can stop the agent, which
+not on the file. The same holds for **approvals forgery**: the key is readable by the operator's user, hence by the agent. With a readable key
+the chains (`approvals.jsonl`, `demotions.jsonl`) accept only keyed `v: 2` rows and a signed head file pins their last row, so a chain
+cannot be downgraded to plain hashes, cut or rolled back by a process that lacks the key. What a keyed row proves is that its writer READ,
+REPLACED or REDIRECTED the key: it can read the key file, swap the file or its directory, or point `chain_key_path` in `config.json` at a key of
+its own and re-sign both chains and the heads. The operator's permission layer can deny that (hooks/INSTALL.md section 7: Read, Edit and Write on
+`~/.config/ace-playbook/**`, plus the config file), but a deny rule covers the tools it names, not a shell command: the substring guard
+does not catch `cd ~/.config/ace-playbook; mv chain_key x`. Heads close tail truncation and rollback to an earlier approved state; they stay
+open to a same-user process outside the permission layer (it can replace key, heads and chains together, or restore an old chain together with
+its old heads file) and to deleting BOTH the key file and the heads file, which returns the install to the unkeyed state and its v1-only rule
+unless `ACE_PLAYBOOK_KEYED=1` is set in the hook command in the operator's settings (deleting only one of the two leaves the install keyed and
+both chains broken). `shadow.sh` and `ace_playbook` itself live in an agent-writable checkout, so the flag raises the bar, but the permission
+layer is the real boundary. Deleting the chain files themselves disables rather than promotes WITH a key (an empty approvals chain approves
+nothing, a head that does not match breaks the chain, and a broken demotions chain caps at observe); before `keygen`, deleting
+`demotions.jsonl` lifts its caps. Until `keygen` has run the chains are unkeyed and any local process can append a row. Block mode is the first time ace-playbook hooks can stop the agent, which
 contradicted SECURITY.md:36 ("Hooks never block a session"), the "hooks fail open and stay out of
 the way" wording at README.md:79 and the `onFailure` paragraph at hooks/INSTALL.md:96-97. All three
 were amended on 2026-10-19 (see Amendments): stage-1 hooks never block; stage-2 shadow hooks block

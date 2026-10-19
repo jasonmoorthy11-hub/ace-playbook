@@ -16,6 +16,9 @@
   <dict>
     <key>ACE_PLAYBOOK_CONFIG</key>
     <string>__ACE_CONFIG_FILE__</string>
+    <!-- the chain-key marker (hooks/INSTALL.md section 7): UNCOMMENT these two lines after `compile keygen` has run; set before that, the nightly demotion stage reports an error -->
+    <!-- <key>ACE_PLAYBOOK_KEYED</key>
+    <string>1</string> -->
     <key>PATH</key>
     <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
   </dict>

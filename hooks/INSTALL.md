@@ -250,6 +250,83 @@ block wins over any warn in the same call. Every approval is a row in the hash-c
 (or with no row, or with a broken `approvals.jsonl`) falls back to observe and logs `approvals:<id>:missing`, `:mismatch` or
 `approvals:chain_broken` in `shadow.log`; a hand edit of the copy alone never enforces. A demotion (a row in `demotions.jsonl` from the nightly pass) lowers the proposal until you approve it again at the terminal: `approve --mode observe` lifts every older row and restarts the ladder, and a revoked proposal is skipped (`skipped:P-xxxxxxxx:revoked`). Row numbers in the chain messages (`approvals.jsonl`, `demotions.jsonl`, `labels.jsonl`) count from 1. If `approve --mode warn` reports a `forged label` (a label with no fire row in `shadow.jsonl`), restore the missing shadow row or truncate `labels.jsonl` to the row before the forged one and re-label; if it reports `copy not backed by the approvals chain`, run `approve --mode observe` to record the copy.
 
+**Chain key (optional, recommended before warn or block).** `approvals.jsonl` and `demotions.jsonl` are plain hash chains until you create a
+key. At a terminal, with `ACE_PLAYBOOK_KEYED` NOT set in that shell, run `uv run python -m ace_playbook.compile keygen`. It runs on a
+never-keyed install only (no key file, no `chain_heads.json`, no flag): it lists every row of `approvals.jsonl` and `demotions.jsonl` it will
+re-seal, asks y/N (it holds both chain locks from the one read of the files to the last replace, so a file swapped while the prompt is open
+cannot change what is sealed), then writes 32 random bytes as 64 hex characters to `~/.config/ace-playbook/chain_key` (`chain_key_path` in `config.json` moves
+it; mode 0600; if the directory is missing it is created 0700, an existing directory keeps its mode, so make it private yourself; it never
+overwrites a key and prints only the path). Next to the key it keeps byte-for-byte copies of both chains as they were
+(`approvals.jsonl.bak`, `demotions.jsonl.bak`, 0600): keep them, they are your record of the pre-keygen state. READ EVERY `warn` AND `block`
+ROW in the listing against your own record of what you approved before answering y: a row you did not approve is sealed like any other (this is
+the one residual of deleting both the key and the heads file, then writing rows). A line "row N onward does not verify and will be kept as is"
+means that tail stays byte for byte after the sealed rows. It then re-seals both chains in place:
+every row becomes a `v: 2` row hashed with HMAC-SHA256 under the key (same content and order, `prev_hash` relinked; a tail that does not verify is
+kept as it is and named before the prompt), and it writes `chain_heads.json` beside the key, the signed last hash of each chain. If keygen fails it puts
+the chains back and removes the key and the copies, so you can run it again. From then on only `v: 2` rows verify, every `approve`, `unapprove`,
+ladder step and nightly demotion appends a `v: 2` row and moves its head, and a `v: 1` row (a chain rewritten as plain hashes) is a broken chain. An install counts as KEYED when the key file or
+`chain_heads.json` exists (any file type) or the environment variable `ACE_PLAYBOOK_KEYED=1` is set; a keyed install without a usable key
+(deleted, mode other than owner-only, wrong owner) has both chains broken: the hook runs observe, logs `chain_key:missing` once, and `approve`,
+`unapprove`, the ladder and the nightly pass refuse to write and print the restore message (restore the key file from your backup, or move
+the unusable key file away, delete `approvals.jsonl`, `demotions.jsonl` and `chain_heads.json`, unset the flag in that shell and run `keygen`
+again, re-making every approval); `unapprove` still removes the approved copy. A
+cut or rolled-back chain is `approvals:head_mismatch` or `demotions:head_mismatch`; a missing or forged heads file breaks both chains
+(`chain_heads:missing`). Back the key file up with your other secrets: losing it breaks both chains. On a keyed install `keygen` refuses
+(there is no resume and no overwrite), because re-sealing plain v1 rows there would sign a forgery under a new key.
+
+**The flag (recommended second marker).** Set `ACE_PLAYBOOK_KEYED=1` for the shadow hook so that removing the key file and the heads file
+does not turn the install back into an unkeyed one. Claude Code runs a hook `command` through a shell (the entries above already rely on
+`$HOME` expanding), so the portable form is an assignment in front of the command in your user-level `settings.json`:
+
+```json
+{ "type": "command", "command": "ACE_PLAYBOOK_KEYED=1 $HOME/ace-playbook/hooks/shadow.sh pre", "timeout": 5, "onFailure": "continue" }
+```
+
+(use the same prefix on the `stop` entry; `hooks/shadow.sh` passes its environment through unchanged, and a test checks that). Also export it
+in your own shell profile (`export ACE_PLAYBOOK_KEYED=1`) once `keygen` has run, so `approve`, `unapprove` and the ladder fail safe if the key
+is moved away, and the example launchd plist in section 4 carries it commented out: uncomment it after keygen has run. Set it only AFTER the first `keygen` (keygen refuses
+while it is set, and until a key exists the nightly pass would report an error for its demotion stage). A config with `"chain_key_path": null`
+and the flag set has no key by definition: both chains are broken (`key_missing`, fail safe), so keep the path set. The settings file
+sits behind a stronger consent gate than the data dir, but `shadow.sh` and the `ace_playbook` package live in a checkout the agent can write, so
+the flag raises the bar and the permission layer below remains the real boundary.
+
+The key is readable by your user, so by the agent too. A keyed chain proves that its writer read, replaced or redirected the key (the key file,
+its directory, or `chain_key_path` in `config.json`), so put all of `~/.config/ace-playbook` out of the agent's reach with deny rules in your
+user-level `settings.json`. The form is the home-relative one from the Claude Code permissions reference (`~/path`; the absolute form is a
+`//` prefix followed by the full path from the filesystem root and spells out your username, the single-slash form is relative to the settings
+file), one rule per tool:
+
+```json
+{ "permissions": { "deny": [
+  "Read(~/.config/ace-playbook/**)",
+  "Edit(~/.config/ace-playbook/**)",
+  "Write(~/.config/ace-playbook/**)"
+] } }
+```
+
+These rules stop the Read, Edit and Write tools (and, per the permissions reference, a symlink that points into the directory). They do not stop a
+shell command. If you run a guard hook that matches substrings of command text, it may refuse a command that names the key but it does not catch
+`cd ~/.config/ace-playbook; mv chain_key x`; add Bash deny rules of your own if you want that closed, and edit `settings.json` with an editor
+rather than a shell one-liner. What this setup still does not close: a same-user process outside the permission layer, deleting both the key
+file and the heads file without the flag set (the install falls back to the unkeyed v1-only rule), and restoring an old chain together with its
+old heads file. Heads do close a cut tail and a rollback of the chain alone. With a key, deleting `approvals.jsonl` or `demotions.jsonl`
+disables rather than promotes; before `keygen`, deleting `demotions.jsonl` lifts its caps.
+
+*Repair, interrupted keygen.* If the key is present but `chain_heads.json` is not, `keygen` refuses to run again and says which case you are in.
+(1) Both chains verify under the key (the heads file was deleted or lost): run `uv run python -m ace_playbook.compile keygen --rehead`, which lists
+what changed and asks. Do NOT restore from the `.bak` files then: that would silently roll back every revocation and demotion made since keygen.
+(2) A chain is still plain v1 (keygen was killed between the two replaces): delete the key, restore both chains from the `.bak` files in the key
+directory, delete the `.bak` files, and run keygen again.
+
+*Repair.* A broken chain (`approvals.jsonl chain broken at row N`) is repaired by hand: truncate the file to its last complete line before the
+bad row. After a truncation you authorised, after a crash between an append and its head write (`head_mismatch`), or after restoring a chain
+from a backup, run `uv run python -m ace_playbook.compile keygen --rehead` at a terminal: it needs the existing key, verifies both chains with it
+(it refuses while one is still broken), holds the chain locks, and for each chain prints what differs from the OLD heads: `old head not found:
+rows were removed or replaced after row N` (with the rows the chain now ends with), or the rows added after the old head (normal after an
+interrupted append), or that the old heads file is missing (removed rows cannot be listed: compare with a backup before answering y). Inspect the listed rows before answering y: it asks on the terminal, there is no
+`--yes`, and only then does it write the heads and print their two hashes. A row that someone cut is not listed (it is gone); the message
+that your old head is no longer in the chain is the signal. Do not hand-write rows.
+
 After a detector change, re-propose and re-approve that detector's proposals only: an edit inside one detector's own `fire` body retires only that detector's proposals, while any other edit to `detectors.py` or `catalogue.py` (any row's registry fields, a shared helper, an import, a decorator or signature, `evaluate`, `advance`, a new detector) or to `events.py`, `shell.py` or `textrules.py` retires every approved proposal (see LIMITATIONS.md). One-time migration: the release that introduced the per-detector hash made every proposal written before it stale at once (`compile validate` says "catalogue source_sha256 is stale", the hook logs `skipped:P-xxxxxxxx:invalid:schema`, and the nightly pass records a `source_sha256` demotion), so re-propose and re-approve each live proposal once.
 
 Two things to know. The matcher is `Bash` only, narrower than the design's list (no approvable proposal

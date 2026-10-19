@@ -92,7 +92,7 @@ and the operator approves it at a terminal with `approve <id> --mode observe`. T
 Bash call, re-validating them from disk every time (a proposal records a per-detector source hash, so editing one detector's own function body retires only its own proposals and any other edit to the detector or catalogue code, including adding a detector, retires all of them; the release that introduced it made every earlier proposal stale once, to be re-proposed and re-approved), and appends what **would** have fired to
 `shadow.jsonl` (ids, hashes and a timestamp, never the command). In observe mode it prints nothing,
 changes nothing and cannot block; `approve --mode warn|block` is the promotion ladder (14 days, 5 human-labelled true
-positives and no false positive, a hash-chained `approvals.jsonl`; warn reaches the model through `additionalContext`).
+positives and no false positive, a hash-chained `approvals.jsonl`, HMAC-keyed once `compile keygen` has made the chain key; warn reaches the model through `additionalContext`).
 `compile label` records human labels at a terminal in a hash-chained `labels.jsonl`: an `incident` label is
 the only way a legacy lesson gets an evidence card, and `tp`/`fp` labels on shadow rows feed the ladder.
 `compile report` prints counts per proposal from the shadow rows and those human labels, then per corpus the eligible-session

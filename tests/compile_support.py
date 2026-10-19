@@ -222,7 +222,7 @@ def make_world(tmp_path, monkeypatch, *, origin: str | None = "origin", sessions
     from ace_playbook.store import DeltaLog
     from .helpers import GLOBAL, add_draft
     fx = json.loads(CARDS_FIXTURE.read_text())
-    cfg = Config(data_dir=tmp_path / "data", transcripts_root=tmp_path / "projects")
+    cfg = Config(data_dir=tmp_path / "data", transcripts_root=tmp_path / "projects", chain_key_path=tmp_path / "chain_key")
     Path(cfg.data_dir).mkdir(parents=True)
     les = fx["lesson"]
     if legacy:
@@ -251,10 +251,10 @@ def real_world(tmp_path, detectors=("rm_rf_nonscratch",), approve: bool = True):
     from types import SimpleNamespace
     from ace_playbook.compile import evidence as evm, proposal as prop
     from ace_playbook.config import Config
-    cfg = Config(data_dir=tmp_path / "data")
+    cfg = Config(data_dir=tmp_path / "data", chain_key_path=tmp_path / "chain_key")     # a key file only where a test writes one
     Path(cfg.data_dir).mkdir(parents=True)
     conf = tmp_path / "config.json"
-    conf.write_text(json.dumps({"data_dir": str(cfg.data_dir)}))
+    conf.write_text(json.dumps({"data_dir": str(cfg.data_dir), "chain_key_path": str(cfg.chain_key_path)}))
     w = SimpleNamespace(cfg=cfg, conf=str(conf), props={}, data=Path(cfg.data_dir))
     for det in detectors:
         payload = json.loads(EXAMPLES.read_text())["detectors"][det]["fire"]

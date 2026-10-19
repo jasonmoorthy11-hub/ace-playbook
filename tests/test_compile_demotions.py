@@ -354,7 +354,7 @@ def test_the_hook_reads_the_demotions_file_once_per_call(tmp_path, monkeypatch, 
     w = cs.offline_world(tmp_path, "observe")
     seen = []
     real = dm.read_chain
-    monkeypatch.setattr(dm, "read_chain", lambda d: seen.append(d) or real(d))
+    monkeypatch.setattr(dm, "read_chain", lambda d, key=None: seen.append(d) or real(d, key))
     hook(w, monkeypatch, capsys)
     assert len(seen) == 1
 

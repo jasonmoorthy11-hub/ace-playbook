@@ -64,9 +64,18 @@ pre-registration, the evaluation of an effect (randomization inference, the spil
 - Warn delivery, resolved: warn uses `additionalContext` (step 5b). The Claude Code hooks reference (read
   2026-10-19) says a hook's stderr on exit 0 never reaches the model, so the hook prints one
   `hookSpecificOutput.additionalContext` JSON object on stdout (and echoes the message on stderr for the debug log).
-- `approvals.jsonl` is hash-chained but unkeyed. It stops hand edits of an approved copy (a copy without a matching row
-  runs in observe) but not a local process that appends a correctly chained row for a `warn` or `block` copy it also
-  writes: that would make the hook warn or block the agent itself, limited to proposals that pass validation.
+- `approvals.jsonl` and `demotions.jsonl` are hash-chained and, after `compile keygen`, HMAC-keyed (only `v: 2` rows verify while the key is
+  readable) with a signed head file (`chain_heads.json`) that pins each chain's last row, so a process without the key cannot downgrade,
+  cut or roll back a chain. The key is readable by the operator's user, hence by the agent: a keyed row proves its writer read, replaced or
+  redirected the key (the key file, its directory, or `chain_key_path` in `config.json`). The deny rules in hooks/INSTALL.md section 7 cover
+  Read, Edit and Write on `~/.config/ace-playbook/**`; they do not cover a shell command (the substring guard does not catch
+  `cd ~/.config/ace-playbook; mv chain_key x`), a same-user process outside the permission layer, or deleting both the key file and the heads
+  file, which returns the install to the unkeyed v1-only rule unless `ACE_PLAYBOOK_KEYED=1` is set in the hook command (an install counts as
+  keyed when either file exists or the flag is set; keyed without a usable key, both chains are broken). `shadow.sh` and the package live in an
+  agent-writable checkout, so the permission layer is the real boundary. Deleting the chain files disables rather than promotes with a key; before
+  `keygen`, deleting `demotions.jsonl` lifts its caps. Until `keygen` runs the chains are unkeyed. `keygen` itself runs on a never-keyed install only (it lists the rows it will re-seal, asks, and keeps
+  `.bak` copies in the key directory); on any keyed install it refuses, so it cannot be used to seal a forged chain under a new key.
+  `labels.jsonl` stays unkeyed.
 - A proposal's `provenance.source_sha256` is a per-detector hash by exclusion: the text of `detectors.py` and `catalogue.py`, minus
   the bodies of the other rows' `fire` functions (`catalogue.py` is hashed whole, the `CATALOGUE` registry literal included, because
   an expression inside it runs at import time in every process), plus the row's name, fire name and catalogue fields (the `meta`
@@ -105,11 +114,11 @@ pre-registration, the evaluation of an effect (randomization inference, the spil
   newest `approvals.jsonl` row, so `approve --mode observe` (TTY, which lists each row it lifts) on a demoted proposal,
   `disabled` included, lifts the strictly older rows (a same-second row stays: re-approve a second later) and restarts the
   ladder from observe; until then `approve --mode warn|block` is refused with `demoted:<cap>`. The agent
-  cannot write a valid approval row without the TTY, except by forging the unkeyed chain (the stated residual). A restored copy
+  cannot write a valid approval row without the TTY, except by reading, replacing, redirecting or deleting the chain key (the stated residual). A restored copy
   after `unapprove` is skipped (`revoked`), not run in observe.
   The `from_mode` check in `demotions.append` is a guard the nightly pass cannot trip, not a control.
 - Every input of the offline pass can be written by a local process: transcripts, `shadow.jsonl` (including its `mode`),
-  `shadow.log`, `labels.jsonl`, `demotions.jsonl` (hash-chained but unkeyed), `offline_state.json`, the approved copy's
+  `shadow.log`, `labels.jsonl`, `demotions.jsonl` (hash-chained, keyed from `v: 2`), `offline_state.json`, the approved copy's
   `approved_at` and `deltas.jsonl`. Demotions can so be caused by forged inputs and suppressed by deleting or truncating the
   file. The hook's safety is that a copy above `observe` needs a matching approvals row and only an operator approval lifts a demotion; the
   operator's controls are the TTY listing at promotion and the `Demotions` section of `compile report`.
