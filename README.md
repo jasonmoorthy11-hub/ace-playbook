@@ -5,9 +5,10 @@ A measured lesson-to-hook compiler for CLI coding agents. It implements ideas fr
 reference code at [github.com/ace-agent/ace](https://github.com/ace-agent/ace)) for a single
 user's day-to-day coding agent, tested with Claude Code.
 
-**Status: stage 1 scaffold, no results yet.** Everything below is plumbing plus an evaluation
-design. Nothing here shows that injecting lessons helps, and the pre-registration is a draft
-that is not sealed. Read [LIMITATIONS.md](LIMITATIONS.md) first.
+**Status: stage 2 shadow mode, observe only, no results yet.** The stage-1 plumbing and the
+stage-2 compiler exist as code; as of 2026-10-19 no proposal has been approved, so nothing has been
+measured. Nothing here shows that injecting lessons or compiling them into hooks helps, and the
+pre-registration is a draft that is not sealed. Read [LIMITATIONS.md](LIMITATIONS.md) first.
 
 Not affiliated with or endorsed by Anthropic or by the authors of the ACE paper.
 
@@ -17,8 +18,8 @@ An agent that is told the same things in every session never learns which of the
 This project keeps an **append-only store of short lessons** extracted from past sessions, records
 **which lessons were shown in which session** (with a randomized hide/show holdout), and is built
 so that lessons which prove their worth can later be **compiled into enforcing hooks** instead of
-staying as prose the agent may ignore. The compile step and the evaluation harness are planned
-(see below); stage 1 builds everything underneath them.
+staying as prose the agent may ignore. The compile step exists in shadow mode (see below); the
+evaluation harness is planned.
 
 ## Why
 

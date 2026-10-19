@@ -3,7 +3,9 @@
 import dataclasses
 import hashlib
 import json
+import io
 import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -236,7 +238,6 @@ def test_the_opposite_label_is_allowed_with_a_warning_and_the_same_label_is_not_
 
 
 def test_a_hook_written_shadow_row_can_be_labelled(tmp_path, monkeypatch, capsys, tty):
-    import io
     w = cs.real_world(tmp_path)
     monkeypatch.setenv("ACE_PLAYBOOK_CONFIG", w.conf)
     monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(json.dumps(cs.pre_payload(cs.RM_CMD)).encode())))
@@ -249,12 +250,80 @@ def test_a_hook_written_shadow_row_can_be_labelled(tmp_path, monkeypatch, capsys
     assert code == 0 and json.loads((w.data / "labels.jsonl").read_text())["ref"] == labels.row_id(hook_row)
 
 
+def test_relabelling_back_to_the_first_label_is_a_new_row_not_already_labelled(world, tty, capsys):
+    rid = put_shadow(world)
+    codes = [run(world, f"--{k}", rid, capsys=capsys) for k in ("tp", "fp", "tp")]
+    assert [c[0] for c in codes] == [0, 0, 0] and all("already labelled" not in c[1] for c in codes)
+    assert [r["label"] for r in rows_of(world)] == ["tp", "fp", "tp"]
+    assert run(world, "--tp", rid, capsys=capsys)[1].strip().endswith("already labelled")
+
+
+def test_the_write_time_check_reads_the_locked_file_not_the_earlier_look(world, tty, capsys, monkeypatch):
+    put_shadow(world)
+    cs.write_labels(world.cfg, [{"ref": "E-00000000", "label": "fp"}])
+    path = world.cfg.path("labels.jsonl")
+    path.write_text(path.read_text().replace("E-00000000", "E-00000001"))
+    monkeypatch.setattr(labels, "check_chain", lambda cfg: [])      # the pre-prompt look saw nothing wrong
+    code, _, err = run(world, "--tp", labels.row_id(ROW), capsys=capsys)
+    assert code == 1 and "chain broken at row 1" in err and len(rows_of(world)) == 1
+
+
+def test_a_symlink_swapped_in_after_the_pre_prompt_check_is_refused_untouched(world, tty, capsys, monkeypatch, tmp_path):
+    target = tmp_path / "elsewhere.jsonl"
+    target.write_text("")
+    path = world.cfg.path("labels.jsonl")
+
+    def swap(cfg):
+        path.symlink_to(target)
+        return []
+
+    monkeypatch.setattr(labels, "check_chain", swap)
+    code, _, _ = incident(world, capsys)
+    assert code == 2 and target.read_text() == ""
+
+
+def test_creating_the_file_fsyncs_the_data_dir_once(world, tty, capsys, monkeypatch):
+    seen, real = [], os.fsync
+    monkeypatch.setattr(os, "fsync", lambda fd: (seen.append(stat.S_ISDIR(os.fstat(fd).st_mode)), real(fd))[1])
+    incident(world, capsys)
+    assert seen.count(True) == 1
+    run(world, "--fp", put_shadow(world), capsys=capsys)
+    assert seen.count(True) == 1
+
+
+def test_a_lesson_with_standard_user_evidence_is_refused(tmp_path, monkeypatch, tty, capsys):
+    w = cs.make_world(tmp_path, monkeypatch)
+    conf = tmp_path / "config.json"
+    conf.write_text(json.dumps({"data_dir": str(w.cfg.data_dir), "transcripts_root": str(w.cfg.transcripts_root)}))
+    w.conf = str(conf)
+    code, _, err = run(w, "--incident", "--lesson", w.lesson_id, "--session", w.sid("later"), capsys=capsys)
+    assert code == 1 and "standard user evidence" in err and "legacy-evidence lessons only" in err
+    assert rows_of(w) == [] and tty.asked == []
+
+
+def test_free_text_from_the_files_is_printed_without_control_characters(world, capsys):
+    cs.write_labels(world.cfg, [{"ref": "E-0000\x1b[31m0000", "label": "fp", "note": "a\x1b[2Jb\x07", "lesson_id": "L-\x1b1"}])
+    cs.append_jsonl(world.cfg.path("shadow.jsonl"), {**ROW, "cause": "x\x1b[0m", "lesson_id": "L-\x9b2"})
+    out = run(world, "--list", capsys=capsys)[1] + run(world, "--rows", capsys=capsys)[1]
+    assert "\x1b" not in out and "\x07" not in out and "\x9b" not in out
+    assert "a[2Jb" in out and "x[0m" in out
+
+
+@pytest.mark.parametrize("args", [
+    ["--tp", "abcd1234", "--session", "s"], ["--fp", "abcd1234", "--lesson", "L-00000000"], ["--list", "--note", "n"],
+    ["--list", "--limit", "5"], ["--rows", "--kind", "tp"], ["--rows", "--session", "s"],
+    ["--incident", "--lesson", "L-00000000", "--session", "s", "--kind", "tp"]])
+def test_flags_that_do_not_apply_to_the_action_are_a_usage_error(world, tty, capsys, args):
+    code, _, err = run(world, *args, capsys=capsys)
+    assert code == 2 and "do not apply" in err and tty.asked == []
+
+
 # ------------------------------------------------------------------ list / rows
 def test_list_prints_one_line_per_row_and_a_chain_summary_without_a_terminal(world, tty, capsys, monkeypatch):
     rid = put_shadow(world)
     incident(world, capsys, "--note", "first")
     run(world, "--fp", rid, capsys=capsys)
-    monkeypatch.undo()
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))              # not a terminal
     code, out, _ = run(world, "--list", capsys=capsys)
     lines = out.splitlines()
     assert code == 0 and len(lines) == 3 and lines[-1] == "chain ok (2 rows)"

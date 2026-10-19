@@ -456,6 +456,10 @@ LESSON profile; a hit refuses the row). `ref` is the card id of the incident (`-
 the shadow `row_id` = sha256(ts, session, proposal_id, payload_sha256)[:8] (`--tp ID`, `--fp ID`, ids from `--rows`).
 Writing needs a TTY and a `y` on /dev/tty; the whole chain is verified before each append and a broken chain refuses
 the write. `--list [--kind K]` verifies and prints, `--rows` prints shadow rows with their ids; neither needs a TTY.
+The write opens the file `O_NOFOLLOW`, takes `flock`, and verifies the chain from that locked fd. `row_id` is
+computed on read from the stored shadow row (the bare `session` hash as stored, `ts|session|proposal_id|payload_sha256`
+joined with `|`, sha256, first 8 hex, no `r:` prefix); shadow.py writes no `row_id`, so a future hook that
+does must use the same formula.
 
 **Mode ladder.**
 
@@ -639,6 +643,13 @@ reminders; no cross-session learning by the hook; no block mode during the step 
 1. **Warn visibility.** The brief's warn is "stderr line, exit 0". My reading of the hooks docs is
    that stderr on exit 0 reaches the user's verbose view but not the model. Should warn use the
    documented JSON output channel instead (verified live at step 4), or stay user-visible only?
+   *Answered 2026-10-19 from the hooks reference (code.claude.com/docs/en/hooks, "Exit code 0"):
+   "Claude never sees stderr from a hook that exits 0", and plain stdout on PreToolUse goes to the
+   debug log only. The model-visible channels are `hookSpecificOutput.additionalContext` (exit 0,
+   inserted as a system reminder next to the tool result) and exit 2 / `permissionDecision: deny`
+   (blocks). So warn must emit `additionalContext` JSON on stdout; the stderr write in `shadow.py`
+   is kept only as the user-facing echo. This lands with the ladder (step 5) before any warn
+   approval. A live confirmation needs a throwaway hook in settings, which is a gated edit here.*
 2. **Randomized arms.** Measuring "with versus without" means the check is off (observe) in about
    half of sessions during the randomized phase. Do you accept that for `rm_rf_nonscratch`, given
    that guard-destructive.sh still covers root and home deletes? This is the same kind of decision
@@ -654,6 +665,13 @@ reminders; no cross-session learning by the hook; no block mode during the step 
    count as user evidence (README.md:60-65). Take the legacy path (a card only after you label a
    later offline incident, with the banner and double confirmation), or re-mint the lesson from a
    session where you actually said it and let the standard path apply?
+   *Note 2026-10-19: re-minting through `store promote` does not open the standard path as built.
+   The promote PATCH records session `promote-cli`, which has no transcript, so `_lesson_cards`
+   returns `transcript_missing` (evidence.py). Only a user message in a real session, attached as
+   evidence with that session's id, would. As of 2026-10-19 `compile cards --lesson L-b3d1fba9`
+   reports one `legacy_unlabelled` ref (a later eligible session where `rm_rf_nonscratch` fired on
+   a scratchpad path reached through an unresolved `$VAR`); whether that counts as the incident is
+   the operator's label decision.*
 
 ## Decisions taken while drafting
 
