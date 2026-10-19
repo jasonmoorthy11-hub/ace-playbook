@@ -169,3 +169,87 @@ def test_the_report_prints_a_rates_table_and_a_cost_block_per_corpus_and_json_ca
     got = json.loads(capsys.readouterr().out)["rates"]["private"]["proposals"][w.pid]
     assert (got["eligible"], got["sessions_with_fire"], got["fire_rate"], got["wilson95"], got["repeat_fires"]) == (
         1, 1, 1.0, metrics.wilson(1, 1), 0)
+
+
+# ------------------------------------------------------------------ wave 2
+def test_live_fires_in_unscanned_sessions_are_counted_apart_and_leave_every_rate_alone():
+    ev = [summary("s1")]
+    rows = [fire_row("s1"), fire_row("s9"), fire_row("s9", phash="bb")]
+    got, corpus = one(rows, ev)
+    assert corpus["awaiting_offline_scan"] == 2 and (got["eligible"], got["fires"], got["fire_rate"]) == (1, 1, 1.0)
+    assert one(rows[:1], ev)[1]["awaiting_offline_scan"] == 0
+
+
+def test_agreement_starts_at_each_detectors_own_first_live_row():
+    ev = [summary("s1"), summary("s2"), offline_event("s1", "a1", ts="2026-10-18T10:00:00Z"),
+          offline_event("s1", "b0", ts="2026-10-18T10:00:00Z", det="rm_rf"),           # before rm_rf was deployed: ignored
+          offline_event("s2", "b1", ts="2026-10-19T10:00:00Z", det="rm_rf"),           # exactly at its first live row: counted
+          offline_event("s2", "b2", ts="2026-10-19T11:00:00Z", det="rm_rf"),
+          offline_event("s2", "c1", ts="2026-10-19T11:00:00Z", det="unparseable")]    # no proposal at all: ignored
+    rows = [fire_row("s1", ts="2026-10-18T10:00:00Z", phash="a1"),
+            {**fire_row("s2", ts="2026-10-19T10:00:00Z", phash="b1"), "proposal_id": "P-0a1b2c3e"}]
+    got = metrics.compute("private", rows, {PID: DET, "P-0a1b2c3e": "rm_rf"}, ev, [])
+    assert got["corpus"]["agreement"] == {"live_only": 0, "offline_only": 1}              # b2 only
+    single = metrics.compute("private", rows[:1], {PID: DET}, ev, [])
+    assert single["corpus"]["agreement"] == {"live_only": 0, "offline_only": 0}
+
+
+def test_truncated_fires_are_counted_apart_and_stay_out_of_the_rates_and_the_agreement():
+    ev = [summary("s1"), offline_event("s1", "bb")]
+    rows = [fire_row("s1", phash="aa"), fire_row("s1", phash="bb", cause="truncated", mode="warn")]
+    got, corpus = one(rows, ev)
+    assert (got["fires"], got["truncated_fires"], got["sessions_with_fire"], got["repeat_fires"]) == (1, 1, 1, 0)
+    assert got["friction"]["messages_per_100_calls"] == 10.0                               # the warning was emitted: 1 over 10 calls
+    assert corpus["agreement"] == {"live_only": 1, "offline_only": 1}                       # aa live-only, bb offline-only
+
+
+def test_stop_rows_and_stop_proposals_are_left_out_of_the_agreement():
+    ev = [summary("s1"), offline_event("s1", "aa")]
+    rows = [fire_row("s1", phash="zz", event="Stop")]
+    assert metrics.compute("private", rows, {PID: DET}, ev, [])["corpus"]["agreement"] == "-"
+    rows = [fire_row("s1", phash="aa"), fire_row("s1", phash="zz", event="Stop")]
+    assert metrics.compute("private", rows, {PID: DET}, ev, [])["corpus"]["agreement"] == {"live_only": 0, "offline_only": 0}
+    assert metrics.compute("private", rows, {PID: DET}, ev, [], {PID})["corpus"]["agreement"] == "-"
+
+
+def test_the_session_row_id_covers_the_transcript_stamp_so_a_return_to_an_older_state_is_a_new_row():
+    consumes = {DET: ("PreToolUse:Bash",)}
+    ids = [metrics.session_row([], "s1", "2026-10-18T10:00:00Z", consumes, stamp)["id"] for stamp in ("10:1", "20:2", "10:1", "10:3")]
+    assert ids[0] == ids[2] and len({ids[0], ids[1], ids[3]}) == 3                            # the same scan twice is one id
+    assert metrics.session_row([], "s1", "t", consumes, "10:3")["id"] != metrics.session_row([], "s1", "t", consumes, "10:4")["id"]
+
+
+def test_synthetic_tool_calls_are_distinct_payloads_not_event_detector_pairs():
+    rows = [{**fire_row("s1", phash="p1"), "detector": DET}, {**fire_row("s1", phash="p1"), "detector": "rm_rf", "proposal_id": "P-0a1b2c3e"},
+            {**fire_row("s1", phash="p2"), "detector": DET}]
+    got = metrics._sessions("synthetic", rows, [])["s1"]
+    assert (got["calls"], got["eligible"]) == (2, {DET, "rm_rf"})
+    warn = [{**r, "mode": "warn"} for r in rows]
+    assert one(warn, [], corpus="synthetic")[0]["friction"]["messages_per_100_calls"] == 100.0       # 2 warnings of DET over 2 calls
+
+
+def test_a_session_scanned_before_the_summary_rows_existed_is_scanned_again_once(w):
+    cs.put_session(w, "s1", [{"human": "tidy"}, RM])
+    offline.run(w.cfg, now=cs.NOW)
+    path = w.cfg.path("detector_events.jsonl")
+    fires = [ln for ln in path.read_text().splitlines() if json.loads(ln)["detector"] != "_session"]
+    path.write_text("".join(ln + "\n" for ln in fires))                                         # the state of a pre-5c pass
+    again = offline.run(w.cfg, now=cs.NOW)
+    assert (again["transcripts"], again["sessions"], again["detector_events"]) == (1, 1, 0)       # no duplicate fire rows
+    assert sum(r["detector"] == "_session" for r in jsonl(w)) == 1 and [r["id"] for r in jsonl(w) if r["detector"] != "_session"] == [
+        json.loads(ln)["id"] for ln in fires]
+    assert offline.run(w.cfg, now=cs.NOW)["transcripts"] == 0
+
+
+def test_a_returned_transcript_state_adds_the_newest_session_row(w):
+    path = cs.put_session(w, "s1", [{"human": "x"}, RM])
+    offline.run(w.cfg, now=cs.NOW)
+    first = path.read_text()
+    path.write_text("".join(json.dumps(r) + "\n" for r in cs.records([{"human": "x"}, RM, RM2], "s1")))
+    os.utime(path, (cs.NOW - 7000,) * 2)
+    offline.run(w.cfg, now=cs.NOW)
+    path.write_text(first)
+    os.utime(path, (cs.NOW - 6000,) * 2)
+    offline.run(w.cfg, now=cs.NOW)
+    sessions = [r for r in jsonl(w) if r["detector"] == "_session"]
+    assert [r["count"] for r in sessions] == [1, 2, 1] and metrics.latest_sessions(jsonl(w))[st.session_hash("s1")]["count"] == 1

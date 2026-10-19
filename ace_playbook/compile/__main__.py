@@ -232,7 +232,7 @@ def cmd_offline(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
     except Exception as exc:                                  # type only: no traceback, no paths
         print(f"error: {type(exc).__name__}", file=sys.stderr)
         return 1
-    lines = [f"{k}: {out[k]}" for k in ("transcripts", "skipped", "detector_events")]
+    lines = [f"{k}: {out[k]}" for k in ("transcripts", "skipped", "detector_events", "sessions")]
     lines += [f"labels: {sum(out['labels'].values())}", *(f"labels.{k}: {v}" for k, v in out["labels"].items())]
     lines += [f"{k}: {out[k]}" for k in ("demotions", "evasion_candidates", "state_removed", "errors", "lesson_check", "error_rate", "p95_rule")]
     print("\n".join(lines))                                   # counts only: no paths, no hashes

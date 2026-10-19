@@ -52,8 +52,7 @@ repository.
 
 The curator and refiner, the replay and task-suite evaluation harness, the judge, and the
 state-versus-lesson classifier. In the stage-2 compiler: the arms (randomization of the check per session), the seal of the
-pre-registration, the evaluation of an effect (randomization inference, the spillover flag), the curator, the refiner, the review
-packet and the review record. `PREREGISTRATION.md` describes them as plans only and is not sealed.
+pre-registration, the evaluation of an effect (randomization inference, the spillover flag), the review packet and the review record. `PREREGISTRATION.md` describes them as plans only and is not sealed.
 
 ## Compiler (stage 2)
 
@@ -80,8 +79,9 @@ packet and the review record. `PREREGISTRATION.md` describes them as plans only 
   An auto `fp` counts as a false positive (and can demote a proposal) until a human relabels it, a
   `tp_candidate` is never counted as a true positive, and a human row always wins. The signals are
   heuristics (a regex for user corrections, a hash match against the latest prompt). The p95 hook-cost
-  rule (disable above 200 ms over seven days) waits for rows to carry `dur_ms` and is reported as
-  `not computable` on every run; the 1% hook-error rule needs a sample of 100 (rows count fires, not hook calls) and is
+  rule (disable above 200 ms over seven days) is not implemented and is reported as `not implemented` on every run (rows carry `dur_ms`, but
+  it covers firing calls only and excludes the interpreter start); the report's hook cost has the same limits, and a subagent's tool calls
+  may count as live fires against a parent session whose tool calls the offline pass excludes; the 1% hook-error rule needs a sample of 100 (rows count fires, not hook calls) and is
   reported `not computable` below it.
 - An operator approval lifts demotions: a proposal's cap is the lowest `to_mode` among the `demotions.jsonl` rows stamped at or after its
   newest `approvals.jsonl` row, so `approve --mode observe` (TTY, which lists each row it lifts) on a demoted proposal,

@@ -196,3 +196,105 @@ def test_the_report_text_prints_cost_for_rows_with_dur_ms(w, capsys, monkeypatch
     fire_live(w, monkeypatch)
     cli.main(["--config", w.conf, "report"])
     assert "dur_ms p50 " in capsys.readouterr().out and report.metrics.DASH == "-"
+
+
+# ------------------------------------------------------------------ wave 2: --out is confined to the synthetic file
+def private_bytes(w, monkeypatch):
+    fire_live(w, monkeypatch)
+    return w.cfg.path("shadow.jsonl").read_bytes()
+
+
+def test_out_pointing_at_the_private_corpus_is_refused_and_leaves_it_byte_identical(w, capsys, monkeypatch):
+    before = private_bytes(w, monkeypatch)
+    for arg in (w.data / "shadow.jsonl", w.data / "sub" / ".." / "shadow.jsonl"):
+        code, out, err = replay(w, "--out", str(arg), capsys=capsys)
+        assert (code, out) == (2, "") and err.startswith("error:") and str(w.data) not in err
+        assert w.cfg.path("shadow.jsonl").read_bytes() == before
+    assert not w.cfg.path(SYN_FILE).exists()
+
+
+@pytest.mark.parametrize("name", ["labels.jsonl", "approvals.jsonl", "deltas.jsonl"])
+def test_out_pointing_at_another_data_file_is_refused_and_leaves_it_byte_identical(w, capsys, name):
+    cs.write_labels(w.cfg, [{"ref": "E-00000000", "label": "tp"}])
+    target = w.data / name
+    if name != "labels.jsonl":
+        target.write_text('{"keep": 1}\n')
+    before = target.read_bytes()
+    assert replay(w, "--out", str(target), capsys=capsys)[0] == 2
+    assert target.read_bytes() == before
+
+
+def test_out_in_a_subdirectory_of_the_data_dir_is_refused_even_under_the_synthetic_name(w, capsys):
+    (w.data / "sub").mkdir()
+    assert replay(w, "--out", str(w.data / "sub" / SYN_FILE), capsys=capsys)[0] == 2
+    assert not (w.data / "sub" / SYN_FILE).exists()
+    assert replay(w, "--out", str(w.data / SYN_FILE), capsys=capsys)[0] == 0          # the one allowed name inside data_dir
+
+
+def test_an_existing_target_outside_the_data_dir_must_hold_synthetic_rows_only(w, capsys, tmp_path, monkeypatch):
+    live = private_bytes(w, monkeypatch)
+    for content in (live, b"not json\n", b'{"corpus": "synthetic"}\n{"no": "corpus"}\n', b"[1]\n"):
+        target = tmp_path / "elsewhere.jsonl"
+        target.write_bytes(content)
+        assert replay(w, "--out", str(target), capsys=capsys)[0] == 2
+        assert target.read_bytes() == content
+    target.write_bytes(b"")
+    assert replay(w, "--out", str(target), capsys=capsys)[0] == 0 and target.stat().st_size > 0
+    assert replay(w, "--out", str(target), capsys=capsys)[0] == 0                       # a synthetic file is replaced
+
+
+def test_a_symlink_or_directory_as_out_is_refused(w, capsys, tmp_path):
+    real = tmp_path / "real.jsonl"
+    real.write_text("")
+    link = tmp_path / "link.jsonl"
+    link.symlink_to(real)
+    assert replay(w, "--out", str(link), capsys=capsys)[0] == 2 and real.read_text() == "" and link.is_symlink()
+    assert replay(w, "--out", str(tmp_path), capsys=capsys)[0] == 2
+
+
+def test_synthetic_rows_carry_the_synthetic_tier_and_the_private_file_refuses_such_a_row(w, capsys):
+    replay(w, capsys=capsys)
+    assert {r["tier"] for r in syn_rows(w)} == {"synthetic"}
+    cs.append_jsonl(w.cfg.path("shadow.jsonl"), {**syn_rows(w)[0], "corpus": "private"})
+    assert cli.main(["--config", w.conf, "report"]) == 2
+
+
+def test_a_synthetic_proposal_id_is_never_looked_up_in_the_private_proposals(w, capsys):
+    pid = w.props["rm_rf_nonscratch"]["id"]
+    row = {**syn_row_of(w), "proposal_id": pid, "detector": "rm_rf"}
+    cs.append_jsonl(w.cfg.path(SYN_FILE), row)
+    cli.main(["--config", w.conf, "report", "--json"])
+    got = json.loads(capsys.readouterr().out)["synthetic"]["proposals"][pid]
+    assert (got["detector"], got["event"], got["approved_mode"], got["mode"]) == ("rm_rf", "PreToolUse", "-", "-")
+
+
+def syn_row_of(w):
+    return {"ts": "2026-10-19T09:00:00Z", "session": "0123456789abcdef", "lesson_id": "L-0a1b2c3d", "payload_sha256": "ab" * 32,
+            "mode": "observe", "event": "PreToolUse", "tool_name": "Bash", "would_fire": True, "cause": "detector", "tier": "synthetic",
+            "corpus": "synthetic"}
+
+
+def test_the_report_header_hash_covers_report_and_metrics_and_changes_with_either(tmp_path, monkeypatch):
+    a, b = tmp_path / "metrics.py", tmp_path / "report.py"
+    a.write_text("a = 1\n")
+    b.write_text("b = 1\n")
+    monkeypatch.setattr(report, "HASHED", (a, b))
+    base = report.source_sha256()
+    assert base == hashlib.sha256(b"a = 1\n\0b = 1\n").hexdigest() and [p.name for p in report.HASHED] == ["metrics.py", "report.py"]
+    a.write_text("a = 2\n")
+    assert report.source_sha256() != base
+    a.write_text("a = 1\n")
+    b.write_text("b = 2\n")
+    assert report.source_sha256() != base
+    real = report.HASHED
+    monkeypatch.undo()
+    assert {p.name for p in report.HASHED} == {"metrics.py", "report.py"} and real != report.HASHED
+
+
+def test_the_cost_block_states_its_limits_per_corpus(w, capsys, monkeypatch):
+    fire_live(w, monkeypatch)
+    replay(w, capsys=capsys)
+    cli.main(["--config", w.conf, "report"])
+    out = capsys.readouterr().out
+    assert out.count("firing calls only, in-process: no interpreter start, imports or config load") == 1
+    assert out.count("the evaluator only, not a hook call") == 1 and out.count("live fires awaiting offline scan: ") == 2

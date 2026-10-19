@@ -264,7 +264,7 @@ create `data_dir/proposals/DISABLED` (any content) or run `python3 -m ace_playbo
 P-xxxxxxxx` at a terminal. `shadow.jsonl`, `shadow.log` and `shadow_state/` are plain files you can delete.
 
 **Regression check.** `python3 -m ace_playbook.compile replay-synthetic` feeds the frozen invented corpus through the evaluator
-(a throwaway state directory), writes `data_dir/shadow.synthetic.jsonl` (never `shadow.jsonl`) and exits 1 if any expected outcome
+(a throwaway state directory), writes `data_dir/shadow.synthetic.jsonl` (never `shadow.jsonl`; `--out` inside `data_dir` is refused unless it is that file) and exits 1 if any expected outcome
 differs; `compile report` then prints the synthetic table apart from the private one.
 
 ## What the hooks write

@@ -2,7 +2,7 @@
 
 Feeds every `fire` and `no_fire` payload of `fixtures/compile/examples.json` (one session per detector) and the frozen sessions of
 `fixtures/frozen/shadow_corpus.json` through `shadow._evaluate` with a temporary state directory, and writes one row per event, `corpus:
-"synthetic"`, to `shadow.synthetic.jsonl` (replaced on every run; never the private `shadow.jsonl`). A row that did not fire has
+"synthetic"`, to `shadow.synthetic.jsonl` (replaced on every run, `tier: "synthetic"`; never the private `shadow.jsonl`: `--out` is confined by `target`). A row that did not fire has
 `would_fire: false`; `compile report` counts only the fires but needs the rest as the corpus's eligible sessions. The corpus is a regression
 test: exit 1 when any `expect` disagrees with the outcome, or a detector errors; exit 2 for an unusable corpus. Detector names and tools are
 checked against `catalogue.CATALOGUE`, never hard-coded. Prints counts only. Not imported by shadow.py: it is off the hook path.
@@ -13,6 +13,8 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import os
+import stat
 import sys
 import tempfile
 import time
@@ -24,7 +26,7 @@ from .events import event_from_hook
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
 EXAMPLES, CORPUS, OUT = FIXTURES / "compile" / "examples.json", FIXTURES / "frozen" / "shadow_corpus.json", "shadow.synthetic.jsonl"
-EXPECT = ("fire", "no_fire")
+EXPECT, MAX_OUT = ("fire", "no_fire"), 1 << 24
 
 
 def _read(path: Path) -> dict:
@@ -78,7 +80,7 @@ def replay(cfg, sessions: list | None = None) -> tuple[list[dict], dict]:
                 t0 = time.monotonic()
                 fired = det in shadow._evaluate(scratch, ev, sid, [det], errors.append)
                 row = shadow._row(proposal_of(det), "observe", "detector" if fired else "none", "PreToolUse", ev, sid, b"", t0)
-                rows.append({**row, "would_fire": fired, "corpus": "synthetic", "detector": det})
+                rows.append({**row, "would_fire": fired, "corpus": "synthetic", "tier": "synthetic", "detector": det})
                 counts["events"] += 1
                 counts["fired"] += fired
                 counts["disagreements"] += fired != (expect == "fire")
@@ -86,11 +88,38 @@ def replay(cfg, sessions: list | None = None) -> tuple[list[dict], dict]:
     return rows, counts
 
 
-def run(cfg, out: str | None = None) -> int:
-    """Entry of `compile replay-synthetic [--out PATH]`: 0, 1 when the corpus disagrees with the catalogue, 2 for an unusable corpus."""
+def target(cfg, out: str | None) -> Path:
+    """The file to replace: the default, or `--out`. Inside `data_dir` only `shadow.synthetic.jsonl` itself is allowed (never the
+    private corpus, labels, approvals or the store); a file already there must be a regular file (not a symlink) holding synthetic
+    rows only. Refusal (exit 2) before anything is written."""
+    path = Path(out) if out else cfg.path(OUT)
+    real, data = path.parent.resolve() / path.name, Path(cfg.data_dir).resolve()
+    if data in real.parents and real != data / OUT:
+        raise labels.Refusal(f"--out inside the data directory must be {OUT}", 2)
     try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return path
+    except OSError:
+        raise labels.Refusal("--out is a symlink or not a regular file", 2) from None
+    with os.fdopen(fd, "rb") as fh:
+        raw = fh.read(MAX_OUT + 1) if stat.S_ISREG(os.fstat(fh.fileno()).st_mode) else None
+    try:
+        ok = raw is not None and len(raw) <= MAX_OUT and all(
+            isinstance(r := json.loads(ln), dict) and r.get("corpus") == "synthetic" for ln in raw.decode().splitlines() if ln.strip())
+    except (ValueError, RecursionError):
+        ok = False
+    if not ok:
+        raise labels.Refusal("--out exists and is not a file of synthetic rows; nothing was written", 2)
+    return path
+
+
+def run(cfg, out: str | None = None) -> int:
+    """Entry of `compile replay-synthetic [--out PATH]`: 0, 1 when the corpus disagrees with the catalogue, 2 for an unusable corpus
+    or a refused `--out`."""
+    try:
+        path = target(cfg, out)
         rows, counts = replay(cfg)
-        path = Path(out) if out else cfg.path(OUT)
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         write_private(path, "".join(json.dumps(r, sort_keys=True) + "\n" for r in rows))
     except labels.Refusal as exc:
