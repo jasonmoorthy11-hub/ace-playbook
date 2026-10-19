@@ -4,8 +4,10 @@ Read this before drawing any conclusion from the repository.
 
 ## Status
 
-Stage 1 scaffold. There are no results. Nothing here has been run against real sessions in
-public, and no measured claim about benefit is made.
+Stage 2 shadow mode, observe only. There are no results. The stage-1 plumbing (store, scrubber,
+injector, reflector) and the stage-2 compiler (evidence cards, spec-only proposals, the shadow hook)
+exist as code; as of 2026-10-19 no proposal has been approved, so the shadow hook has recorded
+nothing and nothing has been measured. No measured claim about benefit is made.
 
 ## Statistical power
 
@@ -46,11 +48,32 @@ repository.
 - Stage 1 injects pinned lessons only, so it tests the plumbing and the holdout mechanism, not
   retrieval quality.
 
-## Not built in stage 1
+## Not built yet
 
-The compiler (lesson to proposed hook or CLAUDE.md edit), the curator and refiner, migration of
-any existing lesson corpus, the replay and task-suite evaluation harness, the judge, and the
-state-versus-lesson classifier. `PREREGISTRATION.md` describes them as plans only.
+The curator and refiner, the replay and task-suite evaluation harness, the judge, and the
+state-versus-lesson classifier. In the stage-2 compiler: the offline nightly pass over transcripts,
+automatic demotion, promotion to `warn` or `block` (`approve` accepts only `observe`), the synthetic
+replay corpus, and the full measurement report. `PREREGISTRATION.md` describes them as plans only
+and is not sealed.
+
+## Compiler (stage 2)
+
+- The command scanner is a best-effort linear tokenizer, not a shell parser. Known shapes it does
+  not see: `find ... -delete` and `-exec rm -rf`, `xargs` fed from a pipe, `bash -c`, `eval` and
+  `bash <<EOF` bodies, shell functions and aliases, and anything past the 64 KB cap (reported as
+  `unparseable`). The control is the promotion ladder: a proposal starts in observe mode and every
+  counted true positive is read by a human before any mode change (`docs/design/compiler.md` 7.3).
+- Warn delivery is unresolved. The Claude Code hooks reference (read 2026-10-19) says that a hook's
+  stderr on exit 0 never reaches the model, so the current warn path (a message on stderr) would be
+  visible to nobody. The model-visible channel is `hookSpecificOutput.additionalContext` on stdout;
+  that change lands before any proposal can be approved in warn mode.
+- The `Stop` hook entry is wiring only: no approvable detector consumes `Stop` today.
+- A lesson migrated from an older corpus carries self-quoted `legacy:` evidence and gets an evidence
+  card only through a human incident label (`compile label --incident`). Re-minting such a lesson
+  with `store promote` does not help here: the promote evidence carries session `promote-cli`, which
+  has no transcript, so it never yields a standard card.
+- `compile label` is TTY-only, which stops hooks, pipes and plain subprocesses, not a determined
+  local process; promotion makes a forged label visible to the operator rather than impossible.
 
 ## Security and scrubbing
 
