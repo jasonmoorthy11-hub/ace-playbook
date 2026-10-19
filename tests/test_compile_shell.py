@@ -151,3 +151,53 @@ def test_tmpdir_forms_other_than_the_plain_variable_are_not_scratch():
     assert not rm_fires("rm -rf ${TMPDIR}/x") and not rm_fires("rm -rf $TMPDIR/x")
     for target in ("${TMPDIR:-/w/src}/x", "${TMPDIR:=/w}/x", "${TMPDIR#a}/x", "$TMPDIRX/x"):
         assert rm_fires("rm -rf " + target), target
+
+
+# ------------------------------------------------------------------ escapes: is this character escaped?
+def test_an_escaped_separator_does_not_make_a_comment():
+    assert rm_fires("echo\\ # a note; rm -rf /w/src")                       # `echo\ #` is one word
+    assert ev.command_segments("echo\\ # x") == [["echo\\", "#", "x"]]
+    assert not rm_fires("echo ok  # a note; rm -rf /w/src")                 # a real comment still is
+
+
+def test_two_backslashes_leave_the_separator_unescaped():
+    assert not rm_fires("echo \\\\ # a note; rm -rf /w/src")                 # `\\` is a literal backslash: a comment
+
+
+def test_an_escaped_dollar_is_not_ansi_c_quoting():
+    assert ev.command_segments("echo \\$'a b' c") == [["echo", "\\$Q", "c"]]     # \$ literal, then a plain '..'
+    assert ev.command_segments("echo \\\\$'a b' c") == [["echo", "\\\\Q", "c"]]  # \\ then a real $'..'
+    assert ev.command_segments('echo \\$"a b" c') == [["echo", "\\$Q", "c"]]
+
+
+def test_a_double_backslash_before_the_opener_is_still_a_heredoc():
+    assert not rm_fires("cat \\\\<<EOF\nrm -rf /w/src\nEOF")
+    assert rm_fires("cat \\<<EOF\nrm -rf /w/src\nEOF")
+    assert rm_fires("cat \\\\\\<<EOF\nrm -rf /w/src\nEOF")                   # three: escaped again
+
+
+def test_arithmetic_depth_ignores_parentheses_in_quotes_and_resets_at_closing():
+    assert not rm_fires('echo "((" ; cat <<EOF\nrm -rf /w/src\nEOF')
+    assert not rm_fires("echo $((1<<2)); cat <<EOF\nrm -rf /w/src\nEOF")
+    assert rm_fires("echo $((1<<2))\nrm -rf /w/src\n2")
+
+
+def test_backslash_newline_joins_the_line():
+    assert rm_fires("rm -r\\\nf /w/src")
+    assert ev.command_segments("echo a \\\nb") == [["echo", "a", "b"]]
+    assert ev.command_segments("echo a \\\\\nb") == [["echo", "a", "\\\\"], ["b"]]   # even run: a real newline
+    assert ev.command_segments("cat <<EOF \\\nmore\nbody\nEOF\nls") == [["cat", "more"], ["ls"]]
+
+
+def test_a_comment_ends_at_its_newline_even_after_a_backslash():
+    assert rm_fires("# note \\\nrm -rf /w/src")
+
+
+@pytest.mark.parametrize("name,cmd", [("backslash-run-then-opener", "\\" * 60000 + "<<a\n"),
+                                      ("backslash-newlines", "\\\n" * 30000),
+                                      ("escaped-hashes", "a\\ #" * 15000),
+                                      ("escaped-dollar-quotes", "\\$'" * 20000)])
+def test_escape_handling_is_linear(name, cmd):
+    t0 = time.monotonic()
+    catalogue.evaluate(ev.event_from_hook(pre(cmd)), state_mod.new_state("s-1"), strict=True)
+    assert time.monotonic() - t0 <= 0.1, name

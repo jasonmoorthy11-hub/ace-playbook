@@ -5,8 +5,8 @@ pass handles quotes, comments and heredocs, at most MAX_HEREDOCS heredoc openers
 the rest is split by regex. Nothing is executed, expanded or passed to a shell; strings are only split.
 
 Differences from Step 0 (parity deviations only on unusual input, see step0_parity.json): a heredoc
-removes only its BODY and is not opened for `<<<`, `\\<<`, `<<` inside `((`, or after a comment `#`
-(a word-initial `#` drops the rest of the line); `$'..'` and `$".."` are quoted words; a single `&`
+removes only its BODY and is not opened for `<<<`, an escaped `<<`, `<<` inside `((`, or after a comment `#`
+(a word-initial, unescaped `#` drops the rest of the line; backslash-newline continues a line); `$'..'` and `$".."` are quoted words; a single `&`
 separates segments; braces, `!` and if/then/do/else/while are stripped from a segment's front, and so
 are leading redirections and the wrappers sudo, env, nice, xargs, doas, timeout, ... with their options.
 """
@@ -59,18 +59,18 @@ def _terminator(word: str) -> re.Pattern:
     return re.compile(rf"(?m)^{sp}{re.escape(word)}{sp}$")
 
 
-def _not_a_heredoc(s: str, p: int) -> bool:
-    """`<<` that bash reads as something else: escaped, or a shift inside `((`/`$((`."""
-    if s[p - 1:p] == "\\":
-        return True
-    pre = s[s.rfind("\n", 0, p) + 1:p]
-    return pre.count("((") > pre.count("))")
+def _escaped(s: str, p: int) -> bool:
+    """True if the character at p is escaped: an odd run of backslashes sits right before it."""
+    j = p
+    while j > 0 and s[j - 1] == "\\":
+        j -= 1
+    return (p - j) % 2 == 1
 
 
 def _scan(s: str) -> str:
     """Mask quoted strings (single tokens stay, prose becomes Q), drop comments and heredoc bodies."""
     out: list[str] = []
-    n, i, dead, ansi_dead, attempts = len(s), 0, 0, 0, 0
+    n, i, dead, ansi_dead, attempts, depth = len(s), 0, 0, 0, 0, 0   # depth: open `((` outside quotes
     skip: dict[int, int] = {}          # newline index ending an opener line -> end of its body
     while i < n:
         m = _SPECIAL.search(s, i)
@@ -82,11 +82,16 @@ def _scan(s: str) -> str:
         out.append(run)
         c = s[p]
         i = p + 1
+        depth = max(0, depth + run.count("((") - run.count("))"))
         if c == "\n":
-            out.append("\n")
-            i = skip.get(p, i)
+            if run.endswith("\\") and _escaped(s, p):   # backslash-newline: both vanish, the line goes on
+                out[-1] = run[:-1]
+            else:
+                out.append("\n")
+                i = skip.get(p, i)
+                depth = 0
         elif c == "#":
-            if p == 0 or s[p - 1] in " \t\n;|&(":   # word-initial: a comment to end of line
+            if p == 0 or (s[p - 1] in " \t\n;|&(" and not _escaped(s, p - 1)):   # word-initial: a comment
                 e = s.find("\n", p)
                 i = n if e < 0 else e
             else:
@@ -98,7 +103,7 @@ def _scan(s: str) -> str:
                 if end < 0:
                     dead = fail
             if end >= 0:
-                if run.endswith("$"):      # $"..": the $ is part of the quoting
+                if run.endswith("$") and not _escaped(s, p - 1):      # $"..": the $ is part of the quoting
                     out[-1] = run[:-1]
                 out.append(_mask(s[p + 1:end]))
                 i = end + 1
@@ -106,7 +111,7 @@ def _scan(s: str) -> str:
                 out.append('"')
         elif c == "'":
             end = -1
-            if run.endswith("$") and p >= ansi_dead:     # $'..' with backslash escapes
+            if run.endswith("$") and not _escaped(s, p - 1) and p >= ansi_dead:    # $'..' with escapes
                 q = _ANSI_RUN.match(s, p + 1).end()
                 if q < n and s[q] == "'":
                     out[-1] = run[:-1]
@@ -126,9 +131,11 @@ def _scan(s: str) -> str:
         elif s.startswith("<<", p):
             o = _OPENER.match(s, p) if attempts < MAX_HEREDOCS else None
             attempts += bool(o)
-            if o and _not_a_heredoc(s, p):
+            if o and (_escaped(s, p) or depth > 0):    # `\<<`, or a shift inside `((`/`$((`
                 o = None
             e = s.find("\n", o.end()) if o else -1
+            while e >= 0 and _escaped(s, e):         # the opener line continues past a backslash-newline
+                e = s.find("\n", e + 1)
             t = _terminator(o.group(2)).search(s, skip.get(e, e + 1)) if e >= 0 else None
             if t:
                 skip[e] = t.end()          # the body goes; the rest of the opening line stays
