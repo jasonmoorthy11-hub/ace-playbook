@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 from .. import config as cfgmod
+from .. import ttyio
 from ..atomic import write_private
 from . import evidence, labels, proposal, report, shadow
 
@@ -77,11 +78,8 @@ def cmd_validate(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
 
 
 def _ask(prompt: str) -> str:
-    """One line from the controlling terminal (not stdin, which may be a pipe)."""
-    with open("/dev/tty", "r+") as tty:
-        tty.write(prompt)
-        tty.flush()
-        return tty.readline().strip()
+    """One line from the controlling terminal (not stdin, which may be a pipe); tests monkeypatch this name."""
+    return ttyio.ask(prompt).strip()
 
 
 def _need_tty(what: str) -> bool:

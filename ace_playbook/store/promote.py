@@ -13,6 +13,7 @@ import argparse
 import copy
 import sys
 
+from .. import ttyio
 from ..scrub import OUTBOUND, QuarantineRequired, scan
 from . import DeltaLog, view
 from .schema import ID_RE, SchemaError, canonical, now_iso, unsafe_text_reason
@@ -29,13 +30,7 @@ def _refuse(msg: str) -> int:
 
 def _prompt(text: str) -> str:
     """Ask on the controlling terminal (not stdin); raises OSError/EOFError if unavailable."""
-    with open("/dev/tty", "r+") as tty:
-        tty.write(text)
-        tty.flush()
-        line = tty.readline()
-    if not line:
-        raise EOFError
-    return line.rstrip("\n")
+    return ttyio.ask(text)
 
 
 def _check_quote(quote: str, deny_terms: tuple[str, ...]) -> str | None:
