@@ -52,7 +52,7 @@ repository.
 
 The curator and refiner, the replay and task-suite evaluation harness, the judge, and the
 state-versus-lesson classifier. In the stage-2 compiler: the offline nightly pass over transcripts,
-automatic demotion, promotion to `warn` or `block` (`approve` accepts only `observe`), the synthetic
+automatic demotion, the synthetic
 replay corpus, and the full measurement report. `PREREGISTRATION.md` describes them as plans only
 and is not sealed.
 
@@ -63,10 +63,9 @@ and is not sealed.
   `bash <<EOF` bodies, shell functions and aliases, and anything past the 64 KB cap (reported as
   `unparseable`). The control is the promotion ladder: a proposal starts in observe mode and every
   counted true positive is read by a human before any mode change (`docs/design/compiler.md` 7.3).
-- Warn delivery is unresolved. The Claude Code hooks reference (read 2026-10-19) says that a hook's
-  stderr on exit 0 never reaches the model, so the current warn path (a message on stderr) would be
-  visible to nobody. The model-visible channel is `hookSpecificOutput.additionalContext` on stdout;
-  that change lands before any proposal can be approved in warn mode.
+- Warn delivery, resolved: warn uses `additionalContext` (step 5b). The Claude Code hooks reference (read
+  2026-10-19) says a hook's stderr on exit 0 never reaches the model, so the hook prints one
+  `hookSpecificOutput.additionalContext` JSON object on stdout (and echoes the message on stderr for the debug log).
 - The `Stop` hook entry is wiring only: no approvable detector consumes `Stop` today.
 - A lesson migrated from an older corpus carries self-quoted `legacy:` evidence and gets an evidence
   card only through a human incident label (`compile label --incident`). Re-minting such a lesson
