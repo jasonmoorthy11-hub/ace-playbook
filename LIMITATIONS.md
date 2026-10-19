@@ -65,9 +65,11 @@ the long-token lint partly covers and nothing measures.
 
 Behavior of Claude Code hooks (SessionStart context cap, SessionEnd budget, Stop payload,
 `onFailure`) is taken from its documentation as read in October 2026 and may change. Two
-behaviors are not settled by documentation and need a live test before relying on them: whether
-a detached child process survives an interactive exit, and whether files written outside a
-session are read mid-session. Stage 1 does not depend on either.
+behaviors were not settled by documentation; `docs/platform-notes.md` records what was observed
+on 2026-10-19 (Claude Code 2.1.302, macOS): files written to the memory directory during a
+session are not surfaced to the running session, and the SessionEnd hook only enqueues, so the
+design never relies on a detached child surviving an interactive exit. Stage 1 depends on
+neither; the nightly sweep runs under launchd instead.
 
 ## Single user
 
