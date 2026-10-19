@@ -292,6 +292,8 @@ def test_a_detector_error_is_logged_and_the_hook_stays_silent(w, run, monkeypatc
             return row.fire(event, state)
         raise ValueError("boom")
 
+    orig, real = row.source_sha256, catalogue.Detector.source_sha256     # swapping `fire` moves the hash: keep the original for `bad`
+    monkeypatch.setattr(catalogue.Detector, "source_sha256", property(lambda self: orig if self.fire is bad else real.fget(self)))
     monkeypatch.setitem(catalogue.CATALOGUE, "rm_rf_nonscratch", dataclasses.replace(row, fire=bad))
     assert run(cs.pre_payload(RM)) == (0, "", "")
     assert run.rows == [] and "error:rm_rf_nonscratch:ValueError" in run.log

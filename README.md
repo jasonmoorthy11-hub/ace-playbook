@@ -89,7 +89,7 @@ block mode after the observe/warn ladder, see [docs/design/compiler.md](docs/des
 human-written detector from a fixed catalogue (`python -m ace_playbook.compile cards|propose|validate`),
 and the operator approves it at a terminal with `approve <id> --mode observe`. The shadow hook
 (`hooks/shadow.sh`, [INSTALL.md](hooks/INSTALL.md) section 7) then evaluates approved proposals on each
-Bash call, re-validating them from disk every time, and appends what **would** have fired to
+Bash call, re-validating them from disk every time (a proposal records a per-detector source hash, so editing one detector's own function body retires only its own proposals and any other edit to the detector or catalogue code, including adding a detector, retires all of them; the release that introduced it made every earlier proposal stale once, to be re-proposed and re-approved), and appends what **would** have fired to
 `shadow.jsonl` (ids, hashes and a timestamp, never the command). In observe mode it prints nothing,
 changes nothing and cannot block; `approve --mode warn|block` is the promotion ladder (14 days, 5 human-labelled true
 positives and no false positive, a hash-chained `approvals.jsonl`; warn reaches the model through `additionalContext`).

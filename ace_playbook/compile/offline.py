@@ -227,7 +227,7 @@ def demote(cfg, rows: list[dict], labs: dict[str, str], cands: list[dict], now: 
                    and labs.get(labels.row_id(r)) == "fp"]
             ref = demotions.pair_ref([c for c in cands if c.get("proposal_id") == pid], 14)
             flagged = any(r["proposal_id"] == pid and r["cause"] == "evasion_pair" and r["ref"] == ref for r in drows)
-            stale = det not in catalogue.CATALOGUE or catalogue.CATALOGUE[det].source_sha256 != p["provenance"]["source_sha256"]
+            stale = catalogue.stale(det, p["provenance"]["source_sha256"])
             disable = ("lesson_inactive" if (lessons or {}).get(p["lesson_id"]) in WITHDRAWN else
                        "source_sha256" if stale else "error_rate" if sure and errors > 0.01 * n else None)
             for f in demotions.decide(pid, cur, disable=disable, fps=sorted(set(fps)), evasion=None if flagged else ref):

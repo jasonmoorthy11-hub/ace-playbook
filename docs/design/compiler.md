@@ -52,7 +52,7 @@ RESULTS.md:62), alongside `edit_unread_turn` and `rm_rf` (RESULTS.md:34). The ve
 | `compile/events.py` | `Event`, `ToolUse`, `ToolResult` (port of step0/scanlib.py:24-52); two adapters: hook payload to Event, transcript record to Event (port of scanlib.py:80-126); input caps with a `truncated` mark | ~230 lines |
 | `compile/shell.py` | `command_segments`, `git_subcommand` (scanlib.py:231-266), rewritten linear-time: one pass for quotes, `$'..'`, comments and heredocs (no heredoc for `<<<`, `\<<`, `<<` inside `((`, or after a comment), at most 32 heredoc openers, `&`, braces and shell keywords split or strip, leading redirections and wrappers with their options are skipped | ~180 |
 | `compile/detectors.py` | Pure detector functions, `Fire`, `advance` (the state transition) (section 4) | ~230 |
-| `compile/catalogue.py` | `CATALOGUE` registry (`Detector` rows with strength, tier, consumes, state, compilable, lessons), `evaluate` (strict mode, error list), `source_sha256` over the full source of events, shell, textrules, detectors and catalogue | ~100 |
+| `compile/catalogue.py` | `CATALOGUE` registry (`Detector` rows with strength, tier, consumes, state, compilable, lessons), `evaluate` (strict mode, error list), `source_sha256` per detector (exclusion hash, `srchash.py`) and `source_table()` | ~100 |
 | `compile/state.py` | Rolling per-session state file under `data_dir/shadow_state/`, locked (`LOCK_NB`), atomic, hashed name, 0600/0700, FIFO- and symlink-safe | ~235 |
 | `compile/evidence.py` | Evidence cards (section 5): admission, legacy path, scrub, `cards/` writer | 300 (built, step 2) |
 | `compile/proposal.py` | Proposal schema, ordered validation, replay/regression runner, writer (section 6) | 299 (built, step 2) |
@@ -60,6 +60,7 @@ RESULTS.md:62), alongside `edit_unread_turn` and `rm_rf` (RESULTS.md:34). The ve
 | `ace_playbook/canon.py` | Stdlib-only leaf: `canonical`, `now_iso`, `record_hash`, `GENESIS`, `ID_RE`; `store/schema.py` re-exports them (step 4, see 7.2) | 29 |
 | `compile/shadow.py` | Hook entry point: load approved proposals, re-validate, check the approvals row of a warn or block copy, evaluate, append `shadow.jsonl` rows, print the decision as JSON on stdout (block deny, or warn `additionalContext`); always returns 0 (section 7); since step 5a it reads `demotions.jsonl` once per call, since the integration wave it asks `modes.resolve` for the effective mode (disabled or revoked skips the proposal, a broken chain caps every proposal at observe), repeated log lines are throttled per call (`_Once`), and since step 5c every row carries `v` and `dur_ms` | ~220; 220 (step 4), 259 (step 5b), 300 (5a, integration, 5c) |
 | `compile/approvals.py` | The hash-chained `approvals.jsonl`: `read_chain`, `newest`, `append` (locked, chain verified from the fd, duplicate skip), `verify_copy`; stdlib and `canon` only, on the hook path (step 5b) | 117 |
+| `compile/srchash.py` | The per-detector hash behind `Detector.source_sha256`: `module_text` (on-disk text, read once), `excised_text` (exact-span replacement of other rows' fire bodies and of the registry literal), `detector_drop` (which fire bodies to excise) and `digest` (step 5, per-detector hash) | ~100 |
 | `compile/ladder.py` | The promotion rules: pure `check` over rows (TP and FP re-derivation, 14 days, 5 human TPs, 0 FPs, strength, source hash, cap) and `run`, the `approve --mode warn\|block` flow with the TP listing; imported lazily by the CLI (step 5b) | 235 |
 | `compile/offline.py` | Nightly pass: run signal detectors over finished transcripts, finalize session-level detectors, label pre-fill, evasion candidates, demotions, `shadow_state` cleanup (section 7.3) | ~250; 290 (built, step 5a), 300 (integration, 5c: `_session` summary rows) |
 | `compile/demotions.py` | Hash-chained, append-only `demotions.jsonl` (stdlib and `canon` only, read by the hook): reader, `effective_cap`, `lower`, locked writer; plus the pure FP and evasion rules `decide` and `pair_ref` the nightly pass uses | 149 (built, step 5a); 150 |
@@ -116,8 +117,39 @@ no environment. The same function runs in two tiers, fed by the two adapters in 
   *signal detectors* (blocks raised by existing hooks, user corrections).
 
 Each catalogue entry carries `name`, `strength` (copied from Step 0), `tier`, `consumes`,
-`state`, `fire`, `compilable`, `lessons` (L-ids after migration), and `source_sha256` of the
-function body (used to invalidate approvals when the code changes).
+`state`, `fire`, `compilable`, `lessons` (L-ids after migration), and `source_sha256` (used to
+invalidate approvals when the code that decides a detector changes).
+
+**Source hash (as built, per detector).** The hash is an exclusion: it covers all of `detectors.py` and
+`catalogue.py` as text, minus what cannot change this row's behaviour. `Detector.source_sha256` is the sha256
+of these parts, each preceded by its label and joined by NUL (nothing is deduplicated): the row name; the name
+of its `fire` function; the row metadata as canonical JSON (`strength`, `tier`, `consumes`, `state`,
+`compilable`, `lessons`); `detectors.py` with only the BODIES of the other rows' `fire` functions replaced by
+`...excised...` (the exact characters from the first statement of the body to the end of the def; decorators,
+signatures and default arguments of those fires stay, because they run at import time in every process); `catalogue.py` with only the
+`CATALOGUE = {...}` registry literal replaced by a placeholder (again by exact span, so a statement sharing a
+line with it stays hashed; a registry bound twice at top level is an error); and the full text of `events.py`,
+`shell.py` and `textrules.py`. A fire that the remaining text still names (one fire calling another, or named
+in a kept signature) is kept whole. `advance` and `blank_state` are hashed for every row, stateless or not:
+`evaluate` runs `advance` in the same hook call before the decision is emitted, so a `SystemExit` or a hang in it
+would silence a stateless detector's deny, and an `advance` edit is rare enough that retiring everything is the
+honest answer. Everything else is hashed verbatim: imports, decorators, constants and every rebinding,
+helpers, `evaluate`, the `Detector` class, comments. `source_sha256` raises `ValueError` unless the row's
+`fire` is the top-level function of `detectors.py` that carries its `__name__` (a lambda, a `functools.wraps`
+wrapper, a `functools.partial` or a callable instance, which has no name, fails closed for that row only: `validate` reports a fail-closed schema step, the hook skips the proposal, and the nightly pass treats it as a
+`source_sha256` change; `source_table()` raises for the whole registry);
+`evaluate` hands each fire its own deep copy of the state (the event is shared, not copied), and a structural
+test pins that `detectors.py` mutates no module-level state and no `event` or `state` argument. So an edit to one detector's own `fire` body, or to another row's FIELDS in the
+registry, retires only that row's proposals; any other edit to `detectors.py`, `catalogue.py`, `events.py`,
+`shell.py` or `textrules.py` (a shared helper, an import, `evaluate`, `advance`, a decorator or signature of
+any fire) retires every approved proposal. Adding a detector also retires every proposal: it adds an import line
+to `catalogue.py` and a placeholder for its fire in `detectors.py`. The check is pure AST and text, read
+from disk once per process (`srchash.module_text`): it describes the on-disk text, not the loaded code, so a
+tampered `.pyc` or an in-memory monkeypatch is invisible to it, as it was to the old whole-file scheme.
+`catalogue.source_table()` returns name to hash for every row (a later seal command and the report read it).
+The first merge of this scheme changes every existing proposal's hash once: each goes stale (`compile
+validate`: "catalogue source_sha256 is stale"; the hook skips it; the nightly pass records a `source_sha256`
+demotion), so re-propose and re-approve.
 
 | Detector | Step 0 strength / eligible rate | Tier | Consumes | State | Fires when | Compilable |
 |---|---|---|---|---|---|---|
@@ -282,6 +314,9 @@ This follows the report's rule of a fixed evaluator the proposer cannot edit (re
  "created": "2026-10-20T03:12:00Z", "created_by": "ace_playbook.compile 0.2.0",
  "reviewed_by": null}
 ```
+
+As built, `provenance` is `{cards, lesson_evidence, source_sha256}`; `source_sha256` is the per-detector
+hash of section 4 and the proposal id includes it, so a detector edit gives the same proposal a new id.
 
 Validation, all fail-closed, before the file is written:
 

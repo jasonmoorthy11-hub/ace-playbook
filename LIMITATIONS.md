@@ -67,6 +67,21 @@ pre-registration, the evaluation of an effect (randomization inference, the spil
 - `approvals.jsonl` is hash-chained but unkeyed. It stops hand edits of an approved copy (a copy without a matching row
   runs in observe) but not a local process that appends a correctly chained row for a `warn` or `block` copy it also
   writes: that would make the hook warn or block the agent itself, limited to proposals that pass validation.
+- A proposal's `provenance.source_sha256` is a per-detector hash by exclusion: the text of `detectors.py` and `catalogue.py`, minus
+  the bodies of the other rows' `fire` functions and the `CATALOGUE` registry literal, plus the row's name, fire name and catalogue
+  fields and the whole text of `events.py`, `shell.py` and `textrules.py`. Editing one detector's own fire body, or another row's
+  fields in the registry, retires only that detector's proposals (re-propose, re-approve). Any other edit retires every approved
+  proposal: a shared helper, an import, a constant, a decorator or signature of any fire, a rebinding, `evaluate`, the `Detector`
+  class, `advance` or `blank_state` (hashed for every row: `evaluate` runs `advance` before the decision is emitted), any edit to
+  the three leaf modules, and adding a detector. Dynamic lookups are moot (nothing is followed, everything is text). What the hash
+  does not see is any difference between the text on disk, read once when it is first used in a process, and the code actually
+  loaded (a tampered `.pyc`, an in-memory monkeypatch, a file edited while a long-lived process runs); the old whole-file hash
+  had the same blind spot. A fire in the registry must be the top-level function of `detectors.py` that carries its name
+  (a lambda, a wrapper, a `functools.partial` or a callable instance fails the same way): hashing then raises `ValueError` for that
+  row only, the hook skips its proposals, the nightly pass treats them as stale (`source_sha256` demotion), and `source_table()`
+  and building evidence cards for it raise. The event object is shared by all fires in one `evaluate` call (the state is deep-copied
+  per fire); a test pins that no detector mutates either. The merge that introduced the hash changed every existing proposal's hash
+  once, so each proposal written before it is stale and must be re-proposed and re-approved.
 - `additionalContext` was confirmed live for PreToolUse only; Stop delivery follows the hooks reference and is unverified.
 - The `Stop` hook entry is wiring only: no approvable detector consumes `Stop` today.
 - A lesson migrated from an older corpus carries self-quoted `legacy:` evidence and gets an evidence
