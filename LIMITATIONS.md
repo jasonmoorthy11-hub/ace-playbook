@@ -66,6 +66,10 @@ and is not sealed.
 - Warn delivery, resolved: warn uses `additionalContext` (step 5b). The Claude Code hooks reference (read
   2026-10-19) says a hook's stderr on exit 0 never reaches the model, so the hook prints one
   `hookSpecificOutput.additionalContext` JSON object on stdout (and echoes the message on stderr for the debug log).
+- `approvals.jsonl` is hash-chained but unkeyed. It stops hand edits of an approved copy (a copy without a matching row
+  runs in observe) but not a local process that appends a correctly chained row for a `warn` or `block` copy it also
+  writes: that would make the hook warn or block the agent itself, limited to proposals that pass validation.
+- `additionalContext` was confirmed live for PreToolUse only; Stop delivery follows the hooks reference and is unverified.
 - The `Stop` hook entry is wiring only: no approvable detector consumes `Stop` today.
 - A lesson migrated from an older corpus carries self-quoted `legacy:` evidence and gets an evidence
   card only through a human incident label (`compile label --incident`). Re-minting such a lesson

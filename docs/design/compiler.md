@@ -477,25 +477,36 @@ does must use the same formula.
 `canon.GENESIS` (same scheme as `labels.jsonl`) of rows `{ts, v: 1, proposal_id, proposal_sha256, mode, reviewed_by:
 "operator-tty", tp_refs, fp_refs, review_sha, prev_hash, hash}`: enums, ids, hashes, timestamps and lists of row ids only.
 Every `approve` appends one row (`proposal_sha256` is the approved copy's own hash, so a row binds id, content and mode;
-the same hash and mode twice appends nothing). `approve --mode observe` on a copy that already exists and matches, but has
-no matching row (the first live approval predates the chain), asks `y/N` and appends the missing row with `ts` = the copy's
-`approved_at`, so the observe clock is not reset. The hook honours a copy in `warn` or `block` only when the newest row for
+the same hash and mode twice appends nothing) and `unapprove` appends a `revoked` row (`proposal_sha256` = the removed
+copy's hash, or `-`), so putting the old bytes back reads as `mismatch`. `approve --mode observe` on a copy that already
+exists and matches, but has no row for the proposal at all (the first live approval predates the chain), asks `y/N` and
+appends the missing row with `ts` = the copy's `approved_at`, so the observe clock is not reset; when the newest row says
+otherwise (`mismatch`: demoted, revoked, or a copy edited down) it approves afresh (new `approved_at`, full listing, row
+`ts` = now). The hook honours a copy in `warn` or `block` only when the newest row for
 its proposal has the same `proposal_sha256` and `mode` (`verify_copy`); otherwise it runs the proposal in observe and logs
 `approvals:<id>:missing|mismatch`. A broken chain (or an unreadable file) puts every above-observe copy back to observe and
-logs `approvals:chain_broken` once. An `observe` copy needs no row. A hand-edited `mode: "block"` therefore still never
-enforces, even with a recomputed `proposal_sha256`.
+logs `approvals:chain_broken` once. An `observe` copy needs no row. The chain is tamper-evident against hand edits of the copy
+(a hand-edited `mode: "block"` falls back to observe even with a recomputed `proposal_sha256`); it is unkeyed
+(`canon.record_hash`), so a process that also appends a recomputed row can still enforce: a forged approvals row is the
+residual risk in section 9. A cut last line stays a refusal (the operator truncates the file to its last complete line).
 `approve --mode warn` runs `ladder.check` and prints, before asking, every counted TP and FP as one line: `fire <ts>  session
-<hash16>  row <row_id>  label <at>  chain #<n>  [after last approval]` (`n` is the 1-based row in `labels.jsonl`; the flag
-marks a label newer than the proposal's newest approvals row), then each failed rule, and exits 1; if all hold it asks `Promote
+<hash16>  row <row_id>  label <at>  chain #<n>[  [after last approval]]` (`n` is the 1-based row in `labels.jsonl`). A label is
+always newer than the approval row that opens its window (it labels a fire after that row), so the per-line tag is printed
+only when some counted label does NOT postdate the newest approvals row; when all do, one line says `all N counted labels
+postdate the last approval row (<ts>)`. Then each failed rule, and exits 1; if all hold it asks `Promote
 <id> to warn mode? N TPs, 0 FPs listed above. [y/N]` and on `y` appends the row with the listed `tp_refs` and `fp_refs`
-and writes the approved copy. The rules: copy in observe for at least 14 days (window start = newest observe row, else the
-copy's `approved_at`); at least 5 TPs, counted only from human `tp` rows (newest human row per ref wins) whose ref is the
-`row_id` of a live `shadow.jsonl` fire of this proposal at or after the window start; 0 FPs, where a ref's label is its newest
+and writes the approved copy. The rules: copy in observe for at least 14 days (window start = the newest approvals row of
+the proposal, which must be an `observe` row, else the copy's `approved_at` when the proposal has no rows; a newer row of
+another mode, a `revoked` row, or a copy the chain does not back, `copy not backed by the approvals chain`, refuses); at
+least 5 TPs, counted only from human `tp` rows (newest human row per ref wins) whose ref is the `row_id` of a live
+`shadow.jsonl` fire of this proposal run in observe, with `window start <= fire ts <= now`; a counted label dated before its
+fire or after now is refused; 0 FPs, where a ref's label is its newest
 human row, else its newest row of any reason code (an auto `fp` blocks; `tp_candidate` never counts); validation passes on
 current code; the lesson is `active`; the detector is strong and its catalogue `compilable` reaches the mode; the
 proposal's `source_sha256` equals the catalogue's; `edit_unread_session` also needs `--raw-checked`. A counted label with no
 fire row (`forged label`), a broken labels chain and a broken approvals chain are refused. `--mode block` applies the same
-rules with the window starting at the newest `warn` row (`not in warn` without one), a `block`-capable `PreToolUse`
+rules with the window starting at the newest approvals row, which must be a `warn` row (`not in warn` otherwise), counting
+fires run in warn, a `block`-capable `PreToolUse`
 detector, and a required `--opus-reviewed <sha>` (7 to 40 lowercase hex) stored as `review_sha` and named in the prompt.
 `ladder.run(..., cap=)` refuses with `demoted:<cap>` when the cap is below the requested mode; the CLI passes none until the
 step 5a demotions reader is wired in. Warn delivery is resolved: see section 11 question 1.
@@ -642,7 +653,10 @@ Residual risks, stated plainly: the agent runs with the user's permissions and c
 `data_dir`, so it could append a demotion or delete an approved file to evade a block; the controls
 above make that visible in the report, not impossible. The same holds for **label forgery**: the
 agent can append a `tp` label, so promotion rests on the human reading the TP listing at `approve`,
-not on the file. Block mode is the first time ace-playbook hooks can stop the agent, which
+not on the file. The same holds for **approvals forgery**: `approvals.jsonl` is hash-chained but unkeyed, so a local process
+that appends a correctly chained row for a `warn` or `block` copy it also writes makes the hook enforce it, on the agent
+itself (limited to proposals that pass validation, so never an arbitrary check); the row is visible in the file, nothing
+prevents it. Block mode is the first time ace-playbook hooks can stop the agent, which
 contradicted SECURITY.md:36 ("Hooks never block a session"), the "hooks fail open and stay out of
 the way" wording at README.md:79 and the `onFailure` paragraph at hooks/INSTALL.md:96-97. All three
 were amended on 2026-10-19 (see Amendments): stage-1 hooks never block; stage-2 shadow hooks block
@@ -688,7 +702,9 @@ reminders; no cross-session learning by the hook; no block mode during the step 
    approval. Confirmed live on 2026-10-19: a throwaway project-local PreToolUse hook printing one marker
    through `additionalContext` and another on stderr (exit 0) was run in a headless session; the model
    reported the `additionalContext` marker and nothing from stderr.*
-   *Resolved in code (step 5b): `shadow._run` prints one `additionalContext` JSON object for warn hits, PreToolUse and Stop.*
+   *Resolved in code (step 5b): `shadow._run` prints one `additionalContext` JSON object for warn hits. The live check covered
+   PreToolUse only; Stop delivery follows the hooks reference (`hookSpecificOutput.additionalContext` on Stop) and is not
+   verified live, and no Stop detector is approvable today. The Stop JSON is still emitted.*
 2. **Randomized arms.** Measuring "with versus without" means the check is off (observe) in about
    half of sessions during the randomized phase. Do you accept that for `rm_rf_nonscratch`, given
    that guard-destructive.sh still covers root and home deletes? This is the same kind of decision

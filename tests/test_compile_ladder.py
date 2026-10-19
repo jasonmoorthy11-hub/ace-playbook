@@ -8,12 +8,21 @@ from ace_playbook.compile import catalogue, labels, ladder
 
 PID, LESSON = "P-00000001", "L-00000001"
 SINCE, NOW = "2026-10-01T00:00:00Z", "2026-10-16T00:00:00Z"          # 15 days apart
+SHA, SHA2 = "a" * 64, "b" * 64
 DET = catalogue.CATALOGUE["rm_rf_nonscratch"]
 
 
-def fire(i, ts="2026-10-05T00:00:00Z", pid=PID, tier="live"):
+def fire(i, ts="2026-10-05T00:00:00Z", pid=PID, tier="live", mode="observe"):
     return {"ts": ts, "proposal_id": pid, "session": f"{i:016x}", "payload_sha256": f"{i:064x}", "tier": tier,
-            "mode": "observe", "would_fire": True}
+            "mode": mode, "would_fire": True}
+
+
+def appr(mode, ts, pid=PID, sha=SHA):
+    return {"proposal_id": pid, "mode": mode, "ts": ts, "proposal_sha256": sha}
+
+
+def cp(mode="observe", at=SINCE, sha=SHA):
+    return {"id": PID, "mode": mode, "approved_at": at, "proposal_sha256": sha}
 
 
 def lab(row, label="tp", at="2026-10-06T00:00:00Z", reason="human"):
@@ -28,9 +37,9 @@ def proposal(det=DET):
 def world(n=5, **over):
     """5 live fires with a human tp each, an observe copy and row at SINCE, lesson active."""
     fires = [fire(i) for i in range(n)]
-    kw = dict(p=proposal(), copy={"mode": "observe", "approved_at": SINCE}, rows_shadow=fires,
+    kw = dict(p=proposal(), copy=cp(), rows_shadow=fires,
               rows_labels=[lab(f) for f in fires],
-              rows_approvals=[{"proposal_id": PID, "mode": "observe", "ts": SINCE}],
+              rows_approvals=[appr("observe", SINCE)],
               catalogue_row=DET, lesson_status="active", now=NOW)
     kw.update(over)
     return kw
@@ -68,15 +77,14 @@ def test_without_an_observe_row_the_copys_approved_at_is_the_start_and_says_so()
 
 
 def test_the_newest_observe_row_is_the_start_not_the_first():
-    rows = [{"proposal_id": PID, "mode": "observe", "ts": "2026-09-01T00:00:00Z"},
-            {"proposal_id": PID, "mode": "observe", "ts": "2026-10-10T00:00:00Z"}]
+    rows = [appr("observe", "2026-09-01T00:00:00Z", sha=SHA2), appr("observe", "2026-10-10T00:00:00Z")]
     res = check(rows_approvals=rows)
     assert not res.ok and res.since == "2026-10-10T00:00:00Z" and res.tps == []     # fires before it do not count
 
 
 def test_a_copy_that_is_missing_or_not_in_observe_fails():
     assert any("not in observe" in r for r in check(copy=None).reasons)
-    assert any("not in observe" in r for r in check(copy={"mode": "warn", "approved_at": SINCE}).reasons)
+    assert any("not in observe" in r for r in check(copy=cp("warn")).reasons)
 
 
 def test_an_fp_since_observe_fails_and_is_listed():
@@ -164,23 +172,25 @@ def test_a_cap_below_the_requested_mode_refuses_with_demoted():
 
 def test_labels_after_the_last_approval_are_flagged_in_the_listing():
     fires = world()["rows_shadow"]
-    rows = [lab(f, at="2026-10-02T00:00:00Z") for f in fires[:3]] + [lab(f, at="2026-10-09T00:00:00Z") for f in fires[3:]]
-    appr = [{"proposal_id": PID, "mode": "observe", "ts": SINCE}, {"proposal_id": PID, "mode": "observe", "ts": "2026-10-05T00:00:00Z"},
-            {"proposal_id": "P-00000002", "mode": "warn", "ts": "2026-10-20T00:00:00Z"}]
-    res = check(rows_labels=rows, rows_approvals=appr)
+    rows = [lab(f, at="2026-10-05T00:00:00Z") for f in fires[:3]] + [lab(f, at="2026-10-09T00:00:00Z") for f in fires[3:]]
+    appr_rows = [appr("observe", SINCE, sha=SHA2), appr("observe", "2026-10-05T00:00:00Z"),
+                 appr("warn", "2026-10-20T00:00:00Z", pid="P-00000002")]
+    res = check(rows_labels=rows, rows_approvals=appr_rows)
     assert sorted(l.after for l in res.tps) == [False, False, False, True, True] and len(res.flagged) == 2
 
 
 def test_the_listing_line_has_every_field_and_the_chain_position():
     fires = world()["rows_shadow"]
-    labs = [lab(f, at="2026-09-30T00:00:00Z") for f in fires]                   # written before the newest approval row
-    res = check(rows_labels=[{"ref": "00000000", "label": "incident", "reason_code": "human", "at": SINCE}, *labs])
+    labs = [lab(f, at="2026-10-05T00:00:00Z") for f in fires]
+    res = check(rows_labels=[{"ref": "00000000", "label": "incident", "reason_code": "human", "at": SINCE}, *labs],
+                rows_approvals=[appr("observe", "2026-10-05T00:00:00Z")])
     first = next(x for x in res.tps if x.row_id == labels.row_id(fires[0]))
-    assert first.n == 2                                                                           # 1-based position in labels.jsonl
+    assert first.n == 2 and not first.after                                                       # 1-based position in labels.jsonl
     assert ladder.listing_line(first) == (f"fire {fires[0]['ts']}  session {fires[0]['session']}  "
                                           f"row {labels.row_id(fires[0])}  label {labs[0]['at']}  chain #2")
     flagged = dataclasses.replace(first, after=True)
     assert ladder.listing_line(flagged).endswith("chain #2  [after last approval]")
+    assert ladder.listing_line(flagged, tag=False).endswith("chain #2")
 
 
 def test_a_listing_line_strips_control_characters_from_file_values():
@@ -191,9 +201,9 @@ def test_a_listing_line_strips_control_characters_from_file_values():
 
 # ------------------------------------------------------------------ block
 def block_world(**over):
-    over.setdefault("copy", {"mode": "warn", "approved_at": SINCE})
-    over.setdefault("rows_approvals", [{"proposal_id": PID, "mode": "observe", "ts": "2026-09-01T00:00:00Z"},
-                                       {"proposal_id": PID, "mode": "warn", "ts": SINCE}])
+    over.setdefault("copy", cp("warn"))
+    over.setdefault("rows_shadow", [fire(i, mode="warn") for i in range(5)])      # fires of the warn period
+    over.setdefault("rows_approvals", [appr("observe", "2026-09-01T00:00:00Z", sha=SHA2), appr("warn", SINCE)])
     return check(mode="block", **over)
 
 
@@ -204,7 +214,7 @@ def test_block_counts_from_the_warn_row_and_passes_with_the_same_numbers():
 
 def test_block_without_a_warn_row_or_a_warn_copy_is_not_in_warn():
     assert any("not in warn" in r for r in block_world(rows_approvals=[]).reasons)
-    assert any("not in warn" in r for r in block_world(copy={"mode": "observe", "approved_at": SINCE}).reasons)
+    assert any("not in warn" in r for r in block_world(copy=cp("observe")).reasons)
 
 
 def test_block_needs_a_block_capable_pretooluse_detector():
@@ -226,3 +236,50 @@ def test_check_does_not_mutate_its_inputs():
     before = cp.deepcopy(kw)
     ladder.check(**kw, raw_checked=False)
     assert kw == before
+
+
+# ------------------------------------------------------------------ the copy must be what the chain says, and the window is bounded
+def test_a_demotion_after_warn_means_the_hook_runs_observe_so_block_is_refused():
+    rows = [appr("observe", "2026-09-01T00:00:00Z", sha=SHA2), appr("warn", "2026-09-16T00:00:00Z", sha=SHA2),
+            appr("observe", SINCE, sha="c" * 64)]
+    res = block_world(rows_approvals=rows)                                                       # the copy says warn, no row backs it
+    assert not res.ok and res.since is None
+    assert "copy not backed by the approvals chain" in res.reasons
+    assert "not in warn (newest approvals row is observe)" in res.reasons
+
+
+def test_a_row_without_its_copy_is_refused_the_crash_path():
+    res = block_world(copy=None)
+    assert not res.ok and "not in warn" in res.reasons and "copy not backed by the approvals chain" in res.reasons
+    res = check(copy=None)
+    assert "copy not backed by the approvals chain" in res.reasons
+
+
+def test_a_copy_whose_hash_differs_from_the_newest_row_is_not_backed():
+    assert "copy not backed by the approvals chain" in check(copy=cp(sha=SHA2)).reasons
+
+
+def test_a_newer_row_of_another_mode_or_a_revocation_means_not_in_the_previous_mode():
+    res = check(rows_approvals=[appr("observe", "2026-09-01T00:00:00Z", sha=SHA2), appr("warn", SINCE)], copy=cp("warn"))
+    assert "not in observe (newest approvals row is warn)" in res.reasons
+    res = check(rows_approvals=[appr("observe", "2026-09-01T00:00:00Z"), appr("revoked", SINCE, sha="-")])
+    assert "not in observe (newest approvals row is revoked)" in res.reasons and not res.ok
+
+
+def test_only_fires_run_in_the_previous_mode_count():
+    assert check(rows_shadow=[fire(i, mode="warn") for i in range(5)]).tps == []
+    assert block_world(rows_shadow=[fire(i, mode="observe") for i in range(5)]).tps == []
+
+
+def test_a_fire_after_now_does_not_count_and_a_label_dated_in_the_future_refuses():
+    late = fire(9, ts="2026-10-17T00:00:00Z")
+    res = check(rows_shadow=world()["rows_shadow"] + [late], rows_labels=world()["rows_labels"] + [lab(late, at="2026-10-18T00:00:00Z")])
+    assert len(res.tps) == 5 and any("label dated in the future" in r for r in res.reasons) and not res.ok
+    assert any("label dated in the future" in r for r in check(rows_labels=[lab(f, at="2026-10-17T00:00:00Z") for f in world()["rows_shadow"]]).reasons)
+
+
+def test_a_label_dated_before_its_fire_refuses():
+    fires = world()["rows_shadow"]
+    res = check(rows_labels=[lab(f, at="2026-10-04T23:59:59Z") for f in fires])
+    assert not res.ok and any("label precedes its fire" in r for r in res.reasons)
+    assert check(rows_labels=[lab(f, at=f["ts"]) for f in fires]).ok                              # the same second is fine

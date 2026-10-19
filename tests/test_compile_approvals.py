@@ -103,6 +103,35 @@ def test_an_oversize_file_is_a_read_error(tmp_path):
         approvals.read_chain(tmp_path)
 
 
+def test_a_revocation_row_is_valid_and_never_matches_a_copy(tmp_path):
+    a = approvals.append(tmp_path, fields(mode="warn"))
+    r = approvals.append(tmp_path, fields(sha="-", mode="revoked"))
+    assert r["mode"] == "revoked" and approvals.read_chain(tmp_path) == ([a, r], None)
+    assert approvals.verify_copy({"id": "P-00000001", "proposal_sha256": SHA, "mode": "warn"}, [a, r]) == "mismatch"
+    with pytest.raises(ValueError):
+        approvals.append(tmp_path, fields(sha="-", mode="warn"))                    # "-" is for revocations only
+
+
+def test_a_cut_last_line_breaks_the_chain_and_append_names_the_repair(tmp_path):
+    approvals.append(tmp_path, fields())
+    approvals.append(tmp_path, fields(pid="P-00000002"))
+    path = tmp_path / "approvals.jsonl"
+    path.write_bytes(path.read_bytes()[:-20])                                        # the second row is cut mid-line
+    rows, broken = approvals.read_chain(tmp_path)
+    assert len(rows) == 1 and broken == 2
+    with pytest.raises(ValueError, match=r"chain broken at row 2.*truncate the file to its last complete line"):
+        approvals.append(tmp_path, fields(pid="P-00000003"))
+    assert path.read_bytes().count(b"\n") == 1                                       # no lead-newline recovery: nothing appended
+
+
+def test_a_fifo_is_refused_by_the_reader_and_the_writer(tmp_path):
+    os.mkfifo(tmp_path / "approvals.jsonl")
+    with pytest.raises(OSError):
+        approvals.read_chain(tmp_path)
+    with pytest.raises(OSError):
+        approvals.append(tmp_path, fields())
+
+
 def test_newest_and_verify_copy(tmp_path):
     a = approvals.append(tmp_path, fields())
     b = approvals.append(tmp_path, fields(sha=OTHER, mode="warn"))
@@ -177,6 +206,17 @@ def test_an_unreadable_approvals_file_falls_back_to_observe(w, run):
     (w.data / "approvals.jsonl").symlink_to(w.data / "nowhere")
     assert run(cs.pre_payload(RM)) == (0, "", "") and run.rows[0]["mode"] == "observe"
     assert "OSError" in run.log and str(w.data) not in run.log
+
+
+def test_a_cut_last_line_or_a_fifo_makes_the_hook_run_observe(w, run):
+    promote(w, "warn")
+    path = w.data / "approvals.jsonl"
+    path.write_bytes(path.read_bytes()[:-20])
+    assert run(cs.pre_payload(RM)) == (0, "", "") and run.rows[-1]["mode"] == "observe"
+    assert "approvals:chain_broken" in run.log
+    path.unlink()
+    os.mkfifo(path)
+    assert run(cs.pre_payload(RM)) == (0, "", "") and run.rows[-1]["mode"] == "observe" and "OSError" in run.log
 
 
 # ------------------------------------------------------------------ warn delivery

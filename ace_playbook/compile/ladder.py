@@ -51,10 +51,10 @@ class Result:
         return not self.reasons
 
 
-def listing_line(x: Listing) -> str:
+def listing_line(x: Listing, tag: bool = True) -> str:
     c = labels._clean
     return (f"fire {c(x.ts)}  session {c(x.session)}  row {c(x.row_id)}  label {c(x.at)}  chain #{x.n}"
-            + ("  [after last approval]" if x.after else ""))
+            + ("  [after last approval]" if x.after and tag else ""))
 
 
 def _epoch(ts: str) -> int:
@@ -87,11 +87,15 @@ def check(p: dict, copy: dict | None, rows_shadow: list[dict], rows_labels: list
     res, prev = Result(), PREV[mode]
     why = res.reasons.append
     mine = [r for r in rows_approvals if r["proposal_id"] == p["id"]]
-    entry = next((r for r in reversed(mine) if r["mode"] == prev), None)
+    newest = mine[-1] if mine else None
     if copy is None or copy.get("mode") != prev:
         why(f"not in {prev}")
-    if entry:
-        res.since, res.since_source = entry["ts"], "approvals row"
+    if mine and (copy is None or approvals.verify_copy(copy, rows_approvals) != "ok"):
+        why("copy not backed by the approvals chain")          # what the hook runs must be what the chain says
+    if newest and newest["mode"] == prev:
+        res.since, res.since_source = newest["ts"], "approvals row"
+    elif newest:
+        why(f"not in {prev} (newest approvals row is {newest['mode']})")
     elif prev == "observe" and copy is not None:
         res.since, res.since_source = copy["approved_at"], "copy approved_at"
     elif f"not in {prev}" not in res.reasons:
@@ -108,10 +112,16 @@ def check(p: dict, copy: dict | None, rows_shadow: list[dict], rows_labels: list
         kind, f = _counted(row, human), fires.get(ref)
         if kind and f is None:
             why(f"forged label: {labels._clean(ref)[:32]} has no fire row")
-        if not (kind and f and res.since is not None and f["proposal_id"] == p["id"] and f.get("tier") == "live"
-                and f["ts"] >= res.since):
+        if not (kind and f and f["proposal_id"] == p["id"]):
             continue
         at = row.get("at") if isinstance(row.get("at"), str) else "-"
+        if at < f["ts"]:
+            why(f"label precedes its fire: {labels._clean(ref)[:32]}")
+        elif at > now:
+            why(f"label dated in the future: {labels._clean(ref)[:32]}")
+        if not (res.since is not None and f.get("tier") == "live" and f.get("mode") == prev
+                and res.since <= f["ts"] <= now):
+            continue
         item = Listing(kind, f["ts"], f["session"], ref, at, n, bool(last and at > last))
         (res.tps if kind == "tp" else res.fps).append(item)
         if item.after:
@@ -193,12 +203,15 @@ def run(cfg, args, ask: Callable[[str], str], need_tty: Callable[[str], bool], n
         print(f"{p['id']}  lesson {p['lesson_id']}  detector {p['check']['detector']}  to {mode}")
         if res.since is not None:
             print(f"  {PREV[mode]} since {res.since} ({res.since_source}); now {now}")
+        counted = len(res.tps) + len(res.fps)
+        every = bool(counted) and len(res.flagged) == counted     # all labels postdate the row: one line, not N tags
         for name, rows in (("TPs", res.tps), ("FPs", res.fps)):
             print(f"  counted {name} ({len(rows)}):")
             for x in rows:
-                print("    " + listing_line(x))
-        if res.flagged:
-            print(f"  {len(res.flagged)} label(s) written after the last approval of this proposal are marked")
+                print("    " + listing_line(x, tag=not every))
+        if every:
+            last = approvals.newest(arows, p["id"])["ts"]
+            print(f"  all {counted} counted labels postdate the last approval row ({last})")
         for r in res.reasons:
             print(f"  FAIL: {r}")
         _need(res.ok, f"{p['id']} is not promoted to {mode}")

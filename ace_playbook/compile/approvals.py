@@ -18,7 +18,7 @@ from pathlib import Path
 from ..canon import GENESIS, now_iso, record_hash
 
 FILE, MAX_BYTES = "approvals.jsonl", 1 << 20
-MODES = ("observe", "warn", "block")
+MODES = ("observe", "warn", "block", "revoked")      # `revoked`: unapprove removed the copy
 KEYS = {"ts", "v", "proposal_id", "proposal_sha256", "mode", "reviewed_by", "tp_refs", "fp_refs", "review_sha",
         "prev_hash", "hash"}
 _STAMP, _PID, _SHA, _REF = (re.compile(x) for x in (r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", r"P-[0-9a-f]{8}",
@@ -33,7 +33,8 @@ def _text(x: object, pattern: re.Pattern) -> bool:
 def valid_row(r: object) -> bool:
     """Strict shape: exactly KEYS, every value of the right type and pattern."""
     return (isinstance(r, dict) and set(r) == KEYS and type(r["v"]) is int and r["v"] == 1
-            and _text(r["ts"], _STAMP) and _text(r["proposal_id"], _PID) and _text(r["proposal_sha256"], _SHA)
+            and _text(r["ts"], _STAMP) and _text(r["proposal_id"], _PID)
+            and (_text(r["proposal_sha256"], _SHA) or (r["mode"] == "revoked" and r["proposal_sha256"] == "-"))
             and r["mode"] in MODES and r["reviewed_by"] == "operator-tty" and _text(r["review_sha"], _REVIEW)
             and all(isinstance(r[k], list) and all(_text(i, _REF) for i in r[k]) for k in ("tp_refs", "fp_refs"))
             and _text(r["prev_hash"], _SHA) and _text(r["hash"], _SHA))
@@ -92,7 +93,7 @@ def append(data_dir, fields: dict) -> dict:
         raise ValueError("approvals row fields are malformed")
     path = Path(data_dir) / FILE
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    with os.fdopen(os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600), "ab") as fh:
+    with os.fdopen(os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600), "ab") as fh:
         fd = fh.fileno()
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise OSError("not a regular file")
@@ -103,7 +104,8 @@ def append(data_dir, fields: dict) -> dict:
             raise ValueError("approvals.jsonl is over 1 MiB")
         rows, broken = _verify(os.pread(fd, size, 0))
         if broken:
-            raise ValueError(f"approvals.jsonl chain broken at row {broken}")
+            raise ValueError(f"approvals.jsonl chain broken at row {broken}; repair by hand: "
+                             "truncate the file to its last complete line")
         last = newest(rows, row["proposal_id"])
         if last and (last["proposal_sha256"], last["mode"]) == (row["proposal_sha256"], row["mode"]):
             return last

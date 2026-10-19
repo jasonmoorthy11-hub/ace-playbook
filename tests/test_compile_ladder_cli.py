@@ -64,6 +64,48 @@ def test_approve_observe_refuses_on_a_broken_approvals_chain(world, written, tty
     assert code == 1 and "chain broken at row 1" in err and tty.asked == []
 
 
+def test_a_copy_edited_down_to_observe_is_approved_afresh_not_back_filled(observed, tty, capsys):
+    w = observed
+    approvals.append(w.cfg.data_dir, {"proposal_id": w.pid, "proposal_sha256": "c" * 64, "mode": "warn"})   # the chain says warn
+    code, out, _ = run(w, "approve", w.pid, "--mode", "observe", capsys=capsys)
+    rows = approvals.read_chain(w.cfg.data_dir)[0]
+    rec = copy_of(w, w.pid)
+    assert code == 0 and "recorded" not in out and "evidence cards:" in out
+    assert tty.asked == [f"Approve {w.pid} in observe mode? [y/N] "]
+    assert [r["mode"] for r in rows] == ["observe", "warn", "observe"]
+    assert (rows[2]["ts"], rows[2]["proposal_sha256"]) == (rec["approved_at"], rec["proposal_sha256"])
+
+
+def test_unapprove_appends_a_revocation_so_restoring_the_old_warn_copy_runs_observe(ready, tty, capsys, monkeypatch):
+    w = ready
+    assert run(w, "approve", w.pid, "--mode", "warn", capsys=capsys)[0] == 0
+    dest = approved_dir(w) / (w.pid + ".json")
+    old = dest.read_bytes()
+    tty.asked.clear()
+    assert run(w, "unapprove", w.pid, capsys=capsys)[0] == 0 and not dest.exists()
+    assert tty.asked == [f"Remove the approval of {w.pid}? [y/N] "]
+    last = approvals.read_chain(w.cfg.data_dir)[0][-1]
+    assert (last["mode"], last["proposal_id"], last["proposal_sha256"]) == ("revoked", w.pid, json.loads(old)["proposal_sha256"])
+    assert (last["tp_refs"], last["fp_refs"], last["review_sha"]) == ([], [], "-")
+    dest.write_bytes(old)                                                           # the agent puts the old bytes back
+    monkeypatch.setenv("ACE_PLAYBOOK_CONFIG", w.conf)
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(json.dumps(cs.pre_payload(cs.RM_CMD)).encode())))
+    assert shadow.main(["pre"]) == 0
+    assert capsys.readouterr().out == "" and cs.shadow_rows(w.cfg.data_dir)[-1]["mode"] == "observe"
+    assert f"approvals:{w.pid}:mismatch" in (w.cfg.data_dir / "shadow.log").read_text()
+
+
+def test_unapprove_asks_first_and_a_broken_chain_does_not_stop_the_removal(observed, tty, capsys):
+    w, dest = observed, approved_dir(observed) / (observed.pid + ".json")
+    tty.answer = "n"
+    assert run(w, "unapprove", w.pid, capsys=capsys)[0] == 1 and dest.exists()
+    tty.answer = "y"
+    path = w.cfg.data_dir / "approvals.jsonl"
+    path.write_text(path.read_text().replace("observe", "warn"))
+    code, _, err = run(w, "unapprove", w.pid, capsys=capsys)
+    assert code == 0 and not dest.exists() and "revocation row not written" in err
+
+
 # ------------------------------------------------------------------ the warn ladder
 @pytest.fixture
 def observed(world, written, tty, capsys, monkeypatch):
@@ -96,10 +138,10 @@ def tp_labels(fires, at):
 
 @pytest.fixture
 def ready(observed):
-    """Five live fires a day after approval, each with a human tp label (two older than the approval row, three newer)."""
+    """Five live fires a day after approval, each with a human tp label dated two days after approval (after its fire)."""
     fires = add_fires(observed)
     observed.fires = fires
-    set_labels(observed, tp_labels(fires[:2], shift(observed.entry, -1)) + tp_labels(fires[2:], shift(observed.entry, 2)))
+    set_labels(observed, tp_labels(fires, shift(observed.entry, 2)))
     observed.later(15)
     return observed
 
@@ -108,11 +150,11 @@ def test_warn_prints_every_counted_tp_then_asks_and_promotes(ready, tty, capsys)
     w = ready
     code, out, _ = run(w, "approve", w.pid, "--mode", "warn", capsys=capsys)
     assert code == 0 and tty.asked == [f"Promote {w.pid} to warn mode? 5 TPs, 0 FPs listed above. [y/N] "]
-    expected = sorted(
-        f"fire {f['ts']}  session {f['session']}  row {labels.row_id(f)}  label {at}  chain #{n}" + ("  [after last approval]" if n > 2 else "")
-        for n, (f, at) in enumerate(zip(w.fires, [shift(w.entry, -1)] * 2 + [shift(w.entry, 2)] * 3), 1))
+    expected = sorted(f"fire {f['ts']}  session {f['session']}  row {labels.row_id(f)}  label {shift(w.entry, 2)}  chain #{n}"
+                      for n, f in enumerate(w.fires, 1))
     shown = [line.strip() for line in out.splitlines() if line.strip().startswith("fire ")]
     assert sorted(shown) == expected and f"observe since {w.entry} (approvals row)" in out
+    assert f"all 5 counted labels postdate the last approval row ({w.entry})" in out and "[after last approval]" not in out
     rec, rows = copy_of(w, w.pid), approvals.read_chain(w.cfg.data_dir)[0]
     assert rec["mode"] == "warn" and rec["approved_at"] == shift(w.entry, 15) and [r["mode"] for r in rows] == ["observe", "warn"]
     assert rows[1]["proposal_sha256"] == rec["proposal_sha256"] and rows[1]["tp_refs"] == sorted(labels.row_id(f) for f in w.fires)

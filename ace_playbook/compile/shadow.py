@@ -4,7 +4,8 @@ hooks/shadow.sh calls `main(["pre"|"stop"])`. It reads one payload on stdin (cap
 proposals, re-validates each from disk, runs the detectors they name and appends one row per fire to
 `data_dir/shadow.jsonl`. It ALWAYS returns 0 and never raises: a failure is one type-only line in
 `data_dir/shadow.log`. Observe mode prints nothing. Warn echoes the stored message on stderr and prints ONE
-`hookSpecificOutput.additionalContext` JSON on stdout (the only channel the model sees on exit 0); block prints the
+`hookSpecificOutput.additionalContext` JSON on stdout (the only channel the model sees on exit 0; verified live for
+PreToolUse only, Stop follows the hooks reference and no Stop detector is approvable today); block prints the
 deny (PreToolUse) or block (Stop) JSON instead and wins over warn. A copy above observe is honoured only when the
 newest `approvals.jsonl` row matches its hash and mode (`approvals.verify_copy`); otherwise it runs in observe and
 the log says why. Rows hold enums, ids, hashes and a timestamp, never payload text. Stdlib plus this package; no

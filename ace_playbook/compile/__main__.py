@@ -119,10 +119,11 @@ def cmd_approve(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
         old, mode = shadow.pending_body(rec) if rec is not None else (None, "")
     except proposal.ProposalError:                            # an unreadable old copy is simply replaced
         rec, old, mode = None, None, ""
-    if old == p and mode == "observe":
-        if approvals.verify_copy(rec, rows) == "ok":
-            print(f"already approved: {args.id} (observe)")
-            return 0
+    verdict = approvals.verify_copy(rec, rows) if old == p and mode == "observe" else None
+    if verdict == "ok":
+        print(f"already approved: {args.id} (observe)")
+        return 0
+    if verdict == "missing":                                  # predates the chain: record it; "mismatch" is approved afresh below
         if not _confirm([f"Record the approval of {args.id} (observe, approved {rec['approved_at']}) in approvals.jsonl? [y/N] "]):
             print("error: not approved", file=sys.stderr)
             return 1
@@ -157,6 +158,20 @@ def cmd_unapprove(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
     if not dest.exists():
         print(f"error: {args.id} is not approved", file=sys.stderr)
         return 1
+    if not _confirm([f"Remove the approval of {args.id}? [y/N] "]):
+        print("error: not removed", file=sys.stderr)
+        return 1
+    try:                                                      # a revocation row makes a restored copy "mismatch" in the hook
+        rec = proposal.load(dest)
+        sha = rec.get("proposal_sha256") if isinstance(rec, dict) else None
+    except proposal.ProposalError:
+        sha = None
+    try:
+        approvals.append(cfg.data_dir, {"proposal_id": args.id, "mode": "revoked",
+                                        "proposal_sha256": sha if isinstance(sha, str) and len(sha) == 64 else "-"})
+    except (ValueError, OSError) as exc:                      # removing the copy matters more than the row
+        print(f"warning: revocation row not written ({exc if isinstance(exc, ValueError) else type(exc).__name__})",
+              file=sys.stderr)
     os.unlink(dest)
     print(f"ok: {args.id} is no longer approved (the proposal file is kept)")
     return 0
