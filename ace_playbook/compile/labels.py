@@ -105,18 +105,24 @@ def check_note(cfg: Config, note: str | None) -> str | None:
 
 
 def append_row(cfg: Config, label: str, ref: str, note_checked: str | None = None, **extra: str) -> tuple[dict, int]:
-    """Open (O_NOFOLLOW, 0600) and lock labels.jsonl, verify the chain from that fd, append a row: (row, number)."""
+    """Open (O_NOFOLLOW, 0600) and lock labels.jsonl, verify the chain from that fd, append a row: (row, number).
+
+    `note_checked` must be the output of `check_note` (it is not scrubbed again). When the newest row of `ref` already
+    carries `label`, nothing is appended and that row and its number are returned."""
     from .evidence import private_dir
     path = cfg.path("labels.jsonl")
     private_dir(path.parent)
     with os.fdopen(os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600), "ab") as fh:
         fd = fh.fileno()
+        _need(stat.S_ISREG(os.fstat(fd).st_mode), NOT_A_FILE, 2)
         fcntl.flock(fd, fcntl.LOCK_EX)
-        info = os.fstat(fd)
-        _need(stat.S_ISREG(info.st_mode), NOT_A_FILE, 2)
         os.fchmod(fd, 0o600)
-        rows, broken = _verify(_parse(os.pread(fd, info.st_size, 0).decode(errors="replace")))
+        info = os.fstat(fd)                                     # the size after the lock is the size to trust
+        rows, broken = _verify(_parse(os.pread(fd, info.st_size, 0).decode()))
         _need(not broken, f"labels.jsonl chain broken at row {broken}")
+        same = [(n, r) for n, r in enumerate(rows, 1) if r.get("ref") == ref]
+        if same and same[-1][1].get("label") == label:
+            return same[-1][1], same[-1][0]
         row = {"ref": ref, "label": label, "reason_code": "human", "at": now_iso(), **extra,
                **({"note": note_checked} if note_checked else {}), "prev_hash": rows[-1]["hash"] if rows else GENESIS}
         row["hash"] = record_hash(row)
@@ -162,7 +168,7 @@ def preview(cfg: Config, payload: dict) -> str:
     from ..scrub import LESSON, scan
     from ..scrub.quarantine import mask
     val = next((v for v in payload["tool_input"].values() if isinstance(v, str)), "")
-    return " ".join(mask(val, scan(val, LESSON, cfg.deny_terms)).split())[:120]
+    return _clean(" ".join(mask(val, scan(val, LESSON, cfg.deny_terms)).split()))[:120]
 
 
 def _list(cfg: Config, kind: str | None) -> int:
@@ -190,7 +196,7 @@ def _target(cfg: Config, args) -> tuple[str, str, dict, str]:
         for name, val in (("detector", inc["detector"]), ("incident", inc["ts"]),
                           ("tool_name", inc["payload"]["tool_name"]), ("input", preview(cfg, inc["payload"])),
                           ("ref", inc["ref"])):
-            print(f"{name + ':':<11}{val}")
+            print(f"{name + ':':<11}{_clean(val)}")
         return ("incident", inc["ref"], {"lesson_id": args.lesson, "session": inc["session"]},
                 f"Label this as the incident for {args.lesson}? [y/N] ")
     label, rid = ("tp", args.tp) if args.tp else ("fp", args.fp)
