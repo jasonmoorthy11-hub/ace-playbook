@@ -10,6 +10,13 @@ citations.jsonl
 reflections.jsonl
 queue.jsonl
 reflect.log
+labels.jsonl
+shadow.jsonl
+shadow.log
+demotions.jsonl
+cards/
+proposals/
+shadow_state/
 health.json
 health.json.tmp
 config.local.json
