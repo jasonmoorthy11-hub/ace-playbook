@@ -98,7 +98,7 @@ the only way a legacy lesson gets an evidence card, and `tp`/`fp` labels on shad
 `compile report` prints counts per proposal from the shadow rows and those human labels; synthetic rows are reported
 apart and never blended with the private ones. The nightly `compile offline` pass (run by `hooks/nightly_sweep.py`)
 records detector events from finished transcripts, pre-fills labels that a human row always overrides, and
-appends hash-chained demotions that only ever lower a proposal's mode and that the shadow hook honours.
+appends hash-chained demotions that only ever lower a proposal's mode and that the shadow hook honours until the operator approves it again.
 No model writes a check, a hook or a setting, and nothing is installed for you.
 
 ## Run it

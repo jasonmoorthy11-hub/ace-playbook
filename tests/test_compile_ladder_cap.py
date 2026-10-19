@@ -8,12 +8,13 @@ from ace_playbook.compile import approvals, demotions
 
 from . import compile_support as cs
 from .test_compile_cli import approved_dir, legacy, run, tty, world, written  # noqa: F401  (fixtures)
-from .test_compile_ladder_cli import copy_of, observed, ready  # noqa: F401  (fixtures)
+from .test_compile_ladder_cli import copy_of, observed, ready, shift  # noqa: F401  (fixtures)
 
 
-def demote(w, pid, to_mode="observe"):
+def demote(w, pid, to_mode="observe", ts=None):
+    """A demotion row; `ts` after the approval (a row at or before the newest approval row is lifted by it)."""
     demotions.append(w.cfg.data_dir, {"proposal_id": pid, "from_mode": "block", "to_mode": to_mode, "cause": "label_fp",
-                                      "ref": "0123abcd", "review_required": False})
+                                      "ref": "0123abcd", "review_required": False, **({"ts": ts} if ts else {})})
 
 
 def refused(w, tty, capsys):
@@ -22,12 +23,12 @@ def refused(w, tty, capsys):
 
 
 def test_warn_is_refused_for_a_proposal_demoted_to_observe(ready, tty, capsys):
-    demote(ready, ready.pid)
+    demote(ready, ready.pid, ts=shift(ready.entry, 1))
     refused(ready, tty, capsys)
 
 
 def test_warn_is_refused_for_a_disabled_proposal(ready, tty, capsys):
-    demote(ready, ready.pid, "disabled")
+    demote(ready, ready.pid, "disabled", ts=shift(ready.entry, 1))
     code, out, _ = run(ready, "approve", ready.pid, "--mode", "warn", capsys=capsys)
     assert code == 1 and "demoted:disabled" in out and tty.asked == []
 

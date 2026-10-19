@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ..atomic import write_private
-from . import catalogue, demotions, detectors, evidence, labels, report, shadow
+from . import catalogue, demotions, detectors, evidence, labels, modes, report, shadow
 from . import state as state_mod
 from .events import end_event, events_from_records, hash16
 from .report import _read as read_jsonl
@@ -74,9 +74,9 @@ def rm_keys(segments) -> set[str]:
 
 
 def shell_keys(events: list) -> set[str]:
-    """rm targets of the operator's own shell-mode entries: user records whose WHOLE text is one `<bash-input>` block."""
+    """rm targets of the operator's own shell-mode entries: non-meta user records whose WHOLE text is one `<bash-input>` block."""
     return set().union(set(), *(rm_keys(command_segments(m.group(1))) for e in events if e.rtype == "user"
-                                and not (e.tool_results or e.dup or e.queued) and (m := SHELL.fullmatch(e.user_text))))
+                                and not (e.tool_results or e.dup or e.queued or e.meta) and (m := SHELL.fullmatch(e.user_text))))
 
 
 def guard_blocked(events: list, tool_id: str) -> bool:
@@ -199,12 +199,9 @@ def write_labels(cfg, picks: list[tuple[dict, str]], now: float, dry: bool) -> t
     return done, labels.effective(rows + added)
 
 
-def current_mode(copy: tuple[dict, str, str], drows: list[dict], until: str = "~") -> tuple[str, str]:
-    """(current mode, window start) of an approved copy (proposal, mode, approved_at): the mode lowered by its cap; the latest
-    of approval and its non-evasion demotions at or before `until` (a forged future stamp must not blind FP counting)."""
-    pid, own = copy[0]["id"], [r for r in drows if r["proposal_id"] == copy[0]["id"]]
-    stamps = (copy[2], *(r["ts"] for r in own if r["cause"] != "evasion_pair"))
-    return demotions.lower(copy[1], demotions.effective_cap(own, pid)), max([t for t in stamps if t <= until] or [""])
+def current_mode(copy: tuple[dict, str, dict], arows: list[dict], abroken, drows: list[dict], until: str = "~") -> modes.Resolution:
+    """`modes.resolve` for an approved copy (proposal, mode, record) as of `until` (a stamp after it cannot blind FP counting)."""
+    return modes.resolve(copy[0]["id"], copy[2], arows, abroken, drows, None, until)
 
 
 def demote(cfg, rows: list[dict], labs: dict[str, str], cands: list[dict], now: float, dry: bool, out: dict) -> None:
@@ -219,12 +216,15 @@ def demote(cfg, rows: list[dict], labs: dict[str, str], cands: list[dict], now: 
     sure = n >= MIN_SAMPLE and not full
     out["error_rate"] = ("not computable (log full)" if full else f"computed (n={n})" if sure
                          else f"not computable (n={n}, need {MIN_SAMPLE})")
+    arows, abroken = modes.read_approvals(cfg.data_dir)         # unreadable counts as broken: the resolver caps at observe
     for copy in shadow.approved_records(cfg):
         try:
             p = copy[0]
             pid, det = p["id"], p["check"]["detector"]
-            cur, since = current_mode(copy, drows, iso(now))
-            fps = [(r["ts"], labels.row_id(r)) for r in rows if r["proposal_id"] == pid and r["ts"] >= since
+            res = current_mode(copy, arows, abroken, drows, iso(now))
+            if (cur := res.mode) == "disabled":                # revoked or disabled: nothing left to lower
+                continue
+            fps = [(r["ts"], labels.row_id(r)) for r in rows if r["proposal_id"] == pid and r["ts"] >= res.window_start
                    and labs.get(labels.row_id(r)) == "fp"]
             ref = demotions.pair_ref([c for c in cands if c.get("proposal_id") == pid], 14)
             flagged = any(r["proposal_id"] == pid and r["cause"] == "evasion_pair" and r["ref"] == ref for r in drows)
@@ -234,7 +234,7 @@ def demote(cfg, rows: list[dict], labs: dict[str, str], cands: list[dict], now: 
             for f in demotions.decide(pid, cur, disable=disable, fps=sorted(set(fps)), evasion=None if flagged else ref):
                 f = {**f, "ts": iso(now)}
                 if demotions.duplicate(drows, f) is None:
-                    drows.append(f if dry else demotions.append(cfg.data_dir, f))
+                    drows.append(f if dry else demotions.append(cfg.data_dir, f, current=cur))
                     out["demotions"] += 1
         except (KeyError, TypeError, ValueError, OSError):
             out["errors"] += 1

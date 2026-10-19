@@ -21,6 +21,7 @@ MAX_PATH = 4096
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit")
 _INPUT_KEYS = {"command": MAX_CMD, "file_path": MAX_PATH, "notebook_path": MAX_PATH}
 
+META_KEYS = ("isMeta", "isCompactSummary", "isVisibleInTranscriptOnly")
 SYNTHETIC_PREFIXES = (
     "<", "[", "Stop hook feedback", "Another Claude session", "Review this change for",
     "## Context Usage", "Implement the following plan", "This session is being continued",
@@ -65,6 +66,7 @@ class Event:
     tool_results: list = field(default_factory=list)
     user_text: str = ""
     human: bool = False
+    meta: bool = False        # isMeta, isCompactSummary or isVisibleInTranscriptOnly record: never typed by the operator
     queued: bool = False      # human prompt delivered mid-turn as a queued_command attachment
     dup: bool = False         # queued prompt later re-delivered as a user record (count once)
     read_files: list = field(default_factory=list)
@@ -160,17 +162,17 @@ def event_from_record(rec: Any, tool_index: dict | None = None) -> Event:
     tool_index = tool_index if tool_index is not None else {}
     rec = rec if isinstance(rec, dict) else {}
     e = Event(rtype=_s(rec.get("type"), 32), ts=_s(rec.get("timestamp"), 64),
-              sidechain=bool(rec.get("isSidechain")), tier="offline")
+              sidechain=bool(rec.get("isSidechain")), meta=any(bool(rec.get(k)) for k in META_KEYS), tier="offline")
     if e.rtype == "attachment":
         a = rec.get("attachment")
         e.attachment = a if isinstance(a, dict) else {}
-        origin = e.attachment.get("origin")
+        origin, e.meta = e.attachment.get("origin"), e.meta or bool(e.attachment.get("isMeta"))
         if (e.attachment.get("type") == "queued_command" and e.attachment.get("commandMode") == "prompt"
                 and isinstance(origin, dict) and origin.get("kind") == "human"
                 and isinstance(e.attachment.get("prompt"), str)):
             e.user_text = e.attachment["prompt"][:MAX_TEXT]
             e.queued = True
-            e.human = is_human_text({"isMeta": e.attachment.get("isMeta")}, e.user_text)
+            e.human = is_human_text({"isMeta": e.attachment.get("isMeta")}, e.user_text) and not e.meta
         elif e.attachment.get("type") in ("file", "edited_text_file", "compact_file_reference"):
             if isinstance(e.attachment.get("filename"), str):
                 e.read_files.append(e.attachment["filename"][:MAX_PATH])
@@ -202,7 +204,7 @@ def event_from_record(rec: Any, tool_index: dict | None = None) -> Event:
                     texts.append(b["text"])
         if not e.tool_results:
             e.user_text = "\n".join(texts)[:MAX_TEXT]
-            e.human = is_human_text(rec, e.user_text)
+            e.human = is_human_text(rec, e.user_text) and not e.meta
     return e
 
 

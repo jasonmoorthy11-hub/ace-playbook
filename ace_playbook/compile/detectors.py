@@ -180,7 +180,7 @@ def commit_without_push(event: Event, state: dict) -> Fire | None:
 
 
 def user_correction(event: Event, state: dict) -> Fire | None:
-    if event.tier != "offline" or not event.human or event.dup:
+    if event.tier != "offline" or not event.human or event.dup or event.meta:
         return None
     t = event.user_text
     return _fire("user_correction", int(len(t) <= 800 and bool(CORRECTION.search(t))), event)

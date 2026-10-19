@@ -9,7 +9,7 @@ import pytest
 
 from ace_playbook.atomic import write_private
 from ace_playbook.canon import GENESIS, record_hash
-from ace_playbook.compile import catalogue, labels, offline, shadow
+from ace_playbook.compile import approvals, catalogue, labels, offline, shadow
 from ace_playbook.compile import demotions as dm
 from ace_playbook.store import DeltaLog
 
@@ -239,8 +239,10 @@ def test_an_auto_fp_demotes_but_a_human_tp_over_it_and_a_tp_candidate_do_not(tmp
 # ------------------------------------------------------------------ disable triggers
 def approve_for(w, lesson_id, mode="observe"):
     p = {**w.props["rm_rf_nonscratch"], "lesson_id": lesson_id}
-    write_private(w.data / "proposals" / "approved" / (w.pid + ".json"),
-                  json.dumps(shadow.approved_record(p, mode, "2026-10-01T00:00:00Z"), indent=1, sort_keys=True) + "\n")
+    rec = shadow.approved_record(p, mode, "2026-10-01T00:00:00Z")           # above observe the approvals row too: the pass lowers
+    write_private(w.data / "proposals" / "approved" / (w.pid + ".json"), json.dumps(rec, indent=1, sort_keys=True) + "\n")
+    if mode != "observe":                                                   # what the hook runs, which needs that row
+        approvals.append(w.data, {"proposal_id": w.pid, "proposal_sha256": rec["proposal_sha256"], "mode": mode, "ts": rec["approved_at"]})
 
 
 def test_a_lesson_that_is_not_active_in_the_store_disables_the_proposal(tmp_path):
@@ -378,18 +380,10 @@ def test_an_evasion_pair_row_does_not_reset_the_fp_counters(tmp_path):
     assert [(d["cause"], d["to_mode"]) for d in chain(w)] == [("evasion_pair", "block"), ("label_fp", "warn")]
 
 
-def test_the_cap_is_the_lowest_valid_row_and_a_row_from_a_mode_the_proposal_lost_is_refused(tmp_path):
-    first = dm.append(tmp_path, fields(from_mode="block", to_mode="disabled", cause="error_rate", ref="-"))
-    with pytest.raises(ValueError):
-        dm.append(tmp_path, fields(from_mode="block", to_mode="block", cause="evasion_pair", ref="cafe0001", review_required=True))
-    rows, _ = dm.read_chain(tmp_path)
-    assert rows == [first] and dm.effective_cap(rows, PID) == "disabled"
-    assert dm.effective_cap([{"proposal_id": PID, "to_mode": "disabled"}, {"proposal_id": PID, "to_mode": "block"}], PID) == "disabled"
-    (tmp_path / "f").mkdir()
-    forge(tmp_path / "f", {"from_mode": "block", "to_mode": "disabled", "cause": "error_rate", "ref": "-"},
-          {"from_mode": "block", "to_mode": "block", "cause": "evasion_pair", "ref": "x"})
-    rows, broken = dm.read_chain(tmp_path / "f")
-    assert (len(rows), broken, dm.effective_cap(rows, PID)) == (1, 1, "disabled")
+def test_the_cap_is_the_lowest_valid_row_of_the_rows_passed_in(tmp_path):
+    first = dm.append(tmp_path, fields(to_mode="disabled", cause="error_rate", ref="-"))
+    assert dm.read_chain(tmp_path)[0] == [first]
+    assert dm.effective_cap([{"proposal_id": PID, "to_mode": m} for m in ("disabled", "block")], PID) == "disabled"
 
 
 def test_an_unreadable_demotions_file_caps_a_block_approval_at_observe(tmp_path, monkeypatch, capsys):

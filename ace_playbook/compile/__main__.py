@@ -20,7 +20,7 @@ from .. import config as cfgmod
 from .. import ttyio
 from ..atomic import write_private
 from ..canon import now_iso
-from . import approvals, demotions, evidence, labels, proposal, report, shadow
+from . import approvals, evidence, labels, modes, proposal, report, shadow
 
 LEGACY_BANNER = ("This lesson's stored evidence is self-quoted legacy text; "
                  "the human incident label is the only evidence.")
@@ -108,20 +108,16 @@ def _provenance(cfg: cfgmod.Config, p: dict) -> bool:
     return legacy
 
 
-def _cap(cfg: cfgmod.Config, pid: str) -> str | None:
-    """The demotion cap of `pid`; a broken demotions chain or a read error caps at observe, like the hook."""
-    try:
-        rows, broken = demotions.read_chain(cfg.data_dir)
-    except Exception:
-        return "observe"
-    cap = demotions.effective_cap(rows, pid)
-    return demotions.lower("observe", cap) if broken is not None else cap
+def _in_force(cfg: cfgmod.Config, pid: str, rows: list[dict]) -> bool:
+    """A demotion row of `pid` is newer than its newest approvals row: a fresh approval lifts it, so it is not a no-op."""
+    ref = modes.anchor(rows, pid, now_iso())
+    return any(r["proposal_id"] == pid and not modes.lifted(r, ref) for r in modes.read_demotions(cfg.data_dir)[0])
 
 
 def cmd_approve(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
     if args.mode != "observe":
         from . import ladder                                  # lazy: the promotion rules stay off the hook path
-        return ladder.run(cfg, args, lambda prompt: _ask(prompt), _need_tty, cap=_cap(cfg, args.id))
+        return ladder.run(cfg, args, lambda prompt: _ask(prompt), _need_tty)
     if args.opus_reviewed or args.raw_checked:
         print("error: --opus-reviewed and --raw-checked apply to --mode block and warn only", file=sys.stderr)
         return 2
@@ -145,7 +141,8 @@ def cmd_approve(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
     except proposal.ProposalError:                            # an unreadable old copy is simply replaced
         rec, old, mode = None, None, ""
     verdict = approvals.verify_copy(rec, rows) if old == p and mode == "observe" else None
-    if verdict == "ok":
+    lift = verdict == "ok" and _in_force(cfg, args.id, rows)  # an approval newer than a demotion lifts it (design 7.3)
+    if verdict == "ok" and not lift:
         print(f"already approved: {args.id} (observe)")
         return 0
     legacy = _provenance(cfg, p)                              # the same block and prompts for a fresh approval and a back-fill
@@ -161,7 +158,7 @@ def cmd_approve(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
                                         "proposal_sha256": rec["proposal_sha256"]})
         print(f"ok: recorded the existing observe approval of {args.id} in approvals.jsonl")
         return 0
-    if not _confirm([f"Approve {p['id']} in observe mode? [y/N] "] + asks):
+    if not _confirm([f"Approve {p['id']} in observe mode{' (lifts its older demotions)' if lift else ''}? [y/N] "] + asks):
         print("error: not approved", file=sys.stderr)
         return 1
     new = shadow.approved_record(p)

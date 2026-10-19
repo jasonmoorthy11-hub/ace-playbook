@@ -1,9 +1,10 @@
 """Demotions (docs/design/compiler.md 7.3): `data_dir/demotions.jsonl`, hash-chained, append-only, lowering only.
 
 A row is `{ts, v: 1, proposal_id, from_mode, to_mode, cause, ref, review_required, prev_hash, hash}`, chained from
-`canon.GENESIS` like labels.jsonl. On the ladder block > warn > observe > disabled `to_mode` is at most `from_mode`, and
-`from_mode` at most the proposal's cap so far (the lowest `to_mode`); a row that breaks either is invalid and breaks the chain
-there. O_NOFOLLOW, regular files only, 1 MiB, strict JSON. `decide` holds the pure rules. The hook reads this file: stdlib only.
+`canon.GENESIS` like labels.jsonl. On the ladder block > warn > observe > disabled `to_mode` is at most `from_mode`; a row
+that breaks that is invalid and breaks the chain there. Whether a row is still in force (an operator approval lifts older
+rows) is `modes.resolve`'s business, and `append` refuses a `from_mode` above the current mode it is given. O_NOFOLLOW,
+regular files only, 1 MiB, strict JSON. `decide` holds the pure rules. The hook reads this file: stdlib only.
 """
 
 from __future__ import annotations
@@ -55,17 +56,16 @@ def _ok(row: dict, prev: str) -> bool:                              # shape, enu
 
 
 def _parse(data: bytes) -> tuple[list[dict], int | None]:
-    rows, prev, caps = [], GENESIS, {}
+    rows, prev = [], GENESIS
     for line in data.splitlines():
         try:
             row = json.loads(line.decode("utf-8"), parse_constant=int)      # int("NaN") raises: no NaN or Infinity
         except (ValueError, RecursionError):                         # includes UnicodeDecodeError
             return rows, len(rows)
-        if not (isinstance(row, dict) and _ok(row, prev)
-                and LADDER.index(row["from_mode"]) <= LADDER.index(caps.get(row["proposal_id"], "block"))):
+        if not (isinstance(row, dict) and _ok(row, prev)):
             return rows, len(rows)
         rows.append(row)
-        prev, caps[row["proposal_id"]] = row["hash"], row["to_mode"]
+        prev = row["hash"]
     return rows, None
 
 
@@ -77,8 +77,7 @@ def read_chain(data_dir: str | Path) -> tuple[list[dict], int | None]:
 
 
 def effective_cap(rows: list[dict], proposal_id: str) -> str | None:
-    """The LOWEST `to_mode` over the proposal's valid rows (a `disabled` row is final until an approval-based lift exists),
-    None when it has no row."""
+    """The LOWEST `to_mode` over the proposal's rows in `rows` (the caller passes the rows still in force), None when none."""
     return min((r["to_mode"] for r in rows if r["proposal_id"] == proposal_id), key=LADDER.index, default=None)
 
 
@@ -88,9 +87,9 @@ def duplicate(rows: list[dict], row: dict) -> dict | None:
     return last if last and all(last[k] == row.get(k) for k in ("to_mode", "cause", "ref")) else None
 
 
-def append(data_dir: str | Path, fields: dict) -> dict:
-    """Lock (O_NOFOLLOW, 0600), verify the chain from that fd, append and return the row; the newest row of the proposal
-    saying the same is returned instead. ValueError: invalid row, broken or oversize chain."""
+def append(data_dir: str | Path, fields: dict, current: str | None = None) -> dict:
+    """Lock (O_NOFOLLOW, 0600), verify the chain from that fd, append and return the row (or the newest row of the proposal
+    saying the same). ValueError: invalid row, broken or oversize chain, or a `from_mode` above `current` (its resolved mode)."""
     path = Path(data_dir) / FILE
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     with os.fdopen(os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600), "ab") as fh:
@@ -109,7 +108,8 @@ def append(data_dir: str | Path, fields: dict) -> dict:
         if (same := duplicate(rows, row)) is not None:
             return same
         line = json.dumps(row, sort_keys=True).encode() + b"\n"
-        if _parse(os.pread(fd, size, 0) + line)[1] is not None:       # shape, hash link, ladder and the cap of the chain
+        if _parse(os.pread(fd, size, 0) + line)[1] is not None or (
+                current is not None and LADDER.index(row["from_mode"]) > LADDER.index(current)):    # shape, link, direction, current
             raise ValueError("invalid demotion row")
         fh.write(line)
         fh.flush()

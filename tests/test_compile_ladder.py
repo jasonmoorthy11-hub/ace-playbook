@@ -4,7 +4,7 @@ import dataclasses
 
 import pytest
 
-from ace_playbook.compile import catalogue, labels, ladder
+from ace_playbook.compile import catalogue, labels, ladder, modes
 
 PID, LESSON = "P-00000001", "L-00000001"
 SINCE, NOW = "2026-10-01T00:00:00Z", "2026-10-16T00:00:00Z"          # 15 days apart
@@ -46,7 +46,12 @@ def world(n=5, **over):
 
 
 def check(raw_checked=False, cap=None, mode="warn", **over):
-    return ladder.check(**world(**over), raw_checked=raw_checked, cap=cap, mode=mode)
+    """`cap` is an `evasion_pair` demotion row (it caps without resetting the counters) stamped at NOW, after every approval
+    row of the worlds, resolved like the CLI does."""
+    kw = world(**over)
+    drows = [] if cap is None else [{"proposal_id": PID, "from_mode": "block", "to_mode": cap, "cause": "evasion_pair", "ts": NOW}]
+    resolved = modes.resolve(PID, kw["copy"], kw["rows_approvals"], None, drows, None, kw["now"])
+    return ladder.check(**kw, resolved=resolved, raw_checked=raw_checked, mode=mode)
 
 
 def test_the_clean_case_passes_and_counts_five_tps():
@@ -235,7 +240,8 @@ def test_check_does_not_mutate_its_inputs():
     kw = world()
     import copy as cp
     before = cp.deepcopy(kw)
-    ladder.check(**kw, raw_checked=False)
+    resolved = modes.resolve(PID, kw["copy"], kw["rows_approvals"], None, [], None, NOW)
+    ladder.check(**kw, resolved=resolved, raw_checked=False)
     assert kw == before
 
 

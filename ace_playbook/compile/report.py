@@ -4,8 +4,9 @@ Two corpora, two tables, never summed: the private `shadow.jsonl` (written by th
 `shadow.synthetic.jsonl` (every row says `corpus: synthetic`). A row in the wrong file refuses the whole report.
 tp/fp come from `labels.jsonl` through `labels.effective` (a human row beats an auto one, the newest row of its kind
 wins, `incident` rows ignored, a broken chain ignores every label): fp counts human and auto rows, tp only human
-ones, `tp_cand` the auto `tp_candidate` rows, which are never TPs. A `Demotions` section lists the newest cap per proposal
-from `demotions.jsonl` (a broken chain is one visible line). No session hash, row id, payload hash or path is printed.
+ones, `tp_cand` the auto `tp_candidate` rows, which are never TPs. `approved_mode` is the copy's own mode, `mode` what
+`modes.resolve` says the hook runs. A `Demotions` section lists every row of `demotions.jsonl` with `lifted` yes/no (an
+approval at or after a row lifts it; the lowest row after the newest approval is the cap; a broken chain is one visible line). No session hash, row id, payload hash or path is printed.
 Both shadow files are read here through a no-follow, regular-file-only reader. Imports: stdlib, `..canon`,
 `..config`, `.labels`; `catalogue`, `proposal` and `shadow` load lazily (hook path).
 """
@@ -26,15 +27,15 @@ from pathlib import Path
 
 from ..canon import now_iso
 from ..config import Config
-from . import demotions, labels
+from . import demotions, labels, modes
 
 PRIVATE, SYNTHETIC = "shadow.jsonl", "shadow.synthetic.jsonl"
 KEYS = ("ts", "session", "proposal_id", "payload_sha256")
 PID, LID = re.compile(r"P-[0-9a-f]{8}"), re.compile(r"L-[0-9a-f]{8}")
 MAX_DAYS = 3660
-FIELDS = ("lesson", "detector", "event", "approved_mode", "rows", "cause_detector", "cause_truncated", "sessions",
+FIELDS = ("lesson", "detector", "event", "approved_mode", "mode", "rows", "cause_detector", "cause_truncated", "sessions",
           "days", "tp", "fp", "tp_cand", "unlabelled", "first", "last")
-HEADS = ("proposal", "lesson", "detector", "event", "approved_mode", "rows", "detector", "truncated", "sessions",
+HEADS = ("proposal", "lesson", "detector", "event", "approved_mode", "mode", "rows", "detector", "truncated", "sessions",
          "days", "tp", "fp", "tp_cand", "unlabelled", "first", "last")
 NOT_COMPUTED = ("not computed here: eligible-session rates, Wilson intervals, friction, hook cost "
                 "(need the offline pass, design 8)")
@@ -123,27 +124,42 @@ def lesson_statuses(cfg: Config) -> tuple[dict | None, str]:
         return None, "chain invalid"
 
 
-def demotion_summary(cfg: Config) -> dict:
-    """{"chain_ok", "broken_at", "proposals": {pid: {cap, cause, ts, review_required, rows}}}: the newest row names the cap,
-    cause and time; `review_required` is true when any row of the proposal asked for a review."""
+def demotion_summary(cfg: Config, now: str | None = None) -> dict:
+    """{"chain_ok", "broken_at", "proposals": {pid: {cap, cause, ts, review_required, rows, lifted_rows}}, "rows": [...]}: a row
+    is `lifted` when the proposal's newest approvals row (at or before `now`) is at or after it; `cap` is the lowest row still in
+    force (`-` when all are lifted) with its cause and time, `review_required` is true when any row of the proposal asked."""
     try:
         rows, broken = demotions.read_chain(cfg.data_dir)
     except OSError:
         raise labels.Refusal("demotions.jsonl is a symlink or not a regular file", 2) from None
+    (arows, abroken), now = modes.read_approvals(cfg.data_dir), now or now_iso()
     props: dict[str, dict] = {}
+    listed = []
     for r in rows:
-        old = props.get(r["proposal_id"], {"review_required": False, "rows": 0})
-        props[r["proposal_id"]] = {"cap": r["to_mode"], "cause": r["cause"], "ts": r["ts"], "rows": old["rows"] + 1,
-                                   "review_required": old["review_required"] or r["review_required"]}
-    return {"chain_ok": broken is None, "broken_at": broken, "proposals": props}
+        done = modes.lifted(r, modes.anchor(arows, r["proposal_id"], now, abroken))
+        listed.append({**{k: r[k] for k in ("proposal_id", "to_mode", "cause", "ts", "review_required")}, "lifted": done})
+        old = props.setdefault(r["proposal_id"], {"cap": "-", "cause": r["cause"], "ts": r["ts"], "review_required": False,
+                                                  "rows": 0, "lifted_rows": 0})
+        old.update(rows=old["rows"] + 1, lifted_rows=old["lifted_rows"] + done, review_required=old["review_required"] or r["review_required"])
+        if not done and (old["cap"] == "-" or demotions.LADDER.index(r["to_mode"]) <= demotions.LADDER.index(old["cap"])):
+            old.update(cap=r["to_mode"], cause=r["cause"], ts=r["ts"])          # the newest of the lowest rows in force
+        elif old["cap"] == "-":
+            old.update(cause=r["cause"], ts=r["ts"])                            # all lifted so far: the newest row
+    return {"chain_ok": broken is None, "broken_at": broken, "proposals": props, "rows": listed}
 
 
-def _meta(cfg: Config, pid: str) -> tuple[str, str, str]:
-    """(detector, event, approved mode) from the proposal files; `-` for anything missing, broken, unsafe or unknown."""
+def _chains(cfg: Config) -> tuple:
+    """(approvals rows, break, demotion rows, break) for `modes.resolve`; a read error is `unreadable`, never raised."""
+    return (*modes.read_approvals(cfg.data_dir), *modes.read_demotions(cfg.data_dir))
+
+
+def _meta(cfg: Config, pid: str, chains: tuple | None = None, now: str = "~") -> tuple[str, str, str, str]:
+    """(detector, event, approved mode, resolved mode) from the proposal files and `chains` (see `_chains`); `-` for anything
+    missing, broken, unsafe or unknown (the resolved mode is `-` without `chains`)."""
     from . import catalogue, proposal, shadow
-    det = ev = mode = "-"
+    det = ev = mode = res = "-"
     if not PID.fullmatch(pid):
-        return det, ev, mode
+        return det, ev, mode, res
     try:
         p = proposal.load(proposal.proposal_path(cfg, pid))
         det = _pick(p["check"]["detector"], catalogue.CATALOGUE)
@@ -151,11 +167,13 @@ def _meta(cfg: Config, pid: str) -> tuple[str, str, str]:
     except (ValueError, OSError, KeyError, TypeError):
         pass
     try:
-        body, approved = shadow.pending_body(proposal.load(shadow.approved_path(cfg, pid)))
+        rec = proposal.load(shadow.approved_path(cfg, pid))
+        body, approved = shadow.pending_body(rec)
         mode = _pick(approved, shadow.MODES) if body is not None else "-"
+        res = modes.resolve(pid, rec, *chains, now).mode if chains and body is not None else "-"
     except (ValueError, OSError):
         pass
-    return det, ev, mode
+    return det, ev, mode, res
 
 
 def summarize(cfg: Config, rows: list[dict], labs: dict[str, str], now: str, days: int) -> dict:
@@ -165,15 +183,15 @@ def summarize(cfg: Config, rows: list[dict], labs: dict[str, str], now: str, day
         by.setdefault(r["proposal_id"] if PID.fullmatch(r["proposal_id"]) else "invalid", []).append(r)
     today = date.fromisoformat(now[:10])
     cutoff = today - timedelta(days=days - 1)
-    props, per_day = {}, Counter()
+    props, per_day, chains = {}, Counter(), _chains(cfg)
     for pid in sorted(by):
         rs = by[pid]
         dates = [d for d in (_day(r["ts"]) for r in rs) if d]
         ids = {labels.row_id(r) for r in rs}                         # rows sharing an id collapse for labelling
         marks, causes = Counter(labs.get(i) for i in ids), Counter(r.get("cause") for r in rs)
-        det, ev, mode = _meta(cfg, pid)
+        det, ev, mode, res = _meta(cfg, pid, chains, now)
         props[pid] = {"lesson": next((v for v in (_match(r.get("lesson_id"), LID) for r in rs) if v != "-"), "-"),
-                      "detector": det, "event": ev, "approved_mode": mode, "rows": len(rs),
+                      "detector": det, "event": ev, "approved_mode": mode, "mode": res, "rows": len(rs),
                       "cause_detector": causes["detector"], "cause_truncated": causes["truncated"],
                       "sessions": len({r["session"] for r in rs}), "days": len(set(dates)),
                       "tp": marks["tp"], "fp": marks["fp"], "tp_cand": marks["tp_candidate"],
@@ -201,11 +219,12 @@ def _section(title: str, source: str, data: dict, days: int) -> list[str]:
 
 
 def _demotions(dem: dict) -> list[str]:
-    out = ["Demotions (demotions.jsonl: the newest row of a proposal is its cap)"]
+    out = ["Demotions (demotions.jsonl: the lowest row after the newest approval is its cap; an approval lifts older rows)"]
     if not dem["chain_ok"]:
         out.append(f"demotions: chain BROKEN at row {dem['broken_at']}, rows after it ignored (the hook caps every proposal at observe)")
-    rows = [[pid, *(str(p[k]).lower() for k in ("cap", "cause", "ts", "review_required", "rows"))] for pid, p in dem["proposals"].items()]
-    return [*out, *(_grid(("proposal", "cap", "cause", "ts", "review_required", "rows"), rows) if rows else ["no demotions"]), ""]
+    rows = [[r["proposal_id"], r["to_mode"], r["cause"], r["ts"], str(r["review_required"]).lower(), "yes" if r["lifted"] else "no"]
+            for r in dem["rows"]]
+    return [*out, *(_grid(("proposal", "to_mode", "cause", "ts", "review_required", "lifted"), rows) if rows else ["no demotions"]), ""]
 
 
 def render(sha: str, days: int, private: dict, synthetic: dict, broken: int | None, dem: dict) -> str:
@@ -229,7 +248,7 @@ def run(cfg: Config, days: int, as_json: bool = False, now: str | None = None) -
         labs, broken = label_map(cfg)
         private = summarize(cfg, priv_rows, labs, now, days)
         synthetic = summarize(cfg, syn_rows, {}, now, days)          # human labels are on private rows only
-        dem = demotion_summary(cfg)
+        dem = demotion_summary(cfg, now)
     except labels.Refusal as exc:
         print(f"error: {exc}", file=sys.stderr)
         return exc.code

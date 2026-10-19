@@ -1,8 +1,9 @@
 """The promotion ladder (docs/design/compiler.md 7.3): `compile approve --mode warn|block`.
 
-`check` is a pure function over rows: it re-derives every counted TP and FP from `shadow.jsonl` and returns a `Result`
-(reasons that failed, the listings, the flagged labels). `run` is the CLI around it: it reads the files, refuses a broken
-chain, prints the listing, asks on the TTY and, on `y`, appends the `approvals.jsonl` row and writes the approved copy.
+`check` is a pure function over rows and the proposal's `modes.Resolution` (cap, resolved mode, counting window): it
+re-derives every counted TP and FP from `shadow.jsonl` and returns a `Result` (reasons that failed, the listings, the flagged
+labels). `run` is the CLI around it: it reads the files, refuses a broken chain, prints the listing, asks on the TTY and,
+on `y`, appends the `approvals.jsonl` row and writes the approved copy.
 Imported lazily by `cmd_approve`. Stdlib, this package and `..atomic`/`..canon`; the store loads inside `lesson_status`.
 """
 
@@ -18,7 +19,7 @@ from typing import Callable
 
 from ..atomic import write_private
 from ..canon import now_iso
-from . import approvals, evidence, labels, proposal, shadow
+from . import approvals, evidence, labels, modes, proposal, shadow
 
 RANK = {"none": 0, "disabled": 0, "observe": 1, "warn": 2, "block": 3}
 PREV = {"warn": "observe", "block": "warn"}
@@ -81,7 +82,7 @@ def _counted(row: dict, human: bool) -> str | None:
 
 
 def check(p: dict, copy: dict | None, rows_shadow: list[dict], rows_labels: list[dict], rows_approvals: list[dict],
-          catalogue_row, lesson_status: str | None, now: str, *, raw_checked: bool = False, cap: str | None = None,
+          catalogue_row, lesson_status: str | None, now: str, resolved: modes.Resolution, *, raw_checked: bool = False,
           mode: str = "warn") -> Result:
     """The rule for moving `p` up to `mode` (warn or block); `copy` is the approved record or None. Pure."""
     res, prev = Result(), PREV[mode]
@@ -92,8 +93,10 @@ def check(p: dict, copy: dict | None, rows_shadow: list[dict], rows_labels: list
         why(f"not in {prev}")
     if mine and (copy is None or approvals.verify_copy(copy, rows_approvals) != "ok"):
         why("copy not backed by the approvals chain")          # what the hook runs must be what the chain says
-    if newest and newest["mode"] == prev:
-        res.since, res.since_source = newest["ts"], "approvals row"
+    if newest and newest["mode"] == prev and newest["ts"] > now:
+        why("newest approvals row is dated in the future")
+    elif newest and newest["mode"] == prev:
+        res.since, res.since_source = resolved.window_start, {"approval": "approvals row", "demotion": "demotion row"}.get(resolved.source, resolved.source)
     elif newest:
         why(f"not in {prev} (newest approvals row is {newest['mode']})")
     elif prev == "observe":                                    # no row: the copy's approved_at is a file the agent can write
@@ -142,8 +145,10 @@ def check(p: dict, copy: dict | None, rows_shadow: list[dict], rows_labels: list
         why("detector source_sha256 changed since the proposal was written")
     if p["check"]["detector"] == "edit_unread_session" and not raw_checked:
         why("edit_unread_session needs --raw-checked (each TP checked against the raw transcript)")
-    if cap is not None and RANK[cap] < RANK[mode]:
-        why(f"demoted:{cap}")
+    if resolved.cap is not None and RANK[resolved.cap] < RANK[mode]:
+        why(f"demoted:{resolved.cap}")
+    elif copy is not None and RANK[resolved.mode] < RANK[prev]:
+        why(f"resolved mode is {resolved.mode}, below {prev}")
     if mode == "block" and p["event"] != "PreToolUse":
         why("block is for PreToolUse proposals only")
     return res
@@ -177,8 +182,7 @@ def _load(cfg, pid: str):
     return p, rep, copy, dest
 
 
-def run(cfg, args, ask: Callable[[str], str], need_tty: Callable[[str], bool], now: str | None = None,
-        cap: str | None = None) -> int:
+def run(cfg, args, ask: Callable[[str], str], need_tty: Callable[[str], bool], now: str | None = None) -> int:
     """`approve --mode warn|block`: exit 0 promoted, 1 refused or not confirmed, 2 usage, unsafe file or no terminal."""
     mode, review = args.mode, getattr(args, "opus_reviewed", None)
     try:
@@ -194,10 +198,12 @@ def run(cfg, args, ask: Callable[[str], str], need_tty: Callable[[str], bool], n
         lrows, lbroken = labels.read_chain(cfg)
         _need(not abroken, f"approvals.jsonl chain broken at row {abroken}")
         _need(not lbroken, f"labels.jsonl chain broken at row {lbroken}")
+        drows, dbroken = modes.read_demotions(cfg.data_dir)           # a read error is the resolver's broken path
+        resolved = modes.resolve(p["id"], copy, arows, None, drows, dbroken, now)
         from . import catalogue
         res = check(p, copy, labels.shadow_rows(cfg), lrows, arows, catalogue.CATALOGUE[p["check"]["detector"]],
-                    lesson_status(cfg, p["lesson_id"]), now, raw_checked=bool(getattr(args, "raw_checked", False)),
-                    cap=cap, mode=mode)
+                    lesson_status(cfg, p["lesson_id"]), now, resolved, raw_checked=bool(getattr(args, "raw_checked", False)),
+                    mode=mode)
         if not rep.ok:
             res.reasons.insert(0, f"validation failed at step '{rep.failed}'")
         print(f"{p['id']}  lesson {p['lesson_id']}  detector {p['check']['detector']}  to {mode}")
