@@ -8,6 +8,9 @@ import re
 import time
 from typing import Any
 
+# The injectable-text rule lives in the stdlib-only leaf module; re-exported for existing imports.
+from ..textrules import FENCE, unsafe_text_reason  # noqa: F401
+
 SCHEMA_VERSION = 1
 GENESIS = "0" * 64
 
@@ -56,26 +59,6 @@ def canonical(obj: Any) -> str:
 def record_hash(record: dict) -> str:
     body = {k: v for k, v in record.items() if k != "hash"}
     return hashlib.sha256(canonical(body).encode()).hexdigest()
-
-
-FENCE = "==="
-
-
-def unsafe_text_reason(text: str) -> str | None:
-    """Fail-closed rule for injectable lesson text: printable ASCII only.
-
-    No newlines (a lesson must stay on its own line of the advisory block), no
-    non-ASCII letters, punctuation, spaces or invisible characters (so no look-alikes,
-    fillers, separators or combining marks), and no "===" fence marker.
-    """
-    for c in text:
-        if c in "\n\r":
-            return "newline"
-        if not 0x20 <= ord(c) <= 0x7E:
-            return "non_ascii_or_control"
-    if FENCE in text:
-        return "fence_marker"
-    return None
 
 
 def _inj_text(f: dict, keys: tuple[str, ...], errs: list[str]) -> None:
