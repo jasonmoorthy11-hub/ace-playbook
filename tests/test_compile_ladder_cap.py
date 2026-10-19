@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from ace_playbook.compile import approvals, demotions
+from ace_playbook.compile import approvals, demotions, modes
 
 from . import compile_support as cs
 from .test_compile_cli import approved_dir, legacy, run, tty, world, written  # noqa: F401  (fixtures)
@@ -54,8 +54,19 @@ def test_observe_approvals_are_never_refused_by_the_cap(world, written, tty, cap
     assert run(world, "approve", written.stem, "--mode", "observe", capsys=capsys)[0] == 0
 
 
-def test_an_observe_back_fill_succeeds_under_a_cap(world, written, tty, capsys):
+def test_an_observe_back_fill_succeeds_under_a_cap_only_without_demotion_rows(world, written, tty, capsys):
     cs.approve_file(world.cfg, json.loads(written.read_text()), "observe")           # a copy and no approvals row
-    demote(world, written.stem)
+    demote(world, "P-22222222")                                                      # another proposal's row does not matter
     code, out, _ = run(world, "approve", written.stem, "--mode", "observe", capsys=capsys)
     assert code == 0 and "recorded" in out and [r["mode"] for r in approvals.read_chain(world.cfg.data_dir)[0]] == ["observe"]
+
+
+def test_a_back_fill_is_not_offered_under_a_demotion_row_a_fresh_approval_that_lifts_it_is(world, written, tty, capsys):
+    rec = json.loads(cs.approve_file(world.cfg, json.loads(written.read_text()), "observe").read_text())
+    demote(world, written.stem, "disabled", ts="2026-10-01T00:00:00Z")               # older than the fresh approval
+    code, out, _ = run(world, "approve", written.stem, "--mode", "observe", capsys=capsys)
+    (row,) = approvals.read_chain(world.cfg.data_dir)[0]
+    assert code == 0 and "recorded" not in out and "lifts demotion: disabled  label_fp  2026-10-01T00:00:00Z" in out
+    assert "lifting 1 demotion row(s)" in tty.asked[-1] and row["mode"] == "observe" and row["ts"] >= rec["approved_at"]
+    assert modes.resolve(written.stem, copy_of(world, written.stem), [row], None, demotions.read_chain(world.cfg.data_dir)[0],
+                         None, "2099-01-01T00:00:00Z").cap is None                    # the row is lifted

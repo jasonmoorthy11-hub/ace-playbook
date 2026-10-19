@@ -204,8 +204,8 @@ def current_mode(copy: tuple[dict, str, dict], arows: list[dict], abroken, drows
     return modes.resolve(copy[0]["id"], copy[2], arows, abroken, drows, None, until)
 
 
-def demote(cfg, rows: list[dict], labs: dict[str, str], cands: list[dict], now: float, dry: bool, out: dict) -> None:
-    """Append design 7.3's demotion rows for every approved proposal (counts to `out`)."""
+def demote(cfg, rows: list[dict], labs: dict[str, str], cands: list[dict], now: float, dry: bool, out: dict, fixed=True) -> None:
+    """Append design 7.3's demotion rows (counts to `out`); `fixed` stamps `iso(now)`, else `append` stamps at append time."""
     drows, broken = demotions.read_chain(cfg.data_dir)
     if broken is not None:
         raise ValueError("demotions.jsonl chain broken")
@@ -219,9 +219,9 @@ def demote(cfg, rows: list[dict], labs: dict[str, str], cands: list[dict], now: 
     arows, abroken = modes.read_approvals(cfg.data_dir)         # unreadable counts as broken: the resolver caps at observe
     for copy in shadow.approved_records(cfg):
         try:
-            p = copy[0]
-            pid, det = p["id"], p["check"]["detector"]
+            pid, det = (p := copy[0])["id"], p["check"]["detector"]
             res = current_mode(copy, arows, abroken, drows, iso(now))
+            after = (a := modes.anchor(arows, pid, iso(now), abroken)) and a["ts"]     # rows before it are lifted: they hide no cause
             if (cur := res.mode) == "disabled":                # revoked or disabled: nothing left to lower
                 continue
             fps = [(r["ts"], labels.row_id(r)) for r in rows if r["proposal_id"] == pid and r["ts"] >= res.window_start
@@ -232,9 +232,9 @@ def demote(cfg, rows: list[dict], labs: dict[str, str], cands: list[dict], now: 
             disable = ("lesson_inactive" if (lessons or {}).get(p["lesson_id"]) in WITHDRAWN else
                        "source_sha256" if stale else "error_rate" if sure and errors > 0.01 * n else None)
             for f in demotions.decide(pid, cur, disable=disable, fps=sorted(set(fps)), evasion=None if flagged else ref):
-                f = {**f, "ts": iso(now)}
-                if demotions.duplicate(drows, f) is None:
-                    drows.append(f if dry else demotions.append(cfg.data_dir, f, current=cur))
+                f = {**f, "ts": iso(now)} if fixed else f
+                if demotions.duplicate(drows, f, after) is None:
+                    drows.append({"ts": iso(time.time()), **f} if dry else demotions.append(cfg.data_dir, f, current=cur, after=after))
                     out["demotions"] += 1
         except (KeyError, TypeError, ValueError, OSError):
             out["errors"] += 1
@@ -251,7 +251,7 @@ def stage(out: dict):
 def run(cfg, *, dry_run: bool = False, since_days: int = 7, idle_minutes: float = 60.0, now: float | None = None) -> dict:
     """The offline pass; counts only. A session is marked done only when its rows were written and, if it has shadow rows,
     the label stage succeeded."""
-    now = time.time() if now is None else now
+    explicit, now = now is not None, time.time() if now is None else now
     out = {"transcripts": 0, "skipped": 0, "detector_events": 0, "labels": dict.fromkeys(labels.AUTO, 0), "demotions": 0,
            "evasion_candidates": 0, "state_removed": 0, "errors": 0, "lesson_check": "not run", "error_rate": "not run",
            "p95_rule": P95}
@@ -294,7 +294,7 @@ def run(cfg, *, dry_run: bool = False, since_days: int = 7, idle_minutes: float 
                 write_private(cfg.path(SEEN), json.dumps({**done, **keep}, sort_keys=True) + "\n")
     if corpus:                                                 # an unreadable corpus is not "no fires": never demote on it
         with stage(out):
-            demote(cfg, rows, labs, old_ca + new_ca, now, dry_run, out)
+            demote(cfg, rows, labs, old_ca + new_ca, now, dry_run, out, explicit)
     with stage(out):
         out["state_removed"] = state_mod.prune(cfg.data_dir, now - 7 * DAY, dry_run)
     return out

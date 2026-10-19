@@ -66,7 +66,7 @@ class Event:
     tool_results: list = field(default_factory=list)
     user_text: str = ""
     human: bool = False
-    meta: bool = False        # isMeta, isCompactSummary or isVisibleInTranscriptOnly record: never typed by the operator
+    meta: bool = False        # isMeta, isCompactSummary or isVisibleInTranscriptOnly record; `human` is unchanged, the consumers check it
     queued: bool = False      # human prompt delivered mid-turn as a queued_command attachment
     dup: bool = False         # queued prompt later re-delivered as a user record (count once)
     read_files: list = field(default_factory=list)
@@ -172,7 +172,7 @@ def event_from_record(rec: Any, tool_index: dict | None = None) -> Event:
                 and isinstance(e.attachment.get("prompt"), str)):
             e.user_text = e.attachment["prompt"][:MAX_TEXT]
             e.queued = True
-            e.human = is_human_text({"isMeta": e.attachment.get("isMeta")}, e.user_text) and not e.meta
+            e.human = is_human_text({"isMeta": e.attachment.get("isMeta")}, e.user_text)
         elif e.attachment.get("type") in ("file", "edited_text_file", "compact_file_reference"):
             if isinstance(e.attachment.get("filename"), str):
                 e.read_files.append(e.attachment["filename"][:MAX_PATH])
@@ -204,7 +204,7 @@ def event_from_record(rec: Any, tool_index: dict | None = None) -> Event:
                     texts.append(b["text"])
         if not e.tool_results:
             e.user_text = "\n".join(texts)[:MAX_TEXT]
-            e.human = is_human_text(rec, e.user_text) and not e.meta
+            e.human = is_human_text(rec, e.user_text)
     return e
 
 

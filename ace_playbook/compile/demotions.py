@@ -2,9 +2,9 @@
 
 A row is `{ts, v: 1, proposal_id, from_mode, to_mode, cause, ref, review_required, prev_hash, hash}`, chained from
 `canon.GENESIS` like labels.jsonl. On the ladder block > warn > observe > disabled `to_mode` is at most `from_mode`; a row
-that breaks that is invalid and breaks the chain there. Whether a row is still in force (an operator approval lifts older
-rows) is `modes.resolve`'s business, and `append` refuses a `from_mode` above the current mode it is given. O_NOFOLLOW,
-regular files only, 1 MiB, strict JSON. `decide` holds the pure rules. The hook reads this file: stdlib only.
+that breaks that breaks the chain there. Whether a row is in force (an approval lifts older rows) is `modes.resolve`'s
+business; `append` guards against a `from_mode` above the current mode. O_NOFOLLOW, regular files only, 1 MiB, strict JSON.
+`decide` holds the pure rules. The hook reads this file: stdlib only.
 """
 
 from __future__ import annotations
@@ -81,15 +81,15 @@ def effective_cap(rows: list[dict], proposal_id: str) -> str | None:
     return min((r["to_mode"] for r in rows if r["proposal_id"] == proposal_id), key=LADDER.index, default=None)
 
 
-def duplicate(rows: list[dict], row: dict) -> dict | None:
-    """The newest row of the proposal when it already says the same (`to_mode`, `cause`, `ref`)."""
-    last = next((r for r in reversed(rows) if r["proposal_id"] == row.get("proposal_id")), None)
-    return last if last and all(last[k] == row.get(k) for k in ("to_mode", "cause", "ref")) else None
+def duplicate(rows: list[dict], row: dict, after: str | None = None) -> dict | None:
+    """The newest row of the proposal stamped at or after `after` (in force) when it says the same (`to_mode`, `cause`, `ref`)."""
+    mine = [r for r in rows if r["proposal_id"] == row.get("proposal_id") and (after is None or r["ts"] >= after)]
+    return mine[-1] if mine and all(mine[-1][k] == row.get(k) for k in ("to_mode", "cause", "ref")) else None
 
 
-def append(data_dir: str | Path, fields: dict, current: str | None = None) -> dict:
-    """Lock (O_NOFOLLOW, 0600), verify the chain from that fd, append and return the row (or the newest row of the proposal
-    saying the same). ValueError: invalid row, broken or oversize chain, or a `from_mode` above `current` (its resolved mode)."""
+def append(data_dir: str | Path, fields: dict, current: str | None = None, after: str | None = None) -> dict:
+    """Lock, verify the chain from that fd, stamp `now_iso()` unless `fields` has a `ts`, append and return the row (or the
+    newest in force, `duplicate`). ValueError: invalid row, broken chain, or `from_mode` above `current` (a guard)."""
     path = Path(data_dir) / FILE
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     with os.fdopen(os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600), "ab") as fh:
@@ -105,7 +105,7 @@ def append(data_dir: str | Path, fields: dict, current: str | None = None) -> di
         prev = rows[-1]["hash"] if rows else GENESIS
         row = {"ts": now_iso(), "v": 1, **fields, "prev_hash": prev}
         row["hash"] = record_hash(row)
-        if (same := duplicate(rows, row)) is not None:
+        if (same := duplicate(rows, row, after)) is not None:
             return same
         line = json.dumps(row, sort_keys=True).encode() + b"\n"
         if _parse(os.pread(fd, size, 0) + line)[1] is not None or (

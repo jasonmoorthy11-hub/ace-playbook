@@ -83,11 +83,13 @@ and is not sealed.
   rule (disable above 200 ms over seven days) waits for rows to carry `dur_ms` and is reported as
   `not computable` on every run; the 1% hook-error rule needs a sample of 100 (rows count fires, not hook calls) and is
   reported `not computable` below it.
-- An operator approval lifts demotions: a proposal's cap is the lowest `to_mode` among the `demotions.jsonl` rows stamped after its
-  newest `approvals.jsonl` row, so `approve --mode observe` (TTY) on a demoted proposal, `disabled` included, lifts the older
-  rows and restarts the ladder from observe; until then `approve --mode warn|block` is refused with `demoted:<cap>`. The agent
+- An operator approval lifts demotions: a proposal's cap is the lowest `to_mode` among the `demotions.jsonl` rows stamped at or after its
+  newest `approvals.jsonl` row, so `approve --mode observe` (TTY, which lists each row it lifts) on a demoted proposal,
+  `disabled` included, lifts the strictly older rows (a same-second row stays: re-approve a second later) and restarts the
+  ladder from observe; until then `approve --mode warn|block` is refused with `demoted:<cap>`. The agent
   cannot write a valid approval row without the TTY, except by forging the unkeyed chain (the stated residual). A restored copy
   after `unapprove` is skipped (`revoked`), not run in observe.
+  The `from_mode` check in `demotions.append` is a guard the nightly pass cannot trip, not a control.
 - Every input of the offline pass can be written by a local process: transcripts, `shadow.jsonl` (including its `mode`),
   `shadow.log`, `labels.jsonl`, `demotions.jsonl` (hash-chained but unkeyed), `offline_state.json`, the approved copy's
   `approved_at` and `deltas.jsonl`. Demotions can so be caused by forged inputs and suppressed by deleting or truncating the

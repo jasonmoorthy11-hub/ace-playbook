@@ -69,12 +69,12 @@ def approved_path(cfg, pid: str) -> Path:
 
 
 class _Approvals:
-    """The approvals chain, read at most once per hook call."""
+    """The approvals chain, read at most once per hook call (and on every call: a revocation must stop a copy)."""
     def __init__(self, cfg, log) -> None:
         self.cfg, self.log, self.loaded, self.rows, self.broken = cfg, log, False, [], None
 
     def read(self) -> tuple[list[dict], modes.Broken]:
-        """(rows, broken_at): a read error is logged (type only) and counts as `unreadable`."""
+        """(rows, broken_at): a read error is logged (type only, not throttled: `error:` lines feed the error-rate rule) and counts as `unreadable`."""
         if not self.loaded:
             self.loaded = True
             try:

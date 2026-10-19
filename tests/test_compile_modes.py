@@ -4,10 +4,13 @@ An operator approval lifts every demotion row at or before it; the cap is the lo
 
 import dataclasses
 import json
+import time
 
 import pytest
 
 from ace_playbook.atomic import write_private
+from ace_playbook.compile import __main__ as cli
+from ace_playbook.compile import catalogue
 from ace_playbook.compile import approvals, demotions as dm, detectors, labels, modes, offline, report, shadow
 from ace_playbook.compile.events import META_KEYS, event_from_hook, event_from_record, events_from_records, hash16
 
@@ -62,8 +65,8 @@ CASES = {
                                           "disabled", ()),
     "a demotion before the approval is lifted": (cp("warn", at=T3), [ap("warn", T3)], None, [dr("disabled", T2)], None, "warn", "warn",
                                                  None, ()),
-    "a demotion at the approval second is lifted": (cp("warn", at=T2), [ap("warn", T2)], None, [dr("observe", T2)], None, "warn",
-                                                    "warn", None, ()),
+    "a demotion at the approval second is NOT lifted": (cp("warn", at=T2), [ap("warn", T2)], None, [dr("observe", T2)], None,
+                                                        "observe", "warn", "observe", ()),
     "the lowest row after the approval": (cp("block"), [ap("block")], None, [dr("warn", T2), dr("observe", T3), dr("warn", T4)],
                                           None, "observe", "block", "observe", ()),
     "only the rows after the approval count": (cp("block", at=T3), [ap("block", T3)], None, [dr("disabled", T2), dr("warn", T4)],
@@ -201,8 +204,9 @@ def test_the_ladder_refuses_demoted_observe_until_a_newer_approval_lifts_the_row
     code, out, _ = run(w, "approve", w.pid, "--mode", "warn", capsys=capsys)
     assert code == 1 and "demoted:observe" in out and tty.asked == []          # the demotion is newer than the approval
     monkeypatch.setattr(shadow, "now_iso", lambda: shift(w.entry, 2))
+    monkeypatch.setattr(cli, "now_iso", lambda: shift(w.entry, 2))                 # the fixture's days are in the future
     code, out, _ = run(w, "approve", w.pid, "--mode", "observe", capsys=capsys)  # not "already approved": it lifts the row
-    assert code == 0 and "lifts its older demotions" in tty.asked[-1]
+    assert code == 0 and "lifting 1 demotion row(s)" in tty.asked[-1] and "lifts demotion: observe  label_fp_pair" in out
     assert [(r["mode"], r["ts"]) for r in approvals.read_chain(w.cfg.data_dir)[0]] == [
         ("observe", w.entry), ("observe", shift(w.entry, 2))]
     code, out, _ = run(w, "approve", w.pid, "--mode", "warn", capsys=capsys)
@@ -244,6 +248,48 @@ def test_the_offline_pass_skips_a_revoked_proposal_and_ignores_a_future_stamp(tm
     assert got.window_start == T1 and got.mode == "warn"                          # the forged future stamp does not blind counting
 
 
+def test_a_cause_that_comes_back_after_a_lift_is_written_again_and_the_hook_skips_again(tmp_path, monkeypatch, capsys):
+    w = cs.offline_world(tmp_path, "observe")
+    monkeypatch.setattr(catalogue, "_source_texts", lambda: ("an edited detector",))         # a standing disable cause
+    assert offline.run(w.cfg, now=cs.NOW)["demotions"] == 1 and offline.run(w.cfg, now=cs.NOW + 60)["demotions"] == 0
+    reapprove(w, "observe", "2026-10-19T12:30:00Z")                                           # the operator lifts it
+    assert offline.run(w.cfg, now=cs.NOW + 7200)["demotions"] == 1                            # same to_mode, cause and ref
+    assert [(d["cause"], d["from_mode"], d["to_mode"]) for d in chain(w)] == [("source_sha256", "observe", "disabled")] * 2
+    monkeypatch.undo()
+    _, _, log = hook(w, monkeypatch, capsys)
+    assert f"skipped:{w.pid}:demoted" in log and cs.shadow_rows(w.data) == []
+
+
+def test_a_real_pass_stamps_each_row_when_it_is_appended_not_when_the_pass_started(tmp_path, monkeypatch):
+    w = cs.offline_world(tmp_path, "observe")
+    monkeypatch.setattr(catalogue, "_source_texts", lambda: ("an edited detector",))
+    assert offline.run(w.cfg)["demotions"] == 1                                               # no `now`: the real clock
+    assert abs(dm.epoch(chain(w)[0]["ts"]) - time.time()) < 10
+
+
+# ------------------------------------------------------------------ the lift prompt
+def test_approve_observe_on_a_demoted_warn_copy_lists_each_row_it_lifts(ready, tty, capsys, monkeypatch):
+    w = ready
+    assert run(w, "approve", w.pid, "--mode", "warn", capsys=capsys)[0] == 0
+    dm.append(w.cfg.data_dir, fields(proposal_id=w.pid, from_mode="warn", to_mode="observe", ts=shift(w.entry, 16)))
+    for mod in (shadow, cli):
+        monkeypatch.setattr(mod, "now_iso", lambda: shift(w.entry, 17))
+    tty.asked.clear()
+    code, out, _ = run(w, "approve", w.pid, "--mode", "observe", capsys=capsys)             # the copy is warn: a fresh approval
+    assert code == 0 and f"lifts demotion: observe  label_fp  {shift(w.entry, 16)}" in out
+    assert "lifting 1 demotion row(s)" in tty.asked[-1] and copy_of(w, w.pid)["mode"] == "observe"
+    rows = approvals.read_chain(w.cfg.data_dir)[0]
+    assert modes.resolve(w.pid, copy_of(w, w.pid), rows, None, dm.read_chain(w.cfg.data_dir)[0], None, shift(w.entry, 18)).cap is None
+
+
+def test_approve_observe_without_a_demotion_in_force_shows_no_lift_notice(ready, tty, capsys):
+    w = ready
+    assert run(w, "approve", w.pid, "--mode", "warn", capsys=capsys)[0] == 0
+    tty.asked.clear()
+    code, out, _ = run(w, "approve", w.pid, "--mode", "observe", capsys=capsys)
+    assert code == 0 and "lifts demotion" not in out and "lifting" not in tty.asked[-1]
+
+
 # ------------------------------------------------------------------ the report
 def test_the_report_marks_lifted_rows_and_shows_the_resolved_and_the_approved_mode(tmp_path):
     w = cs.offline_world(tmp_path, "warn")
@@ -260,9 +306,9 @@ def test_the_report_marks_lifted_rows_and_shows_the_resolved_and_the_approved_mo
 
 # ------------------------------------------------------------------ meta records
 @pytest.mark.parametrize("key", META_KEYS)
-def test_meta_user_records_are_flagged_never_human_and_never_a_correction(key):
+def test_meta_user_records_are_flagged_and_never_a_correction(key):
     e = event_from_record({"type": "user", "message": {"role": "user", "content": "I told you not to do that"}, key: True})
-    assert e.meta and not e.human and detectors.user_correction(e, {}) is None
+    assert e.meta and detectors.user_correction(e, {}) is None             # `human` is not touched: only the consumers check meta
     plain = event_from_record({"type": "user", "message": {"role": "user", "content": "I told you not to do that"}})
     assert not plain.meta and plain.human and detectors.user_correction(plain, {}).count == 1
     assert not event_from_hook({"hook_event_name": "UserPromptSubmit", "prompt": "hi"}).meta

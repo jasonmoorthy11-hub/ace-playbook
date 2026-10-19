@@ -1,8 +1,9 @@
 """One mode resolver (docs/design/compiler.md 7.3, "Mode resolution"): the hook, the ladder, the offline pass and the report
-all ask `resolve` what a proposal runs at, so they cannot disagree. Pure: rows in, a `Resolution` out (only `read_demotions`
-touches a file). The copy's mode counts only when the approvals chain backs it (an observe copy needs no row); the cap is the
-lowest `to_mode` of the demotion rows STRICTLY AFTER the newest approvals row (an operator approval lifts every older row; with
-no approvals row every row counts); a broken or unreadable chain caps at observe. Imports: stdlib, `.approvals`, `.demotions`
+all ask `resolve` what a proposal runs at, so they cannot disagree. `resolve` is pure: rows in, a `Resolution` out (only
+`read_approvals` and `read_demotions` touch a file). The copy's mode counts only when the approvals chain backs it (an observe
+copy needs no row); the cap is the lowest `to_mode` of the demotion rows stamped at or after the newest approvals row (an
+operator approval lifts every STRICTLY older row, a tie keeps the demotion; with no approvals row every row counts); a broken
+or unreadable chain caps at observe. Imports: stdlib, `.approvals`, `.demotions`
 (the shadow hook imports this module).
 """
 
@@ -51,8 +52,8 @@ def anchor(rows: list[dict], pid: str, now: str, broken: Broken = None) -> dict 
 
 
 def lifted(row: dict, ref: dict | None) -> bool:
-    """A demotion row at or before the approval `ref` is lifted by it."""
-    return ref is not None and row["ts"] <= ref["ts"]
+    """A demotion row stamped strictly before the approval `ref` is lifted by it (a tie keeps it: re-approve a second later)."""
+    return ref is not None and row["ts"] < ref["ts"]
 
 
 def _approved(pid: str, copy: dict | None, rows: list[dict], broken: Broken) -> tuple[str, list[str]]:

@@ -5,8 +5,8 @@ Two corpora, two tables, never summed: the private `shadow.jsonl` (written by th
 tp/fp come from `labels.jsonl` through `labels.effective` (a human row beats an auto one, the newest row of its kind
 wins, `incident` rows ignored, a broken chain ignores every label): fp counts human and auto rows, tp only human
 ones, `tp_cand` the auto `tp_candidate` rows, which are never TPs. `approved_mode` is the copy's own mode, `mode` what
-`modes.resolve` says the hook runs. A `Demotions` section lists every row of `demotions.jsonl` with `lifted` yes/no (an
-approval at or after a row lifts it; the lowest row after the newest approval is the cap; a broken chain is one visible line). No session hash, row id, payload hash or path is printed.
+`modes.resolve` says the hook runs. A `Demotions` section lists every row of `demotions.jsonl` with `lifted` yes/no (a
+strictly later approval lifts it; the lowest row not lifted is the cap; a broken chain is one visible line). No session hash, row id, payload hash or path is printed.
 Both shadow files are read here through a no-follow, regular-file-only reader. Imports: stdlib, `..canon`,
 `..config`, `.labels`; `catalogue`, `proposal` and `shadow` load lazily (hook path).
 """
@@ -126,7 +126,7 @@ def lesson_statuses(cfg: Config) -> tuple[dict | None, str]:
 
 def demotion_summary(cfg: Config, now: str | None = None) -> dict:
     """{"chain_ok", "broken_at", "proposals": {pid: {cap, cause, ts, review_required, rows, lifted_rows}}, "rows": [...]}: a row
-    is `lifted` when the proposal's newest approvals row (at or before `now`) is at or after it; `cap` is the lowest row still in
+    is `lifted` when the proposal's newest approvals row (at or before `now`) is stamped strictly after it; `cap` is the lowest row still in
     force (`-` when all are lifted) with its cause and time, `review_required` is true when any row of the proposal asked."""
     try:
         rows, broken = demotions.read_chain(cfg.data_dir)
@@ -219,7 +219,7 @@ def _section(title: str, source: str, data: dict, days: int) -> list[str]:
 
 
 def _demotions(dem: dict) -> list[str]:
-    out = ["Demotions (demotions.jsonl: the lowest row after the newest approval is its cap; an approval lifts older rows)"]
+    out = ["Demotions (demotions.jsonl, every row; lifted = a strictly later approval of the proposal lifted it)"]
     if not dem["chain_ok"]:
         out.append(f"demotions: chain BROKEN at row {dem['broken_at']}, rows after it ignored (the hook caps every proposal at observe)")
     rows = [[r["proposal_id"], r["to_mode"], r["cause"], r["ts"], str(r["review_required"]).lower(), "yes" if r["lifted"] else "no"]

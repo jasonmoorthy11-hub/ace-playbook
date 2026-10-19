@@ -1,11 +1,10 @@
 """CLI: `python -m ace_playbook.compile cards|propose|validate|approve|unapprove|label|report|offline|shadow` (docs/design/compiler.md 10).
 
-No network, no model, stdlib only. Exit codes: 0 ok, 1 a proposal failed validation or was not approved (the
-step is named), 2 usage, configuration, store or id errors. `approve` and `unapprove` need a terminal; `approve`
-appends every approval to the hash-chained `approvals.jsonl` (approvals.py) and `--mode warn|block` is the promotion
-ladder (ladder.py, imported on demand); `label` writes human labels (labels.py; `--list` and `--rows` need no
-terminal); `report` prints per-proposal shadow counts with labels (report.py; exit 2 on a corpus mix-up);
-`offline` is the nightly pass (offline.py; counts only, `--dry-run` writes nothing).
+No network, no model, stdlib only. Exit codes: 0 ok, 1 a proposal failed validation or was not approved (the step is
+named), 2 usage, configuration, store or id errors. `approve` and `unapprove` need a terminal; `approve` appends every
+approval to the hash-chained `approvals.jsonl` (approvals.py) and `--mode warn|block` is the promotion ladder (ladder.py,
+imported on demand); `label` writes human labels (labels.py; `--list`, `--rows` need no terminal); `report` prints per-proposal
+shadow counts with labels (report.py; exit 2 on a corpus mix-up); `offline` is the nightly pass (offline.py; `--dry-run` writes nothing).
 """
 
 from __future__ import annotations
@@ -108,10 +107,10 @@ def _provenance(cfg: cfgmod.Config, p: dict) -> bool:
     return legacy
 
 
-def _in_force(cfg: cfgmod.Config, pid: str, rows: list[dict]) -> bool:
-    """A demotion row of `pid` is newer than its newest approvals row: a fresh approval lifts it, so it is not a no-op."""
-    ref = modes.anchor(rows, pid, now_iso())
-    return any(r["proposal_id"] == pid and not modes.lifted(r, ref) for r in modes.read_demotions(cfg.data_dir)[0])
+def _lifting(cfg: cfgmod.Config, pid: str, rows: list[dict], ts: str) -> list[dict]:
+    """Demotion rows of `pid` in force that a new approvals row stamped `ts` would lift (stamped strictly before it)."""
+    return [r for r in modes.read_demotions(cfg.data_dir)[0] if r["proposal_id"] == pid
+            and not modes.lifted(r, modes.anchor(rows, pid, now_iso())) and modes.lifted(r, {"ts": ts})]
 
 
 def cmd_approve(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
@@ -141,8 +140,9 @@ def cmd_approve(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
     except proposal.ProposalError:                            # an unreadable old copy is simply replaced
         rec, old, mode = None, None, ""
     verdict = approvals.verify_copy(rec, rows) if old == p and mode == "observe" else None
-    lift = verdict == "ok" and _in_force(cfg, args.id, rows)  # an approval newer than a demotion lifts it (design 7.3)
-    if verdict == "ok" and not lift:
+    if verdict == "missing" and any(r["proposal_id"] == args.id for r in modes.read_demotions(cfg.data_dir)[0]):
+        verdict = None                      # no back-fill under demotions (the copy's stamp is agent-writable): approve afresh
+    if verdict == "ok" and not _lifting(cfg, args.id, rows, now_iso()):     # else an approval newer than a demotion lifts it
         print(f"already approved: {args.id} (observe)")
         return 0
     legacy = _provenance(cfg, p)                              # the same block and prompts for a fresh approval and a back-fill
@@ -158,10 +158,13 @@ def cmd_approve(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
                                         "proposal_sha256": rec["proposal_sha256"]})
         print(f"ok: recorded the existing observe approval of {args.id} in approvals.jsonl")
         return 0
-    if not _confirm([f"Approve {p['id']} in observe mode{' (lifts its older demotions)' if lift else ''}? [y/N] "] + asks):
+    new = shadow.approved_record(p)
+    lift = _lifting(cfg, args.id, rows, new["approved_at"])
+    for r in lift:                                            # a fresh observe row lifts every older demotion: show each
+        print(f"  lifts demotion: {r['to_mode']}  {r['cause']}  {r['ts']}")
+    if not _confirm([f"Approve {p['id']} in observe mode{f', lifting {len(lift)} demotion row(s)' if lift else ''}? [y/N] "] + asks):
         print("error: not approved", file=sys.stderr)
         return 1
-    new = shadow.approved_record(p)
     approvals.append(cfg.data_dir, {"ts": new["approved_at"], "proposal_id": p["id"], "mode": "observe",
                                     "proposal_sha256": new["proposal_sha256"]})
     evidence.private_dir(dest.parent)

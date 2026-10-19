@@ -245,6 +245,15 @@ def test_check_does_not_mutate_its_inputs():
     assert kw == before
 
 
+def test_a_newest_approvals_row_dated_after_now_is_refused():
+    assert "newest approvals row is dated in the future" in check(rows_approvals=[appr("observe", "2026-10-17T00:00:00Z")]).reasons
+
+
+def test_a_revoked_proposal_resolves_below_the_previous_rung():
+    res = check(rows_approvals=[appr("observe", SINCE), appr("revoked", "2026-10-02T00:00:00Z", sha="-")])
+    assert "resolved mode is disabled, below observe" in res.reasons
+
+
 # ------------------------------------------------------------------ the copy must be what the chain says, and the window is bounded
 def test_a_demotion_after_warn_means_the_hook_runs_observe_so_block_is_refused():
     rows = [appr("observe", "2026-09-01T00:00:00Z", sha=SHA2), appr("warn", "2026-09-16T00:00:00Z", sha=SHA2),

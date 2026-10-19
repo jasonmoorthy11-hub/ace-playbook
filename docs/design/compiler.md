@@ -507,13 +507,19 @@ nothing. A session is marked done in `offline_state.json` only when its detector
 the label stage succeeded.
 
 *Demotions are lifted by an operator approval.* A demotion row caps its proposal until the operator approves it again: the
-cap is the LOWEST `to_mode` over the rows stamped strictly AFTER the proposal's newest `approvals.jsonl` row (rows at or before
-that approval are lifted by it; with no approvals row every row counts), so `approve --mode observe` on a demoted proposal
+cap is the LOWEST `to_mode` over the rows stamped at or after the proposal's newest `approvals.jsonl` row (rows stamped strictly
+BEFORE that approval are lifted by it; a row in the same second as the approval is NOT lifted, and the operator re-approves a
+second later; with no approvals row every row counts), so `approve --mode observe` on a demoted proposal
 (including a `disabled` one) writes a fresh observe row and restarts the ladder from observe, and `approve --mode warn|block`
-on a proposal that is in its previous rung is refused with `demoted:<cap>` only while a newer row caps it. The agent cannot
+on a proposal that is in its previous rung is refused with `demoted:<cap>` only while a row in force caps it. `approve --mode
+observe` prints every row it would lift (`to_mode`, `cause`, `ts`) and says so in the `y/N` prompt, also on a demoted warn or
+block copy, and it does not back-fill a pre-chain copy while any demotion row of the proposal exists (the back-fill row would
+take its `ts` from the agent-writable copy): it approves afresh, with that prompt. The agent cannot
 write a valid approval row without the TTY, except by forging the unkeyed chain (the stated residual, section 9). The cap is
-no longer a rule of chain validity (a later demotion from a lifted mode must stay a valid row); `append` still refuses a row
-whose `from_mode` is above the mode `modes.resolve` gave the proposal. `compile report` has a `Demotions` section (every row,
+no longer a rule of chain validity (a later demotion from a lifted mode must stay a valid row); `append` keeps a guard
+against a row whose `from_mode` is above the mode `modes.resolve` gave the proposal (the nightly pass always passes the
+resolved mode, so it should never fire: a guard, not a control). A cause that is still true after a lift (the same `to_mode`,
+`cause` and `ref`, e.g. every disable cause) is written again: the pass and `append` dedupe only against rows in force. `compile report` has a `Demotions` section (every row,
 its cap, cause, time, `review_required` and `lifted` yes/no; a broken chain is one visible line), so a silenced proposal shows.
 
 **Mode resolution (as built, integration).** `compile/modes.py` holds `resolve(pid, copy_rec, approvals_rows, approvals_broken,
@@ -523,15 +529,17 @@ report (`_meta`, `demotion_summary`) all call it, so they cannot disagree. Rules
 `verify_copy` says `ok`; an observe copy needs no row; a warn or block copy with no row or another hash runs observe
 (`approvals:missing|mismatch`); a broken or unreadable approvals chain runs observe (`approvals:chain_broken`); a newest row
 that is `revoked`, or no copy, disables the proposal (`revoked|no_copy`; the hook logs `skipped:<id>:revoked`, and
-`skipped:<id>:demoted` for a `disabled` cap). `cap` is the lowest `to_mode` of the rows after the newest approvals row at or
-before `now` (a broken approvals chain lifts nothing); a broken or unreadable demotions chain caps at observe
+`skipped:<id>:demoted` for a `disabled` cap). `cap` is the lowest `to_mode` of the rows stamped at or after the newest
+approvals row stamped at or before `now` (a broken approvals chain lifts nothing); a broken or unreadable demotions chain caps at observe
 (`demotions:chain_broken|unreadable`). `mode = lower(approved_mode, cap)`. `window_start` is the newest approvals row, else
 (the pre-chain observe case only) the copy's `approved_at`, then the newest counter-resetting demotion (any cause but
 `evasion_pair`) after it; a stamp after `now` is ignored, not clamped, for the window (it still caps, fail safe); `source` names
 which of `approval|demotion|copy` set it (`none` when nothing did). The ladder counts from `window_start` and refuses with
 `demoted:<cap>` when the cap is below the requested mode; `ladder.run` and `check` no longer take a `cap`. Both chains are read
-at most once per hook call. `Event.meta` (`isMeta`, `isCompactSummary`, `isVisibleInTranscriptOnly`) makes a record non-human:
-`user_correction`, the prompt-target rule and `shell_keys` ignore it. `compile report` shows `approved_mode` (the copy's own)
+at most once per hook call, and `approvals.jsonl` is now read on every call that has an approved file (a revocation must
+stop a copy; the read is capped at 1 MiB, no-follow). A real nightly pass stamps each demotion row when it is appended
+(`demotions.append`), not when the pass started. `Event.meta` (`isMeta`, `isCompactSummary`, `isVisibleInTranscriptOnly`)
+changes nothing about `human`: only `user_correction` and `shell_keys` check it. `compile report` shows `approved_mode` (the copy's own)
 and `mode` (resolved). A copy restored after `unapprove` is now skipped (`revoked`) instead of running in observe.
 
 *Trust.* Every input of the offline pass can be written by a local process: the transcripts, `shadow.jsonl` (including its
@@ -738,7 +746,7 @@ exploratory (PREREGISTRATION.md:6-7).
 
 Residual risks, stated plainly: the agent runs with the user's permissions and can edit
 `data_dir`, so it could append a demotion or delete an approved file to evade a block; the controls
-above make that visible in the report, not impossible. An operator approval lifts demotions (every row at or before the
+above make that visible in the report, not impossible. An operator approval lifts demotions (every row stamped strictly before the
 newest approvals row); the agent cannot write a valid approval row without the TTY, except by forging the unkeyed chain, the
 stated residual. The same holds for **label forgery**: the
 agent can append a `tp` label, so promotion rests on the human reading the TP listing at `approve`,
