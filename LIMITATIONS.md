@@ -84,7 +84,8 @@ and is not sealed.
   `not computable` on every run; the 1% hook-error rule needs a sample of 100 (rows count fires, not hook calls) and is
   reported `not computable` below it.
 - Demotions are not lifted yet: a proposal's cap is the lowest `to_mode` in `demotions.jsonl` (a `disabled` row is final) and
-  nothing clears it (the integration with the promotion ladder will let a newer operator approval row do that).
+  nothing clears it: `approve --mode warn|block` is refused with `demoted:<cap>`, and the only way out is to truncate
+  `demotions.jsonl` to before the row (the chain is append-only); a later wave adds a lift.
 - Every input of the offline pass can be written by a local process: transcripts, `shadow.jsonl` (including its `mode`),
   `shadow.log`, `labels.jsonl`, `demotions.jsonl` (hash-chained but unkeyed), `offline_state.json`, the approved copy's
   `approved_at` and `deltas.jsonl`. Demotions can so be caused by forged inputs and suppressed by deleting or truncating the

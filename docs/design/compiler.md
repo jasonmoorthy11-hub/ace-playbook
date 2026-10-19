@@ -488,7 +488,7 @@ review_required, prev_hash, hash}`, `to_mode` never above `from_mode`, a repeat 
 file once per call: `disabled` skips the proposal, any other cap lowers its mode, a broken chain caps every proposal at
 `observe` (measurement continues), and so does a read error (symlink, directory, FIFO, oversize), logged by type: the hook fails
 safe, not open. The "skipped" lines for a demoted or not-yet-allowed proposal, the `approvals:` lines and the demotions lines are written
-once per 8 KiB of `shadow.log` (its tail, read once per hook call; `error:` lines are never throttled), so they cannot fill it to its cap and blind the error-rate rule. The pass appends `label_fp` (block to
+once per 8 KiB of `shadow.log` (its tail, read once per hook call; `error:` lines are never throttled), so their volume is bounded to a constant factor of the unthrottled lines (measured about 2.3 times the real lines, since once-lines scroll out of the window and are rewritten) and they cannot fill it to its cap on their own. The same applies to `skipped:<id>:oversize` and `invalid:*`, `approved_dir_symlink`, `skipped:too_many_files` and `skipped:file_name`. The pass appends `label_fp` (block to
 warn, warn to observe), `label_fp_pair` (two effective FPs within 30 days: observe, `review_required`) counting FPs since the
 later of approval and the proposal's last demotion (an `evasion_pair` row does not restart them; two FPs more than 30 days
 apart lower one rung each in the same run); and the disable causes `lesson_inactive` (store status `dormant`, `retired`,
@@ -507,8 +507,10 @@ the label stage succeeded.
 
 *Demotions are not lifted yet.* `effective_cap` is the LOWEST `to_mode` over a proposal's valid rows (a `disabled` row is
 final) and a row whose `from_mode` is above the proposal's cap so far is invalid and breaks the chain there, so nothing raises a
-cap and nothing writes such a row. The integration wave makes a newer operator approval row (`approvals.jsonl`, the
-promotion ladder) clear an older demotion; this step does not implement the lift. `compile report` has a `Demotions` section
+cap and nothing writes such a row. Today the cap is permanent: `approve --mode warn|block` on a demoted proposal is refused with
+`demoted:<cap>` (also after an observe to observe `label_fp_pair` row, which two auto FP labels can cause), and until a lift
+exists in a later wave the operator's only way out is to truncate `demotions.jsonl` to before the row (the chain is append-only,
+so there is no other edit). `compile report` has a `Demotions` section
 (newest cap, cause, time, `review_required` if any row asked, row count per proposal; a broken chain is one visible line), so a
 silenced proposal shows.
 

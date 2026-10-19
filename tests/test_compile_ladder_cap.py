@@ -1,9 +1,12 @@
 """`compile approve --mode warn|block` honours the demotions.jsonl cap (docs/design/compiler.md 7.3)."""
 
+import json
+
 import pytest
 
-from ace_playbook.compile import demotions
+from ace_playbook.compile import approvals, demotions
 
+from . import compile_support as cs
 from .test_compile_cli import approved_dir, legacy, run, tty, world, written  # noqa: F401  (fixtures)
 from .test_compile_ladder_cli import copy_of, observed, ready  # noqa: F401  (fixtures)
 
@@ -48,3 +51,10 @@ def test_an_unreadable_demotions_file_refuses_warn(ready, tty, capsys):
 def test_observe_approvals_are_never_refused_by_the_cap(world, written, tty, capsys, to_mode):
     demote(world, written.stem, to_mode)
     assert run(world, "approve", written.stem, "--mode", "observe", capsys=capsys)[0] == 0
+
+
+def test_an_observe_back_fill_succeeds_under_a_cap(world, written, tty, capsys):
+    cs.approve_file(world.cfg, json.loads(written.read_text()), "observe")           # a copy and no approvals row
+    demote(world, written.stem)
+    code, out, _ = run(world, "approve", written.stem, "--mode", "observe", capsys=capsys)
+    assert code == 0 and "recorded" in out and [r["mode"] for r in approvals.read_chain(world.cfg.data_dir)[0]] == ["observe"]

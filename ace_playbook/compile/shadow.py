@@ -125,46 +125,44 @@ def _demotions(cfg, once) -> tuple[list[dict], int | None]:
 def _load_one(cfg, path: Path, pid: str, log, once, appr: _Approvals, dem) -> tuple[dict, str] | None:
     try:
         if os.lstat(path).st_size > MAX_FILE_BYTES:
-            return log(f"skipped:{pid}:oversize")
+            return once(f"skipped:{pid}:oversize")
         rec = proposal.load(path)
         body, mode = pending_body(rec)
         if body is None or body["id"] != pid:
-            return log(f"skipped:{pid}:invalid:{mode if body is None else 'id'}")
+            return once(f"skipped:{pid}:invalid:{mode if body is None else 'id'}")
         if mode not in ALLOWED_MODES:
             return once(f"skipped:{pid}:mode_disabled")
         rep = proposal.validate(body, cfg, hot=True)
         if not rep.ok:
-            return log(f"skipped:{pid}:invalid:{rep.failed}")
+            return once(f"skipped:{pid}:invalid:{rep.failed}")
         if mode != "observe" and (verdict := appr.check(rec)) != "ok":    # warn and block need a matching approvals row
             if verdict != "chain_broken":
                 once(f"approvals:{pid}:{verdict}")
             mode = "observe"
         cap = demotions.effective_cap(dem[0], pid)            # then a demotion can only lower what the chain allows
-        if dem[1] is not None:
-            cap = demotions.lower("observe", cap)
+        cap = demotions.lower("observe", cap) if dem[1] is not None else cap
         if cap == "disabled":
             return once(f"skipped:{pid}:demoted")
         return body, demotions.lower(mode, cap)
     except Exception as exc:                                  # type only; a bad file never stops the others
-        return log(f"skipped:{pid}:invalid:{type(exc).__name__}")
+        return once(f"skipped:{pid}:invalid:{type(exc).__name__}")
 
 
 def load_approved(cfg, log) -> list[tuple[dict, str]]:
     """[(proposal, mode)] for every approved file that is a regular, small, hash-matching, valid proposal."""
-    base = approved_dir(cfg)
+    base, once = approved_dir(cfg), _Once(cfg, log)
     if base.parent.is_symlink() or base.is_symlink():
-        return log("approved_dir_symlink") or []
+        return once("approved_dir_symlink") or []
     try:
         names = sorted(n for n in os.listdir(base) if n.endswith(".json"))
     except OSError:
         return []
     if len(names) > MAX_FILES:
-        log("skipped:too_many_files")
-    once = _Once(cfg, log)
+        once("skipped:too_many_files")
     out, appr, dem = [], _Approvals(cfg, log, once), (_demotions(cfg, once) if names else ([], None))
     for name in names[:MAX_FILES]:
         if not proposal.PID.fullmatch(name[:-5]):
-            log("skipped:file_name")
+            once("skipped:file_name")
             continue
         item = _load_one(cfg, base / name, name[:-5], log, once, appr, dem)
         if item:
@@ -269,7 +267,8 @@ def _run(cfg, argv: list, log) -> None:
         except OSError as exc:                                # still act on the decision below
             log(f"error:row:{type(exc).__name__}")
     warns = [p["message"] for p, mode, _cause in hits if mode == "warn"]
-    sys.stderr.write("".join(m + "\n" for m in warns))        # the user-visible echo; the model never sees stderr
+    if warns:                                                 # the user-visible echo; the model never sees stderr
+        sys.stderr.write("".join(m + "\n" for m in warns))
     block = next((p["message"] for p, mode, _cause in hits if mode == "block"), None)
     out = None
     if event == "Stop" and payload.get("stop_hook_active"):   # a loop guard: nothing on stdout, fires still recorded
