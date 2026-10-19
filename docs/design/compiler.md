@@ -716,7 +716,8 @@ friction (warn and block messages per 100 tool calls; `user_correction` events p
 fires in scanned sessions with no offline event of the same detector, session and payload hash, and offline events of the deployed
 detectors dated at or after the first live row with no live fire (`-` without live rows; synthetic `-`). A live fire in a session the
 offline pass has not scanned yet is not an eligible-session fire and not a disagreement; the block prints their number (`live fires
-awaiting offline scan`, `awaiting_offline_scan` in `--json`). The agreement window starts at each detector's own first live row (a
+awaiting offline scan`, `awaiting_offline_scan` in `--json`; a fire stamped after its session's newest summary row counts as
+awaiting too, `truncated` rows do not; a proposal id with no proposal file has no rates). The agreement window starts at each detector's own first live row (a
 revocation gap is not excluded yet), `cause: truncated` rows are counted apart (`truncated_fires`; fail-closed, not detector fires, but
 still messages in the friction) and left out of agreement, and so are `Stop` rows and proposals (their payload hash is the raw hook
 input, which no offline row has). A session that the offline pass scanned before it wrote `_session` rows is scanned again once
@@ -728,7 +729,8 @@ excludes the interpreter start, the imports and the config load (about 35 ms per
 the evaluator alone (`_evaluate` and the row), not a hook call. No per-call row is written. **Subagents.** The offline pass drops
 sidechain records, while a subagent's hook call may carry its parent's session id: such calls can count as live fires against a
 parent session whose tool-call count excludes them. **`--out`.** `replay-synthetic --out` is refused (exit 2, nothing written) inside
-`data_dir` unless it is `shadow.synthetic.jsonl` itself, and when the target exists and is not a regular file of synthetic rows only;
+`data_dir` (decided by file identity of the parent and its ancestors, so a differently cased path cannot pass) unless it is
+`shadow.synthetic.jsonl` itself, and when the target exists and is not a regular file of synthetic rows only;
 synthetic rows carry `tier: "synthetic"` and the private-file guard refuses such a row. Still not computed: arms, randomization
 inference, the spillover flag (they need the randomized phase).
 

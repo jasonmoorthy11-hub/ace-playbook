@@ -16,8 +16,9 @@ RM = {"tool": "Bash", "input": {"command": cs.RM_PROMPT_CMD}}
 RM2 = {"tool": "Bash", "input": {"command": "rm -rf /w/other"}}
 
 
-def summary(session, calls=10, prompts=5, eligible=(DET,)):
-    return {"detector": "_session", "tier": "offline", "session": session, "count": calls, "prompts": prompts, "eligible": list(eligible)}
+def summary(session, calls=10, prompts=5, eligible=(DET,), ts=""):
+    return {"detector": "_session", "tier": "offline", "session": session, "count": calls, "prompts": prompts, "eligible": list(eligible),
+            "ts": ts}
 
 
 def fire_row(session, mode="observe", ts="2026-10-18T10:00:00Z", phash="aa", **extra):
@@ -253,3 +254,40 @@ def test_a_returned_transcript_state_adds_the_newest_session_row(w):
     offline.run(w.cfg, now=cs.NOW)
     sessions = [r for r in jsonl(w) if r["detector"] == "_session"]
     assert [r["count"] for r in sessions] == [1, 2, 1] and metrics.latest_sessions(jsonl(w))[st.session_hash("s1")]["count"] == 1
+
+
+# ------------------------------------------------------------------ wave 3
+def test_truncated_fires_are_not_awaiting_a_scan():
+    rows = [fire_row("s9"), fire_row("s9", phash="bb", cause="truncated")]
+    assert one(rows, [summary("s1")])[1]["awaiting_offline_scan"] == 1
+
+
+def test_a_fire_after_the_sessions_newest_summary_row_waits_for_the_next_scan():
+    ev = [summary("s1", ts="2026-10-18T10:00:05.123Z"), offline_event("s1", "aa")]
+    same = fire_row("s1", ts="2026-10-18T10:00:05Z", phash="aa")                      # the same second as the last record: covered
+    late = fire_row("s1", ts="2026-10-18T10:00:06Z", phash="bb")                      # the session went on after the scan
+    got, corpus = one([same, late], ev)
+    assert (got["eligible"], got["fires"], got["fire_rate"], corpus["awaiting_offline_scan"]) == (1, 1, 1.0, 1)
+    assert corpus["agreement"] == {"live_only": 0, "offline_only": 0}                   # bb is neither live-only nor in a rate
+    assert one([late], ev)[0]["sessions_with_fire"] == 0 and one([late], ev)[1]["awaiting_offline_scan"] == 1
+
+
+def test_a_summary_row_without_a_stamp_covers_every_fire():
+    assert one([fire_row("s1", ts="2030-01-01T00:00:00Z")], [summary("s1")])[1]["awaiting_offline_scan"] == 0
+
+
+def test_repeated_identical_synthetic_payloads_are_separate_calls():
+    rows = [{**fire_row("s1", phash="p1"), "detector": DET} for _ in range(3)] + [
+        {**fire_row("s1", phash="p1"), "detector": "rm_rf", "proposal_id": "P-0a1b2c3e"}]
+    assert metrics._sessions("synthetic", rows, [])["s1"]["calls"] == 3                  # three replays, one of them also fed to rm_rf
+
+
+def test_a_proposal_id_without_a_proposal_file_has_no_rates_and_is_not_awaiting(w, capsys, monkeypatch):
+    monkeypatch.setattr(report, "now_iso", lambda: "2026-10-19T12:00:00Z")
+    cs.put_session(w, "s1", [{"human": "tidy"}, RM])
+    offline.run(w.cfg, now=cs.NOW)
+    cs.put_shadow(w, "s1", cs.RM_PROMPT_CMD, pid="P-deadbeef")
+    cli.main(["--config", w.conf, "report", "--json"])
+    rates = json.loads(capsys.readouterr().out)["rates"]["private"]
+    assert "P-deadbeef" not in rates["proposals"] and rates["corpus"]["awaiting_offline_scan"] == 0
+    assert rates["corpus"]["agreement"] == "-"

@@ -249,7 +249,8 @@ def test_a_symlink_or_directory_as_out_is_refused(w, capsys, tmp_path):
     link = tmp_path / "link.jsonl"
     link.symlink_to(real)
     assert replay(w, "--out", str(link), capsys=capsys)[0] == 2 and real.read_text() == "" and link.is_symlink()
-    assert replay(w, "--out", str(tmp_path), capsys=capsys)[0] == 2
+    code, out, err = replay(w, "--out", str(tmp_path), capsys=capsys)
+    assert (code, out) == (2, "") and err == "error: --out is a symlink or not a regular file\n"      # a directory: the same text, no leaked fd
 
 
 def test_synthetic_rows_carry_the_synthetic_tier_and_the_private_file_refuses_such_a_row(w, capsys):
@@ -298,3 +299,31 @@ def test_the_cost_block_states_its_limits_per_corpus(w, capsys, monkeypatch):
     out = capsys.readouterr().out
     assert out.count("firing calls only, in-process: no interpreter start, imports or config load") == 1
     assert out.count("the evaluator only, not a hook call") == 1 and out.count("live fires awaiting offline scan: ") == 2
+
+
+def upper(w):
+    """The data dir spelt in capitals; the same directory on a case-insensitive volume, else None (these tests need one)."""
+    path = Path(str(w.data).upper())
+    return path if path.exists() and path.samefile(w.data) and str(path) != str(w.data) else None
+
+
+def test_a_differently_cased_data_dir_path_cannot_reach_other_data_files(w, capsys):
+    up = upper(w)
+    if up is None:
+        pytest.skip("case-sensitive volume")
+    (w.data / "approvals.jsonl").write_bytes(b"")
+    for name in ("deltas.jsonl", "approvals.jsonl", "shadow.jsonl", "labels.jsonl"):
+        code, out, err = replay(w, "--out", str(up / name), capsys=capsys)
+        assert (code, out) == (2, "") and err.startswith("error:")
+    assert (w.data / "approvals.jsonl").read_bytes() == b""
+    assert not any((w.data / n).exists() for n in ("deltas.jsonl", "shadow.jsonl", "labels.jsonl", SYN_FILE))
+
+
+def test_the_synthetic_file_is_still_allowed_through_a_differently_cased_data_dir_path(w, capsys):
+    up = upper(w)
+    if up is None:
+        pytest.skip("case-sensitive volume")
+    assert replay(w, "--out", str(up / SYN_FILE), capsys=capsys)[0] == 0
+    assert replay(w, "--out", str(up / SYN_FILE.upper()), capsys=capsys)[0] == 0
+    assert w.cfg.path(SYN_FILE).exists() and len(syn_rows(w)) > 0
+    assert sorted(p.name for p in w.data.iterdir() if p.name.lower().startswith("shadow")) == [SYN_FILE]

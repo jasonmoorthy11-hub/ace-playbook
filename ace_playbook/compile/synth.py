@@ -27,6 +27,7 @@ from .events import event_from_hook
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
 EXAMPLES, CORPUS, OUT = FIXTURES / "compile" / "examples.json", FIXTURES / "frozen" / "shadow_corpus.json", "shadow.synthetic.jsonl"
 EXPECT, MAX_OUT = ("fire", "no_fire"), 1 << 24
+NOT_FILE = "--out is a symlink or not a regular file"
 
 
 def _read(path: Path) -> dict:
@@ -88,24 +89,38 @@ def replay(cfg, sessions: list | None = None) -> tuple[list[dict], dict]:
     return rows, counts
 
 
+def _same(a: Path, b: Path) -> bool:
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
+
+
 def target(cfg, out: str | None) -> Path:
-    """The file to replace: the default, or `--out`. Inside `data_dir` only `shadow.synthetic.jsonl` itself is allowed (never the
-    private corpus, labels, approvals or the store); a file already there must be a regular file (not a symlink) holding synthetic
-    rows only. Refusal (exit 2) before anything is written."""
+    """The file to replace: the default, or `--out`. Whether it is inside `data_dir` is decided by file identity (device and inode of
+    the parent and its ancestors, so a differently cased path on a case-insensitive volume is caught); inside, only the synthetic file
+    itself is allowed (name compared case-insensitively, then the canonical path is used), never the private corpus, labels,
+    approvals or the store. A file already there must be a regular file (not a symlink) holding synthetic rows only. Refusal (exit 2)
+    before anything is written."""
     path = Path(out) if out else cfg.path(OUT)
-    real, data = path.parent.resolve() / path.name, Path(cfg.data_dir).resolve()
-    if data in real.parents and real != data / OUT:
-        raise labels.Refusal(f"--out inside the data directory must be {OUT}", 2)
+    parent = path.parent.resolve()
+    if any(_same(p, cfg.data_dir) for p in (parent, *parent.parents)):
+        if not (_same(parent, cfg.data_dir) and path.name.casefold() == OUT.casefold()):
+            raise labels.Refusal(f"--out inside the data directory must be {OUT}", 2)
+        path = cfg.path(OUT)
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:
         return path
     except OSError:
-        raise labels.Refusal("--out is a symlink or not a regular file", 2) from None
+        raise labels.Refusal(NOT_FILE, 2) from None
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise labels.Refusal(NOT_FILE, 2)
     with os.fdopen(fd, "rb") as fh:
-        raw = fh.read(MAX_OUT + 1) if stat.S_ISREG(os.fstat(fh.fileno()).st_mode) else None
+        raw = fh.read(MAX_OUT + 1)
     try:
-        ok = raw is not None and len(raw) <= MAX_OUT and all(
+        ok = len(raw) <= MAX_OUT and all(
             isinstance(r := json.loads(ln), dict) and r.get("corpus") == "synthetic" for ln in raw.decode().splitlines() if ln.strip())
     except (ValueError, RecursionError):
         ok = False

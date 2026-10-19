@@ -276,9 +276,10 @@ def run(cfg: Config, days: int, as_json: bool = False, now: str | None = None) -
         synthetic = summarize(cfg, [r for r in syn_rows if r.get("would_fire") is not False], {}, now, days, True)   # labels: private only
         dem, (events, evasion) = demotion_summary(cfg, now), (_read(cfg.path(EVENTS)), _read(cfg.path(EVASION)))
         from . import catalogue
-        syn_det = {r["proposal_id"]: _pick(r.get("detector"), catalogue.CATALOGUE) for r in syn_rows if PID.fullmatch(r["proposal_id"])}
+        syn_det = {r["proposal_id"]: r["detector"] for r in syn_rows if PID.fullmatch(r["proposal_id"]) and r.get("detector") in catalogue.CATALOGUE}
         stop = {k for k, p in private["proposals"].items() if p["event"] == "Stop"}
-        rates = {"private": metrics.compute("private", priv_rows, {k: p["detector"] for k, p in private["proposals"].items()}, events, evasion, stop),
+        known = {k: p["detector"] for k, p in private["proposals"].items() if p["detector"] != "-"}       # no proposal file: no rate
+        rates = {"private": metrics.compute("private", priv_rows, known, events, evasion, stop),
                  "synthetic": metrics.compute("synthetic", syn_rows, syn_det, [], [])}
     except labels.Refusal as exc:
         print(f"error: {exc}", file=sys.stderr)

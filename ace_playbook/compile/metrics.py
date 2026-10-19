@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+from collections import Counter
 
 Z = 1.96
 SESSION = "_session"
@@ -74,21 +75,32 @@ def _int(value: object) -> int:
 
 def _sessions(corpus: str, rows: list[dict], ev_rows: list[dict]) -> dict[str, dict]:
     """{session: {"calls", "prompts", "eligible": set of detectors}}: from the summary rows (private) or from the rows (synthetic:
-    a tool call is a distinct payload of the session, however many detectors it was fed to)."""
+    a tool call is one replayed payload: a payload fed to several detectors counts once per repetition, not once per detector)."""
     if corpus == "synthetic":
         out: dict[str, dict] = {}
         for r in rows:
-            s = out.setdefault(r["session"], {"calls": 0, "prompts": 0, "eligible": set(), "payloads": set()})
-            s["payloads"].add(r["payload_sha256"])
-            s["calls"] = len(s["payloads"])
+            s = out.setdefault(r["session"], {"calls": 0, "prompts": 0, "eligible": set(), "evals": Counter()})
+            s["evals"][r["payload_sha256"], r.get("detector")] += 1
             s["eligible"].add(r.get("detector"))
+        for s in out.values():
+            by: dict[str, int] = {}
+            for (payload, _det), n in s["evals"].items():
+                by[payload] = max(by.get(payload, 0), n)
+            s["calls"] = sum(by.values())
         return out
-    return {k: {"calls": _int(v.get("count")), "prompts": _int(v.get("prompts")),
+    return {k: {"calls": _int(v.get("count")), "prompts": _int(v.get("prompts")), "ts": str(v.get("ts") or ""),
                 "eligible": {n for n in v.get("eligible", []) if isinstance(n, str)}} for k, v in latest_sessions(ev_rows).items()}
 
 
 def _fire(r: dict) -> bool:
     return r.get("would_fire") is not False
+
+
+def _scanned(r: dict, sess: dict) -> bool:
+    """The row's session has a summary row that covers it: a fire stamped (to the second) after the session's newest summary row
+    happened after the scan, so it waits for the next one. A summary row without a stamp covers everything."""
+    s = sess.get(r["session"])
+    return s is not None and (not s.get("ts") or r["ts"][:19] <= s["ts"][:19])
 
 
 def _agreement(rows: list[dict], det_of: dict[str, str], sessions: dict, ev_rows: list[dict], stop: set[str]) -> dict | str:
@@ -104,7 +116,7 @@ def _agreement(rows: list[dict], det_of: dict[str, str], sessions: dict, ev_rows
         d = det_of[r["proposal_id"]]
         start[d] = min(start.get(d, r["ts"]), r["ts"])
     live = {(r["session"], r["payload_sha256"], det_of[r["proposal_id"]]) for r in mine
-            if _fire(r) and r.get("cause") != "truncated" and r["session"] in sessions}
+            if _fire(r) and r.get("cause") != "truncated" and _scanned(r, sessions)}
     off = {(e.get("session"), e.get("payload_sha256"), e.get("detector")) for e in ev_rows
            if e.get("tier") == "offline" and e.get("detector") in start and str(e.get("ts", "")) >= start[e["detector"]]}
     return {"live_only": len(live - off), "offline_only": len(off - live)}
@@ -114,14 +126,15 @@ def compute(corpus: str, rows: list[dict], det_of: dict[str, str], ev_rows: list
             stop: set[str] = frozenset()) -> dict:
     """{"proposals": {pid: {...}}, "corpus": {...}} for one corpus. `rows` are every row of its shadow file (a `would_fire: false` row
     is an evaluated event that did not fire), `det_of` maps proposal id to detector, `ev_rows` and `evasion` are the offline files,
-    `stop` the proposals of the Stop event. `fires` are detector fires in eligible sessions; `cause: truncated` rows are counted apart
+    `stop` the proposals of the Stop event. A fire in a session without a summary row, or stamped after its newest one, is awaiting the
+    offline scan (`awaiting_offline_scan`, truncated rows aside) and is in no rate. `fires` are detector fires in eligible sessions; `cause: truncated` rows are counted apart
     (`truncated_fires`, fail-closed) but still count as messages in the friction (the hook emitted them)."""
     sess = _sessions(corpus, rows, ev_rows)
     fixes = [r for r in ev_rows if r.get("detector") == "user_correction" and r.get("session") in sess]
     out: dict[str, dict] = {}
     for pid, det in det_of.items():
         elig = {s for s, v in sess.items() if det in v["eligible"]}
-        mine = [r for r in rows if r["proposal_id"] == pid and _fire(r) and r["session"] in elig]
+        mine = [r for r in rows if r["proposal_id"] == pid and _fire(r) and r["session"] in elig and _scanned(r, sess)]
         fires = [r for r in mine if r.get("cause") != "truncated"]
         per = {s: sum(r["session"] == s for r in fires) for s in {r["session"] for r in fires}}
         warned = sum(r.get("mode") in ("warn", "block") for r in mine)
@@ -136,6 +149,6 @@ def compute(corpus: str, rows: list[dict], det_of: dict[str, str], ev_rows: list
                     "evasion": sum(e.get("proposal_id") == pid for e in evasion)}
     cost = [r["dur_ms"] for r in rows if isinstance(r.get("dur_ms"), int) and not isinstance(r["dur_ms"], bool)]
     agree = _agreement(rows, det_of, sess, ev_rows, set(stop)) if corpus == "private" else DASH
-    waiting = sum(r["proposal_id"] in det_of and _fire(r) and r["session"] not in sess for r in rows)
+    waiting = sum(r["proposal_id"] in det_of and _fire(r) and r.get("cause") != "truncated" and not _scanned(r, sess) for r in rows)
     return {"proposals": out, "corpus": {"sessions": len(sess), "awaiting_offline_scan": waiting, "cost_rows": len(cost),
                                           "cost_p50_ms": percentile(cost, 0.5), "cost_p95_ms": percentile(cost, 0.95), "agreement": agree}}
