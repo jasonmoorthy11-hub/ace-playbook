@@ -1,10 +1,11 @@
-"""CLI: `python -m ace_playbook.compile cards|propose|validate|approve|unapprove|label|report|offline|shadow` (docs/design/compiler.md 10).
+"""CLI: `python -m ace_playbook.compile cards|propose|validate|approve|unapprove|label|report|offline|shadow|replay-synthetic` (design 10).
 
 No network, no model, stdlib only. Exit codes: 0 ok, 1 a proposal failed validation or was not approved (the step is
 named), 2 usage, configuration, store or id errors. `approve` and `unapprove` need a terminal; `approve` appends every
 approval to the hash-chained `approvals.jsonl` (approvals.py) and `--mode warn|block` is the promotion ladder (ladder.py,
 imported on demand); `label` writes human labels (labels.py; `--list`, `--rows` need no terminal); `report` prints per-proposal
-shadow counts with labels (report.py; exit 2 on a corpus mix-up); `offline` is the nightly pass (offline.py; `--dry-run` writes nothing).
+shadow counts with labels (report.py; exit 2 on a corpus mix-up); `offline` is the nightly pass (offline.py; `--dry-run` writes nothing);
+`replay-synthetic` replays the frozen corpus into `shadow.synthetic.jsonl` (synth.py; exit 1 on a disagreement).
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from .. import config as cfgmod
 from .. import ttyio
 from ..atomic import write_private
 from ..canon import now_iso
-from . import approvals, evidence, labels, modes, proposal, report, shadow
+from . import approvals, evidence, labels, modes, proposal, report, shadow, synth
 
 LEGACY_BANNER = ("This lesson's stored evidence is self-quoted legacy text; "
                  "the human incident label is the only evidence.")
@@ -233,8 +234,7 @@ def cmd_offline(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
         return 1
     lines = [f"{k}: {out[k]}" for k in ("transcripts", "skipped", "detector_events")]
     lines += [f"labels: {sum(out['labels'].values())}", *(f"labels.{k}: {v}" for k, v in out["labels"].items())]
-    lines += [f"{k}: {out[k]}" for k in ("demotions", "evasion_candidates", "state_removed", "errors", "lesson_check",
-                                         "error_rate", "p95_rule")]
+    lines += [f"{k}: {out[k]}" for k in ("demotions", "evasion_candidates", "state_removed", "errors", "lesson_check", "error_rate", "p95_rule")]
     print("\n".join(lines))                                   # counts only: no paths, no hashes
     return 0
 
@@ -253,8 +253,7 @@ def main(argv: list[str] | None = None) -> int:
                            "or promote it (warn: 14 days, 5 human TPs, 0 FPs; block: the same again in warn)")
     ap_ok.add_argument("id")
     ap_ok.add_argument("--mode", required=True, choices=("observe", "warn", "block"))
-    ap_ok.add_argument("--raw-checked", action="store_true",
-                       help="edit_unread_session: each TP was checked against the raw transcript")
+    ap_ok.add_argument("--raw-checked", action="store_true", help="edit_unread_session: each TP was checked against the raw transcript")
     ap_ok.add_argument("--opus-reviewed", metavar="SHA", help="block only: the commit sha of the Opus review (7 to 40 hex)")
     sub.add_parser("unapprove", help="TTY only: remove the approved copy of a proposal").add_argument("id")
     lb = sub.add_parser("label", help="TTY only: record a human incident, tp or fp label; --list and --rows read")
@@ -277,14 +276,15 @@ def main(argv: list[str] | None = None) -> int:
     of.add_argument("--dry-run", action="store_true", help="compute and print the counts, write nothing")
     of.add_argument("--since", type=int, default=7, help="only transcripts modified in the last N days (1 to 3660, default 7)")
     of.add_argument("--idle-minutes", type=float, default=60.0, help="skip transcripts modified more recently (default 60)")
-    sub.add_parser("shadow", help="the hook entry (what hooks/shadow.sh runs); reads a payload on stdin").add_argument(
-        "event", choices=["pre", "stop"])
+    sub.add_parser("replay-synthetic", help="replay the frozen corpus; exit 1 on a disagreement").add_argument("--out", help="rows file")
+    sub.add_parser("shadow", help="the hook entry (what hooks/shadow.sh runs); reads a payload on stdin").add_argument("event", choices=["pre", "stop"])
     args = ap.parse_args(argv)
     try:
         cfg = cfgmod.load(args.config)
         return {"cards": cmd_cards, "propose": cmd_propose, "validate": cmd_validate, "approve": cmd_approve,
                 "unapprove": cmd_unapprove, "label": cmd_label, "report": cmd_report, "shadow": cmd_shadow,
-                "offline": cmd_offline}[args.cmd](cfg, args)
+                "offline": cmd_offline,
+                "replay-synthetic": lambda c, a: synth.run(c, a.out)}[args.cmd](cfg, args)
     except proposal.ProposalError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

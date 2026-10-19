@@ -51,9 +51,9 @@ repository.
 ## Not built yet
 
 The curator and refiner, the replay and task-suite evaluation harness, the judge, and the
-state-versus-lesson classifier. In the stage-2 compiler: the synthetic replay corpus and the full
-measurement report (rates and inference; `compile report` prints counts only). `PREREGISTRATION.md` describes them as plans only
-and is not sealed.
+state-versus-lesson classifier. In the stage-2 compiler: the arms (randomization of the check per session), the seal of the
+pre-registration, the evaluation of an effect (randomization inference, the spillover flag), the curator, the refiner, the review
+packet and the review record. `PREREGISTRATION.md` describes them as plans only and is not sealed.
 
 ## Compiler (stage 2)
 

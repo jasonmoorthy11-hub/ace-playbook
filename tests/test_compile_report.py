@@ -76,7 +76,7 @@ def test_with_no_data_both_sections_say_no_rows_and_the_header_hashes_the_source
     got = re.search(r"^report_sha256: ([0-9a-f]{64})$", out, re.M).group(1)
     assert got == hashlib.sha256(SOURCE.read_bytes()).hexdigest()
     assert PRIV in out and SYNTH in out
-    assert "not computed here: eligible-session rates, Wilson intervals, friction, hook cost" in out
+    assert "not computed here: arms, randomization inference, spillover flag" in out
 
 
 def test_real_hook_rows_are_counted_per_proposal_with_sessions_days_and_cause_split(w, fire, capsys):
@@ -198,7 +198,7 @@ def test_json_has_the_specified_shape_and_the_same_numbers_as_the_text(w, fire, 
     put_syn(w, SYN)
     code, out, _ = run(w, "--json", "--days", "7", capsys=capsys)
     obj = json.loads(out)
-    assert code == 0 and set(obj) == {"report_sha256", "days", "private", "synthetic", "demotions", "labels"} and obj["days"] == 7
+    assert code == 0 and set(obj) == {"report_sha256", "days", "private", "synthetic", "rates", "demotions", "labels"} and obj["days"] == 7
     assert obj["labels"] == {"chain_ok": True, "broken_at": None}
     assert obj["report_sha256"] == hashlib.sha256(SOURCE.read_bytes()).hexdigest()
     prop = obj["private"]["proposals"][pid(w)]

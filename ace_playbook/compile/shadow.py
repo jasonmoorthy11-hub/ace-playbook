@@ -1,12 +1,11 @@
 """The shadow hook (docs/design/compiler.md 7): evaluate approved proposals on one live hook payload.
 
-hooks/shadow.sh calls `main(["pre"|"stop"])`: one payload on stdin (cap 256 KiB), the approved proposals re-validated,
-their detectors run, one `shadow.jsonl` row per fire; ALWAYS returns 0, failures are type-only lines in `shadow.log`.
-Observe prints nothing; warn echoes the message on stderr and prints ONE `hookSpecificOutput.additionalContext` JSON
-on stdout (verified live for PreToolUse; Stop per the hooks reference only); block prints the deny/block JSON and wins.
-`modes.resolve` decides the mode: a copy above observe needs a matching `approvals.jsonl` row (else observe, logged), a
-revoked proposal is skipped, `demotions.jsonl` lowers it until a newer approval lifts the older rows.
-Rows hold enums, ids, hashes and a timestamp, never payload text. Stdlib plus this package; no inject/keys/reflect/network.
+hooks/shadow.sh calls `main(["pre"|"stop"])`: one payload on stdin (cap 256 KiB), the approved proposals re-validated, their detectors run, one
+`shadow.jsonl` row per fire; ALWAYS returns 0, failures are type-only lines in `shadow.log`. Observe prints nothing; warn echoes the message on stderr
+and prints ONE `hookSpecificOutput.additionalContext` JSON on stdout (verified live for PreToolUse; Stop per the hooks reference only); block prints
+the deny/block JSON and wins. `modes.resolve` decides the mode: a copy above observe needs a matching `approvals.jsonl` row (else observe, logged), a
+revoked proposal is skipped, `demotions.jsonl` lowers it until a newer approval lifts the older rows. Rows hold enums, ids, hashes, a timestamp and
+`dur_ms` (monotonic ms from the call's start to the row write), never payload text. Stdlib plus this package; no inject/keys/reflect/network.
 """
 
 from __future__ import annotations
@@ -16,6 +15,7 @@ import json
 import os
 import stat
 import sys
+import time
 from pathlib import Path
 
 from .. import config as cfgmod
@@ -109,8 +109,7 @@ class _Once:
 
 
 def _demotions(cfg, log) -> tuple[list[dict], modes.Broken]:
-    """(rows, broken_at) of demotions.jsonl, read once per call; a read error is logged (type only, unthrottled: it counts
-    toward the error rate like `error:approvals:`) and counts as `unreadable`."""
+    """(rows, broken_at) of demotions.jsonl, once per call; a read error is logged (type only, unthrottled) and is `unreadable`."""
     try:
         return demotions.read_chain(cfg.data_dir)
     except Exception as exc:
@@ -231,15 +230,16 @@ def _applies(p: dict, event: str, tool: str) -> bool:
     return p["event"] == event and bool({"*", tool} & set(p["matcher"].split("|")))
 
 
-def _row(p: dict, mode: str, cause: str, event: str, ev, sid: str, raw: bytes) -> dict:
+def _row(p: dict, mode: str, cause: str, event: str, ev, sid: str, raw: bytes, t0: float) -> dict:
     tu = ev.tool_uses[0] if ev.tool_uses else None
     phash = evidence.payload_hash({"tool_name": tu.name, "tool_input": tu.input}) if tu else hashlib.sha256(raw).hexdigest()
-    return {"ts": now_iso(), "proposal_id": p["id"], "lesson_id": p["lesson_id"], "mode": mode, "event": event,
+    return {"v": 1, "ts": now_iso(), "proposal_id": p["id"], "lesson_id": p["lesson_id"], "mode": mode, "event": event,
             "tool_name": tu.name if tu else "", "session": state_mod.session_hash(sid), "payload_sha256": phash,
-            "would_fire": True, "cause": cause, "tier": "live"}
+            "would_fire": True, "cause": cause, "tier": "live", "dur_ms": int((time.monotonic() - t0) * 1000)}
 
 
 def _run(cfg, argv: list, log) -> None:
+    t0 = time.monotonic()
     if (event := EVENTS.get(argv[0]) if argv else None) is None:
         return
     raw = sys.stdin.buffer.read(MAX_STDIN + 1)
@@ -264,7 +264,7 @@ def _run(cfg, argv: list, log) -> None:
     for p, mode, cause in hits:
         try:
             _append(Path(cfg.data_dir) / "shadow.jsonl",
-                    json.dumps(_row(p, mode, cause, event, ev, sid, raw), sort_keys=True) + "\n")
+                    json.dumps(_row(p, mode, cause, event, ev, sid, raw, t0), sort_keys=True) + "\n")
         except OSError as exc:                                # still act on the decision below
             log(f"error:row:{type(exc).__name__}")
     warns = [p["message"] for p, mode, _cause in hits if mode == "warn"]

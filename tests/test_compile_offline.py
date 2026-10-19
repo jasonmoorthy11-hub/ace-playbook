@@ -62,7 +62,7 @@ def test_detector_events_carry_ids_hashes_counts_and_no_text(w):
     out = offline.run(w.cfg, now=cs.NOW)
     rows = {r["detector"]: r for r in jsonl(w, "detector_events.jsonl")}
     assert out["detector_events"] == len(jsonl(w, "detector_events.jsonl")) and out["errors"] == 0
-    assert set(rows) == {"rm_rf_nonscratch", "rm_rf", "commit_without_push", "user_correction"}
+    assert set(rows) == {"rm_rf_nonscratch", "rm_rf", "commit_without_push", "user_correction", "_session"}      # + the per-session summary
     rm = rows["rm_rf_nonscratch"]
     assert set(rm) == {"ts", "v", "id", "session", "detector", "tier", "count", "key", "payload_sha256", "tool_name"}
     assert (rm["v"], rm["tier"], rm["count"], rm["tool_name"], rm["session"]) == (1, "offline", 1, "Bash", st.session_hash("s1"))

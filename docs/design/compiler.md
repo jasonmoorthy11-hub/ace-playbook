@@ -698,6 +698,27 @@ counts the rows whose id has no label, so tp + fp + unlabelled can differ from r
 of `report.py` only (`labels.py` and `shadow.pending_body` also shape the numbers and are not covered), so the operator can
 record it before observe starts.
 
+**As built (step 5c, 2026-10-19).** Hook rows gain `v: 1` and `dur_ms` (whole milliseconds, `time.monotonic` from the start of
+`shadow._run` to the row write); `labels.row_id` is unchanged. `compile replay-synthetic [--out PATH]` (`compile/synth.py`, not imported by
+the hook) feeds every `fire` and `no_fire` payload of `fixtures/compile/examples.json` (one session per detector) and the frozen sessions
+of `fixtures/frozen/shadow_corpus.json` (listed in `MANIFEST.json`; `fixtures/generate.py` writes it) through `shadow._evaluate` with a
+throwaway state directory. It replaces `shadow.synthetic.jsonl` with one row per event (`corpus: "synthetic"`, `detector`; a row that did
+not fire has `would_fire: false`, because the report needs the quiet sessions as eligible ones; the table counts only the fires), prints
+counts only, exits 1 when an `expect` disagrees with the outcome or a detector errors (the corpus is a regression test), and 2 for an
+unusable corpus. Detector names and tools are checked against the catalogue. Synthetic proposal ids are stand-ins derived from the
+detector name, never ids from the private proposals directory. `compile/metrics.py` (stdlib only) computes, per corpus and proposal:
+`eligible` (private: sessions whose newest `_session` summary row in `detector_events.jsonl` lists the proposal's detector; the offline
+pass now writes one such row per transcript, `{detector: "_session", session, count: tool calls, prompts: human prompts, eligible:
+[detectors with at least one consumed event]}`, and a grown transcript adds a newer row; synthetic: every corpus session that fed the
+detector), the session-level `fire_rate` with a Wilson 95% interval (z 1.96, `-` for n = 0), `fires_per_eligible`, `repeat_fires`,
+friction (warn and block messages per 100 tool calls; `user_correction` events per 100 human prompts, private only), `evasion` (rows of
+`evasion_candidates.jsonl`), and per corpus the hook cost (nearest-rank p50 and p95 of `dur_ms`, `-` without it) and agreement: live
+fires in scanned sessions with no offline event of the same detector, session and payload hash, and offline events of the deployed
+detectors dated at or after the first live row with no live fire (`-` without live rows; synthetic `-`). A live fire in a session the
+offline pass has not scanned yet is not an eligible-session fire and not a disagreement. `compile report` prints a `Rates` table and a
+`Hook cost / agreement` block per corpus and carries all of it under `rates` in `--json`. Still not computed: arms, randomization
+inference, the spillover flag (they need the randomized phase).
+
 **Effect estimate.** For the compiled path, blocking prevents the action by construction, so the
 primary is false-block rate and friction, with recurrence descriptive (PREREGISTRATION.md:78-84).
 The descriptive effect is fires per eligible session with versus without the check, using a

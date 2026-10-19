@@ -23,6 +23,7 @@
     "reflector_responses/session-03-repeated-failure.json": "e20a02107fc67c381efda3724eb4b5670675dc4935a86c3cdaf4f489bcbdc489",
     "reflector_responses/session-04-secrets.json": "490dbd1eb628ede31afbd3eb57c09a4f922bb9624ac4d456a05549cb56a3ea7e",
     "reflector_responses/session-05-injection.json": "d8a9e35d1a9cc7fd607a439b20257906566319b6508eb6e9e0fe3aadc3229460",
+    "shadow_corpus.json": "84f952917ddea0aaae15194d45c6e9f9e8fd2b9f11d510c5e31d8caf51e52eed",
     "transcripts/session-01-grounded.jsonl": "de90bc6d71d643edbed9b8c11fcaebaa88a7ace536ab8bb6e6c3bce1110b838b",
     "transcripts/session-02-noisy.jsonl": "062d5e5db95a64f7b3f2b4ffd6ee1bd9344bf4af045f72ff276c762772691651",
     "transcripts/session-03-repeated-failure.jsonl": "0e445ac905c545b79cdf0136d1b27522ed7f21e9690b7fc7e1cf262e4dfd33f0",

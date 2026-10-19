@@ -36,6 +36,28 @@ def _write(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+# Frozen replay corpus for `compile replay-synthetic`: invented /w/... commands, each tagged with the detector it is checked
+# against and the outcome the catalogue must give. Not seeded: a pure constant, so its manifest hash is stable.
+RM, SCRATCH = "rm_rf_nonscratch", "rm_rf"
+SHADOW_SESSIONS = {
+    "synthetic-01": [(RM, "fire", "rm -rf /w/src"), (RM, "no_fire", "ls /w"), (RM, "no_fire", "rm -rf /tmp/scratch"),
+                     (RM, "fire", "rm -rf /w/a /w/b"), (RM, "no_fire", "grep -n 'rm -rf' /w/notes.md"), (RM, "no_fire", "git status")],
+    "synthetic-02": [(RM, "no_fire", "ls /w"), (RM, "no_fire", "rm -rf node_modules"), (RM, "no_fire", "rm -rf ./dist"),
+                     (RM, "no_fire", "rm -r /w/dir"), (RM, "no_fire", "cat /w/README.md"), (RM, "no_fire", "echo done")],
+    "synthetic-03": [(SCRATCH, "fire", "rm -fr /w/cache"), (SCRATCH, "no_fire", "rm -r /w/dir"), (SCRATCH, "no_fire", "echo done"),
+                     (SCRATCH, "fire", "rm -rf ./dist"), (SCRATCH, "fire", "rm -rf /w/build"), (SCRATCH, "no_fire", "rm /w/file.txt"),
+                     (SCRATCH, "no_fire", "ls -la")],
+    "synthetic-04": [(RM, "fire", "cd /w && rm -rf out"), (SCRATCH, "fire", "cd /w && rm -rf out"), (RM, "no_fire", "rm -rf node_modules"),
+                     (SCRATCH, "fire", "rm -rf node_modules"), (RM, "no_fire", "git status"), (SCRATCH, "no_fire", "git status")],
+}
+
+
+def shadow_corpus() -> dict:
+    sessions = [{"session_id": sid, "events": [{"detector": det, "expect": expect, "tool_name": "Bash", "tool_input": {"command": cmd}}
+                                               for det, expect, cmd in evs]} for sid, evs in SHADOW_SESSIONS.items()]
+    return {"v": 1, "sessions": sessions}
+
+
 def _candidates(rng: random.Random) -> list[dict]:
     p = fakes.planted(rng)
     rows = [{"text": t, "expect": e, "why": w} for t, e, w in CANDIDATES]
@@ -63,6 +85,7 @@ def generate(seed: int, out: Path) -> dict:
         _write(out / "reflector_responses" / f"{name}.json", json.dumps(resp, indent=2, sort_keys=True) + "\n")
     _write(out / "planted" / "candidates.jsonl",
            "".join(json.dumps(r, sort_keys=True) + "\n" for r in _candidates(random.Random(seed + 2))))
+    _write(out / "shadow_corpus.json", json.dumps(shadow_corpus(), indent=1, sort_keys=True) + "\n")
     (out / "deltas.jsonl.lock").unlink(missing_ok=True)
     return _manifest(out, seed, meta)
 

@@ -95,8 +95,10 @@ changes nothing and cannot block; `approve --mode warn|block` is the promotion l
 positives and no false positive, a hash-chained `approvals.jsonl`; warn reaches the model through `additionalContext`).
 `compile label` records human labels at a terminal in a hash-chained `labels.jsonl`: an `incident` label is
 the only way a legacy lesson gets an evidence card, and `tp`/`fp` labels on shadow rows feed the ladder.
-`compile report` prints counts per proposal from the shadow rows and those human labels; synthetic rows are reported
-apart and never blended with the private ones. The nightly `compile offline` pass (run by `hooks/nightly_sweep.py`)
+`compile report` prints counts per proposal from the shadow rows and those human labels, then per corpus the eligible-session
+rates with Wilson intervals, friction, hook cost and live-versus-offline agreement; synthetic rows are reported
+apart and never blended with the private ones. There are still no results: to produce the reproducible synthetic table run
+`python3 -m ace_playbook.compile replay-synthetic` and then `compile report` (the private table stays empty until a proposal is approved). The nightly `compile offline` pass (run by `hooks/nightly_sweep.py`)
 records detector events from finished transcripts, pre-fills labels that a human row always overrides, and
 appends hash-chained demotions that only ever lower a proposal's mode and that the shadow hook honours until the operator approves it again.
 No model writes a check, a hook or a setting, and nothing is installed for you.

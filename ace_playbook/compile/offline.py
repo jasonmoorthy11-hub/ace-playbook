@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ..atomic import write_private
-from . import catalogue, demotions, detectors, evidence, labels, modes, report, shadow
+from . import catalogue, demotions, detectors, evidence, labels, metrics, modes, report, shadow
 from . import state as state_mod
 from .events import end_event, events_from_records, hash16
 from .report import _read as read_jsonl
@@ -131,7 +131,7 @@ def discover(cfg, now: float, idle_minutes: float, since_days: int, done: dict) 
 
 
 def detector_rows(events: list, sh: str) -> list[dict]:
-    """One row per detector fire over the transcript plus its end (`commit_without_push`); ids are stable across reruns."""
+    """One row per detector fire plus its end (`commit_without_push`) and one `_session` summary row (metrics.py); ids are stable."""
     state, rows, ts = None, [], ""
     for ev in [*events, end_event("offline")]:
         ts = ev.ts or ts
@@ -143,7 +143,7 @@ def detector_rows(events: list, sh: str) -> list[dict]:
             rid = hashlib.sha256(f"{sh}|{f.detector}|{at}|{ph}".encode()).hexdigest()[:16]
             rows.append({"ts": ts, "v": 1, "id": rid, "session": sh, "detector": f.detector, "tier": "offline",
                          "count": f.count, "key": f.key, "payload_sha256": ph, "tool_name": tu.name if tu else ""})
-    return rows
+    return [*rows, metrics.session_row(events, sh, ts, {n: d.consumes for n, d in catalogue.CATALOGUE.items()})]
 
 
 def join(uses: list, t: float):

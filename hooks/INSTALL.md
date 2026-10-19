@@ -263,10 +263,14 @@ Check it by hand: `echo '{"session_id":"t1","tool_name":"Bash","tool_input":{"co
 create `data_dir/proposals/DISABLED` (any content) or run `python3 -m ace_playbook.compile unapprove
 P-xxxxxxxx` at a terminal. `shadow.jsonl`, `shadow.log` and `shadow_state/` are plain files you can delete.
 
+**Regression check.** `python3 -m ace_playbook.compile replay-synthetic` feeds the frozen invented corpus through the evaluator
+(a throwaway state directory), writes `data_dir/shadow.synthetic.jsonl` (never `shadow.jsonl`) and exits 1 if any expected outcome
+differs; `compile report` then prints the synthetic table apart from the private one.
+
 ## What the hooks write
 
 All under `data_dir`: `deltas.jsonl` (+ `.lock`), `playbook.sqlite` (disposable view),
 `injections.jsonl`, `citations.jsonl`, `reflections.jsonl`, `queue.jsonl`, `quarantine.jsonl`,
-`health.json`, `reflect.log`; with the shadow hook also `shadow.jsonl`, `shadow.log` and `shadow_state/`.
+`health.json`, `reflect.log`; with the shadow hook also `shadow.jsonl`, `shadow.log` and `shadow_state/` (and `shadow.synthetic.jsonl` after `replay-synthetic`).
 None of them should ever be committed to a public repository; keep `data_dir` outside any checkout (the
 repo's `.gitignore` lists the stage 1 files only).
