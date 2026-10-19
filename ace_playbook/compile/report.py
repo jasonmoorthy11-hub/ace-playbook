@@ -221,7 +221,7 @@ def _section(title: str, source: str, data: dict, days: int) -> list[str]:
 def _demotions(dem: dict) -> list[str]:
     out = ["Demotions (demotions.jsonl, every row; lifted = a strictly later approval of the proposal lifted it)"]
     if not dem["chain_ok"]:
-        out.append(f"demotions: chain BROKEN at row {dem['broken_at']}, rows after it ignored (the hook caps every proposal at observe)")
+        out.append(f"demotions: chain BROKEN at row {dem['broken_at'] + 1}, rows after it ignored (the hook caps every proposal at observe)")
     rows = [[r["proposal_id"], r["to_mode"], r["cause"], r["ts"], str(r["review_required"]).lower(), "yes" if r["lifted"] else "no"]
             for r in dem["rows"]]
     return [*out, *(_grid(("proposal", "to_mode", "cause", "ts", "review_required", "lifted"), rows) if rows else ["no demotions"]), ""]

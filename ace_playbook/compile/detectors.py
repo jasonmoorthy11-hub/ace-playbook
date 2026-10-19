@@ -203,7 +203,7 @@ def advance(event: Event, state: dict | None) -> dict:
         s["pending"].pop(tr.id, None)
     seen, turn = set(s["seen_paths"]), set(s["turn_paths"])
     # turn reset: a human prompt offline, Stop live (the live hooks are PreToolUse and Stop only)
-    if (event.tier == "offline" and event.human and not event.queued) or event.hook == "Stop":
+    if (event.tier == "offline" and event.human and not event.queued and not event.meta) or event.hook == "Stop":
         turn.clear()
     for name in event.read_files:
         if isinstance(name, str):

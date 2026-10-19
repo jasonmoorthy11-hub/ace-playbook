@@ -78,5 +78,5 @@ def test_no_back_fill_under_a_broken_or_unreadable_demotions_file(world, written
     path = world.cfg.data_dir / demotions.FILE
     path.write_text("not json\n") if kind == "broken" else path.symlink_to(world.cfg.data_dir / "nowhere")
     code, out, _ = run(world, "approve", written.stem, "--mode", "observe", capsys=capsys)
-    assert code == 0 and "recorded" not in out and "demotions.jsonl is " + ("broken at row 0" if kind == "broken" else "unreadable") in out
+    assert code == 0 and "recorded" not in out and "demotions.jsonl is " + ("broken at row 1" if kind == "broken" else "unreadable") in out
     assert tty.asked[-1].startswith(f"Approve {written.stem} in observe mode?")

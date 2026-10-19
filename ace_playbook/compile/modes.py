@@ -62,6 +62,22 @@ def in_force(drows: list[dict], pid: str, arows: list[dict], now: str, abroken: 
     return [r for r in drows if r["proposal_id"] == pid and not lifted(r, ref)]
 
 
+def chain_notice(broken: Broken) -> str:
+    """The operator line for a demotions chain that is broken (rows counted from 1, like approvals) or unreadable; '' if intact."""
+    if broken is None:
+        return ""
+    where = "unreadable" if broken == "unreadable" else f"broken at row {broken + 1}"
+    return f"demotions.jsonl is {where}: rows from the break on are not listed (the chain keeps capping at observe until it is repaired)"
+
+
+def capped(rows: list[dict], now: str) -> str:
+    """The operator line for in-force rows (of one proposal) that an approval stamped `now` cannot lift."""
+    first, cap = min(r["ts"] for r in rows), demotions.effective_cap(rows, rows[0]["proposal_id"])
+    if demotions.epoch(first) - demotions.epoch(now) > 1:
+        return f"capped at {cap} until {first} ({len(rows)} row(s) not liftable now)"
+    return f"capped at {cap} by {len(rows)} row(s) not liftable now (re-run in a second)"
+
+
 def _approved(pid: str, copy: dict | None, rows: list[dict], broken: Broken) -> tuple[str, list[str]]:
     """(approved mode, problems): `disabled` for a revoked proposal or no copy, `observe` when the chain cannot back the copy."""
     bad = ["approvals:chain_broken"] if broken is not None else []
@@ -93,7 +109,7 @@ def resolve(pid: str, copy_rec: dict | None, approvals_rows: list[dict], approva
     approved, problems = _approved(pid, copy_rec, approvals_rows, approvals_broken)
     ref = anchor(approvals_rows, pid, now, approvals_broken)
     mine = [r for r in demotion_rows if r["proposal_id"] == pid]
-    cap = demotions.effective_cap([r for r in mine if not lifted(r, ref)], pid)
+    cap = demotions.effective_cap(in_force(demotion_rows, pid, approvals_rows, now, approvals_broken), pid)
     if demotions_broken is not None:                  # fail toward observe, never open
         cap = demotions.lower("observe", cap)
         problems.append("demotions:unreadable" if demotions_broken == "unreadable" else "demotions:chain_broken")

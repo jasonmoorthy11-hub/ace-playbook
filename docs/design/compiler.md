@@ -539,15 +539,17 @@ which of `approval|demotion|copy` set it (`none` when nothing did). The ladder c
 at most once per hook call, and `approvals.jsonl` is now read on every call that has an approved file (a revocation must
 stop a copy; the read is capped at 1 MiB, no-follow). A real nightly pass stamps each demotion row when it is appended
 (`demotions.append`), not when the pass started. `Event.meta` (`isMeta`, `isCompactSummary`, `isVisibleInTranscriptOnly`)
-changes nothing about `human`; its consumers check it themselves: `user_correction`, `shell_keys`, the prompt-target rule and
-`span` (a transcript-only record is not "the user asked for exactly this", and it does not end a span). An unreadable
+changes nothing about `human`; its consumers check it themselves: `user_correction`, `shell_keys`, the prompt-target rule,
+`span` and the offline turn reset of `edit_unread_turn` (a transcript-only record is not "the user asked for exactly this", and it does not end a span). An unreadable
 `demotions.jsonl` is logged `error:demotions:<Type>` (unthrottled, counts toward the error rate like `error:approvals:<Type>`);
 `demotions:chain_broken` stays throttled. `approve --mode observe` never back-fills while a demotion row exists or the
 demotions file is broken or unreadable (it prints one line saying so and approves afresh), and says `capped at <cap> by <n>
-row(s) not liftable now` when the only rows in force are a same-second or future-dated one. The evasion `flagged` check of
+row(s) not liftable now (re-run in a second)` when the only rows in force tie the clock second, `capped at <cap> until <ts>`
+for a later one, and `still capped ...` after the lift lines when a row it does not lift stays. Operator messages and the
+report text count `demotions.jsonl` rows from 1, like `approvals.jsonl` (the report JSON `broken_at` stays 0-based). The evasion `flagged` check of
 `offline.demote` deliberately looks at ALL rows, lifted ones included: an evasion pair is one event keyed by the newer
 candidate's id (the lift prompt listed it), any new candidate makes a new ref, and re-flagging the same pair after every lift
-would pin the mode. `compile report`  shows `approved_mode` (the copy's own)
+would pin the mode. `compile report` shows `approved_mode` (the copy's own)
 and `mode` (resolved). A copy restored after `unapprove` is now skipped (`revoked`) instead of running in observe.
 
 *Trust.* Every input of the offline pass can be written by a local process: the transcripts, `shadow.jsonl` (including its

@@ -101,7 +101,7 @@ def append(data_dir: str | Path, fields: dict, current: str | None = None, after
         size = os.fstat(fd).st_size
         rows, broken = _parse(os.pread(fd, size, 0)) if size <= MAX_BYTES else ([], 0)
         if broken is not None:
-            raise ValueError(f"demotions.jsonl chain broken at row {broken} (or over 1 MiB)")
+            raise ValueError(f"demotions.jsonl chain broken at row {broken + 1} (or over 1 MiB)")
         prev = rows[-1]["hash"] if rows else GENESIS
         row = {"ts": now_iso(), "v": 1, **fields, "prev_hash": prev}
         row["hash"] = record_hash(row)

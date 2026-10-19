@@ -299,12 +299,40 @@ def test_a_garbage_first_line_of_approvals_is_a_clean_refusal_on_the_observe_and
     assert tty.asked == []
 
 
-def test_approve_observe_says_so_when_the_only_demotion_row_cannot_be_lifted_yet(observed, tty, capsys):
-    dm.append(observed.cfg.data_dir, fields(proposal_id=observed.pid, from_mode="observe", to_mode="observe",
-                                            ts=shift(observed.entry, 1)))                 # in force, newer than now
+def test_approve_observe_says_so_when_the_only_demotion_row_cannot_be_lifted_yet(observed, tty, capsys, monkeypatch):
+    monkeypatch.setattr(cli, "now_iso", lambda: observed.entry)                          # the row ties the clock second
+    dm.append(observed.cfg.data_dir, fields(proposal_id=observed.pid, from_mode="observe", to_mode="observe", ts=observed.entry))
     code, out, _ = run(observed, "approve", observed.pid, "--mode", "observe", capsys=capsys)
-    assert code == 0 and "capped at observe by 1 row(s) not liftable now" in out and "already approved" not in out
+    assert code == 0 and "capped at observe by 1 row(s) not liftable now (re-run in a second)" in out and "already approved" not in out
     assert tty.asked == [] and len(approvals.read_chain(observed.cfg.data_dir)[0]) == 1
+
+
+def test_a_far_future_row_says_until_when_and_a_mixed_case_says_what_stays_capped(observed, tty, capsys, monkeypatch):
+    w = observed
+    far = fields(proposal_id=w.pid, from_mode="observe", to_mode="disabled", cause="error_rate", ref="-", ts="2099-01-01T00:00:00Z")
+    dm.append(w.cfg.data_dir, far)
+    out = run(w, "approve", w.pid, "--mode", "observe", capsys=capsys)[1]
+    assert "capped at disabled until 2099-01-01T00:00:00Z (1 row(s) not liftable now)" in out and tty.asked == []
+    dm.append(w.cfg.data_dir, fields(proposal_id=w.pid, from_mode="observe", to_mode="observe", ts=shift(w.entry, 1)))
+    for mod in (shadow, cli):
+        monkeypatch.setattr(mod, "now_iso", lambda: shift(w.entry, 2))
+    code, out, _ = run(w, "approve", w.pid, "--mode", "observe", capsys=capsys)          # one row lifts, the 2099 row stays
+    assert code == 0 and "lifts demotion: observe  label_fp" in out and "still capped at disabled until 2099-01-01" in out
+
+
+def test_an_ok_copy_with_a_broken_demotions_file_and_nothing_in_force_still_gets_the_chain_notice(observed, tty, capsys):
+    (observed.cfg.data_dir / dm.FILE).write_text("not json\n")
+    code, out, _ = run(observed, "approve", observed.pid, "--mode", "observe", capsys=capsys)
+    assert code == 0 and "demotions.jsonl is broken at row 1" in out and "already approved" in out and tty.asked == []
+
+
+def test_a_meta_human_record_does_not_reset_the_turn():
+    state = detectors.advance(event_from_record({"type": "attachment", "attachment": {"type": "file", "filename": "/a"}}), None)
+    assert state["turn_paths"]
+    meta = event_from_record({"type": "user", "isVisibleInTranscriptOnly": True, "message": {"role": "user", "content": "go on"}})
+    assert meta.human and detectors.advance(meta, state)["turn_paths"] == state["turn_paths"]
+    plain = event_from_record({"type": "user", "message": {"role": "user", "content": "go on"}})
+    assert detectors.advance(plain, state)["turn_paths"] == []
 
 
 # ------------------------------------------------------------------ the report

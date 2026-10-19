@@ -19,7 +19,7 @@ from .. import config as cfgmod
 from .. import ttyio
 from ..atomic import write_private
 from ..canon import now_iso
-from . import approvals, demotions, evidence, labels, modes, proposal, report, shadow
+from . import approvals, evidence, labels, modes, proposal, report, shadow
 
 LEGACY_BANNER = ("This lesson's stored evidence is self-quoted legacy text; "
                  "the human incident label is the only evidence.")
@@ -135,15 +135,14 @@ def cmd_approve(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
         rec, old, mode = None, None, ""
     verdict = approvals.verify_copy(rec, rows) if old == p and mode == "observe" else None
     drows, dbroken = modes.read_demotions(cfg.data_dir)
-    live = modes.in_force(drows, args.id, rows, now_iso())
+    live = modes.in_force(drows, args.id, rows, now_iso(), broken)
     if verdict == "missing" and (dbroken is not None or any(r["proposal_id"] == args.id for r in drows)):
         verdict = None          # no back-fill under demotions, or an unreadable file (the copy's stamp is agent-writable)
     if verdict == "ok" and not [r for r in live if modes.lifted(r, {"ts": now_iso()})]:      # else a newer approval lifts them
-        print(f"capped at {demotions.effective_cap(live, args.id)} by {len(live)} row(s) not liftable now (re-run in a second)"
-              if live else f"already approved: {args.id} (observe)")
+        print("\n".join(filter(None, [modes.chain_notice(dbroken),
+                                  modes.capped(live, now_iso()) if live else f"already approved: {args.id} (observe)"])))
         return 0
-    legacy = _provenance(cfg, p)                              # the same block and prompts for a fresh approval and a back-fill
-    asks = ["Legacy evidence: approve anyway? [y/N] "] if legacy else []
+    asks = ["Legacy evidence: approve anyway? [y/N] "] if _provenance(cfg, p) else []      # same block for approval and back-fill
     if verdict == "missing":                                  # predates the chain: record it; "mismatch" is approved afresh below
         if rec["approved_at"] > now_iso():
             print("error: the copy's approved_at is in the future; nothing was written", file=sys.stderr)
@@ -158,10 +157,11 @@ def cmd_approve(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
     new = shadow.approved_record(p)
     lift = [r for r in live if modes.lifted(r, {"ts": new["approved_at"]})]
     if dbroken is not None:
-        print(f"  demotions.jsonl is {'unreadable' if dbroken == 'unreadable' else f'broken at row {dbroken}'}: rows from the "
-              "break on are not listed (the chain keeps capping at observe until it is repaired)")
+        print("  " + modes.chain_notice(dbroken))
     for r in lift:                                            # a fresh observe row lifts every older demotion: show each
         print(f"  lifts demotion: {r['to_mode']}  {r['cause']}  {r['ts']}")
+    if rest := [r for r in live if r not in lift]:            # e.g. a future-dated row: this approval leaves the cap in place
+        print("  still " + modes.capped(rest, new["approved_at"]))
     if not _confirm([f"Approve {p['id']} in observe mode{f', lifting {len(lift)} demotion row(s)' if lift else ''}? [y/N] "] + asks):
         print("error: not approved", file=sys.stderr)
         return 1

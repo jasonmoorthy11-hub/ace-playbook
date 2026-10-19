@@ -388,8 +388,8 @@ def test_the_demotions_section_lists_every_row_with_lifted_and_flags_a_broken_ch
     path = w.data / "demotions.jsonl"
     path.write_text(path.read_text().replace("observe", "disabled"))
     out = run(w, capsys=capsys)[1]
-    assert "demotions: chain BROKEN at row 1" in out
-    assert json.loads(run(w, "--json", capsys=capsys)[1])["demotions"]["broken_at"] == 1
+    assert "demotions: chain BROKEN at row 2" in out                         # operator rows count from 1 ...
+    assert json.loads(run(w, "--json", capsys=capsys)[1])["demotions"]["broken_at"] == 1    # ... the JSON keeps the 0-based index
     path.unlink()
     assert "no demotions" in run(w, capsys=capsys)[1]
     path.symlink_to(w.data / "elsewhere")
