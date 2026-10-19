@@ -94,7 +94,9 @@ pre-registration, the evaluation of an effect (randomization inference, the spil
   installed copy would change other rows' results in the nightly pass and in evidence building (offline only); the hook is
   unaffected, because it runs only rows whose proposals are hash-valid and an edited row's proposals are stale. The merge that introduced the hash changed every existing proposal's hash
   once, so each proposal written before it is stale and must be re-proposed and re-approved.
-- `additionalContext` was confirmed live for PreToolUse only; Stop delivery follows the hooks reference and is unverified.
+- `additionalContext` was confirmed live for PreToolUse and for Stop (a scratch project under `claude -p`: the transcript records a
+  `hook_additional_context` attachment and the model is re-prompted with it, so a Stop warn CONTINUES the turn and fires again on every
+  later stop unless the hook returns nothing when `stop_hook_active` is true, which `shadow.py` does). No Stop detector is approvable today.
 - The `Stop` hook entry is wiring only: no approvable detector consumes `Stop` today.
 - A lesson migrated from an older corpus carries self-quoted `legacy:` evidence and gets an evidence
   card only through a human incident label (`compile label --incident`). Re-minting such a lesson

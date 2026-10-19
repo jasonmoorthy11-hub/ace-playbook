@@ -981,8 +981,10 @@ reminders; no cross-session learning by the hook; no block mode during the step 
    through `additionalContext` and another on stderr (exit 0) was run in a headless session; the model
    reported the `additionalContext` marker and nothing from stderr.*
    *Resolved in code (step 5b): `shadow._run` prints one `additionalContext` JSON object for warn hits. The live check covered
-   PreToolUse only; Stop delivery follows the hooks reference (`hookSpecificOutput.additionalContext` on Stop) and is not
-   verified live, and no Stop detector is approvable today. The Stop JSON is still emitted.*
+   PreToolUse and, since v1.5, Stop: a probe hook in a scratch project under `claude -p` showed the Stop `additionalContext`
+   recorded as a `hook_additional_context` attachment and the model re-prompted with it (the turn continues; it re-fires on
+   every later stop unless the hook stays silent when `stop_hook_active` is true, which `shadow._run` does). No Stop detector
+   is approvable today. The Stop JSON is still emitted.*
 2. **Randomized arms.** Measuring "with versus without" means the check is off (observe) in about
    half of sessions during the randomized phase. Do you accept that for `rm_rf_nonscratch`, given
    that guard-destructive.sh still covers root and home deletes? This is the same kind of decision

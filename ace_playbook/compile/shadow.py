@@ -2,7 +2,7 @@
 
 hooks/shadow.sh calls `main(["pre"|"stop"])`: one payload on stdin (cap 256 KiB), the approved proposals re-validated, their detectors run, one
 `shadow.jsonl` row per fire; ALWAYS returns 0, failures are type-only lines in `shadow.log`. Observe prints nothing; warn echoes the message on stderr
-and prints ONE `hookSpecificOutput.additionalContext` JSON on stdout (verified live for PreToolUse; Stop per the hooks reference only); block prints
+and prints ONE `hookSpecificOutput.additionalContext` JSON on stdout (verified live for PreToolUse and Stop: a Stop additionalContext re-prompts the model, so `stop_hook_active` is honoured); block prints
 the deny/block JSON and wins. `modes.resolve` decides the mode: a copy above observe needs a matching `approvals.jsonl` row (else observe, logged), a
 revoked proposal is skipped, `demotions.jsonl` lowers it until a newer approval lifts the older rows. Both chains are read with the chain key (chains.py): without it a chain
 holding a `v: 2` row is broken, logged once as `chain_key:missing`. Rows hold enums, ids, hashes, a timestamp and `dur_ms` (monotonic ms from the call's start to the
