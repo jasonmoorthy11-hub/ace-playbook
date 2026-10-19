@@ -113,7 +113,7 @@ export ACE_PLAYBOOK_CONFIG="$HOME/.config/ace-playbook/config.json"
 echo '{"session_id":"test-1","cwd":"'"$PWD"'","source":"startup"}' | hooks/sessionstart.sh
 echo '{"session_id":"test-1","transcript_path":"/tmp/none.jsonl","reason":"clear"}' | hooks/sessionend.sh
 echo '{"session_id":"test-1","last_assistant_message":"used [L-00000000]"}' | hooks/stop_citation_ledger.sh
-python3 hooks/nightly_sweep.py --dry-run
+python3 hooks/nightly_sweep.py --dry-run --offline-dry-run
 ```
 
 With an empty store, `sessionstart.sh` prints nothing. Add a lesson with a pinned status (see
@@ -129,6 +129,10 @@ cp hooks/com.example.ace-playbook-nightly.plist "$HOME/Library/LaunchAgents/com.
 launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.example.ace-playbook-nightly.plist"
 launchctl print "gui/$(id -u)/com.example.ace-playbook-nightly" | head
 ```
+
+The nightly job also runs the offline compiler pass (`compile offline`: detector events, label pre-fill, demotions) before the
+reflection step; it makes no API call, so `--dry-run` only affects the reflection step (use `--offline-dry-run` to make the pass
+write nothing, or `--no-offline` to skip it).
 
 The sweep reflects up to 20 transcripts per run that are idle for an hour, larger than 2 KB, not
 in a subagent folder, and have no entry in `reflections.jsonl`. Each reflection is one Haiku 5.5

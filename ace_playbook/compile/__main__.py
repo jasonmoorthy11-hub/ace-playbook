@@ -1,9 +1,10 @@
-"""CLI: `python -m ace_playbook.compile cards|propose|validate|approve|unapprove|label|report|shadow` (docs/design/compiler.md 10).
+"""CLI: `python -m ace_playbook.compile cards|propose|validate|approve|unapprove|label|report|offline|shadow` (docs/design/compiler.md 10).
 
 No network, no model, stdlib only. Exit codes: 0 ok, 1 a proposal failed validation or was not approved (the
 step is named), 2 usage, configuration, store or id errors. `approve` and `unapprove` need a terminal and
 `approve` only does `--mode observe`; `label` writes human labels (labels.py; `--list` and `--rows` need no terminal);
 `report` prints per-proposal shadow counts with labels (report.py; exit 2 on a corpus mix-up);
+`offline` is the nightly pass (offline.py; counts only, `--dry-run` writes nothing);
 the review and promotion commands come in later steps.
 """
 
@@ -153,6 +154,16 @@ def cmd_shadow(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
     return shadow.main([args.event], cfg)
 
 
+def cmd_offline(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
+    from . import offline                                     # lazy: the hook path never loads the offline pass
+    if not 1 <= args.since <= 3660 or args.idle_minutes < 0:
+        print("error: --since must be 1..3660 and --idle-minutes at least 0", file=sys.stderr)
+        return 2
+    print("\n".join(offline.lines(offline.run(cfg, dry_run=args.dry_run, since_days=args.since,
+                                              idle_minutes=args.idle_minutes))))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="ace_playbook.compile")
     ap.add_argument("--config")
@@ -183,13 +194,18 @@ def main(argv: list[str] | None = None) -> int:
     rp = sub.add_parser("report", help="counts per proposal from shadow rows and labels; synthetic kept apart")
     rp.add_argument("--days", type=int, default=14, help="days in the rows-per-day block (default 14, 1 to 3660)")
     rp.add_argument("--json", action="store_true", help="one JSON object instead of text")
+    of = sub.add_parser("offline", help="the nightly pass: detector events, auto labels, demotions, evasion, state cleanup")
+    of.add_argument("--dry-run", action="store_true", help="compute and print the counts, write nothing")
+    of.add_argument("--since", type=int, default=7, help="only transcripts modified in the last N days (1 to 3660, default 7)")
+    of.add_argument("--idle-minutes", type=float, default=60.0, help="skip transcripts modified more recently (default 60)")
     sub.add_parser("shadow", help="the hook entry (what hooks/shadow.sh runs); reads a payload on stdin").add_argument(
         "event", choices=["pre", "stop"])
     args = ap.parse_args(argv)
     try:
         cfg = cfgmod.load(args.config)
         return {"cards": cmd_cards, "propose": cmd_propose, "validate": cmd_validate, "approve": cmd_approve,
-                "unapprove": cmd_unapprove, "label": cmd_label, "report": cmd_report, "shadow": cmd_shadow}[args.cmd](cfg, args)
+                "unapprove": cmd_unapprove, "label": cmd_label, "report": cmd_report, "shadow": cmd_shadow,
+                "offline": cmd_offline}[args.cmd](cfg, args)
     except proposal.ProposalError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

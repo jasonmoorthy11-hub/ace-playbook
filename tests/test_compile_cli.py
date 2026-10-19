@@ -320,7 +320,8 @@ def test_importing_the_hook_path_modules_loads_no_sqlite_store_scrub_cleaner_inj
              "ace_playbook.keys", "ace_playbook.reflect", "subprocess", "socket", "ssl", "http.client", "urllib.request")
     code = (f"import sys; sys.path.insert(0, {str(ROOT)!r}); import ace_playbook.compile.shadow, "
             f"ace_playbook.compile.state, ace_playbook.compile.evidence, ace_playbook.compile.proposal, "
-            f"ace_playbook.compile.labels, ace_playbook.compile.report, ace_playbook.compile.__main__; "
+            f"ace_playbook.compile.labels, ace_playbook.compile.report, ace_playbook.compile.__main__, "
+            f"ace_playbook.compile.demotions, ace_playbook.compile.offline; "
             f"print(','.join(sorted(m for m in sys.modules if any(m == h or m.startswith(h + '.') for h in {heavy!r}))))")
     out = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
@@ -336,7 +337,8 @@ def test_the_offline_functions_still_load_their_heavy_parts_on_demand():
 
 def test_step2_and_4_sources_do_not_import_inject_keys_reflect_or_spawn_anything():
     banned = {"inject", "keys", "reflect", "subprocess", "socket", "urllib", "http", "ssl", "requests", "migrate"}
-    for name in ("evidence.py", "proposal.py", "__main__.py", "shadow.py", "labels.py", "report.py"):
+    for name in ("evidence.py", "proposal.py", "__main__.py", "shadow.py", "labels.py", "report.py", "offline.py",
+                 "demotions.py"):
         for node in ast.walk(ast.parse((COMPILE / name).read_text())):
             if isinstance(node, ast.Import):
                 mods = {a.name.split(".")[0] for a in node.names}
@@ -350,6 +352,6 @@ def test_step2_and_4_sources_do_not_import_inject_keys_reflect_or_spawn_anything
 
 def test_step2_and_4_modules_stay_within_their_line_budgets():
     for name, cap in (("evidence.py", 300), ("proposal.py", 300), ("__main__.py", 300), ("shadow.py", 300),
-                      ("labels.py", 240), ("report.py", 300)):
+                      ("labels.py", 260), ("report.py", 300), ("offline.py", 300), ("demotions.py", 150)):
         assert len((COMPILE / name).read_text().splitlines()) <= cap, name
     assert os.access(COMPILE / "__main__.py", os.R_OK) and proposal.PROPOSALS == "proposals"

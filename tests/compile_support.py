@@ -297,6 +297,48 @@ def shadow_rows(data) -> list[dict]:
     return [json.loads(line) for line in p.read_text().splitlines()] if p.exists() else []
 
 
+# ---------------------------------------------------------------- step 5a: the offline pass
+NOW = 1792411200.0         # 2026-10-19T12:00:00Z: every offline test passes this as `now`
+RM_PROMPT_CMD = "rm -rf /w/src"
+
+
+def offline_world(tmp_path, mode: str = "observe", approved_at: str = "2026-10-01T00:00:00Z"):
+    """real_world with a transcripts root and its approved copy re-written at `mode` and a fixed approval time."""
+    from ace_playbook.atomic import write_private
+    from ace_playbook.compile import shadow
+    w = real_world(tmp_path)
+    w.cfg.transcripts_root = tmp_path / "projects"
+    w.pid = w.props["rm_rf_nonscratch"]["id"]
+    w.approve = lambda m, at=approved_at: write_private(  # noqa: E731
+        w.data / "proposals" / "approved" / (w.pid + ".json"),
+        json.dumps(shadow.approved_record(w.props["rm_rf_nonscratch"], m, at), indent=1, sort_keys=True) + "\n")
+    w.approve(mode)
+    return w
+
+
+def put_session(w, sid: str, steps: list[dict], age: float = 7200.0) -> Path:
+    """An invented transcript whose mtime is `age` seconds before NOW."""
+    import os
+    path = write_transcript(w.cfg, {"id": sid, "steps": steps})
+    os.utime(path, (NOW - age, NOW - age))
+    return path
+
+
+def put_shadow(w, sid: str, command: str, mode: str = "observe", ts: str = "2026-10-18T10:00:00Z", pid: str | None = None) -> dict:
+    """A live shadow row the hook would have written for `command` in session `sid`."""
+    from ace_playbook.compile import evidence as evm, state as st
+    row = {"ts": ts, "proposal_id": pid or w.pid, "lesson_id": RM_LESSON, "mode": mode, "event": "PreToolUse",
+           "tool_name": "Bash", "session": st.session_hash(sid), "would_fire": True, "cause": "detector", "tier": "live",
+           "payload_sha256": evm.payload_hash({"tool_name": "Bash", "tool_input": {"command": command}})}
+    append_jsonl(w.cfg.path("shadow.jsonl"), row)
+    return row
+
+
+def tree_state(root) -> dict:
+    """Relative path -> size of every file under `root` (a dry run must leave it unchanged)."""
+    return {str(p.relative_to(root)): p.stat().st_size for p in sorted(Path(root).rglob("*")) if p.is_file()}
+
+
 if __name__ == "__main__":  # python -m tests.compile_support <rebuild-lab>/ace/step0
     PARITY.parent.mkdir(exist_ok=True)
     PARITY.write_text(dump_parity(regen_parity(sys.argv[1])))

@@ -232,3 +232,21 @@ def update(data_dir: str | Path, session_id: str, fn: Callable[[dict], dict],
         return new, "ok"
     finally:
         os.close(fd)     # closing the descriptor releases the lock
+
+
+def prune(data_dir: str | Path, before: float, dry_run: bool = False) -> int:
+    """Delete (dry_run: only count) the regular `<hash>.json` and `<hash>.json.lock` files under shadow_state/ last
+    modified before `before` (epoch seconds). A symlink, any other name and a symlinked directory are left alone."""
+    base, removed = Path(data_dir) / STATE_DIR, 0
+    if base.is_symlink() or not base.is_dir():
+        return 0
+    for path in sorted(base.iterdir()):
+        try:
+            info = os.lstat(path)
+            if re.fullmatch(r"[0-9a-f]{16}\.json(\.lock)?", path.name) and stat.S_ISREG(info.st_mode) and info.st_mtime < before:
+                if not dry_run:
+                    os.unlink(path)
+                removed += 1
+        except OSError:
+            pass
+    return removed

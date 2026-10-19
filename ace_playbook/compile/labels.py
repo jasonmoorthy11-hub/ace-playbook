@@ -1,8 +1,10 @@
 """Human labels (docs/design/compiler.md 7.3): `compile label` appends to the hash-chained `labels.jsonl`.
 
 A row is `{ref, label: incident|tp|fp, reason_code: human, at, [lesson_id, session], [note], prev_hash, hash}`, read
-by `evidence._labels`. Append-only (O_APPEND, 0600), the whole chain is verified before every append, notes are
-scrubbed. Imports: stdlib, `..canon`, `..config`; the store, scrub engine and `evidence` load lazily (hook path).
+by `evidence._labels`. The nightly offline pass also writes auto rows (`reason_code` one of AUTO, label `fp` or
+`tp_candidate`); `effective` lets a human row beat them. Append-only (O_APPEND, 0600), the whole chain is verified
+before every append, notes are scrubbed. Imports: stdlib, `..canon`, `..config`; the store, scrub engine and
+`evidence` load lazily (hook path).
 """
 
 from __future__ import annotations
@@ -21,7 +23,9 @@ from ..canon import GENESIS, ID_RE, now_iso, record_hash
 from ..config import Config
 
 NOTE_MAX = 200
-KINDS = ("incident", "tp", "fp")
+KINDS = ("incident", "tp", "fp", "tp_candidate")
+AUTO = {"auto_fp_correction": "fp", "auto_fp_prompt_target": "fp", "auto_fp_shell_rerun": "fp",
+        "auto_tp_hook_block": "tp_candidate", "auto_tp_correction": "tp_candidate"}     # reason_code -> its label
 NOT_A_FILE = "labels.jsonl is a symlink or not a regular file"
 
 
@@ -87,6 +91,22 @@ def read_chain(cfg: Config) -> tuple[list[dict], int | None]:
     return _verify(_read(path))
 
 
+def effective(rows: list[dict]) -> dict[str, str]:
+    """ref -> tp|fp|tp_candidate: the newest human row of a ref if it has one (any reason_code outside AUTO, label tp or
+    fp), else its newest auto row (label as AUTO says). `incident` rows and unknown labels count for nothing."""
+    human, auto = {}, {}
+    for r in rows:
+        ref, label = r.get("ref"), r.get("label")
+        if not isinstance(ref, str):
+            continue
+        if r.get("reason_code") in AUTO:
+            if AUTO[r["reason_code"]] == label:
+                auto[ref] = label
+        elif label in ("tp", "fp"):
+            human[ref] = label
+    return {**auto, **human}
+
+
 def check_chain(cfg: Config) -> list[dict]:
     rows, broken = read_chain(cfg)
     _need(not broken, f"labels.jsonl chain broken at row {broken}")
@@ -104,11 +124,13 @@ def check_note(cfg: Config, note: str | None) -> str | None:
     return note or None
 
 
-def append_row(cfg: Config, label: str, ref: str, note_checked: str | None = None, **extra: str) -> tuple[dict, int]:
+def append_row(cfg: Config, label: str, ref: str, note_checked: str | None = None, *, reason_code: str = "human",
+               **extra: str) -> tuple[dict, int]:
     """Open (O_NOFOLLOW, 0600) and lock labels.jsonl, verify the chain from that fd, append a row: (row, number).
 
-    `note_checked` must be the output of `check_note` (it is not scrubbed again). When the newest row of `ref` already
-    carries `label`, nothing is appended and that row and its number are returned."""
+    `note_checked` must be the output of `check_note` (it is not scrubbed again); `reason_code` is `human` except for
+    the offline pass. When the newest row of `ref` already carries `label`, nothing is appended and that row and its
+    number are returned."""
     from .evidence import private_dir
     path = cfg.path("labels.jsonl")
     private_dir(path.parent)
@@ -123,7 +145,7 @@ def append_row(cfg: Config, label: str, ref: str, note_checked: str | None = Non
         same = [(n, r) for n, r in enumerate(rows, 1) if r.get("ref") == ref]
         if same and same[-1][1].get("label") == label:
             return same[-1][1], same[-1][0]
-        row = {"ref": ref, "label": label, "reason_code": "human", "at": now_iso(), **extra,
+        row = {"ref": ref, "label": label, "reason_code": reason_code, "at": now_iso(), **extra,
                **({"note": note_checked} if note_checked else {}), "prev_hash": rows[-1]["hash"] if rows else GENESIS}
         row["hash"] = record_hash(row)
         lead = b"\n" if info.st_size and os.pread(fd, 1, info.st_size - 1) != b"\n" else b""   # a cut last line

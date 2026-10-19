@@ -163,7 +163,7 @@ def test_sweep_script_exit_code_zero_and_health_written(env):  # noqa: F811
     e, cfg = env
     p = subprocess.run([sys.executable, str(HOOKS / "nightly_sweep.py")], capture_output=True,
                        text=True, env=e)
-    assert p.returncode == 0 and json.loads(p.stdout) == []
+    assert p.returncode == 0 and json.loads(p.stdout)["sweep"] == []
     assert health(cfg)["ok"] is True
 
 

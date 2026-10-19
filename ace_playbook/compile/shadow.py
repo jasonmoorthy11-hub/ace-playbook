@@ -5,8 +5,9 @@ proposals, re-validates each from disk, runs the detectors they name and appends
 `data_dir/shadow.jsonl`. It ALWAYS returns 0 and never raises: a failure is one type-only line in
 `data_dir/shadow.log`. Observe mode prints nothing; warn prints the stored message on stderr; block prints the
 deny (PreToolUse) or block (Stop) JSON on stdout. Only observe can be approved today (ALLOWED_MODES); the
-warn and block paths exist for the ladder of a later step and are reached only by tests. Rows hold enums,
-ids, hashes and a timestamp, never payload text. Stdlib plus this package; no inject/keys/reflect/network.
+warn and block paths exist for the ladder of a later step and are reached only by tests. `demotions.jsonl` is read once
+per call and only ever lowers a mode (disabled skips the proposal; a broken chain caps every proposal at observe). Rows
+hold enums, ids, hashes and a timestamp, never payload text. Stdlib plus this package; no inject/keys/reflect/network.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from pathlib import Path
 
 from .. import config as cfgmod
 from ..canon import canonical, now_iso
-from . import catalogue, evidence, proposal
+from . import catalogue, demotions, evidence, proposal
 from . import state as state_mod
 from .events import event_from_hook
 
@@ -72,7 +73,20 @@ def approved_path(cfg, pid: str) -> Path:
     return path
 
 
-def _load_one(cfg, path: Path, pid: str, log) -> tuple[dict, str] | None:
+def _demotions(cfg, log) -> tuple[list[dict], int | None]:
+    """(rows, broken_at) of demotions.jsonl, read once per hook call. A read error is logged by type and means no demotions
+    (fail open); a broken chain is logged and makes `_load_one` cap every proposal at observe (lowering is always safe)."""
+    try:
+        rows, broken = demotions.read_chain(cfg.data_dir)
+    except Exception as exc:
+        log(f"demotions:{type(exc).__name__}")
+        return [], None
+    if broken is not None:
+        log("demotions:chain_broken")
+    return rows, broken
+
+
+def _load_one(cfg, path: Path, pid: str, log, dem: tuple[list[dict], int | None] = ([], None)) -> tuple[dict, str] | None:
     try:
         if os.lstat(path).st_size > MAX_FILE_BYTES:
             return log(f"skipped:{pid}:oversize")
@@ -81,6 +95,12 @@ def _load_one(cfg, path: Path, pid: str, log) -> tuple[dict, str] | None:
             return log(f"skipped:{pid}:invalid:{mode if body is None else 'id'}")
         if mode not in ALLOWED_MODES:
             return log(f"skipped:{pid}:mode_disabled")
+        cap = demotions.effective_cap(dem[0], pid)
+        if dem[1] is not None:
+            cap = demotions.lower("observe", cap)
+        if cap == "disabled":
+            return log(f"skipped:{pid}:demoted")
+        mode = demotions.lower(mode, cap)
         rep = proposal.validate(body, cfg, hot=True)
         return (body, mode) if rep.ok else log(f"skipped:{pid}:invalid:{rep.failed}")
     except Exception as exc:                                  # type only; a bad file never stops the others
@@ -99,19 +119,33 @@ def load_approved(cfg, log) -> list[tuple[dict, str]]:
         return []
     if len(names) > MAX_FILES:
         log("skipped:too_many_files")
-    out = []
+    out, dem = [], _demotions(cfg, log) if names else ([], None)
     for name in names[:MAX_FILES]:
         if not proposal.PID.fullmatch(name[:-5]):
             log("skipped:file_name")
             continue
-        item = _load_one(cfg, base / name, name[:-5], log)
+        item = _load_one(cfg, base / name, name[:-5], log, dem)
         if item:
             out.append(item)
     return out
 
 
+def approved_records(cfg) -> list[tuple[dict, str, str]]:
+    """[(proposal, mode, approved_at)] of the approved copies whose hash holds; not re-validated (the offline pass only lowers)."""
+    base, out = approved_dir(cfg), []
+    for p in sorted(base.glob("*.json")) if base.is_dir() and not base.is_symlink() else []:
+        try:
+            rec = proposal.load(p)
+            body, mode = pending_body(rec)
+        except (ValueError, OSError):
+            continue
+        if body is not None and body["id"] == p.stem:
+            out.append((body, mode, rec["approved_at"]))
+    return out
+
+
 # ---------------------------------------------------------------- files
-def _append(path: Path, text: str, cap: int | None = None) -> None:
+def _append(path: Path, text: str, cap: int | None = None, sync: bool = False) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
     try:
@@ -120,6 +154,8 @@ def _append(path: Path, text: str, cap: int | None = None) -> None:
             raise OSError("not a regular file")
         if cap is None or info.st_size < cap:
             os.write(fd, text.encode())
+            if sync:                                          # the offline pass; the hook never waits for a disk flush
+                os.fsync(fd)
     finally:
         os.close(fd)
 

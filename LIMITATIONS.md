@@ -51,9 +51,9 @@ repository.
 ## Not built yet
 
 The curator and refiner, the replay and task-suite evaluation harness, the judge, and the
-state-versus-lesson classifier. In the stage-2 compiler: the offline nightly pass over transcripts,
-automatic demotion, promotion to `warn` or `block` (`approve` accepts only `observe`), the synthetic
-replay corpus, and the full measurement report. `PREREGISTRATION.md` describes them as plans only
+state-versus-lesson classifier. In the stage-2 compiler: promotion to `warn` or `block` (`approve`
+accepts only `observe`), the synthetic replay corpus, and the full measurement report (rates and
+inference; `compile report` prints counts only). `PREREGISTRATION.md` describes them as plans only
 and is not sealed.
 
 ## Compiler (stage 2)
@@ -74,6 +74,12 @@ and is not sealed.
   has no transcript, so it never yields a standard card.
 - `compile label` is TTY-only, which stops hooks, pipes and plain subprocesses, not a determined
   local process; promotion makes a forged label visible to the operator rather than impossible.
+- The nightly `compile offline` pass pre-fills labels from transcript signals; they are pre-fill only.
+  An auto `fp` counts as a false positive (and can demote a proposal) until a human relabels it, a
+  `tp_candidate` is never counted as a true positive, and a human row always wins. The signals are
+  heuristics (a regex for user corrections, a hash match against the latest prompt). The p95 hook-cost
+  rule (disable above 200 ms over seven days) waits for rows to carry `dur_ms` and is reported as
+  `not computable` on every run.
 
 ## Security and scrubbing
 

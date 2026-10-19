@@ -140,7 +140,7 @@ def test_sweep_script_dry_run(env, tmp_path):
     make_transcripts(tmp_path / "projects", ["sa"])
     p = subprocess.run([sys.executable, str(HOOKS / "nightly_sweep.py"), "--dry-run"],
                        capture_output=True, text=True, env=e)
-    assert p.returncode == 0 and json.loads(p.stdout)[0]["status"] == "would_reflect"
+    assert p.returncode == 0 and json.loads(p.stdout)["sweep"][0]["status"] == "would_reflect"
 
 
 def _git(cwd, *args):

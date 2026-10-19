@@ -1,0 +1,247 @@
+"""The nightly offline pass (compile/offline.py): discovery, detector events, idempotency, dry run, cleanup, CLI, sweep script."""
+
+import dataclasses
+import importlib.util
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+import pytest
+
+from ace_playbook.compile import __main__ as cli
+from ace_playbook.compile import catalogue, evidence, labels, offline
+from ace_playbook.compile import state as st
+
+from . import compile_support as cs
+
+CMD = cs.RM_PROMPT_CMD
+RM = {"tool": "Bash", "input": {"command": CMD}}
+HOOKS = Path(__file__).resolve().parent.parent / "hooks"
+
+
+@pytest.fixture
+def w(tmp_path):
+    return cs.offline_world(tmp_path)
+
+
+def jsonl(w, name):
+    p = w.cfg.path(name)
+    return [json.loads(line) for line in p.read_text().splitlines()] if p.exists() else []
+
+
+# ------------------------------------------------------------------ discovery
+def test_discovery_skips_subagents_symlinks_fresh_old_oversize_and_bad_session_ids(w, tmp_path, monkeypatch):
+    steps = [{"human": "x"}, RM]
+    cs.put_session(w, "good", steps)
+    cs.put_session(w, "fresh", steps, age=60)
+    cs.put_session(w, "old", steps, age=8 * 86400)
+    cs.put_session(w, "bad id", steps)
+    (w.cfg.transcripts_root / "proj" / "subagents").mkdir()
+    (w.cfg.transcripts_root / "proj" / "subagents" / "agent.jsonl").write_text("{}\n")
+    (tmp_path / "elsewhere.jsonl").write_text("{}\n")
+    (w.cfg.transcripts_root / "proj" / "linked.jsonl").symlink_to(tmp_path / "elsewhere.jsonl")
+    todo, skipped = offline.discover(w.cfg, cs.NOW, 60.0, 7, {})
+    assert [sh for _, sh, _, _ in todo] == [st.session_hash("good")] and skipped == 5
+    monkeypatch.setattr(evidence, "MAX_TRANSCRIPT", 10)
+    assert offline.discover(w.cfg, cs.NOW, 60.0, 7, {})[0] == []
+
+
+def test_discovery_without_a_transcripts_root_finds_nothing(w):
+    w.cfg.transcripts_root = None
+    assert offline.discover(w.cfg, cs.NOW, 60.0, 7, {}) == ([], 0)
+    assert offline.run(w.cfg, now=cs.NOW)["transcripts"] == 0
+
+
+# ------------------------------------------------------------------ detector events
+def test_detector_events_carry_ids_hashes_counts_and_no_text(w):
+    cs.put_session(w, "s1", [{"human": "tidy"}, RM, {"tool": "Bash", "input": {"command": "git commit -m done"}},
+                             {"human": "why do you keep doing that"}])
+    out = offline.run(w.cfg, now=cs.NOW)
+    rows = {r["detector"]: r for r in jsonl(w, "detector_events.jsonl")}
+    assert out["detector_events"] == len(jsonl(w, "detector_events.jsonl")) and out["errors"] == 0
+    assert set(rows) == {"rm_rf_nonscratch", "rm_rf", "commit_without_push", "user_correction"}
+    rm = rows["rm_rf_nonscratch"]
+    assert set(rm) == {"ts", "v", "id", "session", "detector", "tier", "count", "key", "payload_sha256", "tool_name"}
+    assert (rm["v"], rm["tier"], rm["count"], rm["tool_name"], rm["session"]) == (1, "offline", 1, "Bash", st.session_hash("s1"))
+    assert rm["key"] == offline.hash16("/w/src")
+    assert rm["payload_sha256"] == evidence.payload_hash({"tool_name": "Bash", "tool_input": {"command": CMD}})
+    assert re.fullmatch(r"[0-9a-f]{16}", rm["id"])
+    assert (rows["commit_without_push"]["payload_sha256"], rows["commit_without_push"]["tool_name"]) == ("", "")
+    assert rows["user_correction"]["key"] == "" and rows["user_correction"]["tool_name"] == ""
+    text = w.cfg.path("detector_events.jsonl").read_text()
+    assert "rm -rf" not in text and "/w/src" not in text and "s1" not in text.replace("sha", "")
+    assert oct(w.cfg.path("detector_events.jsonl").stat().st_mode & 0o777) == "0o600"
+
+
+def test_one_failing_transcript_is_one_error_and_the_pass_goes_on(w, monkeypatch):
+    def boom(event, state):
+        if any("BOOM" in tu.input.get("command", "") for tu in event.tool_uses):
+            raise RuntimeError("detector bug")
+        return None
+    monkeypatch.setitem(catalogue.CATALOGUE, "rm_rf", dataclasses.replace(catalogue.CATALOGUE["rm_rf"], fire=boom))
+    cs.put_session(w, "bad", [{"human": "x"}, {"tool": "Bash", "input": {"command": "echo BOOM"}}])
+    cs.put_session(w, "good", [{"human": "x"}, RM])
+    out = offline.run(w.cfg, now=cs.NOW)
+    assert (out["errors"], out["transcripts"]) == (1, 1)
+    assert {r["session"] for r in jsonl(w, "detector_events.jsonl")} == {st.session_hash("good")}
+    assert set(json.loads(w.cfg.path("offline_state.json").read_text())) == {st.session_hash("good")}   # the bad one is retried
+
+
+# ------------------------------------------------------------------ idempotency
+def test_a_second_run_appends_nothing_and_skips_unchanged_sessions(w):
+    cs.put_session(w, "s1", [{"human": "please remove /w/src"}, RM])
+    cs.put_shadow(w, "s1", CMD)
+    first = offline.run(w.cfg, now=cs.NOW)
+    before = cs.tree_state(w.data)
+    second = offline.run(w.cfg, now=cs.NOW)
+    assert first["transcripts"] == 1 and first["detector_events"] > 0 and sum(first["labels"].values()) == 1
+    assert (second["transcripts"], second["skipped"], second["detector_events"], sum(second["labels"].values())) == (0, 1, 0, 0)
+    assert cs.tree_state(w.data) == before and oct(w.cfg.path("offline_state.json").stat().st_mode & 0o777) == "0o600"
+    assert json.loads(w.cfg.path("offline_state.json").read_text()) == {
+        st.session_hash("s1"): {"size": os.stat(w.cfg.transcripts_root / "proj" / "s1.jsonl").st_size,
+                                "mtime": int(cs.NOW - 7200)}}
+
+
+def test_a_changed_session_is_scanned_again_and_adds_only_new_ids(w):
+    path = cs.put_session(w, "s1", [{"human": "x"}, RM])
+    offline.run(w.cfg, now=cs.NOW)
+    first_ids = [r["id"] for r in jsonl(w, "detector_events.jsonl")]
+    more = cs.records([{"human": "x"}, RM, {"tool": "Bash", "input": {"command": "rm -rf /w/other"}}], "s1")
+    path.write_text("".join(json.dumps(r) + "\n" for r in more))
+    os.utime(path, (cs.NOW - 7000, cs.NOW - 7000))
+    out = offline.run(w.cfg, now=cs.NOW)
+    ids = [r["id"] for r in jsonl(w, "detector_events.jsonl")]
+    assert out["transcripts"] == 1 and out["detector_events"] == len(ids) - len(first_ids) > 0
+    assert len(ids) == len(set(ids)) and ids[:len(first_ids)] == first_ids
+
+
+# ------------------------------------------------------------------ dry run
+def test_dry_run_computes_everything_and_writes_nothing(w):
+    w.approve("block")
+    cs.put_session(w, "s1", [{"human": "please remove /w/src"}, RM, {"tool": "Bash", "input": {"command": "rm -rf /w/src/"}}])
+    cs.put_shadow(w, "s1", CMD, mode="block")
+    old = w.data / "shadow_state" / ("0" * 16 + ".json")
+    old.parent.mkdir()
+    old.write_text("{}")
+    os.utime(old, (cs.NOW - 9 * 86400,) * 2)
+    before = cs.tree_state(w.data)
+    out = offline.run(w.cfg, dry_run=True, now=cs.NOW)
+    assert cs.tree_state(w.data) == before and old.exists()
+    assert out["detector_events"] > 0 and out["evasion_candidates"] == 1 and out["state_removed"] == 1
+    assert out["labels"]["auto_fp_prompt_target"] == 1 and out["demotions"] == 1
+    real = offline.run(w.cfg, now=cs.NOW)
+    assert {k: real[k] for k in ("detector_events", "evasion_candidates", "state_removed", "demotions", "labels")} == {
+        k: out[k] for k in ("detector_events", "evasion_candidates", "state_removed", "demotions", "labels")}
+
+
+# ------------------------------------------------------------------ state cleanup
+def test_stale_shadow_state_files_are_removed_fresh_ones_and_symlinks_are_not(w, tmp_path):
+    base = w.data / "shadow_state"
+    base.mkdir()
+    names = {"old": "a" * 16 + ".json", "old_lock": "a" * 16 + ".json.lock", "fresh": "b" * 16 + ".json",
+             "link": "c" * 16 + ".json", "other": "notes.txt"}
+    for key in ("old", "old_lock", "fresh", "other"):
+        (base / names[key]).write_text("{}")
+    target = tmp_path / "target.json"
+    target.write_text("{}")
+    (base / names["link"]).symlink_to(target)
+    for key in ("old", "old_lock", "other"):
+        os.utime(base / names[key], (cs.NOW - 8 * 86400,) * 2)
+    os.utime(base / names["link"], (cs.NOW - 9 * 86400,) * 2, follow_symlinks=False)
+    os.utime(target, (cs.NOW - 9 * 86400,) * 2)
+    out = offline.run(w.cfg, now=cs.NOW)
+    left = sorted(p.name for p in base.iterdir())
+    assert out["state_removed"] == 2 and left == sorted([names["fresh"], names["link"], names["other"]])
+    assert target.exists()
+
+
+def test_a_symlinked_shadow_state_directory_is_left_alone(w, tmp_path):
+    real = tmp_path / "real_state"
+    real.mkdir()
+    (real / ("d" * 16 + ".json")).write_text("{}")
+    os.utime(real / ("d" * 16 + ".json"), (cs.NOW - 9 * 86400,) * 2)
+    (w.data / "shadow_state").symlink_to(real)
+    assert offline.run(w.cfg, now=cs.NOW)["state_removed"] == 0 and len(list(real.iterdir())) == 1
+
+
+# ------------------------------------------------------------------ CLI
+def cli_run(w, *args, capsys):
+    code = cli.main(["--config", w.conf, "offline", *args])
+    out = capsys.readouterr()
+    return code, out.out, out.err
+
+
+def test_cli_prints_one_ascii_count_line_each_and_the_p95_rule_every_run(w, capsys, tmp_path):
+    conf = tmp_path / "c.json"
+    conf.write_text(json.dumps({"data_dir": str(w.data), "transcripts_root": str(w.cfg.transcripts_root)}))
+    w.conf = str(conf)
+    cs.put_session(w, "s1", [{"human": "please remove /w/src"}, RM])
+    cs.put_shadow(w, "s1", CMD)
+    code, out, err = cli_run(w, "--idle-minutes", "0", capsys=capsys)
+    assert code == 0 and err == "" and all(ch == "\n" or " " <= ch <= "~" for ch in out)
+    names = [ln.split(":")[0] for ln in out.splitlines()]
+    assert names == ["transcripts", "skipped", "detector_events", "labels", *(f"labels.{k}" for k in labels.AUTO),
+                     "demotions", "evasion_candidates", "state_removed", "errors", "p95_rule"]
+    assert all(re.fullmatch(r"[a-z0-9_.]+: [0-9a-z_ :.]+", ln) for ln in out.splitlines())
+    assert "p95_rule: not computable: no dur_ms in rows" in out and "labels: 1" in out
+    assert str(w.data) not in out and st.session_hash("s1") not in out
+    code, out, _ = cli_run(w, "--dry-run", capsys=capsys)
+    assert code == 0 and "p95_rule: not computable: no dur_ms in rows" in out
+
+
+@pytest.mark.parametrize("args", [("--since", "0"), ("--since", "3661"), ("--since", "-5"), ("--idle-minutes", "-1")])
+def test_cli_bounds_since_and_idle_minutes(w, capsys, args):
+    code, out, err = cli_run(w, *args, capsys=capsys)
+    assert (code, out) == (2, "") and "--since must be 1..3660" in err
+
+
+def test_cli_exits_2_when_the_config_cannot_load(tmp_path, capsys):
+    bad = tmp_path / "c.json"
+    bad.write_text("{not json")
+    assert cli.main(["--config", str(bad), "offline"]) == 2
+    assert "error" in capsys.readouterr().err
+
+
+def test_p95_is_reported_not_computable_in_the_counts(w):
+    out = offline.run(w.cfg, now=cs.NOW)
+    assert out["p95_rule"] == "not computable: no dur_ms in rows" and offline.lines(out)[-1].startswith("p95_rule: not comp")
+
+
+# ------------------------------------------------------------------ hooks/nightly_sweep.py
+@pytest.fixture
+def sweep(w, monkeypatch, capsys):
+    spec = importlib.util.spec_from_file_location("nightly_sweep_under_test", HOOKS / "nightly_sweep.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    calls = {"sweep": [], "offline": []}
+    monkeypatch.setattr(mod, "run_sweep", lambda cfg, **kw: calls["sweep"].append(kw) or [{"status": "would_reflect"}])
+    monkeypatch.setattr(offline, "run", lambda cfg, **kw: calls["offline"].append(kw) or {"transcripts": 3})
+
+    def go(*args):
+        monkeypatch.setattr(sys, "argv", ["nightly_sweep.py", "--config", w.conf, *args])
+        assert mod.main() == 0
+        return json.loads(capsys.readouterr().out), calls
+    return go
+
+
+def test_nightly_sweep_runs_the_offline_pass_even_under_dry_run_and_lists_its_counts(sweep):
+    out, calls = sweep("--dry-run")
+    assert out == {"offline": {"transcripts": 3}, "sweep": [{"status": "would_reflect"}]}
+    assert calls["offline"][0]["dry_run"] is False and calls["sweep"][0]["dry_run"] is True
+
+
+def test_nightly_sweep_offline_dry_run_writes_nothing_and_no_offline_skips_the_stage(sweep):
+    _, calls = sweep("--offline-dry-run")
+    assert calls["offline"][0]["dry_run"] is True and calls["sweep"][0]["dry_run"] is False
+    out, calls = sweep("--no-offline")
+    assert "offline" not in out and len(calls["offline"]) == 1 and len(calls["sweep"]) == 2
+
+
+def test_an_offline_exception_is_reported_by_type_and_reflection_still_runs(sweep, monkeypatch):
+    def fail(cfg, **kw):
+        raise KeyError("secret detail /private/path")
+    monkeypatch.setattr(offline, "run", fail)
+    out, calls = sweep("--dry-run")
+    assert out == {"offline": {"error": "KeyError"}, "sweep": [{"status": "would_reflect"}]} and len(calls["sweep"]) == 1

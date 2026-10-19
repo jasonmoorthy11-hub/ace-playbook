@@ -2,8 +2,9 @@
 
 Two corpora, two tables, never summed: the private `shadow.jsonl` (written by the live hook) and the optional
 `shadow.synthetic.jsonl` (every row says `corpus: synthetic`). A row in the wrong file refuses the whole report.
-tp/fp come from `labels.jsonl` (newest row per ref wins, `incident` rows ignored, a broken chain ignores every
-label). No session hash, row id, payload hash or path is printed. Rates and hook cost need the offline pass.
+tp/fp come from `labels.jsonl` through `labels.effective` (a human row beats an auto one, the newest row of its kind
+wins, `incident` rows ignored, a broken chain ignores every label): fp counts human and auto rows, tp only human
+ones, `tp_cand` the auto `tp_candidate` rows, which are never TPs. No session hash, row id, payload hash or path is printed. Rates and hook cost need the offline pass.
 Both shadow files are read here through a no-follow, regular-file-only reader. Imports: stdlib, `..canon`,
 `..config`, `.labels`; `catalogue`, `proposal` and `shadow` load lazily (hook path).
 """
@@ -31,9 +32,9 @@ KEYS = ("ts", "session", "proposal_id", "payload_sha256")
 PID, LID = re.compile(r"P-[0-9a-f]{8}"), re.compile(r"L-[0-9a-f]{8}")
 MAX_DAYS = 3660
 FIELDS = ("lesson", "detector", "event", "approved_mode", "rows", "cause_detector", "cause_truncated", "sessions",
-          "days", "tp", "fp", "unlabelled", "first", "last")
+          "days", "tp", "fp", "tp_cand", "unlabelled", "first", "last")
 HEADS = ("proposal", "lesson", "detector", "event", "approved_mode", "rows", "detector", "truncated", "sessions",
-         "days", "tp", "fp", "unlabelled", "first", "last")
+         "days", "tp", "fp", "tp_cand", "unlabelled", "first", "last")
 NOT_COMPUTED = ("not computed here: eligible-session rates, Wilson intervals, friction, hook cost "
                 "(need the offline pass, design 8)")
 
@@ -93,12 +94,9 @@ def read_corpora(cfg: Config) -> tuple[list[dict], list[dict]]:
 
 
 def label_map(cfg: Config) -> tuple[dict[str, str], int | None]:
-    """({row_id: tp|fp}, broken_at): the newest row per ref wins; a broken chain gives no labels at all."""
+    """({row_id: tp|fp|tp_candidate}, broken_at): `labels.effective`; a broken chain gives no labels at all."""
     rows, broken = labels.read_chain(cfg)
-    if broken is not None:
-        return {}, broken
-    marked = [r for r in rows if r.get("label") in ("tp", "fp") and isinstance(r.get("ref"), str)]
-    return {r["ref"]: r["label"] for r in marked}, None
+    return ({}, broken) if broken is not None else (labels.effective(rows), None)
 
 
 def _meta(cfg: Config, pid: str) -> tuple[str, str, str]:
@@ -138,7 +136,7 @@ def summarize(cfg: Config, rows: list[dict], labs: dict[str, str], now: str, day
                       "detector": det, "event": ev, "approved_mode": mode, "rows": len(rs),
                       "cause_detector": causes["detector"], "cause_truncated": causes["truncated"],
                       "sessions": len({r["session"] for r in rs}), "days": len(set(dates)),
-                      "tp": marks["tp"], "fp": marks["fp"], "unlabelled": sum(labels.row_id(r) not in labs for r in rs),
+                      "tp": marks["tp"], "fp": marks["fp"], "tp_cand": marks["tp_candidate"], "unlabelled": sum(labels.row_id(r) not in labs for r in rs),
                       "first": min(dates, default="-"), "last": max(dates, default="-")}
         per_day.update(Counter((d, pid) for d in dates if cutoff <= date.fromisoformat(d) <= today))
     return {"proposals": props,
