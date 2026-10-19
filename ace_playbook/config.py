@@ -12,6 +12,7 @@ from typing import Any
 ENV_CONFIG = "ACE_PLAYBOOK_CONFIG"
 DEFAULT_CONFIG = Path.home() / ".config" / "ace-playbook" / "config.json"
 DEFAULT_DATA = Path.home() / ".local" / "share" / "ace-playbook"
+DEFAULT_CHAIN_KEY = "~/.config/ace-playbook/chain_key"   # expanded at load; a bare Config() has no key (None)
 MAX_INJECT_CHARS = 7000
 
 
@@ -21,6 +22,7 @@ class Config:
     transcripts_root: Path | None = None
     api_key_path: Path | None = None
     engagements_path: Path | None = None
+    chain_key_path: Path | None = None  # the HMAC key of the approvals and demotions chains; `load` fills in DEFAULT_CHAIN_KEY
     fold_key_separators: bool = False
     model: str = "claude-haiku-5-5"
     api_url: str = "https://api.anthropic.com/v1/messages"
@@ -102,10 +104,11 @@ class Config:
         return self.path("reflect.log")
 
 
-_PATH_FIELDS = {"data_dir", "transcripts_root", "api_key_path", "engagements_path"}
+_PATH_FIELDS = {"data_dir", "transcripts_root", "api_key_path", "engagements_path", "chain_key_path"}
 
 
 def from_dict(raw: dict[str, Any]) -> Config:
+    raw = {"chain_key_path": DEFAULT_CHAIN_KEY, **raw}   # an explicit null switches the key off
     known = {f.name for f in fields(Config)}
     unknown = set(raw) - known
     if unknown:
@@ -125,5 +128,5 @@ def load(path: str | Path | None = None) -> Config:
     if not target.exists():
         if explicit:
             raise FileNotFoundError(f"config not found: {target}")
-        return Config()
+        return from_dict({})
     return from_dict(json.loads(target.read_text()))

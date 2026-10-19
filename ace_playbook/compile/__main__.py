@@ -1,9 +1,9 @@
-"""CLI: `python -m ace_playbook.compile cards|propose|validate|approve|unapprove|label|report|offline|shadow|replay-synthetic` (design 10).
+"""CLI: `python -m ace_playbook.compile cards|propose|validate|approve|unapprove|keygen|label|report|offline|shadow|replay-synthetic` (design 10).
 
 No network, no model, stdlib only. Exit codes: 0 ok, 1 a proposal failed validation or was not approved (the step is
-named), 2 usage, configuration, store or id errors. `approve` and `unapprove` need a terminal; `approve` appends every
-approval to the hash-chained `approvals.jsonl` (approvals.py) and `--mode warn|block` is the promotion ladder (ladder.py,
-imported on demand); `label` writes human labels (labels.py; `--list`, `--rows` need no terminal); `report` prints per-proposal
+named), 2 usage, configuration, store or id errors. `approve`, `unapprove` and `keygen` need a terminal; `approve` appends every
+approval to the hash-chained `approvals.jsonl` (approvals.py; keyed `v: 2` rows once `keygen` made the chain key) and `--mode warn|block`
+is the promotion ladder (ladder.py, imported on demand); `label` writes human labels (labels.py; `--list`, `--rows` need no terminal); `report` prints per-proposal
 shadow counts with labels (report.py; exit 2 on a corpus mix-up); `offline` is the nightly pass (offline.py; `--dry-run` writes nothing);
 `replay-synthetic` replays the frozen corpus into `shadow.synthetic.jsonl` (synth.py; exit 1 on a disagreement).
 """
@@ -20,7 +20,7 @@ from .. import config as cfgmod
 from .. import ttyio
 from ..atomic import write_private
 from ..canon import now_iso
-from . import approvals, evidence, labels, modes, proposal, report, shadow, synth
+from . import approvals, chains, chains_cli, chains_io, evidence, labels, modes, proposal, report, shadow, synth
 
 LEGACY_BANNER = ("This lesson's stored evidence is self-quoted legacy text; "
                  "the human incident label is the only evidence.")
@@ -97,10 +97,9 @@ def _confirm(prompts: list[str]) -> bool:
 
 def _provenance(cfg: cfgmod.Config, p: dict) -> bool:
     """Print what the operator is approving; True when a cited card is legacy (the banner is printed too)."""
-    print(f"{p['id']}  lesson {p['lesson_id']}  detector {p['check']['detector']}  on {p['event']} matcher {p['matcher']}")
-    print(f"  evidence cards: {', '.join(p['provenance']['cards'])}")
-    print(f"  source_sha256:  {p['provenance']['source_sha256']}")
-    print(f"  message:        {p['message']}")
+    print(f"{p['id']}  lesson {p['lesson_id']}  detector {p['check']['detector']}  on {p['event']} matcher {p['matcher']}\n"
+          f"  evidence cards: {', '.join(p['provenance']['cards'])}\n  source_sha256:  {p['provenance']['source_sha256']}\n"
+          f"  message:        {p['message']}")
     legacy = any(c["provenance"] == "legacy" for c in evidence.load_cards(cfg, p["lesson_id"])
                  if c["id"] in p["provenance"]["cards"])
     if legacy:
@@ -117,6 +116,7 @@ def cmd_approve(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
         return 2
     if not _need_tty("approve"):
         return 2
+    ring = chains_io.need_key(cfg, approvals)                    # KeyMissing: the chain has a v2 row and the key is gone (exit 1)
     src = proposal.proposal_path(cfg, args.id)
     p = proposal.load(src)
     rep = proposal.validate(p, cfg, path=src)
@@ -124,9 +124,9 @@ def cmd_approve(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
         _steps(rep)
         print(f"error: validation failed at step '{rep.failed}'", file=sys.stderr)
         return 1
-    rows, broken = approvals.read_chain(cfg.data_dir)
+    rows, broken = approvals.read_chain(cfg.data_dir, ring)
     if broken is not None:
-        print(f"error: approvals.jsonl chain broken at row {broken}", file=sys.stderr)
+        print(f"error: approvals.jsonl chain broken {chains.where(broken)}", file=sys.stderr)
         return 1
     dest = shadow.approved_path(cfg, args.id)
     try:
@@ -135,7 +135,7 @@ def cmd_approve(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
     except proposal.ProposalError:                            # an unreadable old copy is simply replaced
         rec, old, mode = None, None, ""
     verdict = approvals.verify_copy(rec, rows) if old == p and mode == "observe" else None
-    drows, dbroken = modes.read_demotions(cfg.data_dir)
+    drows, dbroken = modes.read_demotions(cfg.data_dir, ring)
     live = modes.in_force(drows, args.id, rows, now_iso(), broken)
     if verdict == "missing" and (dbroken is not None or any(r["proposal_id"] == args.id for r in drows)):
         verdict = None          # no back-fill under demotions, or an unreadable file (the copy's stamp is agent-writable)
@@ -152,7 +152,7 @@ def cmd_approve(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
             print("error: not approved", file=sys.stderr)
             return 1
         approvals.append(cfg.data_dir, {"ts": rec["approved_at"], "proposal_id": args.id, "mode": "observe",
-                                        "proposal_sha256": rec["proposal_sha256"]})
+                                        "proposal_sha256": rec["proposal_sha256"]}, ring)
         print(f"ok: recorded the existing observe approval of {args.id} in approvals.jsonl")
         return 0
     new = shadow.approved_record(p)
@@ -167,7 +167,7 @@ def cmd_approve(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
         print("error: not approved", file=sys.stderr)
         return 1
     approvals.append(cfg.data_dir, {"ts": new["approved_at"], "proposal_id": p["id"], "mode": "observe",
-                                    "proposal_sha256": new["proposal_sha256"]})
+                                    "proposal_sha256": new["proposal_sha256"]}, ring)
     evidence.private_dir(dest.parent)
     write_private(dest, json.dumps(new, indent=1, sort_keys=True) + "\n")
     print(f"ok: approved {p['id']} in observe mode\n{dest}")
@@ -177,9 +177,13 @@ def cmd_approve(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
 def cmd_unapprove(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
     if not _need_tty("unapprove"):
         return 2
+    try:
+        ring, missing = chains_io.need_key(cfg, approvals), False
+    except chains.KeyMissing:                                 # need_key printed the keygen line: only the revocation row is refused
+        ring, missing = None, True
     dest = shadow.approved_path(cfg, args.id)
     try:
-        newest = approvals.newest(approvals.read_chain(cfg.data_dir)[0], args.id)
+        newest = approvals.newest(approvals.read_chain(cfg.data_dir, ring)[0], args.id)
     except (ValueError, OSError):
         newest = None
     has_copy = dest.exists()
@@ -196,10 +200,11 @@ def cmd_unapprove(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
         sha = None
     try:
         approvals.append(cfg.data_dir, {"proposal_id": args.id, "mode": "revoked",
-                                        "proposal_sha256": sha if isinstance(sha, str) and len(sha) == 64 else "-"})
+                                        "proposal_sha256": sha if isinstance(sha, str) and len(sha) == 64 else "-"}, ring)
     except (ValueError, OSError) as exc:                      # removing the copy matters more than the row
-        print(f"warning: revocation row not written ({exc if isinstance(exc, ValueError) else type(exc).__name__}); "
-              f"repair approvals.jsonl, then re-run unapprove {args.id}", file=sys.stderr)
+        if not missing:
+            print(f"warning: revocation row not written ({exc if isinstance(exc, ValueError) else type(exc).__name__}); "
+                  f"repair approvals.jsonl, then re-run unapprove {args.id}", file=sys.stderr)
         if not has_copy:
             return 1
     if not has_copy:
@@ -207,19 +212,7 @@ def cmd_unapprove(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
         return 0
     os.unlink(dest)
     print(f"ok: {args.id} is no longer approved (the proposal file is kept)")
-    return 0
-
-
-def cmd_label(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
-    return labels.run(cfg, args, lambda prompt: _ask(prompt), _need_tty)
-
-
-def cmd_report(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
-    return report.run(cfg, args.days, args.json)
-
-
-def cmd_shadow(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
-    return shadow.main([args.event], cfg)
+    return int(missing)                                       # 1 when the revocation row was refused for want of the key
 
 
 def cmd_offline(cfg: cfgmod.Config, args: argparse.Namespace) -> int:
@@ -276,17 +269,22 @@ def main(argv: list[str] | None = None) -> int:
     of.add_argument("--dry-run", action="store_true", help="compute and print the counts, write nothing")
     of.add_argument("--since", type=int, default=7, help="only transcripts modified in the last N days (1 to 3660, default 7)")
     of.add_argument("--idle-minutes", type=float, default=60.0, help="skip transcripts modified more recently (default 60)")
+    kg = sub.add_parser("keygen", help="TTY only: create the chain key (HMAC key of approvals.jsonl and demotions.jsonl, never overwritten), "
+                        "re-seal both chains under it and sign their heads")
+    kg.add_argument("--rehead", action="store_true", help="rewrite the signed chain heads from the (verified) chains after you confirm the listed rows; needs the key")
     sub.add_parser("replay-synthetic", help="replay the frozen corpus; exit 1 on a disagreement").add_argument("--out", help="rows file")
     sub.add_parser("shadow", help="the hook entry (what hooks/shadow.sh runs); reads a payload on stdin").add_argument("event", choices=["pre", "stop"])
     args = ap.parse_args(argv)
     try:
         cfg = cfgmod.load(args.config)
         return {"cards": cmd_cards, "propose": cmd_propose, "validate": cmd_validate, "approve": cmd_approve,
-                "unapprove": cmd_unapprove, "label": cmd_label, "report": cmd_report, "shadow": cmd_shadow,
-                "offline": cmd_offline,
+                "unapprove": cmd_unapprove, "label": lambda c, a: labels.run(c, a, lambda prompt: _ask(prompt), _need_tty), "report": lambda c, a: report.run(c, a.days, a.json), "shadow": lambda c, a: shadow.main([a.event], c),
+                "offline": cmd_offline, "keygen": lambda c, a: chains_cli.keygen(c, _need_tty, a.rehead, lambda prompt: _ask(prompt)),
                 "replay-synthetic": lambda c, a: synth.run(c, a.out)}[args.cmd](cfg, args)
     except proposal.ProposalError as exc:
         print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except chains.KeyMissing:                                 # the operator line (naming keygen) was printed by need_key
         return 1
     except ValueError as exc:                                 # includes store.schema.SchemaError
         print(f"error: {exc}", file=sys.stderr)

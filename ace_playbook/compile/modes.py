@@ -3,7 +3,7 @@ all ask `resolve` what a proposal runs at, so they cannot disagree. `resolve` is
 `read_approvals` and `read_demotions` touch a file). The copy's mode counts only when the approvals chain backs it (an observe
 copy needs no row); the cap is the lowest `to_mode` of the demotion rows stamped at or after the newest approvals row (an
 operator approval lifts every STRICTLY older row, a tie keeps the demotion; with no approvals row every row counts); a broken
-or unreadable chain caps at observe. Imports: stdlib, `.approvals`, `.demotions`
+or unreadable chain caps at observe. Imports: stdlib, `.approvals`, `.chains`, `.demotions`
 (the shadow hook imports this module).
 """
 
@@ -12,9 +12,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Union
 
-from . import approvals, demotions
+from . import approvals, chains, demotions
 
-Broken = Optional[Union[int, str]]   # None: the chain is intact; an index: broken there; "unreadable": the read failed
+Broken = Optional[Union[int, str]]   # None: intact; an index: broken there; "unreadable": the read failed; "head_mismatch" / "heads_missing": see chains.head_state
 
 
 @dataclass(frozen=True)
@@ -24,21 +24,21 @@ class Resolution:
     cap: str | None                # lowest `to_mode` of the demotion rows stamped at or after the newest approval, None without
     window_start: str              # start of the counting window ("" when none is known)
     source: str                    # what set `window_start`: approval | demotion | copy | none
-    problems: tuple[str, ...] = ()  # approvals:missing|mismatch|chain_broken, revoked, no_copy, demotions:chain_broken|unreadable
+    problems: tuple[str, ...] = ()  # approvals:missing|mismatch|chain_broken|head_mismatch, revoked, no_copy, demotions:chain_broken|head_mismatch|unreadable
 
 
-def read_demotions(data_dir) -> tuple[list[dict], Broken]:
+def read_demotions(data_dir, ring: chains.Keyring | None = None) -> tuple[list[dict], Broken]:
     """`demotions.read_chain`, a read error (symlink, directory, ...) reported as `unreadable` instead of raised."""
     try:
-        return demotions.read_chain(data_dir)
+        return demotions.read_chain(data_dir, ring)
     except Exception:
         return [], "unreadable"
 
 
-def read_approvals(data_dir) -> tuple[list[dict], Broken]:
+def read_approvals(data_dir, ring: chains.Keyring | None = None) -> tuple[list[dict], Broken]:
     """`approvals.read_chain`, a read error reported as `unreadable` instead of raised."""
     try:
-        return approvals.read_chain(data_dir)
+        return approvals.read_chain(data_dir, ring)
     except Exception:
         return [], "unreadable"
 
@@ -66,7 +66,7 @@ def chain_notice(broken: Broken) -> str:
     """The operator line for a demotions chain that is broken (rows counted from 1, like approvals) or unreadable; '' if intact."""
     if broken is None:
         return ""
-    where = "unreadable" if broken == "unreadable" else f"broken at row {broken + 1}"
+    where = "unreadable" if broken == "unreadable" else f"broken {chains.where(broken, 1)}"
     return f"demotions.jsonl is {where}: rows from the break on are not listed (the chain keeps capping at observe until it is repaired)"
 
 
@@ -80,7 +80,7 @@ def capped(rows: list[dict], now: str) -> str:
 
 def _approved(pid: str, copy: dict | None, rows: list[dict], broken: Broken) -> tuple[str, list[str]]:
     """(approved mode, problems): `disabled` for a revoked proposal or no copy, `observe` when the chain cannot back the copy."""
-    bad = ["approvals:chain_broken"] if broken is not None else []
+    bad = [f"approvals:{broken if broken == 'head_mismatch' else 'chain_broken'}"] if broken is not None else []
     newest = None if broken is not None else approvals.newest(rows, pid)
     if newest is not None and newest["mode"] == "revoked":
         return "disabled", ["revoked"]
@@ -112,6 +112,6 @@ def resolve(pid: str, copy_rec: dict | None, approvals_rows: list[dict], approva
     cap = demotions.effective_cap(in_force(demotion_rows, pid, approvals_rows, now, approvals_broken), pid)
     if demotions_broken is not None:                  # fail toward observe, never open
         cap = demotions.lower("observe", cap)
-        problems.append("demotions:unreadable" if demotions_broken == "unreadable" else "demotions:chain_broken")
+        problems.append("demotions:" + (demotions_broken if demotions_broken in ("unreadable", "head_mismatch") else "chain_broken"))
     start, source = _window(copy_rec, ref, mine, now)
     return Resolution(demotions.lower(approved, cap), approved, cap, start, source, tuple(problems))

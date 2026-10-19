@@ -29,7 +29,7 @@ from pathlib import Path
 
 from ..canon import now_iso
 from ..config import Config
-from . import demotions, labels, metrics, modes
+from . import chains, demotions, labels, metrics, modes
 
 PRIVATE, SYNTHETIC = "shadow.jsonl", "shadow.synthetic.jsonl"
 EVENTS, EVASION = "detector_events.jsonl", "evasion_candidates.jsonl"      # offline.py writes them
@@ -137,10 +137,10 @@ def demotion_summary(cfg: Config, now: str | None = None) -> dict:
     is `lifted` when the proposal's newest approvals row (at or before `now`) is stamped strictly after it; `cap` is the lowest row still in
     force (`-` when all are lifted) with its cause and time, `review_required` is true when any row of the proposal asked."""
     try:
-        rows, broken = demotions.read_chain(cfg.data_dir)
+        rows, broken = demotions.read_chain(cfg.data_dir, chains.key_of(cfg))
     except OSError:
         raise labels.Refusal("demotions.jsonl is a symlink or not a regular file", 2) from None
-    (arows, abroken), now = modes.read_approvals(cfg.data_dir), now or now_iso()
+    (arows, abroken), now = modes.read_approvals(cfg.data_dir, chains.key_of(cfg)), now or now_iso()
     props: dict[str, dict] = {}
     listed = []
     for r in rows:
@@ -158,7 +158,7 @@ def demotion_summary(cfg: Config, now: str | None = None) -> dict:
 
 def _chains(cfg: Config) -> tuple:
     """(approvals rows, break, demotion rows, break) for `modes.resolve`; a read error is `unreadable`, never raised."""
-    return (*modes.read_approvals(cfg.data_dir), *modes.read_demotions(cfg.data_dir))
+    return (*modes.read_approvals(cfg.data_dir, ring := chains.key_of(cfg)), *modes.read_demotions(cfg.data_dir, ring))
 
 
 def _meta(cfg: Config, pid: str, chains: tuple | None = None, now: str = "~") -> tuple[str, str, str, str]:
@@ -247,7 +247,7 @@ def _section(title: str, source: str, data: dict, days: int, rates: dict | None)
 def _demotions(dem: dict) -> list[str]:
     out = ["Demotions (demotions.jsonl, every row; lifted = a strictly later approval of the proposal lifted it)"]
     if not dem["chain_ok"]:
-        out.append(f"demotions: chain BROKEN at row {dem['broken_at'] + 1}, rows after it ignored (the hook caps every proposal at observe)")
+        out.append(f"demotions: chain BROKEN {chains.where(dem['broken_at'], 1)}, rows after it ignored (the hook caps every proposal at observe)")
     rows = [[r["proposal_id"], r["to_mode"], r["cause"], r["ts"], str(r["review_required"]).lower(), "yes" if r["lifted"] else "no"]
             for r in dem["rows"]]
     return [*out, *(_grid(("proposal", "to_mode", "cause", "ts", "review_required", "lifted"), rows) if rows else ["no demotions"]), ""]

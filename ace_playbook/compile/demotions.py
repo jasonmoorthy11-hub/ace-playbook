@@ -1,8 +1,8 @@
 """Demotions (docs/design/compiler.md 7.3): `data_dir/demotions.jsonl`, hash-chained, append-only, lowering only.
 
-A row is `{ts, v: 1, proposal_id, from_mode, to_mode, cause, ref, review_required, prev_hash, hash}`, chained from
-`canon.GENESIS` like labels.jsonl. On the ladder block > warn > observe > disabled `to_mode` is at most `from_mode`; a row
-that breaks that breaks the chain there. Whether a row is in force (an approval lifts older rows) is `modes.resolve`'s
+A row is `{ts, v: 1|2, proposal_id, from_mode, to_mode, cause, ref, review_required, prev_hash, hash}`, chained from
+`canon.GENESIS`: `v: 1` with `canon.record_hash` while there is no chain key, `v: 2` with the keyed hash once there is one (chains.py).
+On the ladder block > warn > observe > disabled `to_mode` is at most `from_mode`; a row that breaks that breaks the chain there. Whether a row is in force (an approval lifts older rows) is `modes.resolve`'s
 business; `append` guards against a `from_mode` above the current mode. O_NOFOLLOW, regular files only, 1 MiB, strict JSON.
 `decide` holds the pure rules. The hook reads this file: stdlib only.
 """
@@ -18,7 +18,9 @@ import stat
 import time
 from pathlib import Path
 
-from ..canon import GENESIS, now_iso, record_hash
+from ..canon import GENESIS, now_iso
+from . import chains
+from .chains import read_regular  # noqa: F401  (re-exported: offline and report read through it)
 
 FILE, MAX_BYTES = "demotions.jsonl", 1 << 20
 LADDER = ("disabled", "observe", "warn", "block")                   # lowest first
@@ -32,48 +34,38 @@ def lower(mode: str, cap: str | None) -> str:
     return mode if cap is None else min(mode, cap, key=LADDER.index)
 
 
-def read_regular(path: Path, cap: int) -> bytes | None:
-    """Up to `cap` + 1 bytes of a regular file opened O_NOFOLLOW; None when missing, OSError for a symlink or non-file."""
+def shape(row: dict) -> bool:                                       # keys, types, enums, ladder direction (the hash link is `_ok`'s)
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    except FileNotFoundError:
-        return None
-    with os.fdopen(fd, "rb") as fh:
-        if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
-            raise OSError("not a regular file")
-        return fh.read(cap + 1)
-
-
-def _ok(row: dict, prev: str) -> bool:                              # shape, enums, ladder direction, hash link
-    try:
-        return (set(row) == KEYS and row["v"] == 1 and PID.fullmatch(row["proposal_id"]) is not None
+        return (set(row) == KEYS and type(row["v"]) is int and row["v"] in (1, 2) and PID.fullmatch(row["proposal_id"]) is not None
                 and row["cause"] in CAUSES and isinstance(row["ref"], str) and STAMP.fullmatch(row["ts"]) is not None
-                and isinstance(row["review_required"], bool)
-                and LADDER.index(row["to_mode"]) <= LADDER.index(row["from_mode"])
-                and row["prev_hash"] == prev and row["hash"] == record_hash(row))
+                and isinstance(row["review_required"], bool) and LADDER.index(row["to_mode"]) <= LADDER.index(row["from_mode"]))
     except (TypeError, ValueError):
         return False
 
 
-def _parse(data: bytes) -> tuple[list[dict], int | None]:
+BASE = 1                                                            # `verify` numbers rows from 0: add this for a 1-based number
+
+
+def verify(data: bytes, ring: chains.Keyring | None = None) -> tuple[list[dict], int | None]:
     rows, prev = [], GENESIS
     for line in data.splitlines():
         try:
             row = json.loads(line.decode("utf-8"), parse_constant=int)      # int("NaN") raises: no NaN or Infinity
         except (ValueError, RecursionError):                         # includes UnicodeDecodeError
             return rows, len(rows)
-        if not (isinstance(row, dict) and _ok(row, prev)):
+        if not (isinstance(row, dict) and shape(row) and row["prev_hash"] == prev and chains.hash_ok(row, ring)):
             return rows, len(rows)
         rows.append(row)
         prev = row["hash"]
     return rows, None
 
 
-def read_chain(data_dir: str | Path) -> tuple[list[dict], int | None]:
-    """(rows before the first bad one, its 0-based index or None). Missing file: ([], None); symlink: OSError; over 1 MiB: a break."""
+def read_chain(data_dir: str | Path, ring: chains.Keyring | None = None) -> tuple[list[dict], int | str | None]:
+    """(rows before the first bad one, its 0-based index or None). Missing file: ([], None); symlink: OSError; over 1 MiB: a
+    break. With a keyring only `v: 2` rows verify and the signed head must match (`head_mismatch` / `heads_missing`)."""
     data = read_regular(Path(data_dir) / FILE, MAX_BYTES) or b""
-    rows, broken = _parse(data[:MAX_BYTES])
-    return rows, len(rows) if broken is None and len(data) > MAX_BYTES else broken
+    rows, broken = verify(data[:MAX_BYTES], ring)
+    return rows, chains.head_state(ring, "demotions", rows, len(rows) if broken is None and len(data) > MAX_BYTES else broken)
 
 
 def effective_cap(rows: list[dict], proposal_id: str) -> str | None:
@@ -87,9 +79,13 @@ def duplicate(rows: list[dict], row: dict, after: str | None = None) -> dict | N
     return mine[-1] if mine and all(mine[-1][k] == row.get(k) for k in ("to_mode", "cause", "ref")) else None
 
 
-def append(data_dir: str | Path, fields: dict, current: str | None = None, after: str | None = None) -> dict:
+def append(data_dir: str | Path, fields: dict, current: str | None = None, after: str | None = None, *,
+           ring: chains.Keyring | None = None) -> dict:
     """Lock, verify the chain from that fd, stamp `now_iso()` unless `fields` has a `ts`, append and return the row (or the
-    newest in force, `duplicate`). ValueError: invalid row, broken chain, or `from_mode` above `current` (a guard)."""
+    newest in force, `duplicate`). ValueError: invalid row, broken chain, or `from_mode` above `current` (a guard). With a
+    keyring the row is `v: 2` (keyed hash) and the signed head is updated inside the lock. Without one: ValueError("chain key
+    missing") once the file holds a shape-valid `v: 2` row; on an empty or v1-only chain the row stays `v: 1`, so installs from before
+    keygen work unchanged."""
     path = Path(data_dir) / FILE
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     with os.fdopen(os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600), "ab") as fh:
@@ -99,21 +95,25 @@ def append(data_dir: str | Path, fields: dict, current: str | None = None, after
         fcntl.flock(fd, fcntl.LOCK_EX)
         os.fchmod(fd, 0o600)
         size = os.fstat(fd).st_size
-        rows, broken = _parse(os.pread(fd, size, 0)) if size <= MAX_BYTES else ([], 0)
-        if broken is not None:
-            raise ValueError(f"demotions.jsonl chain broken at row {broken + 1} (or over 1 MiB)")
+        data = os.pread(fd, size, 0) if size <= MAX_BYTES else b""
+        if ring is None and chains.has_v2(data, shape):
+            raise ValueError(chains.MISSING)
+        rows, broken = verify(data, ring) if size <= MAX_BYTES else ([], 0)
+        if (broken := chains.head_state(ring, "demotions", rows, broken)) is not None:
+            raise ValueError(f"demotions.jsonl chain broken {chains.where(broken, 1)} (or over 1 MiB)")
         prev = rows[-1]["hash"] if rows else GENESIS
-        row = {"ts": now_iso(), "v": 1, **fields, "prev_hash": prev}
-        row["hash"] = record_hash(row)
+        row = chains.seal({"ts": now_iso(), **fields, "prev_hash": prev}, ring)
         if (same := duplicate(rows, row, after)) is not None:
             return same
         line = json.dumps(row, sort_keys=True).encode() + b"\n"
-        if _parse(os.pread(fd, size, 0) + line)[1] is not None or (
+        if verify(data + line, ring)[1] is not None or (
                 current is not None and LADDER.index(row["from_mode"]) > LADDER.index(current)):    # shape, link, direction, current
             raise ValueError("invalid demotion row")
         fh.write(line)
         fh.flush()
         os.fsync(fd)
+        if ring is not None:
+            ring.update(demotions=row["hash"])                     # under the file lock; a crash between the two is `keygen --rehead`
     return row
 
 

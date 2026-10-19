@@ -19,7 +19,7 @@ from typing import Callable
 
 from ..atomic import write_private
 from ..canon import now_iso
-from . import approvals, evidence, labels, modes, proposal, shadow
+from . import approvals, chains, chains_io, evidence, labels, modes, proposal, shadow
 
 RANK = {"none": 0, "disabled": 0, "observe": 1, "warn": 2, "block": 3}
 PREV = {"warn": "observe", "block": "warn"}
@@ -191,14 +191,15 @@ def run(cfg, args, ask: Callable[[str], str], need_tty: Callable[[str], bool], n
               "--mode block needs --opus-reviewed <sha> (7 to 40 lowercase hex characters)", 2)
         if not need_tty("approve"):
             return 2
+        ring = chains_io.need_key(cfg, approvals)            # KeyMissing (the chain has a v2 row, the key is gone): caught below
         now = now or now_iso()
         p, rep, copy, dest = _load(cfg, args.id)
         _need(rep.failed != "schema", "validation failed at step 'schema'")
-        arows, abroken = approvals.read_chain(cfg.data_dir)
+        arows, abroken = approvals.read_chain(cfg.data_dir, ring)
         lrows, lbroken = labels.read_chain(cfg)
-        _need(abroken is None, f"approvals.jsonl chain broken at row {abroken}")
+        _need(abroken is None, f"approvals.jsonl chain broken {chains.where(abroken)}")
         _need(lbroken is None, f"labels.jsonl chain broken at row {lbroken}")
-        drows, dbroken = modes.read_demotions(cfg.data_dir)           # a read error is the resolver's broken path
+        drows, dbroken = modes.read_demotions(cfg.data_dir, ring)           # a read error is the resolver's broken path
         resolved = modes.resolve(p["id"], copy, arows, None, drows, dbroken, now)
         from . import catalogue
         res = check(p, copy, labels.shadow_rows(cfg), lrows, arows, catalogue.CATALOGUE[p["check"]["detector"]],
@@ -227,7 +228,7 @@ def run(cfg, args, ask: Callable[[str], str], need_tty: Callable[[str], bool], n
         rec = shadow.approved_record(p, mode=mode, now=now)
         approvals.append(cfg.data_dir, {"ts": now, "proposal_id": p["id"], "proposal_sha256": rec["proposal_sha256"],
                                         "mode": mode, "tp_refs": sorted(x.row_id for x in res.tps),
-                                        "fp_refs": sorted(x.row_id for x in res.fps), "review_sha": review or "-"})
+                                        "fp_refs": sorted(x.row_id for x in res.fps), "review_sha": review or "-"}, ring)
         try:
             evidence.private_dir(dest.parent)
             write_private(dest, json.dumps(rec, indent=1, sort_keys=True) + "\n")
@@ -236,6 +237,8 @@ def run(cfg, args, ask: Callable[[str], str], need_tty: Callable[[str], bool], n
                          f"observe; re-run approve --mode {mode} after fixing the copy directory")
         print(f"ok: {p['id']} is now in {mode} mode\n{dest}")
         return 0
+    except chains.KeyMissing:                                 # need_key printed the operator line
+        return 1
     except labels.Refusal as exc:
         print(f"error: {exc}", file=sys.stderr)
         return exc.code

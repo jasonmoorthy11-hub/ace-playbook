@@ -189,10 +189,11 @@ def test_hook_logs_each_problem_once_and_reads_both_chains_once(tmp_path, monkey
     seen = []
     for mod in (approvals, dm):
         real = mod.read_chain
-        monkeypatch.setattr(mod, "read_chain", lambda d, real=real, name=mod.__name__: seen.append(name) or real(d))
+        monkeypatch.setattr(mod, "read_chain", lambda d, key=None, real=real, name=mod.__name__: seen.append(name) or real(d, key))
     hook(w, monkeypatch, capsys)
     _, _, log = hook(w, monkeypatch, capsys)
     assert log.count("approvals:chain_broken") == 1 and cs.shadow_rows(w.data)[-1]["mode"] == "observe"
+    assert "error:approvals" not in log and "error:demotions" not in log          # the chain was read and judged broken, not a failed read
     assert sorted(seen) == sorted([approvals.__name__, dm.__name__] * 2)
 
 

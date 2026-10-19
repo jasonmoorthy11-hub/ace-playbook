@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ..atomic import write_private
-from . import catalogue, demotions, detectors, evidence, labels, metrics, modes, report, shadow
+from . import catalogue, chains, chains_io, demotions, detectors, evidence, labels, metrics, modes, report, shadow
 from . import state as state_mod
 from .events import end_event, events_from_records, hash16
 from .report import _read as read_jsonl
@@ -205,7 +205,7 @@ def current_mode(copy: tuple[dict, str, dict], arows: list[dict], abroken, drows
 
 def demote(cfg, rows: list[dict], labs: dict[str, str], cands: list[dict], now: float, dry: bool, out: dict, fixed=True) -> None:
     """Append design 7.3's demotion rows (counts to `out`); `fixed` stamps `iso(now)`, else `append` stamps at append time."""
-    drows, broken = demotions.read_chain(cfg.data_dir)
+    drows, broken = demotions.read_chain(cfg.data_dir, ring := chains.key_of(cfg) if dry else chains_io.need_key(cfg, demotions))   # KeyMissing: one error
     if broken is not None:
         raise ValueError("demotions.jsonl chain broken")
     lessons, out["lesson_check"] = report.lesson_statuses(cfg)
@@ -215,7 +215,7 @@ def demote(cfg, rows: list[dict], labs: dict[str, str], cands: list[dict], now: 
     sure = n >= MIN_SAMPLE and not full
     out["error_rate"] = ("not computable (log full)" if full else f"computed (n={n})" if sure
                          else f"not computable (n={n}, need {MIN_SAMPLE})")
-    arows, abroken = modes.read_approvals(cfg.data_dir)         # unreadable counts as broken: the resolver caps at observe
+    arows, abroken = modes.read_approvals(cfg.data_dir, ring)         # unreadable counts as broken: the resolver caps at observe
     for copy in shadow.approved_records(cfg):
         try:
             pid, det = (p := copy[0])["id"], p["check"]["detector"]
@@ -233,7 +233,7 @@ def demote(cfg, rows: list[dict], labs: dict[str, str], cands: list[dict], now: 
             for f in demotions.decide(pid, cur, disable=disable, fps=sorted(set(fps)), evasion=None if flagged else ref):
                 f = {**f, "ts": iso(now)} if fixed else f
                 if demotions.duplicate(drows, f, after) is None:
-                    drows.append({"ts": iso(time.time()), **f} if dry else demotions.append(cfg.data_dir, f, current=cur, after=after))
+                    drows.append({"ts": iso(time.time()), **f} if dry else demotions.append(cfg.data_dir, f, current=cur, after=after, ring=ring))
                     out["demotions"] += 1
         except (KeyError, TypeError, ValueError, OSError):
             out["errors"] += 1
