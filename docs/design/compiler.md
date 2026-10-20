@@ -547,6 +547,16 @@ computed on read from the stored shadow row (the bare `session` hash as stored, 
 joined with `|`, sha256, first 8 hex, no `r:` prefix); shadow.py writes no `row_id`, so a future hook that
 does must use the same formula.
 
+**Label queue (as built, step 2d).** `compile label --queue [--limit N]` (`compile/queue.py`, TTY only, not on the hook path) is the
+labelling path; `--rows` stays for audit. `pending` lists the fired rows of the private corpus that no label covers, oldest first,
+one per `row_id`, at most N (default 50). Each card has six field groups: identity (id, detector@hash8 of the approved copy, resolved mode,
+age); why (the detector and the cause; payloads are hashes only, no command text is shown); context (session[:8], ts, proposal id, event);
+the label control line `1 tp / 2 fp / 3 skip / q quit`; the proposal's tally (rows, tp, fp, labels still needed to reach 5 TPs);
+provenance (labels chain ok|BROKEN, `rubric = design §7.3`). The queue is blind: an item never carries an existing label, a note or the
+row's text, and a row that already has a label is not offered. `1` appends a human `tp` (optional note); `2` appends a human `fp` and
+needs a note that passes the scrubber (asked again once, then the row is skipped); `3` skips; any other key is asked again, the third
+miss skips. A broken labels chain refuses before the first card.
+
 **As built (step 5a, 2026-10-19).** `python3 -m ace_playbook.compile offline [--dry-run] [--since DAYS] [--idle-minutes N]`
 (`compile/offline.py`; `hooks/nightly_sweep.py` runs it before the reflection sweep, also under that script's `--dry-run`,
 because it makes no API call) prints counts only. It scans transcripts that are regular files of at most 64 MiB, not in
