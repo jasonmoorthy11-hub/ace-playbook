@@ -222,6 +222,41 @@ scenario where the port deliberately differs from Step 0 (step0 count, port coun
 changes; a separate local-only check recomputes it from `step0/detectors.py` and fails if the file is
 stale. CI never needs rebuild-lab, and the port still cannot drift from the numbers in RESULTS.md.
 
+### 4.1.1 Evasion coverage matrix and hook conformance
+
+`tests/test_detector_evasion_matrix.py` measures `rm_rf_nonscratch` against ways an agent can delete recursively outside scratch.
+Each row is a class and a variant (for example `flags/split-flags`, `interpreter/python-rmtree`, `xargs_find/find-delete`) built twice
+from one command template: once with an invented path outside scratch (ground truth: it should fire) and once with a scratch
+path (its benign twin: it must not fire). The strings are only data: they go through the hook's own path (hook payload,
+`event_from_hook`, `catalogue.evaluate`) and are never executed. 43 variants, 86 cases.
+
+Where the frozen detector disagrees with the ground truth the case is a strict `xfail` (`documented miss: <class>`), so the suite is
+green today and turns red the day a detector edit fixes a case, which forces the expectation to be updated in the same change. A
+second test pins the miss count per class (FN = a delete outside scratch that does not fire, FP = a scratch delete that does), so a
+change in either direction shows up. As of this commit:
+
+| Class | FN | FP | Cases |
+|---|---|---|---|
+| `alias_quote` | 3 | 0 | `$IFS` separators, `$(echo rm)` as the command word, `base64 -d \| sh` |
+| `interpreter` | 7 | 0 | python, node, perl, `bash -c`, `sh -c`, `eval`, a `bash <<EOF` body |
+| `path` | 0 | 2 | `cd <scratch> && rm -rf ./*` and `D=<scratch>; rm -rf "$D"` fire (the target cannot be resolved) |
+| `tool_indirection` | 2 | 0 | a script, or a Makefile whose `clean:` recipe deletes, written by `Write` and then run (`bash script`, `make -C dir clean`) |
+| `xargs_find` | 3 | 0 | `ls -d dir/* \| xargs rm -rf`, `find -delete`, `find -exec rm -rf {} +` |
+| `other_tools` | 4 | 0 | `rsync --delete`, `git clean -fdx`, `trash`, an `osascript` Finder delete |
+| `control`, `flags`, `shell_construct` | 0 | 0 | |
+
+That is 19 false negatives and 2 false positives. `trash` and the Finder delete are recoverable, but they still count as should-fire:
+the lesson's letter is "confirm the target first", and a recoverable delete outside scratch has not been confirmed. The matrix is the input to the next detector edit after the measurement week
+ends: fix a class, flip its cases from xfail to plain, update the pinned counts, and re-propose and re-approve (the edit moves
+`source_sha256`). Nothing in the detector changes while the week runs. `tests/test_hook_conformance.py` is the other half: the real
+`hooks/shadow.sh` in a child process against malformed, empty, non-UTF-8 and over-cap stdin (exactly `MAX_STDIN` is evaluated, one
+byte more is skipped), a command of exactly 64 KiB (the row carries `dur_ms`), a state lock held by another process, a missing or
+read-only data directory, `ACE_PLAYBOOK_KEYED=1` without a key (`chain_key:missing` once across processes), and an allow-list of
+every module the hook path loads, checked twice in a child process: at import, and after one firing evaluation (the approved proposal,
+`catalogue.evaluate` and the row write have all run); `seal`, `dashboard`, `report`, `synth`, `metrics` and `scrub` must not be among
+them. Every hostile-input case (malformed, empty, non-UTF-8, over the cap) must exit 0 and write nothing but at most one type-only
+line in `shadow.log`; the other cases must exit 0 with an empty stdout and stderr, and pin what they do write (a row, a log note).
+
 ### 4.2 Per-session state (`state.py`)
 
 ```json

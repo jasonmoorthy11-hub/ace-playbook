@@ -60,6 +60,11 @@ state-versus-lesson classifier. In the stage-2 compiler: the arms (randomization
   `bash <<EOF` bodies, shell functions and aliases, and anything past the 64 KB cap (reported as
   `unparseable`). The control is the promotion ladder: a proposal starts in observe mode and every
   counted true positive is read by a human before any mode change (`docs/design/compiler.md` 7.3).
+  A strict-xfail evasion matrix (`tests/test_detector_evasion_matrix.py`, `docs/design/compiler.md` 4.1.1) pins the documented
+  misses of `rm_rf_nonscratch` as of this writing: it does not see a recursive delete through an interpreter (python, node, perl,
+  `bash -c`, `sh -c`, `eval`, a heredoc, a base64 pipe), through `find`, `xargs` from a pipe, `rsync --delete`, `git clean`, `trash` or
+  Finder, or in a script or Makefile that was written and then run, nor through `$IFS` or `$(...)` as the command word
+  (19 of 43 variants); and it flags a scratch delete written as `cd <scratch> && rm -rf ./*` or through a variable (2 false positives).
 - Warn delivery, resolved: warn uses `additionalContext` (step 5b). The Claude Code hooks reference (read
   2026-10-19) says a hook's stderr on exit 0 never reaches the model, so the hook prints one
   `hookSpecificOutput.additionalContext` JSON object on stdout (and echoes the message on stderr for the debug log).
