@@ -18,7 +18,6 @@ from ..config import Config
 from . import dashboard_html, labels, status
 
 OUT, CAP, STALE_HOURS = "dashboard.html", status.QUEUE_MAX, 36
-W, PAD, ROW, TOP = 400, 16, 42, 24                      # chart geometry in viewBox units: width, side padding, row height, space above row 0
 THRESHOLDS, TICKS = ((0.8, "0.8"), (0.9, "0.9")), ((0.0, "0"), (0.5, ".5"), (1.0, "1"))
 FAMILIES = (("retired", "muted", "⊘"), ("label", "warn", "⚠"), ("silent", "serious", "▲"), ("noisy", "crit", "✖"),
             ("not eligible", "serious", "▲"), ("observe only", "muted", "⊘"),
@@ -70,8 +69,9 @@ def num(v: object, dash: str = "-") -> str:
     return dash if v is None else str(v)
 
 
-def xs(v: float) -> float:
-    return PAD + max(0.0, min(1.0, v)) * (W - 2 * PAD)
+def pct(v: float) -> float:
+    """A 0..1 value as a percentage of the track, clamped."""
+    return max(0.0, min(1.0, v)) * 100
 
 
 def point(p: dict) -> float | None:
@@ -80,35 +80,33 @@ def point(p: dict) -> float | None:
     return p["tp"] / n if n else None
 
 
+def wrow(pid: str, p: dict) -> str:
+    """One chart row: the label, then a track holding the threshold hairlines and a Wilson bar with round ends and a point marker."""
+    who = esc(pid)
+    thr = "".join(f'<div class="thr" style="left:{pct(v):.0f}%"></div>' for v, _ in THRESHOLDS)
+    if isinstance(p["precision"], str):
+        inner, tip = f'<span class="insuf" data-pid="{who}">{esc(p["precision"])}</span>', p["precision"]
+    else:
+        lo, hi = p["precision"]
+        inner = (f'<div class="bar" data-pid="{who}" style="left:{pct(lo):.2f}%;width:{pct(hi) - pct(lo):.2f}%"></div>'
+                 f'<div class="cap" data-pid="{who}" style="left:calc({pct(lo):.2f}% - 2px)"></div>'
+                 f'<div class="cap" data-pid="{who}" style="left:calc({pct(hi):.2f}% - 2px)"></div>')
+        if (pt := point(p)) is not None:
+            inner += f'<div class="point" data-pid="{who}" style="left:calc({pct(pt):.2f}% - 4px)"></div>'
+        tip = f"[{lo}, {hi}]"
+    return (f'<div class="wrow"><div class="wl">{who}<small>{esc(p["detector"])}</small></div>'
+            f'<div class="track" title="{who} {esc(tip)}">{thr}{inner}</div></div>')
+
+
 def chart(props: dict) -> Raw:
-    """The one chart: a Wilson interval per proposal as a thin bar with round ends and a marker at tp/(tp+fp)."""
+    """The one chart, as HTML rows so its text keeps the page's type size: a Wilson interval per proposal on a 0 to 1 track."""
     if not props:
         return Raw('<p class="sub">no proposals</p>')
-    base = TOP + len(props) * ROW
-    out = [f'<svg viewBox="0 0 {W} {base + 22}" width="100%" role="img" aria-label="Wilson 95 % precision interval per proposal">']
-    for v, label in TICKS:
-        out.append(f'<line class="grid" x1="{xs(v):.2f}" y1="{TOP - 6}" x2="{xs(v):.2f}" y2="{base}"/>'
-                   f'<text x="{xs(v):.2f}" y="{base + 16}" text-anchor="middle">{label}</text>')
-    for v, label in THRESHOLDS:
-        out.append(f'<line class="thr" x1="{xs(v):.2f}" y1="{TOP - 6}" x2="{xs(v):.2f}" y2="{base}" stroke-dasharray="3 3"/>'
-                   f'<text class="muted" x="{xs(v):.2f}" y="{TOP - 10}" text-anchor="middle">{label}</text>')
-    out.append(f'<line class="axis" x1="{xs(0):.2f}" y1="{base}" x2="{xs(1):.2f}" y2="{base}"/>')
-    for i, (pid, p) in enumerate(props.items()):
-        y, cy, who = TOP + i * ROW, TOP + i * ROW + 30, esc(pid)
-        out.append(f'<text class="lbl" x="{PAD}" y="{y + 14}">{who}  {esc(p["detector"])}</text>')
-        if isinstance(p["precision"], str):
-            out.append(f'<text class="insuf" data-pid="{who}" x="{xs(0) + 6:.2f}" y="{cy + 4}">{esc(p["precision"])}</text>')
-            continue
-        lo, hi = p["precision"]
-        out.append(f'<g><title>{who} [{lo}, {hi}]</title><rect class="bar" data-pid="{who}" x="{xs(lo):.2f}" y="{cy - 1}" '
-                   f'width="{xs(hi) - xs(lo):.2f}" height="2" rx="1"/>'
-                   f'<circle class="cap" data-pid="{who}" cx="{xs(lo):.2f}" cy="{cy}" r="2"/>'
-                   f'<circle class="cap" data-pid="{who}" cx="{xs(hi):.2f}" cy="{cy}" r="2"/>')
-        if (pt := point(p)) is not None:
-            out.append(f'<circle class="pt" data-pid="{who}" cx="{xs(pt):.2f}" cy="{cy}" r="5"/>')
-        out.append("</g>")
-    out.append("</svg>")
-    return Raw('<div class="scroll chart">' + "".join(out) + f'<p class="legend"><span class="sw"></span>{esc(LEGEND)}</p></div>')
+    ticks = "".join(f'<span class="tick" style="left:{pct(v):.0f}%;transform:translateX(-{pct(v) if v else 0:.0f}%)">{t}</span>' for v, t in TICKS)
+    marks = "".join(f'<span class="tick top" style="left:{pct(v):.0f}%;transform:translateX(-50%)">{t}</span>' for v, t in THRESHOLDS)
+    axis = f'<div class="wrow"><div class="wl"></div><div class="axis">{marks}{ticks}</div></div>'
+    rows = "".join(wrow(pid, p) for pid, p in props.items())
+    return Raw(f'<div class="card chart">{axis}{rows}<p class="legend"><span class="sw"></span>{esc(LEGEND)}</p></div>')
 
 
 def hero(s: dict) -> str:

@@ -5,7 +5,7 @@ import re
 import stat
 import subprocess
 import sys
-import xml.etree.ElementTree as ET
+from html import unescape
 
 import pytest
 
@@ -53,12 +53,16 @@ def synth(n: int = 4, queue: int = 3, **over) -> dict:
     return {**s, **over}
 
 
-def svg_of(page: str) -> ET.Element:
-    return ET.fromstring(re.search(r"<svg.*?</svg>", page, re.S).group(0))
+def parts(page: str, cls: str) -> dict:
+    """pid -> [style, ...] of the chart's `div.<cls>` elements (one entry per element)."""
+    found: dict = {}
+    for pid, style in re.findall(rf'<div class="{cls}" data-pid="([^"]*)" style="([^"]*)"></div>', page):
+        found.setdefault(unescape(pid), []).append(style)
+    return found
 
 
-def by_class(root: ET.Element, cls: str) -> list[ET.Element]:
-    return [e for e in root.iter() if cls in e.get("class", "").split()]
+def pcts(style: str) -> list[float]:
+    return [float(x) for x in re.findall(r"(-?\d+(?:\.\d+)?)%", style)]
 
 
 # ------------------------------------------------------------------ safety
@@ -74,7 +78,8 @@ def test_every_dynamic_string_is_escaped():
     out = dashboard.render(s)
     assert "<script" not in out and "<img" not in out and "<b>" not in out
     assert "&lt;script&gt;alert(1)&lt;/script&gt;&quot;x" in out and "&lt;script&gt;alert(&quot;n&quot;)" in out and "a&quot;b" in out
-    ET.fromstring(re.search(r"<svg.*?</svg>", out, re.S).group(0))          # still well-formed with the hostile id in the chart
+    assert '<div class="wl">P-&lt;script&gt;alert(1)&lt;/script&gt;&quot;x<small>' in out and "<svg" not in out
+    assert bad in parts(out, "bar")                                         # the hostile id round-trips through the chart attributes
 
 
 def test_both_theme_blocks_and_an_explicit_body_background():
@@ -92,7 +97,7 @@ def test_a_normal_world_page_loads_nothing_from_outside(w):
     out = dashboard.render(build(w))
     for bad in ("http://", "https://", "<script", "<link", "@import", "url(", "src="):
         assert bad not in out, bad
-    assert '<meta name="viewport"' in out and "overflow-x:auto" in out and 'width="100%"' in out and "viewBox=" in out
+    assert '<meta name="viewport"' in out and "overflow-x:auto" in out and "<svg" not in out
 
 
 def test_the_page_names_every_proposal_and_verdict_of_a_real_world(w):
@@ -197,36 +202,44 @@ def test_the_queue_list_is_capped_at_fifty_with_the_total():
 # ------------------------------------------------------------------ the chart
 def test_insufficient_rows_have_no_bar_and_labelled_rows_a_bar_at_the_interval():
     s = synth(9)
-    root = svg_of(dashboard.render(s))
-    bars = {e.get("data-pid"): e for e in by_class(root, "bar")}
+    out = dashboard.render(s)
+    bars, points, caps = parts(out, "bar"), parts(out, "point"), parts(out, "cap")
     labelled = {pid for pid, p in s["proposals"].items() if p["precision"] != "INSUFFICIENT"}
     insuf = {pid for pid, p in s["proposals"].items() if p["precision"] == "INSUFFICIENT"}
-    assert set(bars) == labelled and insuf
-    assert {e.get("data-pid") for e in by_class(root, "insuf")} == insuf
-    assert all(e.text == "INSUFFICIENT" for e in by_class(root, "insuf"))
-    left, right = dashboard.PAD, dashboard.W - dashboard.PAD
+    assert set(bars) == labelled and set(points) == labelled and set(caps) == labelled and insuf
+    assert {unescape(m) for m in re.findall(r'<span class="insuf" data-pid="([^"]*)">INSUFFICIENT</span>', out)} == insuf
     for pid in labelled:
         lo, hi = s["proposals"][pid]["precision"]
-        x, width = float(bars[pid].get("x")), float(bars[pid].get("width"))
-        assert x == pytest.approx(left + lo * (right - left), abs=0.01) and x + width == pytest.approx(left + hi * (right - left), abs=0.01)
-        assert bars[pid].get("height") == "2"
-    pts = {e.get("data-pid"): e for e in by_class(root, "pt")}
-    assert set(pts) == labelled and all(float(e.get("r")) >= 4 for e in pts.values())
-    p = s["proposals"]["P-a1b2c302"]                                          # warn eligible, [0.62, 0.97], 11 tp 1 fp
-    assert float(pts["P-a1b2c302"].get("cx")) == pytest.approx(left + 11 / 12 * (right - left), abs=0.01)
-    assert p["precision"] == [0.62, 0.97]
+        (style,) = bars[pid]
+        left, width = pcts(style)
+        assert left == pytest.approx(lo * 100, abs=0.1) and left + width == pytest.approx(hi * 100, abs=0.1)
+        assert re.fullmatch(r"left:[\d.]+%;width:[\d.]+%", style)
+        assert [pcts(c)[0] for c in caps[pid]] == [pytest.approx(lo * 100, abs=0.1), pytest.approx(hi * 100, abs=0.1)]
+        tp, fp = s["proposals"][pid]["tp"], s["proposals"][pid]["fp"]
+        assert pcts(points[pid][0])[0] == pytest.approx(tp / (tp + fp) * 100, abs=0.1) and "- 4px" in points[pid][0]
+    assert pcts(points["P-a1b2c302"][0])[0] == pytest.approx(11 / 12 * 100, abs=0.1)          # warn eligible, [0.62, 0.97], 11 tp 1 fp
+    for pid in insuf:
+        assert pid not in bars and pid not in points
 
 
 def test_the_chart_has_ticks_thresholds_and_a_legend():
     out = dashboard.render(synth())
-    root = svg_of(out)
-    texts = [e.text for e in root.iter() if e.tag == "text"]
-    assert {"0", ".5", "1", "0.8", "0.9"} <= set(texts)
-    thr = by_class(root, "thr")
-    assert len(thr) == 2 and all(e.get("stroke-dasharray") for e in thr)
-    xs = sorted(float(e.get("x1")) for e in thr)
-    assert xs == [pytest.approx(dashboard.PAD + 0.8 * 368, abs=0.01), pytest.approx(dashboard.PAD + 0.9 * 368, abs=0.01)]
+    ticks = dict(re.findall(r'<span class="tick(?: top)?" style="left:(\d+)%;[^"]*">([^<]+)</span>', out))
+    assert set(ticks.values()) == {"0", ".5", "1", "0.8", "0.9"} and ticks["0"] == "0"
+    assert "translateX(-100%)" in out and "translateX(-50%)" in out
+    thr = re.findall(r'<div class="thr" style="left:(\d+)%"></div>', out)
+    assert sorted(thr) == ["80"] * 4 + ["90"] * 4                                            # every row carries both hairlines
+    assert out.count('<div class="wrow">') == 5                                              # four proposals and the axis strip
     assert "Wilson 95 % interval; point = tp/(tp+fp); INSUFFICIENT below 5 labels" in out
+
+
+def test_the_chart_is_html_in_the_page_type_size_and_the_css_draws_it():
+    out = dashboard.render(synth())
+    assert "<svg" not in out and "viewBox" not in out
+    css = out[out.index("<style>"):out.index("</style>")]
+    assert re.search(r"\.thr\{[^}]*border-left:1px dashed var\(--muted\)", css)
+    assert re.search(r"\.bar\{[^}]*top:11px;height:2px;[^}]*var\(--s1\)", css) and re.search(r"\.point\{[^}]*box-shadow:0 0 0 2px var\(--surface\)", css)
+    assert re.search(r"\.track\{height:24px\}", css) and re.search(r"\.wl\{font-size:13px", css) and re.search(r"\.tick\{[^}]*font-size:12px", css)
 
 
 # ------------------------------------------------------------------ the verb
@@ -248,7 +261,7 @@ def test_the_verb_writes_dashboard_html_0600_and_prints_a_relative_line(w, capsy
 def test_out_names_a_file_elsewhere(w, capsys, tmp_path):
     target = tmp_path / "elsewhere" / "d.html"
     code, out, _ = run(w, "--out", str(target), capsys=capsys)
-    assert code == 0 and out == f"wrote {target}\n" and "<svg" in target.read_text()
+    assert code == 0 and out == f"wrote {target}\n" and "class=\"track\"" in target.read_text()
     assert stat.S_IMODE(target.stat().st_mode) == 0o600 and not w.cfg.path("dashboard.html").exists()
 
 
