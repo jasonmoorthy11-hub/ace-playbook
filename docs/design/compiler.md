@@ -1005,6 +1005,9 @@ the way" wording at README.md:79 and the `onFailure` paragraph at hooks/INSTALL.
 were amended on 2026-10-19 (see Amendments): stage-1 hooks never block; stage-2 shadow hooks block
 only a proposal the operator promoted to block mode after the observe and warn ladder.
 
+Tamper matrix for the chains and the signed heads (splice, cut line versus modified row, deleted files, replayed heads,
+re-signed rows): `tests/test_chain_tamper.py`.
+
 ## 10. Build order
 
 | Step | Deliverable | New tests |
