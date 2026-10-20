@@ -239,20 +239,23 @@ change in either direction shows up. As of this commit:
 |---|---|---|---|
 | `alias_quote` | 3 | 0 | `$IFS` separators, `$(echo rm)` as the command word, `base64 -d \| sh` |
 | `interpreter` | 7 | 0 | python, node, perl, `bash -c`, `sh -c`, `eval`, a `bash <<EOF` body |
-| `path` | 0 | 2 | `cd <scratch> && rm -rf .` and `D=<scratch>; rm -rf "$D"` fire (the target cannot be resolved) |
-| `tool_indirection` | 2 | 0 | a script written by `Write` then run with `bash`; `make clean` |
-| `xargs_find` | 3 | 0 | `ls dir \| xargs rm -rf`, `find -delete`, `find -exec rm -rf {} +` |
+| `path` | 0 | 2 | `cd <scratch> && rm -rf ./*` and `D=<scratch>; rm -rf "$D"` fire (the target cannot be resolved) |
+| `tool_indirection` | 2 | 0 | a script, or a Makefile whose `clean:` recipe deletes, written by `Write` and then run (`bash script`, `make -C dir clean`) |
+| `xargs_find` | 3 | 0 | `ls -d dir/* \| xargs rm -rf`, `find -delete`, `find -exec rm -rf {} +` |
 | `other_tools` | 4 | 0 | `rsync --delete`, `git clean -fdx`, `trash`, an `osascript` Finder delete |
 | `control`, `flags`, `shell_construct` | 0 | 0 | |
 
-That is 19 false negatives and 2 false positives. The matrix is the input to the next detector edit after the measurement week
+That is 19 false negatives and 2 false positives. `trash` and the Finder delete are recoverable, but they still count as should-fire:
+the lesson's letter is "confirm the target first", and a recoverable delete outside scratch has not been confirmed. The matrix is the input to the next detector edit after the measurement week
 ends: fix a class, flip its cases from xfail to plain, update the pinned counts, and re-propose and re-approve (the edit moves
 `source_sha256`). Nothing in the detector changes while the week runs. `tests/test_hook_conformance.py` is the other half: the real
 `hooks/shadow.sh` in a child process against malformed, empty, non-UTF-8 and over-cap stdin (exactly `MAX_STDIN` is evaluated, one
 byte more is skipped), a command of exactly 64 KiB (the row carries `dur_ms`), a state lock held by another process, a missing or
 read-only data directory, `ACE_PLAYBOOK_KEYED=1` without a key (`chain_key:missing` once across processes), and an allow-list of
-every module the hook path imports (`seal`, `dashboard`, `report`, `synth`, `metrics` and `scrub` must not be among them). Every
-case must exit 0 and write nothing but at most one type-only line in `shadow.log`.
+every module the hook path loads, checked twice in a child process: at import, and after one firing evaluation (the approved proposal,
+`catalogue.evaluate` and the row write have all run); `seal`, `dashboard`, `report`, `synth`, `metrics` and `scrub` must not be among
+them. Every hostile-input case (malformed, empty, non-UTF-8, over the cap) must exit 0 and write nothing but at most one type-only
+line in `shadow.log`; the other cases must exit 0 with an empty stdout and stderr, and pin what they do write (a row, a log note).
 
 ### 4.2 Per-session state (`state.py`)
 

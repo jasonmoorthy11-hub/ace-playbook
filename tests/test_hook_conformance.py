@@ -13,7 +13,8 @@ Only what the other suites do not already pin. Already covered, and cited rather
   - modules that must stay off the hook path: test_compile_cli.py::test_importing_the_hook_path_modules_loads_no_sqlite_store_scrub_cleaner_inject_or_network
 What this file adds: the same failures through the wrapper in a child process with a whole-tree "nothing else was written" check,
 the exact stdin cap boundary, the exact 64 KiB command with `dur_ms`, a lock held by a separate process, a missing / read-only
-data dir, the keyed-without-key note across two processes, and an allow-list of every module the hook path imports.
+data dir, the keyed-without-key note across three processes, and an allow-list of every module the hook path loads (at import, and
+after one firing evaluation has run the approved-proposal path, the catalogue and the row write).
 """
 
 import json
@@ -187,25 +188,42 @@ ABSENT = ("seal", "dashboard", "report", "synth", "metrics", "scrub")
 HEAVY = {"sqlite3", "subprocess", "socket", "ssl", "http", "urllib.request", "asyncio", "multiprocessing", "threading", "ctypes"}
 
 
-def imported_modules() -> list[str]:
-    code = f"import sys; sys.path.insert(0, {str(ROOT)!r}); from ace_playbook.compile.shadow import main"
-    p = subprocess.run([sys.executable, "-I", "-S", "-X", "importtime", "-c", code], capture_output=True, text=True, timeout=60)
+# NOTE: `-S` drops the site / .pth imports that the real hook (`-I -P`, hooks/shadow.sh) does load, so this measures the package's own
+# imports, not the interpreter's start-up. HEAVY names stdlib modules that this Python version's stdlib happens not to pull in on
+# this path (3.12 imports `urllib.parse` via pathlib, hence only `urllib.request` is listed); another version may need the list revised.
+def child_modules(w, run: bool) -> list[str]:
+    """Module names loaded by a child interpreter: right after `import main`, or after `shadow.main(["pre"])` ran a FIRING payload."""
+    head = f"import sys; sys.path.insert(0, {str(ROOT)!r}); from ace_playbook.compile import shadow; "
+    if not run:
+        code, flags = head + "pass", ["-X", "importtime"]
+    else:
+        code, flags = head + "rc = shadow.main(['pre']); print('\\n'.join(sorted(sys.modules))); sys.exit(rc)", []
+    p = subprocess.run([sys.executable, "-I", "-S", *flags, "-c", code], capture_output=True, text=True, timeout=60,
+                       input=json.dumps(cs.pre_payload(RM)), env=env_of(w))
     assert p.returncode == 0, p.stderr
+    if run:
+        assert len(cs.shadow_rows(w.data)) == 1                       # the approved proposal loaded, the detector fired, the row was written
+        return p.stdout.split()
     rows = [ln.split("|", 2)[2].strip() for ln in p.stderr.splitlines() if ln.startswith("import time:") and "|" in ln]
     return [r for r in rows if r != "imported package"]
 
 
-def test_the_hook_path_imports_only_stdlib_and_the_documented_modules():
-    mods = imported_modules()
+WHEN = pytest.mark.parametrize("run", [False, True], ids=["at-import", "after-one-firing-evaluation"])
+
+
+@WHEN
+def test_the_hook_path_imports_only_stdlib_and_the_documented_modules(w, run):
+    mods = child_modules(w, run)
     assert "ace_playbook.compile.shadow" in mods
     ours = {m for m in mods if m.split(".")[0] == "ace_playbook"}
     assert ours <= ALLOWED_ACE, sorted(ours - ALLOWED_ACE)
     known = set(sys.stdlib_module_names) | set(sys.builtin_module_names)
-    foreign = {m for m in mods if m.split(".")[0] not in known and not m.startswith("_frozen") and m not in ours}
+    foreign = {m for m in mods if m.split(".")[0] not in known and not m.startswith("_frozen") and m not in ours | {"__main__"}}
     assert foreign == set(), sorted(foreign)
     assert not {m for m in mods if any(m == h or m.startswith(h + ".") for h in HEAVY)}   # urllib.parse (pathlib) is fine
 
 
+@WHEN
 @pytest.mark.parametrize("name", ABSENT)
-def test_the_hook_path_never_loads_seal_dashboard_report_synth_metrics_or_scrub(name):
-    assert [m for m in imported_modules() if name in m.split(".")] == []
+def test_the_hook_path_never_loads_seal_dashboard_report_synth_metrics_or_scrub(w, run, name):
+    assert [m for m in child_modules(w, run) if name in m.split(".")] == []
