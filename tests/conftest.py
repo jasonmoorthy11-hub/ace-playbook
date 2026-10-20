@@ -9,9 +9,7 @@ uses `PRODUCTION_CHAIN_KEY` (captured here before any patch) so the literal stay
 
 from __future__ import annotations
 
-import faulthandler
 import signal
-import sys
 import threading
 
 import pytest
@@ -44,8 +42,8 @@ class PerTestTimeout(BaseException):
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     yield
-    if call.when == "call" and call.excinfo is not None and call.excinfo.errisinstance(PerTestTimeout):
-        item.timeout_surfaced = True                       # the timeout reached the test report: teardown has nothing to add
+    if call.excinfo is not None and call.excinfo.errisinstance(PerTestTimeout):
+        item.timeout_surfaced = True                       # the timeout reached a report (any phase): teardown has nothing to add
 
 
 @pytest.fixture(autouse=True)
@@ -54,15 +52,20 @@ def per_test_timeout(request):
 
     A SIGALRM handler raises `PerTestTimeout` in the main thread. The interval timer re-fires every second, so a handler call that a
     `except BaseException` swallows is followed by another; if the test still passes after a firing, teardown fails it
-    ("per-test timeout fired"). `faulthandler.dump_traceback_later(2 * seconds, exit=True)` is the hard stop (it dumps every thread's
-    stack and ends the process). The alarm is armed before the test body, so it fires before a child process's own `timeout=`, which
-    only matters for a hung child: `subprocess.run` kills the child on any exception. Skipped where there is no SIGALRM (Windows)
-    or off the main thread; the previous handler is restored and the timer and the backstop are cancelled in `finally`."""
+    ("per-test timeout fired"). The hard stop is pytest's own `faulthandler_timeout` / `faulthandler_exit_on_timeout` (pyproject.toml,
+    125 s): it dumps every thread's stack and ends the run. The alarm is armed before the test body, so it fires before a child process's
+    own `timeout=`, which only matters for a hung child: `subprocess.run` kills the child on any exception. Skipped where there is no
+    SIGALRM (Windows) or off the main thread; the timer is disarmed and the previous handler restored in `finally`."""
     if not hasattr(signal, "SIGALRM") or threading.current_thread() is not threading.main_thread():
         yield
         return
     marker = request.node.get_closest_marker("timeout")
-    seconds = float(marker.args[0]) if marker and marker.args else TIMEOUT_SECONDS
+    seconds = TIMEOUT_SECONDS
+    if marker is not None:
+        arg = marker.args[0] if marker.args else None
+        if isinstance(arg, bool) or not isinstance(arg, (int, float)) or not arg > 0:
+            pytest.fail("timeout marker must be a positive number")
+        seconds = float(arg)
     fired = []
 
     def expired(signum, frame):
@@ -70,13 +73,12 @@ def per_test_timeout(request):
         raise PerTestTimeout(f"test exceeded {seconds} s")
 
     previous = signal.signal(signal.SIGALRM, expired)
-    faulthandler.dump_traceback_later(2 * seconds, exit=True, file=sys.__stderr__)
     signal.setitimer(signal.ITIMER_REAL, seconds, 1.0)
     try:
         yield
     finally:
+        signal.signal(signal.SIGALRM, signal.SIG_IGN)       # first: a firing pending at disarm time must not raise in here
         signal.setitimer(signal.ITIMER_REAL, 0)
-        faulthandler.cancel_dump_traceback_later()
         signal.signal(signal.SIGALRM, signal.SIG_DFL if previous is None else previous)
     if fired and not getattr(request.node, "timeout_surfaced", False):
         pytest.fail(f"per-test timeout fired after {seconds} s but the test finished: something swallowed it")

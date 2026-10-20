@@ -22,4 +22,6 @@ packages = ["ace_playbook"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-markers = ["timeout(seconds): fail the test with TimeoutError after this many seconds (default 60; tests/conftest.py per_test_timeout)"]
+markers = ["timeout(seconds): fail the test with PerTestTimeout after this many seconds (default 60; tests/conftest.py per_test_timeout)"]
+faulthandler_timeout = 125                  # backstop for tests/conftest.py per_test_timeout: dump every stack, then abort the run
+faulthandler_exit_on_timeout = true
