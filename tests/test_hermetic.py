@@ -2,6 +2,9 @@
 
 import json
 import os
+import signal
+
+import pytest
 
 from ace_playbook import config as cfgmod
 
@@ -20,3 +23,16 @@ def test_child_processes_get_a_throwaway_home(env):  # noqa: F811
     e, _ = env
     assert e["HOME"] != os.environ.get("HOME") and os.path.isdir(e["HOME"])
     assert not os.path.exists(os.path.join(e["HOME"], ".config"))
+
+
+def test_every_test_runs_under_the_default_alarm_of_60_seconds():
+    assert signal.getsignal(signal.SIGALRM) is not signal.SIG_DFL
+    remaining = signal.alarm(0)                                       # disarms it for the rest of this test; the fixture re-checks at teardown
+    assert 0 < remaining <= 60
+
+
+@pytest.mark.timeout(1)
+@pytest.mark.xfail(strict=True, raises=TimeoutError, reason="proof of tests/conftest.py per_test_timeout: an infinite loop fails after 1 s")
+def test_an_infinite_loop_fails_with_timeout_error_instead_of_hanging():
+    while True:
+        pass
