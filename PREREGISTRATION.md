@@ -89,22 +89,25 @@ These commitments cover the compiled path in shadow mode (docs/design/compiler.m
 are binding only once `compile seal` has frozen the block below and the repository is tagged
 `prereg-v1`; until then the heading says DRAFT and nothing here is a commitment.
 
-### Primary metric (compiled path)
+### Effect estimate (compiled path, descriptive)
 
-The sessions-with-fire rate per eligible session, per detector: the share of eligible sessions in
-which the detector fires at least once, in the "with" arm (the proposal runs in its approved mode)
-versus the "without" arm (the proposal runs in observe). It is reported as a rate ratio, with
-randomization inference over 10,000 seeded permutations of the arm labels and a Wilson 95 % interval
-per arm (`metrics.wilson`). A hook has no memory across sessions, so the first attempt in a session
-cannot differ between arms; any real effect shows in repeat fires and in evasion, and the report
-leads with those two.
+The compiled-path primary stays the false-block rate and friction, with recurrence reported
+descriptively, as the "Compiled path" section above says; nothing here replaces it. The descriptive
+effect is fires per eligible session with versus without the check, per detector: the "with" arm
+runs the proposal in its approved mode, the "without" arm runs it in observe. It is reported as a
+rate ratio, with randomization inference over 10,000 seeded permutations of the arm labels and a
+Wilson 95 % interval per arm (`metrics.wilson`). A hook has no memory across sessions, so the first
+attempt in a session cannot differ between arms. The leading contrast is therefore REPEAT fires per
+eligible session and evasion; sessions-with-fire is reported descriptively.
 
 ### Eligibility
 
-A session is eligible for a detector if it has at least one event that detector consumes (the
-detector is listed in the session's `_session` row in `detector_events.jsonl`). Excluded: the
-synthetic corpus, fires with `cause: truncated`, and sessions still awaiting the offline scan at
-report time.
+A session is eligible for a detector if it has at least one event that detector consumes: the
+detector is listed in the `eligible` field of the newest `_session` row of that session in
+`detector_events.jsonl` (the last row in file order wins). Interactive and automated sessions alike;
+the scan does not distinguish them (it skips only subagent transcripts, oversized transcripts and
+sessions idle for less than the configured idle time). Excluded: the synthetic corpus, fires with
+`cause: truncated`, and sessions still awaiting the offline scan at report time.
 
 ### Arm assignment
 
@@ -117,13 +120,19 @@ document and to the report code hash (`report_sha256`) in the block below.
 ### Spillover
 
 Lessons are not arm-specific, so the "without" arm is contaminated by the prompt-level lesson that
-the same incident produced. The spillover flag is reported, not corrected.
+the same incident produced. The report flags every lesson whose originating session holds an `ACE P-`
+message and reports the arm comparison separately for sessions where such a lesson was shown. The
+flag is reported, not corrected.
 
 ### Timing and stopping
 
-A fixed horizon of N eligible sessions per detector, or 4 weeks, whichever comes first. N is filled
-at seal time from the observe-week rates with the power note of design section 8. No interim looks;
-stopping early is allowed for harm only.
+A fixed horizon of N eligible sessions per detector, or 4 weeks, whichever comes first. No interim
+looks; stopping early is allowed for harm only.
+
+N per detector: (filled by hand before the seal)
+
+The operator fills N from the week-1 rates with the power note of design section 8, before running
+`compile seal`; the real seal refuses while the placeholder above is still present.
 
 ### Null handling
 
@@ -132,9 +141,13 @@ this N", never as "no effect".
 
 ### Frozen instruments
 
-Filled by `compile seal`: one line per detector (`name sha256`, from `catalogue.source_table()`),
-`report_sha256`, the approved proposal ids and modes, `shadow_seed_sha256`, `arm_rate`,
-`measurement_start` and `sealed_at`.
+Filled by `compile seal`: one line per detector (`name strength sha256`: the strength from the
+catalogue registry and the hash from `catalogue.source_table()`), `report_sha256`, one line per
+approved proposal (`P-id mode proposal_sha256`, from the newest non-revoked row of
+`approvals.jsonl`), `shadow_seed_sha256`, `arm_rate`, `measurement_start` and `sealed_at`.
+`report_sha256` covers exactly two files, `ace_playbook/compile/metrics.py` and
+`ace_playbook/compile/report.py` (their bytes in that order, joined by a NUL byte); the detector
+code is covered by the per-detector hashes, not by `report_sha256`.
 
 (filled by compile seal)
 

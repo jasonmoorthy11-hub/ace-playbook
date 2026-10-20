@@ -20,6 +20,8 @@ from .test_compile_keyed_heads import keyed
 ROOT = Path(__file__).resolve().parent.parent
 DRAFT, SEALED = "## Shadow-mode additions (DRAFT until sealed)", "## Shadow-mode additions (SEALED 2026-11-01 prereg-v1)"
 FAKE = {"zeta_detector": "2" * 64, "alpha_detector": "1" * 64}
+STRENGTH = {"zeta_detector": "weak", "alpha_detector": "strong"}
+SEED = "e" * 64
 STAMP = "2026-11-01T12:00:00Z"
 
 
@@ -32,7 +34,26 @@ def world(tmp_path, monkeypatch):
     monkeypatch.setattr(seal, "PREREG", prereg)
     monkeypatch.setattr(seal, "now_iso", lambda: STAMP)
     monkeypatch.setattr(catalogue, "source_table", lambda: dict(FAKE))
+    monkeypatch.setattr(catalogue, "CATALOGUE", {n: SimpleNamespace(strength=s) for n, s in STRENGTH.items()})
     return cfgmod.Config(data_dir=data, chain_key_path=None), prereg
+
+
+@pytest.fixture
+def seeded(world, monkeypatch):
+    """`world` whose block carries a 64-hex shadow_seed_sha256: the executed seal's config fields do not exist yet, so the real block
+    holds `-` and the seal refuses; the checks after that refusal are reached through this fixture."""
+    real = seal.frozen_block
+    monkeypatch.setattr(seal, "frozen_block",
+                        lambda cfg, sealed_at="-": real(cfg, sealed_at).replace("shadow_seed_sha256 -", f"shadow_seed_sha256 {SEED}"))
+    return world
+
+
+@pytest.fixture
+def ready(seeded):
+    """`seeded` with N filled by hand in the copy of the pre-registration."""
+    cfg, prereg = seeded
+    prereg.write_text(prereg.read_text().replace(seal.HAND, "40"))
+    return cfg, prereg
 
 
 def row(cfg, pid, mode, ts, ring=None):
@@ -61,8 +82,8 @@ def test_the_dry_run_prints_the_block_in_the_documented_format(world, capsys):
     row(cfg, "P-00000001", "observe", "2026-10-19T00:00:00Z")
     assert go(cfg)[0] == 0
     assert capsys.readouterr().out == (
-        f"detectors:\n  alpha_detector {'1' * 64}\n  zeta_detector {'2' * 64}\nreport_sha256 {report.source_sha256()}\n"
-        "proposals:\n  P-00000001 observe\n  P-00000002 warn\nshadow_seed_sha256 -\narm_rate 0.5 (planned)\n"
+        f"detectors:\n  alpha_detector strong {'1' * 64}\n  zeta_detector weak {'2' * 64}\nreport_sha256 {report.source_sha256()}\n"
+        f"proposals:\n  P-00000001 observe {'a' * 64}\n  P-00000002 warn {'a' * 64}\nshadow_seed_sha256 -\narm_rate 0.5 (planned)\n"
         "measurement_start 2026-10-20T00:00:00Z\nsealed_at -\n")
 
 
@@ -80,8 +101,8 @@ def test_the_block_lists_every_catalogue_detector_with_its_real_hash(world, monk
     assert go(cfg)[0] == 0
     lines = capsys.readouterr().out.splitlines()
     names = sorted(catalogue.CATALOGUE)
-    assert lines[0] == "detectors:" and lines[1:1 + len(names)] == [f"  {n} {catalogue.CATALOGUE[n].source_sha256}" for n in names]
-    assert all(re.fullmatch(r"  [a-z_0-9]+ [0-9a-f]{64}", ln) for ln in lines[1:1 + len(names)])
+    assert lines[0] == "detectors:" and lines[1:1 + len(names)] == [f"  {n} {catalogue.CATALOGUE[n].strength} {catalogue.CATALOGUE[n].source_sha256}" for n in names]
+    assert all(re.fullmatch(r"  [a-z_0-9]+ (strong|weak) [0-9a-f]{64}", ln) for ln in lines[1:1 + len(names)])
 
 
 def test_measurement_start_is_the_newest_non_revoked_row_and_a_revoked_proposal_is_skipped(world, capsys):
@@ -92,7 +113,7 @@ def test_measurement_start_is_the_newest_non_revoked_row_and_a_revoked_proposal_
     row(cfg, "P-00000001", "warn", "2026-10-22T00:00:00Z")
     assert go(cfg)[0] == 0
     out = capsys.readouterr().out
-    assert "  P-00000001 warn\n" in out and "P-00000002" not in out and "measurement_start 2026-10-22T00:00:00Z" in out
+    assert f"  P-00000001 warn {'a' * 64}\n" in out and "P-00000002" not in out and "measurement_start 2026-10-22T00:00:00Z" in out
     row(cfg, "P-00000001", "revoked", "2026-10-23T00:00:00Z")
     go(cfg)
     out = capsys.readouterr().out
@@ -106,7 +127,7 @@ def test_a_keyed_chain_is_read_with_the_key(world, tmp_path, capsys):
     ring = keyed(SimpleNamespace(cfg=cfg))                  # key file and empty signed heads, as `keygen` leaves them
     row(cfg, "P-00000001", "observe", "2026-10-19T00:00:00Z", ring)
     assert go(cfg)[0] == 0
-    assert "  P-00000001 observe\n" in capsys.readouterr().out
+    assert f"  P-00000001 observe {'a' * 64}\n" in capsys.readouterr().out
 
 
 def test_a_broken_chain_is_reported_and_the_dry_run_still_exits_0(world, capsys):
@@ -115,11 +136,11 @@ def test_a_broken_chain_is_reported_and_the_dry_run_still_exits_0(world, capsys)
     break_chain(cfg)
     assert go(cfg)[0] == 0
     out = capsys.readouterr().out
-    assert "proposals:\n  (approvals chain broken at row 2)\n  P-00000001 observe\n" in out and out.endswith("sealed_at -\n")
+    assert f"proposals:\n  (approvals chain broken at row 2)\n  P-00000001 observe {'a' * 64}\n" in out and out.endswith("sealed_at -\n")
 
 
-def test_seal_rewrites_the_heading_once_and_refuses_the_second_time(world, capsys):
-    cfg, prereg = world
+def test_seal_rewrites_the_heading_once_and_refuses_the_second_time(ready, capsys):
+    cfg, prereg = ready
     row(cfg, "P-00000001", "observe", "2026-10-19T00:00:00Z")
     code, asked = go(cfg, dry=False)
     text = prereg.read_text()
@@ -127,7 +148,7 @@ def test_seal_rewrites_the_heading_once_and_refuses_the_second_time(world, capsy
     assert SEALED in text and DRAFT not in text and text.count("## Shadow-mode additions") == 1
     assert "(filled by compile seal)" not in text
     block = re.search(r"### Frozen instruments\n.*?```text\n(.*?)```", text, re.S).group(1)
-    assert block.startswith("detectors:\n  alpha_detector ") and f"sealed_at {STAMP}\n" in block and "sealed_at -" not in block
+    assert block.startswith("detectors:\n  alpha_detector strong ") and f"shadow_seed_sha256 {SEED}\n" in block and f"sealed_at {STAMP}\n" in block and "sealed_at -" not in block
     assert block.replace(f"sealed_at {STAMP}", "sealed_at -") == seal.frozen_block(cfg)
     capsys.readouterr()
     again, asked = go(cfg, dry=False)
@@ -135,8 +156,8 @@ def test_seal_rewrites_the_heading_once_and_refuses_the_second_time(world, capsy
     assert "already sealed" in capsys.readouterr().err
 
 
-def test_seal_prints_exactly_the_two_git_commands_and_never_runs_git(world, capsys, monkeypatch):
-    cfg, _ = world
+def test_seal_prints_exactly_the_two_git_commands_and_never_runs_git(ready, capsys, monkeypatch):
+    cfg, _ = ready
     monkeypatch.setattr("subprocess.run", lambda *a, **k: pytest.fail("seal must not run git"))
     assert go(cfg, dry=False)[0] == 0
     repo = Path(seal.__file__).resolve().parents[2]
@@ -152,15 +173,15 @@ def test_seal_without_a_terminal_refuses_and_writes_nothing(world):
 
 
 @pytest.mark.parametrize("answer", ["n", "", "no", "x"])
-def test_anything_but_yes_writes_nothing(world, answer):
-    cfg, prereg = world
+def test_anything_but_yes_writes_nothing(ready, answer):
+    cfg, prereg = ready
     before = prereg.read_bytes()
     code, asked = go(cfg, dry=False, answer=answer)
     assert code == 1 and len(asked) == 1 and prereg.read_bytes() == before
 
 
-def test_a_broken_chain_is_not_sealed(world, capsys):
-    cfg, prereg = world
+def test_a_broken_chain_is_not_sealed(ready, capsys):
+    cfg, prereg = ready
     row(cfg, "P-00000001", "observe", "2026-10-19T00:00:00Z")
     break_chain(cfg)
     before = prereg.read_bytes()
@@ -179,10 +200,13 @@ def test_the_section_text_has_its_eight_subsections_and_the_filler_line():
     assert text.count(DRAFT) == 1 and text.index(DRAFT) < text.index("\n## Amendments\n")
     section = text[text.index(DRAFT):text.index("\n## Amendments\n")]
     heads = re.findall(r"^### (.*)$", section, re.M)
-    assert heads == ["Primary metric (compiled path)", "Eligibility", "Arm assignment", "Spillover", "Timing and stopping",
+    assert heads == ["Effect estimate (compiled path, descriptive)", "Eligibility", "Arm assignment", "Spillover", "Timing and stopping",
                      "Null handling", "Frozen instruments", "Amendments"]
     assert section.count("\n(filled by compile seal)\n") == 1
     assert "10,000 seeded permutations" in section and "metrics.wilson" in section and "arm_rate" in section
+    assert section.count("\nN per detector: (filled by hand before the seal)\n") == 1 and "REPEAT fires" in section
+    assert "`name strength sha256`" in section and "`P-id mode proposal_sha256`" in section and "`ACE P-`" in section
+    assert "Interactive and automated sessions alike" in section
 
 
 def test_the_cli_wires_seal_dry_run(tmp_path, capsys, monkeypatch):

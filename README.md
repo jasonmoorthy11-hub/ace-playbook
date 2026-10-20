@@ -101,7 +101,7 @@ apart and never blended with the private ones. There are still no results: to pr
 `python3 -m ace_playbook.compile replay-synthetic` and then `compile report` (the private table stays empty until a proposal is approved). The nightly `compile offline` pass (run by `hooks/nightly_sweep.py`)
 records detector events from finished transcripts, pre-fills labels that a human row always overrides, and
 appends hash-chained demotions that only ever lower a proposal's mode and that the shadow hook honours until the operator approves it again.
-`python3 -m ace_playbook.compile seal --dry-run` prints the pre-registration's frozen-instruments block with live values and writes nothing (the real seal is built but not executed). No model writes a check, a hook or a setting, and nothing is installed for you.
+`python3 -m ace_playbook.compile seal --dry-run` prints the pre-registration's frozen-instruments block with live values and writes nothing (the real seal is built but refuses until the seed commitment exists). No model writes a check, a hook or a setting, and nothing is installed for you.
 
 ## Run it
 
