@@ -104,7 +104,7 @@ def refusal(mod, w, ring):
 
 
 # ------------------------------------------------------------------ 1. splice between chains
-@pytest.mark.parametrize("relinked", [False, True], ids=["as_is", "relinked_and_resigned_under_the_real_key"])
+@pytest.mark.parametrize("relinked", [False, True], ids=["as_is", "relinked_and_signed_with_the_real_key"])
 @pytest.mark.parametrize("mod", MODS)
 def test_a_valid_row_of_the_other_chain_spliced_in_is_broken_at_that_row(w, mod, relinked):
     ring = keyed(w)
@@ -112,13 +112,14 @@ def test_a_valid_row_of_the_other_chain_spliced_in_is_broken_at_that_row(w, mod,
     donor = dm if mod is approvals else approvals
     row = json.loads(lines(w, donor)[-1])
     assert donor.read_chain(w.data, ring)[1] is None                              # the row is valid where it came from
-    if relinked:                                                                  # an attacker WITH the key: right prev_hash, right MAC
+    if relinked:                                                                  # linked and signed correctly: only the row schema is wrong
         row["prev_hash"] = json.loads(lines(w, mod)[-1])["hash"]
         row["hash"] = keyed_hash(K1, row)
     with open(w.data / mod.FILE, "a") as fh:
         fh.write(json.dumps(row, sort_keys=True) + "\n")
     rows, broken = READ[mod](w.data, ring)
-    # the two chains share one key and the MAC carries no chain label: the disjoint row KEYS (the shape check) are the separation
+    # the chains share one key and the MAC has no chain label: both params prove the same thing, that the disjoint row KEYS (shape check)
+    # separate them; `relinked` adds that a correct link and MAC do not matter
     assert len(rows) == 2 and number(mod, broken) == 3
     assert "chain broken at row 3" in refusal(mod, w, ring)
     assert READ[donor](w.data, ring)[1] is None                                   # the donor chain is untouched
@@ -316,7 +317,7 @@ def test_a_middle_row_re_signed_under_a_different_key_is_broken_at_that_row(w, m
 
 
 @pytest.mark.parametrize("mod", MODS)
-def test_a_whole_chain_re_signed_under_another_key_is_broken_at_row_one_even_with_matching_forged_heads(w, mod):
+def test_a_whole_chain_re_signed_under_another_key_is_broken_at_row_one(w, mod):
     ring = keyed(w)
     for i in (1, 2):
         add(mod, w.data, ring, i)
@@ -326,8 +327,7 @@ def test_a_whole_chain_re_signed_under_another_key_is_broken_at_row_one_even_wit
         r["hash"] = prev = keyed_hash(K2, r)
         out.append(r)
     (w.data / mod.FILE).write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in out))
-    Keyring(K2, ring.heads_path).update(**{mod.FILE.split(".")[0]: prev})         # the forger cannot make the heads verify under the real key
-    got, broken = READ[mod](w.data, ring)
+    got, broken = READ[mod](w.data, ring)                                         # a row break wins in head_state: the heads are not consulted
     assert got == [] and number(mod, broken) == 1
 
 
