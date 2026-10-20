@@ -187,6 +187,7 @@ def test_garbage_that_only_says_v2_is_a_broken_chain_not_a_missing_key(tmp_path,
 # ------------------------------------------------------------------ config
 def test_chain_key_path_defaults_to_the_config_dir_under_home_and_can_be_overridden(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cfgmod, "DEFAULT_CHAIN_KEY", "~/.config/ace-playbook/chain_key")   # the production literal; conftest redirects it for every other test
     assert cfgmod.from_dict({}).chain_key_path == tmp_path / ".config" / "ace-playbook" / "chain_key"
     assert cfgmod.from_dict({"chain_key_path": "~/k"}).chain_key_path == tmp_path / "k"
     assert cfgmod.from_dict({"chain_key_path": None}).chain_key_path is None
