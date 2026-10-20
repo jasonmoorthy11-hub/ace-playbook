@@ -109,6 +109,7 @@ precision with a Wilson interval (`INSUFFICIENT` below five labels), the label q
 from the same dict as `compile report --json`, writes `status.json` (0600) and shows nothing to a model.
 `compile digest [--since ISO]` prints the same data as six short blocks (status, needs you, detectors, health, changes, next); the nightly
 sweep runs it quietly and appends one line to `digest.log`, so a night without a digest shows.
+`compile dashboard [--days N] [--out PATH]` renders the same status as one self-contained HTML page (no script, no network; `dashboard.html`, 0600).
 
 ## Run it
 

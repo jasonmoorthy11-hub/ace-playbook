@@ -970,6 +970,10 @@ least 3 rows today and more than 3 times its daily mean over the window, chain n
 `--since`, default 24 hours) and `next` (week-one date, earliest warn dates). Each run appends one JSON line `{ts, report_sha256, queue,
 notes}` to `data_dir/digest.log` (0600, O_APPEND); `hooks/nightly_sweep.py` does that after the offline pass, so a missing line is a missed night.
 
+| Surface | Entry | Shows |
+|---|---|---|
+| Dashboard | `compile dashboard [--days N] [--out PATH]` | one static HTML file (0600) from `status.build`: day, tiles, table, Wilson bars |
+
 ### Seal (as built, not executed)
 
 `python3 -m ace_playbook.compile seal [--dry-run]` (`compile/seal.py`) is built; the pre-registration is not sealed, and the

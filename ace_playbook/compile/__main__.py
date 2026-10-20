@@ -19,7 +19,7 @@ from .. import config as cfgmod
 from .. import ttyio
 from ..atomic import write_private
 from ..canon import now_iso
-from . import approvals, chains, chains_cli, chains_io, digest, evidence, labels, modes, proposal, report, seal, shadow, status, synth
+from . import approvals, chains, chains_cli, chains_io, dashboard, digest, evidence, labels, modes, proposal, report, seal, shadow, status, synth
 
 LEGACY_BANNER = ("This lesson's stored evidence is self-quoted legacy text; "
                  "the human incident label is the only evidence.")
@@ -264,7 +264,7 @@ def main(argv: list[str] | None = None) -> int:
     rp = sub.add_parser("report", help="counts per proposal from shadow rows and labels; synthetic kept apart")
     rp.add_argument("--days", type=int, default=14, help="days in the rows-per-day block (default 14, 1 to 3660)")
     rp.add_argument("--json", action="store_true", help="one JSON object instead of text")
-    for verb in (status, digest): verb.add_parser(sub)       # noqa: E701 - the read-side verbs own their arguments
+    for verb in (status, digest, dashboard): verb.add_parser(sub)       # noqa: E701 - the read-side verbs own their arguments
     of = sub.add_parser("offline", help="the nightly pass: detector events, auto labels, demotions, evasion, state cleanup")
     of.add_argument("--dry-run", action="store_true", help="compute and print the counts, write nothing")
     of.add_argument("--since", type=int, default=7, help="only transcripts modified in the last N days (1 to 3660, default 7)")
@@ -279,7 +279,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         cfg = cfgmod.load(args.config)
         return {"cards": cmd_cards, "propose": cmd_propose, "validate": cmd_validate, "approve": cmd_approve,
-                "unapprove": cmd_unapprove, "label": lambda c, a: labels.run(c, a, lambda prompt: _ask(prompt), _need_tty), "report": lambda c, a: report.run(c, a.days, a.json), "shadow": lambda c, a: shadow.main([a.event], c), "status": lambda c, a: status.run(c, a.days, a.json, a.out), "digest": lambda c, a: digest.run(c, a.since, a.days),
+                "unapprove": cmd_unapprove, "label": lambda c, a: labels.run(c, a, lambda prompt: _ask(prompt), _need_tty), "report": lambda c, a: report.run(c, a.days, a.json), "shadow": lambda c, a: shadow.main([a.event], c), "status": lambda c, a: status.run(c, a.days, a.json, a.out), "digest": lambda c, a: digest.run(c, a.since, a.days), "dashboard": lambda c, a: dashboard.run(c, a.days, a.out),
                 "offline": cmd_offline, "keygen": lambda c, a: chains_cli.keygen(c, _need_tty, a.rehead, lambda prompt: _ask(prompt)),
                 "seal": lambda c, a: seal.run(c, a, lambda prompt: _ask(prompt), _need_tty),
                 "replay-synthetic": lambda c, a: synth.run(c, a.out)}[args.cmd](cfg, args)
