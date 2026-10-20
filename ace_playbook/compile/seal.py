@@ -23,6 +23,9 @@ REPO = Path(__file__).resolve().parents[2]
 PREREG = REPO / "PREREGISTRATION.md"                         # tests point this at a copy
 TAG, FILLER, HAND, SEED = "prereg-v1", "(filled by compile seal)", "(filled by hand before the seal)", "shadow_seed_sha256"
 _HEAD = re.compile(r"^## Shadow-mode additions \((DRAFT until sealed|SEALED[^)\n]*)\)$", re.M)
+_COUNT = re.compile(r"^ {0,3}##\s+Shadow-mode additions", re.M)           # looser than _HEAD: an indented or double-spaced heading counts
+_N_LINE = re.compile(r"^N per detector: (?!\(filled by hand)\S.*$", re.M)
+PLANNED = "arm_rate 0.5 (planned)"
 
 
 def _proposals(cfg) -> tuple[list[str], str, object]:
@@ -50,7 +53,7 @@ def frozen_block(cfg, sealed_at: str = "-") -> str:
     lines, start, broken = _proposals(cfg)
     out = ["detectors:", *(f"  {n} {catalogue.CATALOGUE[n].strength} {sha}" for n, sha in sorted(catalogue.source_table().items())),
            f"report_sha256 {report.source_sha256()}", "proposals:", *_notice(broken), *(lines or ([] if broken else ["  (none)"])),
-           f"{SEED} -", "arm_rate 0.5 (planned)", f"measurement_start {start}", f"sealed_at {sealed_at}"]
+           f"{SEED} -", PLANNED, f"measurement_start {start}", f"sealed_at {sealed_at}"]
     return "\n".join(out) + "\n"
 
 
@@ -83,7 +86,7 @@ def run(cfg, args: argparse.Namespace, ask: Callable[[str], str], need_tty: Call
         return 2
     text = PREREG.read_text(encoding="utf-8")
     heads = list(_HEAD.finditer(text))
-    if len(heads) != 1 or ("\n" + text).count("\n## Shadow-mode additions") != 1:
+    if len(heads) != 1 or len(_COUNT.findall(text)) != 1:
         return _fail(2, "the pre-registration must hold exactly one '## Shadow-mode additions' heading")
     head = heads[0]
     if head.group(1).startswith("SEALED"):
@@ -95,16 +98,20 @@ def run(cfg, args: argparse.Namespace, ask: Callable[[str], str], need_tty: Call
     fend = end if fend < 0 else fend
     if fz < 0 or text.count("\n" + FILLER + "\n", fz, fend) != 1:
         return _fail(2, f"the Frozen instruments subsection must hold exactly one '{FILLER}' line")
-    if HAND in text[head.end():end]:
-        return _fail(1, f"N per detector is not filled: replace '{HAND}' in the Timing and stopping subsection before sealing")
+    tm = text.find("\n### Timing and stopping\n", head.end(), end)
+    tend = text.find("\n### ", tm + 1, end) if tm >= 0 else -1
+    if HAND in text[head.end():end] or tm < 0 or len(_N_LINE.findall(text[tm:end if tend < 0 else tend])) != 1:
+        return _fail(1, f"the Timing and stopping subsection must hold exactly one 'N per detector: <value>' line, filled by hand "
+                        f"(not '{HAND}') before sealing")
     if (broken := _proposals(cfg)[2]) is not None:
         return _fail(1, f"approvals.jsonl chain {'unreadable' if broken == 'unreadable' else 'broken ' + chains.where(broken)}; "
                         "repair it before sealing")
     stamp = now_iso()
     block = frozen_block(cfg, stamp)
     print(block, end="")
-    if f"\n{SEED} -\n" in "\n" + block:
-        return _fail(1, f"{SEED} is '-': the seal refuses until the shadow_seed and arm_rate config fields exist (they land with the executed seal)")
+    if f"\n{SEED} -\n" in "\n" + block or f"\n{PLANNED}\n" in "\n" + block:
+        return _fail(1, f"{SEED} is '-' or arm_rate is '(planned)': the seal refuses until the shadow_seed and arm_rate config fields exist "
+                        "(they land with the executed seal)")
     if ask(f"Seal the shadow-mode section as of {stamp[:10]} with the block above? [y/N] ").lower() not in ("y", "yes"):
         return _fail(1, "not sealed")
     if PREREG.read_text(encoding="utf-8") != text:

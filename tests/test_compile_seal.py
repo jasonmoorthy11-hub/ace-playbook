@@ -40,11 +40,11 @@ def world(tmp_path, monkeypatch):
 
 @pytest.fixture
 def seeded(world, monkeypatch):
-    """`world` whose block carries a 64-hex shadow_seed_sha256: the executed seal's config fields do not exist yet, so the real block
-    holds `-` and the seal refuses; the checks after that refusal are reached through this fixture."""
+    """`world` whose block carries a 64-hex shadow_seed_sha256 and `arm_rate 0.5`: the executed seal's config fields do not exist yet, so
+    the real block holds `-` and `(planned)` and the seal refuses; the checks after that refusal are reached through this fixture."""
     real = seal.frozen_block
-    monkeypatch.setattr(seal, "frozen_block",
-                        lambda cfg, sealed_at="-": real(cfg, sealed_at).replace("shadow_seed_sha256 -", f"shadow_seed_sha256 {SEED}"))
+    monkeypatch.setattr(seal, "frozen_block", lambda cfg, sealed_at="-": real(cfg, sealed_at).replace(
+        "shadow_seed_sha256 -", f"shadow_seed_sha256 {SEED}").replace(seal.PLANNED, "arm_rate 0.5"))
     return world
 
 

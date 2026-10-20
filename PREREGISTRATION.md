@@ -105,8 +105,10 @@ eligible session and evasion; sessions-with-fire is reported descriptively.
 A session is eligible for a detector if it has at least one event that detector consumes: the
 detector is listed in the `eligible` field of the newest `_session` row of that session in
 `detector_events.jsonl` (the last row in file order wins). Interactive and automated sessions alike;
-the scan does not distinguish them (it skips only subagent transcripts, oversized transcripts and
-sessions idle for less than the configured idle time). Excluded: the synthetic corpus, fires with
+the scan does not distinguish them. It reads `*.jsonl` transcripts and `offline.discover` skips subagent
+transcripts, non-regular files (symlinks included), names that do not match the session-id pattern,
+transcripts older than the `since_days` look-back, already-scanned transcripts that have not changed,
+oversized transcripts (over 64 MiB) and sessions idle for less than the configured idle time. Excluded: the synthetic corpus, fires with
 `cause: truncated`, and sessions still awaiting the offline scan at report time.
 
 ### Arm assignment

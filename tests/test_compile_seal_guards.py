@@ -98,12 +98,39 @@ def test_an_unfilled_n_refuses_before_the_chain_and_the_prompt(seeded, capsys):
     assert code == 1 and asked == [] and prereg.read_bytes() == before and "N per detector" in err and seal.HAND in err
 
 
+def test_the_whole_n_line_deleted_refuses_too(ready, capsys):
+    cfg, prereg = ready
+    text = prereg.read_text()
+    assert "\nN per detector: 40\n" in text
+    prereg.write_text(text.replace("\nN per detector: 40\n", "\n", 1))
+    before = prereg.read_bytes()
+    code, asked = real(cfg, prereg)
+    assert code == 1 and asked == [] and prereg.read_bytes() == before and "N per detector" in capsys.readouterr().err
+
+
+def test_two_n_lines_refuse(ready):
+    cfg, prereg = ready
+    prereg.write_text(prereg.read_text().replace("\nN per detector: 40\n", "\nN per detector: 40\nN per detector: 50\n", 1))
+    before = prereg.read_bytes()
+    code, asked = real(cfg, prereg)
+    assert code == 1 and asked == [] and prereg.read_bytes() == before
+
+
+def test_an_indented_duplicate_heading_is_a_usage_error(ready):
+    cfg, prereg = ready
+    prereg.write_text(prereg.read_text().rstrip("\n") + "\n\n  ##  Shadow-mode additions (DRAFT until sealed)\n")
+    before = prereg.read_bytes()
+    code, asked = real(cfg, prereg)
+    assert code == 2 and asked == [] and prereg.read_bytes() == before
+
+
 def test_the_real_block_has_no_seed_hash_so_the_seal_refuses(world, capsys):
     cfg, prereg = world
     prereg.write_text(prereg.read_text().replace(seal.HAND, "40"))
     before = prereg.read_bytes()
     code, asked = real(cfg, prereg)
-    assert code == 1 and asked == [] and prereg.read_bytes() == before and "shadow_seed_sha256" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert code == 1 and asked == [] and prereg.read_bytes() == before and "shadow_seed_sha256" in err and "arm_rate" in err
     assert go(cfg)[0] == 0 and "shadow_seed_sha256 -\n" in capsys.readouterr().out          # the dry run still prints the placeholder
 
 
