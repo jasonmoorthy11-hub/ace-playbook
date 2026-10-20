@@ -26,8 +26,9 @@ def env(tmp_path):
     conf = tmp_path / "config.json"
     data = tmp_path / "data"
     conf.write_text(json.dumps({"data_dir": str(data), "holdout_enabled": False}))
+    (tmp_path / "home").mkdir(exist_ok=True)                     # the child's HOME: its `~` never reaches the operator's key dir
     e = {**os.environ, "ACE_PLAYBOOK_CONFIG": str(conf), "ACE_PLAYBOOK_HOME": str(ROOT),
-         "ACE_PYTHON": sys.executable}
+         "ACE_PYTHON": sys.executable, "HOME": str(tmp_path / "home")}
     return e, cfgmod.load(conf)
 
 
