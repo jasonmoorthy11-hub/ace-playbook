@@ -355,6 +355,9 @@ differs; `compile report` then prints the synthetic table apart from the private
 **Status.** `python3 -m ace_playbook.compile status` prints one screen (measurement day, per proposal fires over eligible sessions, tp/fp/unlabelled,
 precision, a verdict, the label queue, heartbeat ages, hook cost against 200 ms, notes) and writes `data_dir/status.json` (0600; `--out PATH` elsewhere,
 `--json` prints it). It reads only; the `heartbeat` block shows when the hook, the offline scan and the nightly run last worked.
+`python3 -m ace_playbook.compile digest [--since ISO]` prints the same data as six blocks. `hooks/nightly_sweep.py` runs it quietly after the
+offline pass (`digest` in its JSON report; none in an offline dry run) and appends one line `{ts, report_sha256, queue, notes}` to
+`data_dir/digest.log` (0600): check that file for a line per night; a missing night means the sweep did not run.
 
 ## What the hooks write
 

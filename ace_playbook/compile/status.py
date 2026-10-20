@@ -39,12 +39,17 @@ def parse_ts(ts: object) -> datetime | None:
         return None
 
 
+def seconds_since(ts: object, now: str) -> int | None:
+    """Whole seconds from a stamp to `now` (0 for a stamp in the future); None for a bad stamp."""
+    then, here = parse_ts(ts), parse_ts(now)
+    return None if then is None or here is None else max(0, int((here - then).total_seconds()))
+
+
 def age(ts: object, now: str) -> str:
     """`5m`, `3h` (under 48 hours) or `2d` between a stamp and `now`; `never` for None or a bad stamp."""
-    then, here = parse_ts(ts), parse_ts(now)
-    if then is None or here is None:
+    secs = seconds_since(ts, now)
+    if secs is None:
         return "never"
-    secs = max(0, int((here - then).total_seconds()))
     return f"{secs // 60}m" if secs < 3600 else f"{secs // 3600}h" if secs < 48 * 3600 else f"{secs // 86400}d"
 
 
@@ -161,6 +166,7 @@ def build(cfg: Config, days: int = 14, now: str | None = None) -> dict:
                             "week1_due": (t0 + timedelta(days=WEEK)).strftime(FMT) if t0 else None, "keyed": ring is not None,
                             "chains": {"approvals": _chain(abroken), "demotions": _chain(dem_broken), "labels": _chain(lab_broken)}},
             "heartbeat": _heartbeat(cfg, rows, notes), "proposals": props, "queue": queue[:QUEUE_MAX], "queue_total": len(queue),
+            "per_day": d["private"]["per_day"],
             "cost": {"p50_ms": corpus["cost_p50_ms"], "p95_ms": corpus["cost_p95_ms"], "rows": corpus["cost_rows"], "threshold_ms": COST_MS},
             "agreement": corpus["agreement"], "demotions": d["demotions"]["rows"]}
 
@@ -169,16 +175,21 @@ def _precision(v: object) -> str:
     return v if isinstance(v, str) else "[{},{}]".format(*v)
 
 
+def table(s: dict) -> list[str]:
+    """The per-proposal grid (header first) of the screen and of the digest."""
+    body = [[pid, p["detector"], p["mode"], f"{'-' if p['fires'] is None else p['fires']}/{'-' if p['eligible'] is None else p['eligible']}",
+             f"{p['tp']}/{p['fp']}/{p['unlabelled']}", _precision(p["precision"]), p["verdict"]] for pid, p in s["proposals"].items()]
+    return report._grid(HEADS, body)
+
+
 def render(s: dict) -> str:
     """The text screen: every figure in it is in `s`."""
     m, h, now, c = s["measurement"], s["heartbeat"], s["generated_at"], s["cost"]
     head = (f"ace status  day {'-' if m['day'] is None else m['day']} of {WEEK}  keyed {'yes' if m['keyed'] else 'no'}  "
             f"chains {'ok' if all(v == 'ok' for v in m['chains'].values()) else 'BROKEN'}  report {s['report_sha256'][:8]}")
-    body = [[pid, p["detector"], p["mode"], f"{'-' if p['fires'] is None else p['fires']}/{'-' if p['eligible'] is None else p['eligible']}",
-             f"{p['tp']}/{p['fp']}/{p['unlabelled']}", _precision(p["precision"]), p["verdict"]] for pid, p in s["proposals"].items()]
     oldest = f" (oldest {age(s['queue'][0]['ts'], now)})" if s["queue"] else ""
     nightly = age(h["last_nightly_ok"], now)
-    lines = [head, *report._grid(HEADS, body), "", f"queue: {s['queue_total']} unlabelled{oldest}",
+    lines = [head, *table(s), "", f"queue: {s['queue_total']} unlabelled{oldest}",
              f"heartbeat  hook {age(h['last_hook_row'], now)}  live fire {age(h['last_live_fire'], now)}  "
              f"offline scan {age(h['last_offline_scan'], now)}  nightly ok {nightly}",
              f"cost p95 {c['p95_ms']} ms vs {c['threshold_ms']}", "notes: " + (", ".join(h["notes"]) or "none")]

@@ -230,7 +230,7 @@ def sweep(w, monkeypatch, capsys):
 
 def test_nightly_sweep_runs_the_offline_pass_even_under_dry_run_and_lists_its_counts(sweep):
     out, calls = sweep("--dry-run")
-    assert out == {"offline": {"transcripts": 3}, "sweep": [{"status": "would_reflect"}]}
+    assert out == {"offline": {"transcripts": 3}, "digest": {"queue": 0, "notes": []}, "sweep": [{"status": "would_reflect"}]}
     assert calls["offline"][0]["dry_run"] is False and calls["sweep"][0]["dry_run"] is True
 
 
@@ -246,7 +246,8 @@ def test_an_offline_exception_is_reported_by_type_and_reflection_still_runs(swee
         raise KeyError("secret detail /private/path")
     monkeypatch.setattr(offline, "run", fail)
     out, calls = sweep("--dry-run")
-    assert out == {"offline": {"error": "KeyError"}, "sweep": [{"status": "would_reflect"}]} and len(calls["sweep"]) == 1
+    assert out == {"offline": {"error": "KeyError"}, "digest": {"queue": 0, "notes": []}, "sweep": [{"status": "would_reflect"}]}
+    assert len(calls["sweep"]) == 1
 
 
 def test_nightly_sweep_with_offline_dry_run_really_leaves_the_data_directory_untouched(w, tmp_path, monkeypatch, capsys):

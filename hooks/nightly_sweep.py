@@ -33,6 +33,11 @@ def main() -> int:
         except Exception as exc:                      # type only; reflection still runs
             report["offline"] = {"error": type(exc).__name__}
             failed = f"offline pass raised {type(exc).__name__}"
+    try:                                              # the read-out: one digest.log line a night (none in an offline dry run)
+        from ace_playbook.compile import digest
+        report["digest"] = digest.run_quiet(cfg, write=not args.offline_dry_run)
+    except Exception as exc:                          # type only; a failing digest never fails the sweep
+        report["digest"] = {"error": type(exc).__name__}
     try:
         report["sweep"] = run_sweep(cfg, max_n=args.max_n, dry_run=args.dry_run, idle_minutes=args.idle_minutes)
     finally:

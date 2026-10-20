@@ -105,6 +105,8 @@ appends hash-chained demotions that only ever lower a proposal's mode and that t
 `python3 -m ace_playbook.compile status [--json] [--out PATH]` is the operator's one screen: measurement day, per-proposal fires, labels,
 precision with a Wilson interval (`INSUFFICIENT` below five labels), the label queue, a heartbeat and a verdict per proposal. It is built
 from the same dict as `compile report --json`, writes `status.json` (0600) and shows nothing to a model.
+`compile digest [--since ISO]` prints the same data as six short blocks (status, needs you, detectors, health, changes, next); the nightly
+sweep runs it quietly and appends one line to `digest.log`, so a night without a digest shows.
 
 ## Run it
 

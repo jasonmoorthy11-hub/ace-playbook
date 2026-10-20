@@ -953,7 +953,12 @@ positives is `noisy: add an exception or retire`; otherwise `warn eligible`. An 
 with zero counts and its own rates from `metrics.compute`, because the report lists proposals with rows only. The `heartbeat`
 block (last hook row, last live fire, `offline_state.json` mtime, last good nightly run, notes such as `chain_key:missing`,
 `approvals:broken:<where>` and `silent:<detector>`) says whether the instruments are alive. `measurement.start` is the newest
-approvals row in observe, warn or block mode. `compile digest` renders the same dict as six blocks (see hooks/INSTALL.md).
+approvals row in observe, warn or block mode. `compile digest [--since ISO] [--days N]` (`compile/digest.py`) renders the same dict as six
+plain-text blocks: `status` (protocol `shadow-v1`, report hash, day, keyed, chains), `needs you` (the label queue and the command to
+work it), `detectors` (the status table), `health` (silent detectors, stale heartbeats over 36 hours, a spike when a proposal has at
+least 3 rows today and more than 3 times its daily mean over the window, chain notes), `changes` (approvals and demotions after
+`--since`, default 24 hours) and `next` (week-one date, earliest warn dates). Each run appends one JSON line `{ts, report_sha256, queue,
+notes}` to `data_dir/digest.log` (0600, O_APPEND); `hooks/nightly_sweep.py` does that after the offline pass, so a missing line is a missed night.
 
 ### Seal (as built, not executed)
 
