@@ -973,6 +973,7 @@ notes}` to `data_dir/digest.log` (0600, O_APPEND); `hooks/nightly_sweep.py` does
 | Surface | Entry | Shows |
 |---|---|---|
 | Dashboard | `compile dashboard [--days N] [--out PATH]` | one static HTML file (0600) from `status.build`: day, tiles, table, Wilson bars |
+| Status line | `hooks/statusline.sh` (Claude Code `statusLine`) | one line from `status.json`: approved, fires24h, unlabelled, chains, heartbeat |
 
 ### Seal (as built, not executed)
 

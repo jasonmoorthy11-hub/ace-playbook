@@ -360,6 +360,22 @@ precision, a verdict, the label queue, heartbeat ages, hook cost against 200 ms,
 `python3 -m ace_playbook.compile digest [--since ISO]` prints the same data as six blocks. `hooks/nightly_sweep.py` runs it quietly after the
 offline pass (`digest` in its JSON report; none in an offline dry run) and appends one line `{ts, report_sha256, queue, notes}` to
 `data_dir/digest.log` (0600): check that file for a line per night; a missing night means the sweep did not run.
+`python3 -m ace_playbook.compile dashboard [--days N] [--out PATH]` renders the same data as one self-contained HTML page (`data_dir/dashboard.html`,
+0600; inline CSS, no script, no network) that you open in a browser.
+
+**Status line.** `hooks/statusline.sh` is a Claude Code status-line command. Add it to your user-level `settings.json` (adjust the path to your checkout):
+
+```json
+{"statusLine": {"type": "command", "command": "$HOME/ace-playbook/hooks/statusline.sh", "refreshInterval": 30}}
+```
+
+It prints one line, `<model> | ctx <pct>% | ace approved N  fires24h N  unlabelled N  chains ok|BROKEN  heartbeat <age>`, from `status.json`
+in the data dir (the config is found as for the other hooks: `ACE_PLAYBOOK_CONFIG`, else the default config file; `ACE_PYTHON` picks the interpreter).
+`approved` counts proposals in observe, warn or block mode. `fires24h` counts the label-queue entries (unlabelled fires) stamped within 24 hours
+before `generated_at` (`N+` when the queue, capped at 50 oldest first, is shorter than `unlabelled`). `unlabelled` is `queue_total`. `chains` is `ok`
+only when the approvals, demotions and labels chains all are. `heartbeat` is the age of the last hook row. Without a readable `status.json` it prints
+`<model> | ctx <pct>% | ace: no status file`. It runs one `python3 -I -S` (stdlib only, about 15 ms) and exits 0 on any error.
+The numbers are as fresh as `status.json`, which only `compile status` rewrites.
 
 ## What the hooks write
 
