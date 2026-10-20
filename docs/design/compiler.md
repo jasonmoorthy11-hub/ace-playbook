@@ -937,6 +937,24 @@ detector `source_sha256` list and the report code hash. Seal (`prereg-v1`) happe
 observe week and before the first randomized warn session; anything randomized before the tag is
 exploratory (PREREGISTRATION.md:6-7).
 
+### 8.x Operator surface (read-side)
+
+`compile status [--days N] [--json] [--out PATH]` (`compile/status.py`) is the one place the operator reads the measurement. Principles:
+(1) one source of truth: `status.json` (schema 1, 0600, atomic write; default `data_dir/status.json`) is built from `report.collect` and
+the two chains only, so each count and rate in it equals the `compile report --json` figure and no rate is computed outside `metrics.py`
+(precision is `metrics.wilson(tp, tp + fp)`; the one extra figure is `fp_upper_95 = 1 - 0.05^(1/n)` at zero false positives);
+(2) nothing reaches the model: the screen, the JSON and the digest are written for the terminal, never to an injector, a hook or a prompt,
+and the module is not imported on the hook path; (3) rates carry denominators and intervals, never bare counts, and fewer than five
+labels is the word `INSUFFICIENT`; (4) zero fires with zero eligible sessions is not evidence, it is `silent: eligible 0`.
+The verdict of a proposal is the first rule that holds: mode `disabled` or `revoked` (or a revoking approvals row) is `retired`;
+unlabelled rows are `label N fires`; no eligible session is `silent: eligible 0`; under 14 days since its newest approvals row is
+`warn earliest YYYY-MM-DD`; fewer than five human TPs is `needs 5 human TPs (has k)`; more than half of tp + fp being false
+positives is `noisy: add an exception or retire`; otherwise `warn eligible`. An approved copy with no shadow row is added
+with zero counts and its own rates from `metrics.compute`, because the report lists proposals with rows only. The `heartbeat`
+block (last hook row, last live fire, `offline_state.json` mtime, last good nightly run, notes such as `chain_key:missing`,
+`approvals:broken:<where>` and `silent:<detector>`) says whether the instruments are alive. `measurement.start` is the newest
+approvals row in observe, warn or block mode. `compile digest` renders the same dict as six blocks (see hooks/INSTALL.md).
+
 ### Seal (as built, not executed)
 
 `python3 -m ace_playbook.compile seal [--dry-run]` (`compile/seal.py`) is built; the pre-registration is not sealed, and the

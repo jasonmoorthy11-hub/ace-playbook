@@ -352,6 +352,10 @@ differs; `compile report` then prints the synthetic table apart from the private
 
 **Seal preview.** `python3 -m ace_playbook.compile seal --dry-run` prints the pre-registration's Frozen instruments block (detector hashes, report hash, approved proposals, measurement start) and writes nothing; without `--dry-run` it needs a terminal, refuses until the `shadow_seed`/`arm_rate` config fields exist (the executed seal, next version) and until N is filled by hand in the pre-registration, and only prints the git tag commands, it never runs git.
 
+**Status.** `python3 -m ace_playbook.compile status` prints one screen (measurement day, per proposal fires over eligible sessions, tp/fp/unlabelled,
+precision, a verdict, the label queue, heartbeat ages, hook cost against 200 ms, notes) and writes `data_dir/status.json` (0600; `--out PATH` elsewhere,
+`--json` prints it). It reads only; the `heartbeat` block shows when the hook, the offline scan and the nightly run last worked.
+
 ## What the hooks write
 
 All under `data_dir`: `deltas.jsonl` (+ `.lock`), `playbook.sqlite` (disposable view),
