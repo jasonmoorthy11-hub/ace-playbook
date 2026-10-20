@@ -233,11 +233,11 @@ def run(cfg: Config, args, ask: Callable[[str], str], need_tty: Callable[[str], 
     try:
         bad = [f for f, v, ok in (("--lesson", args.lesson, args.incident), ("--session", args.session, args.incident),
                                   ("--note", args.note, not (args.list or args.rows or args.queue)), ("--kind", args.kind, args.list),
-                                  ("--limit", args.limit, args.rows or args.queue)) if v is not None and not ok]
+                                  ("--limit", args.limit, args.rows or args.queue), ("--all", args.all or None, args.queue)) if v is not None and not ok]
         _need(not bad, f"{', '.join(bad)} do not apply to this action", 2)
         if args.queue:
             from . import queue                                 # lazy: the queue stays off the hook path
-            return queue.run(cfg, 50 if args.limit is None else args.limit, ask, need_tty)
+            return queue.run(cfg, 50 if args.limit is None else args.limit, ask, need_tty, args.all)
         if args.list or args.rows:
             return _list(cfg, args.kind) if args.list else _rows(cfg, 50 if args.limit is None else args.limit)
         if not need_tty("label"):

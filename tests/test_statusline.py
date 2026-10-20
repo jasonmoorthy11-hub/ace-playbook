@@ -60,6 +60,15 @@ def test_the_exact_line(w, tmp_path):
     assert line(tmp_path, INPUT, w.conf) == "Fable 5.1 | ctx 42% | ace approved 2  fires24h 2  unlabelled 3  chains ok  heartbeat 2h"
 
 
+def test_the_retired_queue_count_and_awaiting_scan_leave_the_line_alone(w, tmp_path):
+    def edit(s):
+        s["queue_retired"] = 7
+        s["agreement"]["awaiting_scan"] = 9
+    s = write_status(w, edit)
+    assert s["queue_retired"] == 7
+    assert line(tmp_path, INPUT, w.conf) == "Fable 5.1 | ctx 42% | ace approved 2  fires24h 2  unlabelled 3  chains ok  heartbeat 2h"
+
+
 def test_a_broken_chain_and_a_retired_proposal(w, tmp_path):
     def edit(s):
         s["measurement"]["chains"]["labels"] = "broken:5"

@@ -16,7 +16,7 @@ from .test_compile_status import NOW, ROOT, build, fire, labelled_world, pid_of,
 from .test_hooks import HOOKS, env  # noqa: F401 - env is a fixture
 
 HEADINGS = ["status", "needs you", "detectors", "health", "changes", "next"]
-LABEL_CMD = "uv run python -m ace_playbook.compile label --queue"
+LABEL_CMD = "python3 -m ace_playbook.compile label --queue"
 
 
 def block(text: str, name: str) -> list[str]:
@@ -57,6 +57,10 @@ def test_needs_you_has_the_queue_count_the_oldest_age_and_the_exact_label_comman
     assert lines[0] == "3 unlabelled fires (oldest 2d)" and lines[1] == "run: " + LABEL_CMD
     empty = block(digest.render({**build(w), "queue": [], "queue_total": 0}, None), "needs you")
     assert empty == ["nothing to label"]
+    hidden = block(digest.render({**build(w), "queue_retired": 4}, None), "needs you")
+    assert hidden[:2] == lines[:2] and "4 more on retired proposals" in hidden[2] and "--all" in hidden[2]
+    only = block(digest.render({**build(w), "queue": [], "queue_total": 0, "queue_retired": 4}, None), "needs you")
+    assert only[0] == "nothing to label" and "4 more on retired proposals" in only[1]
 
 
 def test_the_detector_table_is_the_status_table(w):
@@ -79,6 +83,14 @@ def test_health_flags_silent_detectors_stale_heartbeats_and_chain_notes(w):
     assert "note: chain_key:missing" in lines and "chain approvals broken:3" in lines
     s["heartbeat"]["last_hook_row"] = "2026-10-19T00:30:00Z"                                         # 35.5 h: fresh enough
     assert not any(ln.startswith("stale: hook") for ln in block(digest.render(s, None), "health"))
+
+
+def test_health_reports_fires_awaiting_the_offline_scan(w):
+    s = build(w)
+    s["agreement"] = {**s["agreement"], "awaiting_scan": 3}
+    assert "awaiting offline scan: 3 fires" in block(digest.render(s, None), "health")
+    s["agreement"]["awaiting_scan"] = 0
+    assert not any("awaiting" in ln for ln in block(digest.render(s, None), "health"))
 
 
 def test_a_quiet_system_says_all_clear(w):
@@ -157,6 +169,21 @@ def test_each_run_prints_the_digest_and_appends_exactly_one_log_line_0600(w, cap
     assert len(row["report_sha256"]) == 64 and stat.S_IMODE(w.cfg.path("digest.log").stat().st_mode) == 0o600
 
 
+def test_the_default_since_is_the_last_digest_logged(w, capsys):
+    cs.append_jsonl(w.cfg.path("digest.log"), {"ts": "2026-10-15T12:00:00Z", "report_sha256": "ab" * 32, "queue": 0, "notes": []})
+    code, out, _ = run(w, capsys=capsys)
+    assert code == 0 and "approval" not in "\n".join(block(out, "changes"))                # the 10-15T00:00 approval is older than the last digest
+    cs.append_jsonl(w.cfg.path("digest.log"), {"ts": "2026-10-14T12:00:00Z", "report_sha256": "ab" * 32, "queue": 0, "notes": []})
+    w.cfg.path("digest.log").write_text("not json\n" + json.dumps({"ts": "2026-10-14T12:00:00Z"}) + "\ngarbage")
+    code, out, _ = run(w, capsys=capsys)
+    assert any("approval" in ln for ln in block(out, "changes"))                              # the last readable line is 10-14: the approval is newer
+
+
+def test_without_a_log_the_default_is_24_hours(w, capsys):
+    code, out, _ = run(w, capsys=capsys)
+    assert code == 0 and block(out, "changes") == ["none"]
+
+
 def test_since_and_days_are_validated_and_a_bad_run_logs_nothing(w, capsys):
     for args in (("--since", "yesterday"), ("--since", "2026-13-45"), ("--days", "0")):
         code, out, err = run(w, *args, capsys=capsys)
@@ -171,7 +198,10 @@ def test_run_quiet_logs_and_returns_the_queue_and_notes_without_printing(w, caps
     got = digest.run_quiet(w.cfg)
     assert capsys.readouterr().out == "" and set(got) == {"queue", "notes"} and got["queue"] == 3 and isinstance(got["notes"], list)
     assert len(log_lines(w)) == 1
-    assert digest.run_quiet(w.cfg, write=False)["queue"] == 3 and len(log_lines(w)) == 1
+    on_disk = json.loads(w.cfg.path("status.json").read_text())                                 # the status line reads this file
+    assert on_disk["queue_total"] == 3 and stat.S_IMODE(w.cfg.path("status.json").stat().st_mode) == 0o600
+    w.cfg.path("status.json").unlink()
+    assert digest.run_quiet(w.cfg, write=False)["queue"] == 3 and len(log_lines(w)) == 1 and not w.cfg.path("status.json").exists()
 
 
 def test_the_nightly_entry_point_exits_zero_and_reports_the_digest(env):  # noqa: F811
@@ -180,12 +210,17 @@ def test_the_nightly_entry_point_exits_zero_and_reports_the_digest(env):  # noqa
     out = json.loads(p.stdout)
     assert p.returncode == 0 and out["digest"] == {"queue": 0, "notes": []}
     assert len((cfg.data_dir / "digest.log").read_text().splitlines()) == 1
+    health = json.loads((cfg.data_dir / "health.json").read_text())
+    beat = json.loads((cfg.data_dir / "status.json").read_text())["heartbeat"]
+    assert health["ok"] is True and beat["last_nightly_ok"] == health["last_run"]                # the digest ran after tonight's sweep
 
 
 def test_an_offline_dry_run_leaves_digest_log_alone(env):  # noqa: F811
     e, cfg = env
     p = subprocess.run([sys.executable, str(HOOKS / "nightly_sweep.py"), "--offline-dry-run"], capture_output=True, text=True, env=e)
-    assert p.returncode == 0 and "digest" in json.loads(p.stdout) and not (cfg.data_dir / "digest.log").exists()
+    out = json.loads(p.stdout)
+    assert p.returncode == 0 and "error" not in out["digest"] and out["digest"] == {"queue": 0, "notes": []}
+    assert not (cfg.data_dir / "digest.log").exists() and not (cfg.data_dir / "status.json").exists()
 
 
 def test_a_failing_digest_is_reported_by_type_and_the_sweep_still_exits_zero(env):  # noqa: F811

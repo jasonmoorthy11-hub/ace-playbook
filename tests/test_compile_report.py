@@ -396,3 +396,16 @@ def test_the_demotions_section_lists_every_row_with_lifted_and_flags_a_broken_ch
     assert "no demotions" in run(w, capsys=capsys)[1]
     path.symlink_to(w.data / "elsewhere")
     assert run(w, capsys=capsys)[0] == 2
+
+
+def test_run_is_collect_plus_printing_so_the_json_and_the_text_are_unchanged_by_the_split(w, fire, capsys):
+    """`report.run` was split into `collect()` and `run()` (the report hash changed with it): the --json output is exactly the dumped
+    `collect` dict and the text exactly `render` of its parts."""
+    fire()
+    fire(sid="sess-live-2", cmd="rm -rf /w/other")
+    d = report.collect(w.cfg, 7, TODAY)
+    assert report.run(w.cfg, 7, True, TODAY) == 0
+    assert capsys.readouterr().out == json.dumps(d, indent=1, sort_keys=True) + "\n"
+    assert report.run(w.cfg, 7, False, TODAY) == 0
+    assert capsys.readouterr().out == report.render(d["report_sha256"], 7, d["private"], d["synthetic"], d["labels"]["broken_at"],
+                                                    d["demotions"], d["rates"])

@@ -32,6 +32,11 @@ def wilson(k: int, n: int, z: float = Z) -> list[float] | str:
     return [round(max(0.0, c - h), 4), round(min(1.0, c + h), 4)]
 
 
+def upper95_zero(n: int) -> float:
+    """Upper 95% bound (three decimals) of a rate that showed 0 events in n >= 1 trials: 1 - 0.05^(1/n)."""
+    return round(1 - 0.05 ** (1 / n), 3)
+
+
 def percentile(values: list[int], q: float) -> int | str:
     """Nearest-rank percentile (q in 0..1) of `values`; `-` for none."""
     return sorted(values)[max(0, math.ceil(q * len(values)) - 1)] if values else DASH

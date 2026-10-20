@@ -291,3 +291,8 @@ def test_a_proposal_id_without_a_proposal_file_has_no_rates_and_is_not_awaiting(
     rates = json.loads(capsys.readouterr().out)["rates"]["private"]
     assert "P-deadbeef" not in rates["proposals"] and rates["corpus"]["awaiting_offline_scan"] == 0
     assert rates["corpus"]["agreement"] == "-"
+
+
+@pytest.mark.parametrize("n, want", [(1, 0.95), (10, 0.259), (20, 0.139), (30, 0.095)])
+def test_upper95_zero_is_the_bound_on_a_rate_after_no_events(n, want):
+    assert metrics.upper95_zero(n) == want

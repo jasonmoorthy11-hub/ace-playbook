@@ -46,7 +46,8 @@ def synth(n: int = 4, queue: int = 3, **over) -> dict:
                        "last_offline_scan": "2026-10-19T12:00:00Z", "last_nightly_ok": "2026-10-20T03:00:00Z", "notes": ["silent:det_4"]},
          "proposals": props, "queue": qs, "queue_total": queue,
          "per_day": [{"date": f"2026-10-{d:02d}", "proposal_id": p, "rows": 3 + d % 4} for d in (18, 19, 20) for p in pids],
-         "cost": {"p50_ms": 2, "p95_ms": 4, "rows": 13, "threshold_ms": 200}, "agreement": {"live_only": 4, "offline_only": 1},
+         "cost": {"p50_ms": 2, "p95_ms": 4, "rows": 13, "threshold_ms": 200}, "agreement": {"live_only": 4, "offline_only": 1, "awaiting_scan": 2},
+         "queue_retired": 0,
          "demotions": [{"cause": "source_sha256", "lifted": True, "proposal_id": pids[0], "review_required": False,
                         "to_mode": "disabled", "ts": "2026-10-20T10:44:21Z"}]}
     return {**s, **over}
@@ -131,17 +132,19 @@ def test_the_kpi_tiles_carry_their_numbers():
     assert "p95 4 ms vs 200 ms" in out
     for part in ("hook 1h", "live fire 3h", "offline scan 24h", "nightly ok 9h"):
         assert part in out, part
-    assert "live only 4" in out and "offline only 1" in out
+    assert "live only 4" in out and "offline only 1" in out and "awaiting scan 2" in out
     over = synth(cost={"p50_ms": 2, "p95_ms": 250, "rows": 13, "threshold_ms": 200})
     assert "p95 250 ms vs 200 ms" in dashboard.render(over)
     assert "live only -" in dashboard.render(synth(agreement="-"))
+    assert "awaiting scan -" in dashboard.render(synth(agreement={"live_only": None, "offline_only": None}))
     assert "no rows" in dashboard.render(synth(cost={"p50_ms": "-", "p95_ms": "-", "rows": 0, "threshold_ms": 200}))
 
 
 @pytest.mark.parametrize("verdict, cls, glyph", [
     ("retired", "muted", "⊘"), ("label 3 fires", "warn", "⚠"), ("silent: eligible 0", "serious", "▲"),
     ("noisy: add an exception or retire", "crit", "✖"), ("warn eligible", "good", "✓"),
-    ("needs 5 human TPs (has 3)", "neutral", "◦"), ("warn earliest 2026-11-03", "neutral", "◦"), ("something new", "neutral", "◦")])
+    ("needs 5 human TPs (has 3)", "neutral", "◦"), ("warn earliest 2026-11-03", "neutral", "◦"), ("something new", "neutral", "◦"),
+    ("not eligible: 1 FPs (warn needs 0)", "serious", "▲"), ("observe only: weak detector", "muted", "⊘")])
 def test_verdict_families_pair_a_colour_class_with_a_glyph(verdict, cls, glyph):
     assert dashboard.family(verdict) == (cls, glyph)
     cell = str(dashboard.badge(verdict))
@@ -162,6 +165,22 @@ def test_rows_per_day_queue_demotions_notes_and_footer():
     assert "source_sha256" in out and "disabled" in out
     assert "silent:det_4" in out
     assert NOW in out and "status.json is the single source; nothing here reaches the model" in out
+
+
+def test_retired_proposals_hidden_from_the_queue_are_counted_on_the_page():
+    out = dashboard.render(synth(queue_retired=4))
+    assert "showing 3 of 3, oldest first" in out and "4 more on retired proposals (label --queue --all)" in out
+    empty = dashboard.render(synth(queue=0, queue_retired=4))
+    assert "nothing to label" in empty and "4 more on retired proposals" in empty
+    assert "retired proposals" not in dashboard.render(synth())
+
+
+def test_an_older_status_dict_without_the_new_keys_still_renders():
+    s = synth()
+    del s["queue_retired"]
+    s["agreement"] = {"live_only": 1, "offline_only": 0}
+    out = dashboard.render(s)
+    assert "awaiting scan -" in out and "retired proposals" not in out
 
 
 def test_an_empty_world_renders_without_a_chart_row():

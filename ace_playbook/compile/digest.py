@@ -20,7 +20,7 @@ from ..config import Config
 from . import chains, labels, modes, status
 
 PROTOCOL, LOG, STALE_HOURS, SPIKE_FACTOR, SPIKE_MIN = "shadow-v1", "digest.log", 36, 3, 3
-LABEL_CMD = "uv run python -m ace_playbook.compile label --queue"
+LABEL_CMD = "python3 -m ace_playbook.compile label --queue"
 DATE = re.compile(r"\d{4}-\d\d-\d\d")
 
 
@@ -31,9 +31,11 @@ def _status_block(s: dict) -> list[str]:
 
 
 def _needs(s: dict) -> list[str]:
+    hidden = s.get("queue_retired", 0)
+    more = [f"{hidden} more on retired proposals (label --queue --all)"] if hidden else []
     if not s["queue_total"]:
-        return ["nothing to label"]
-    return [f"{s['queue_total']} unlabelled fires (oldest {status.age(s['queue'][0]['ts'], s['generated_at'])})", "run: " + LABEL_CMD]
+        return ["nothing to label", *more]
+    return [f"{s['queue_total']} unlabelled fires (oldest {status.age(s['queue'][0]['ts'], s['generated_at'])})", "run: " + LABEL_CMD, *more]
 
 
 def _spikes(s: dict) -> list[str]:
@@ -56,6 +58,7 @@ def _health(s: dict) -> list[str]:
         if secs is None or secs > STALE_HOURS * 3600:
             out.append(f"stale: {name} {status.age(ts, now)}")
     out += _spikes(s)
+    out += [f"awaiting offline scan: {n} fires"] if (n := s["agreement"].get("awaiting_scan")) else []
     out += [f"chain {k} {v}" for k, v in s["measurement"]["chains"].items() if v != "ok"]
     out += [f"note: {n}" for n in h["notes"] if not n.startswith("silent:") and ":broken:" not in n]
     return out or ["all clear"]
@@ -102,19 +105,43 @@ def append_log(cfg: Config, s: dict) -> dict:
     return row
 
 
+def last_logged(cfg: Config) -> str | None:
+    """The stamp of the newest readable line of digest.log (its last 4 KiB; a symlink or non-file counts as none), else None."""
+    try:
+        fd = os.open(cfg.path(LOG), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    with os.fdopen(fd, "rb") as fh:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        fh.seek(max(0, os.fstat(fd).st_size - 4096))
+        tail = fh.read().decode("utf-8", "replace")
+    for line in reversed(tail.splitlines()):
+        try:
+            ts = json.loads(line).get("ts")
+        except (ValueError, AttributeError):
+            continue
+        if status.parse_ts(ts):
+            return ts
+    return None
+
+
 def run_quiet(cfg: Config, days: int = 14, write: bool = True) -> dict:
-    """The nightly entry: build the status, append the log line (unless `write` is false) and return `{"queue", "notes"}`; prints nothing."""
+    """The nightly entry: build the status; unless `write` is false, refresh `status.json` (the status line reads it) and append the log
+    line; return `{"queue", "notes"}`. Prints nothing."""
     s = status.build(cfg, days)
     if write:
+        status.write_json(cfg, s)
         append_log(cfg, s)
     return {"queue": s["queue_total"], "notes": s["heartbeat"]["notes"]}
 
 
 def run(cfg: Config, since: str | None = None, days: int = 14) -> int:
-    """Entry of `compile digest`: print the digest, then append its log line. Exit 0; 2 for a bad `--since` or `--days`."""
+    """Entry of `compile digest`: print the digest, then append its log line. `since` defaults to the last digest logged, else 24 hours back.
+    Exit 0; 2 for a bad `--since` or `--days`."""
     try:
         s = status.build(cfg, days)
-        since = since + "T00:00:00Z" if since and DATE.fullmatch(since) else since
+        since = since + "T00:00:00Z" if since and DATE.fullmatch(since) else since or last_logged(cfg)
         if since is not None and status.parse_ts(since) is None:
             raise labels.Refusal("--since must be YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ", 2)
     except labels.Refusal as exc:
@@ -128,5 +155,6 @@ def run(cfg: Config, since: str | None = None, days: int = 14) -> int:
 def add_parser(sub) -> None:
     """Register `digest` on the CLI's subparsers."""
     p = sub.add_parser("digest", help="six plain-text blocks from status (read-only; appends one line to digest.log)")
-    p.add_argument("--since", metavar="ISO", help="list approvals and demotions after this stamp or date (default: the last 24 hours)")
+    p.add_argument("--since", metavar="ISO", help="list approvals and demotions after this stamp or date (default: the last digest logged, else 24 hours)")
     p.add_argument("--days", type=int, default=14, help="days in the report window (default 14, 1 to 3660)")
+    p.set_defaults(run=lambda c, a: run(c, a.since, a.days))

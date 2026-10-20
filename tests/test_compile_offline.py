@@ -246,7 +246,8 @@ def test_an_offline_exception_is_reported_by_type_and_reflection_still_runs(swee
         raise KeyError("secret detail /private/path")
     monkeypatch.setattr(offline, "run", fail)
     out, calls = sweep("--dry-run")
-    assert out == {"offline": {"error": "KeyError"}, "digest": {"queue": 0, "notes": []}, "sweep": [{"status": "would_reflect"}]}
+    # the digest runs after the sweep's health record, so tonight's failure is already in it
+    assert out == {"offline": {"error": "KeyError"}, "digest": {"queue": 0, "notes": ["nightly:failed"]}, "sweep": [{"status": "would_reflect"}]}
     assert len(calls["sweep"]) == 1
 
 

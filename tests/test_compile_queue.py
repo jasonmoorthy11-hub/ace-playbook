@@ -131,6 +131,35 @@ def test_pending_without_proposal_files_uses_dashes(w):
     assert item["hash8"] == "-" and item["mode"] == "-"
 
 
+def test_a_tp_candidate_row_covers_nothing_so_the_row_stays_pending(w, capsys):
+    row = fire(w, 0)
+    cs.write_labels(w.cfg, [{"ref": labels.row_id(row), "label": "tp_candidate", "reason_code": "auto_tp_hook_block"}])
+    assert [i["id"] for i in queue.pending(w.cfg, 50, NOW)] == [labels.row_id(row)]
+    assert queue.LABELLED == ("tp", "fp")
+
+
+def revoke(w):
+    from ace_playbook.compile import approvals
+    approvals.append(w.data, {"proposal_id": w.pid, "proposal_sha256": "-", "mode": "revoked"})
+
+
+def test_rows_of_a_retired_proposal_are_left_out_unless_all(w):
+    row = fire(w, 0)
+    revoke(w)
+    assert queue.pending(w.cfg, 50, NOW) == []
+    (item,) = queue.pending(w.cfg, 50, NOW, include_retired=True)
+    assert item["id"] == labels.row_id(row)
+
+
+def test_run_skips_retired_by_default_and_labels_them_with_all(w, capsys):
+    row = fire(w, 0)
+    revoke(w)
+    assert run(w, Script()) == 0 and capsys.readouterr().out.strip() == "queue empty"
+    assert queue.run(w.cfg, 50, Script("1", ""), lambda what: True, include_retired=True) == 0
+    (lab,) = chain(w)
+    assert (lab["ref"], lab["label"], lab["reason_code"]) == (labels.row_id(row), "tp", "human")
+
+
 # ---------------------------------------------------------------- run
 def test_scripted_session_writes_the_expected_rows(w, capsys):
     rows = [fire(w, n) for n in range(5)]
@@ -260,11 +289,21 @@ def test_queue_refuses_without_a_terminal_on_the_cli(w, tmp_path):
     assert chain(w) == []
 
 
-@pytest.mark.parametrize("extra", (["--rows"], ["--note", "x"], ["--tp", "abcd1234"]))
-def test_queue_does_not_combine_with_other_actions(w, tmp_path, extra):
+@pytest.mark.parametrize("extra, text", ((["--rows"], "not allowed with argument"), (["--tp", "abcd1234"], "not allowed with argument"),
+                                         (["--note", "x"], "--note do not apply to this action")))
+def test_queue_does_not_combine_with_other_actions(w, tmp_path, extra, text):
     proc = _cli(w, tmp_path, "label", "--queue", *extra, stdin=subprocess.DEVNULL)
-    proc.communicate(timeout=60)
-    assert proc.returncode == 2
+    _, err = proc.communicate(timeout=60)
+    assert proc.returncode == 2 and text in err and "needs an interactive terminal" not in err       # refused for the combination, not the TTY
+
+
+def test_all_belongs_to_the_queue_only(w, tmp_path):
+    proc = _cli(w, tmp_path, "label", "--rows", "--all", stdin=subprocess.DEVNULL)
+    _, err = proc.communicate(timeout=60)
+    assert proc.returncode == 2 and "--all do not apply to this action" in err
+    proc = _cli(w, tmp_path, "label", "--queue", "--all", stdin=subprocess.DEVNULL)
+    _, err = proc.communicate(timeout=60)
+    assert proc.returncode == 2 and "needs an interactive terminal" in err
 
 
 def test_queue_is_off_the_hook_path():

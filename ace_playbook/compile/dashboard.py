@@ -21,6 +21,7 @@ OUT, CAP, STALE_HOURS = "dashboard.html", status.QUEUE_MAX, 36
 W, PAD, ROW, TOP = 400, 16, 42, 24                      # chart geometry in viewBox units: width, side padding, row height, space above row 0
 THRESHOLDS, TICKS = ((0.8, "0.8"), (0.9, "0.9")), ((0.0, "0"), (0.5, ".5"), (1.0, "1"))
 FAMILIES = (("retired", "muted", "⊘"), ("label", "warn", "⚠"), ("silent", "serious", "▲"), ("noisy", "crit", "✖"),
+            ("not eligible", "serious", "▲"), ("observe only", "muted", "⊘"),
             ("warn eligible", "good", "✓"), ("needs", "neutral", "◦"), ("warn earliest", "neutral", "◦"))
 LEGEND = "Wilson 95 % interval; point = tp/(tp+fp); INSUFFICIENT below 5 labels"
 FOOT = "status.json is the single source; nothing here reaches the model"
@@ -101,7 +102,8 @@ def chart(props: dict) -> Raw:
         lo, hi = p["precision"]
         out.append(f'<g><title>{who} [{lo}, {hi}]</title><rect class="bar" data-pid="{who}" x="{xs(lo):.2f}" y="{cy - 1}" '
                    f'width="{xs(hi) - xs(lo):.2f}" height="2" rx="1"/>'
-                   f'<circle class="cap" data-pid="{who}" cx="{xs(lo):.2f}" cy="{cy}" r="2"/><circle class="cap" data-pid="{who}" cx="{xs(hi):.2f}" cy="{cy}" r="2"/>')
+                   f'<circle class="cap" data-pid="{who}" cx="{xs(lo):.2f}" cy="{cy}" r="2"/>'
+                   f'<circle class="cap" data-pid="{who}" cx="{xs(hi):.2f}" cy="{cy}" r="2"/>')
         if (pt := point(p)) is not None:
             out.append(f'<circle class="pt" data-pid="{who}" cx="{xs(pt):.2f}" cy="{cy}" r="5"/>')
         out.append("</g>")
@@ -144,7 +146,8 @@ def tiles(s: dict) -> str:
             + tile("queue", q, [oldest], glyph("good", "✓", "clear") if not q else glyph("warn", "⚠", "label them"))
             + tile("hook cost", f"{num(p95)} ms", [f"p95 {num(p95)} ms vs {limit} ms"], cost)
             + tile("heartbeat", "", [f"{n} {status.age(ts, now)}" for n, ts in ages], beat)
-            + tile("agreement", "", [f"live only {num(a.get('live_only'))}", f"offline only {num(a.get('offline_only'))}"])
+            + tile("agreement", "", [f"live only {num(a.get('live_only'))}", f"offline only {num(a.get('offline_only'))}",
+                                     f"awaiting scan {num(a.get('awaiting_scan'))}"])
             + "</div>")
 
 
@@ -156,11 +159,13 @@ def proposals(s: dict) -> Raw:
 
 
 def queue(s: dict) -> str:
-    q, now = s["queue"][:CAP], s["generated_at"]
+    q, now, hidden = s["queue"][:CAP], s["generated_at"], s.get("queue_retired", 0)
+    more = f'<p class="sub">{hidden} more on retired proposals (label --queue --all)</p>' if hidden else ""
     if not q:
-        return '<p class="sub">nothing to label</p>'
+        return '<p class="sub">nothing to label</p>' + more
     rows = [[r["id"], r["detector"], r["proposal_id"], r["session8"], r["ts"], status.age(r["ts"], now)] for r in q]
-    return f'<p class="sub">showing {len(q)} of {s["queue_total"]}, oldest first</p>' + table(("id", "detector", "proposal", "session", "ts", "age"), rows, "queue", row_cls="q")
+    heads = ("id", "detector", "proposal", "session", "ts", "age")
+    return f'<p class="sub">showing {len(q)} of {s["queue_total"]}, oldest first</p>' + table(heads, rows, "queue", row_cls="q") + more
 
 
 def render(s: dict) -> str:
@@ -182,6 +187,7 @@ def add_parser(sub) -> None:
     p = sub.add_parser("dashboard", help="a static HTML page from status (read-only; writes dashboard.html, 0600)")
     p.add_argument("--days", type=int, default=14, help="days in the report window (default 14, 1 to 3660)")
     p.add_argument("--out", metavar="PATH", help="where to write the page (default: dashboard.html in the data dir; 0600)")
+    p.set_defaults(run=lambda c, a: run(c, a.days, a.out))
 
 
 def run(cfg: Config, days: int = 14, out: str | None = None) -> int:
