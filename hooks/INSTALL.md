@@ -294,17 +294,21 @@ The key is readable by your user, so by the agent too. A keyed chain proves that
 its directory, or `chain_key_path` in `config.json`), so put all of `~/.config/ace-playbook` out of the agent's reach with deny rules in your
 user-level `settings.json`. The form is the home-relative one from the Claude Code permissions reference (`~/path`; the absolute form is a
 `//` prefix followed by the full path from the filesystem root and spells out your username, the single-slash form is relative to the settings
-file), one rule per tool:
+file):
 
 ```json
 { "permissions": { "deny": [
   "Read(~/.config/ace-playbook/**)",
-  "Edit(~/.config/ace-playbook/**)",
-  "Write(~/.config/ace-playbook/**)"
+  "Read(~/.config/ace-playbook)",
+  "Edit(~/.config/ace-playbook/**)"
 ] } }
 ```
 
-These rules stop the Read, Edit and Write tools (and, per the permissions reference, a symlink that points into the directory). They do not stop a
+There is no `Write(...)` rule: the permissions reference checks file rules against Read and Edit only, a `Write(...)` rule is never consulted
+(and Claude Code warns about it at every start), and a Read deny already blocks Edit, Write and file creation on the path (Claude Code 2.1.228
+and later). The bare-directory rule covers the directory itself (listings, `@`-mentions). These rules stop the Read, Edit and Write tools
+(and, per the permissions reference, a symlink that points into the directory) and the recognised file commands in Bash (`cat`, `head`, and
+`<`/`>` redirects). They do not stop every
 shell command. If you run a guard hook that matches substrings of command text, it may refuse a command that names the key but it does not catch
 `cd ~/.config/ace-playbook; mv chain_key x`; add Bash deny rules of your own if you want that closed, and edit `settings.json` with an editor
 rather than a shell one-liner. What this setup still does not close: a same-user process outside the permission layer, deleting both the key
