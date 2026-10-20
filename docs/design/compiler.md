@@ -553,7 +553,8 @@ one per `row_id`, at most N (default 50). Each card has six field groups: identi
 age); why (the detector and the cause; payloads are hashes only, no command text is shown); context (session[:8], ts, proposal id, event);
 the label control line `1 tp / 2 fp / 3 skip / q quit`; the proposal's tally (rows, tp, fp, labels still needed to reach 5 TPs);
 provenance (labels chain ok|BROKEN, `rubric = design §7.3`). The queue is blind: an item never carries an existing label, a note or the
-row's text, and a row that already has a label is not offered. `1` appends a human `tp` (optional note); `2` appends a human `fp` and
+row's text, and a row that a human `tp` or `fp` row (or an auto `fp`) covers is not offered (a `tp_candidate` covers nothing). The fires of
+retired proposals are left out unless `--all`. `1` appends a human `tp` (optional note); `2` appends a human `fp` and
 needs a note that passes the scrubber (asked again once, then the row is skipped); `3` skips; any other key is asked again, the third
 miss skips. A broken labels chain refuses before the first card.
 
@@ -952,23 +953,34 @@ exploratory (PREREGISTRATION.md:6-7).
 `compile status [--days N] [--json] [--out PATH]` (`compile/status.py`) is the one place the operator reads the measurement. Principles:
 (1) one source of truth: `status.json` (schema 1, 0600, atomic write; default `data_dir/status.json`) is built from `report.collect` and
 the two chains only, so each count and rate in it equals the `compile report --json` figure and no rate is computed outside `metrics.py`
-(precision is `metrics.wilson(tp, tp + fp)`; the one extra figure is `fp_upper_95 = 1 - 0.05^(1/n)` at zero false positives);
+(precision is `metrics.wilson(tp, tp + fp)`; the one extra figure is `fp_upper_95 = metrics.upper95_zero(n)` = 1 - 0.05^(1/n) at zero false positives);
 (2) nothing reaches the model: the screen, the JSON and the digest are written for the terminal, never to an injector, a hook or a prompt,
 and the module is not imported on the hook path; (3) rates carry denominators and intervals, never bare counts, and fewer than five
 labels is the word `INSUFFICIENT`; (4) zero fires with zero eligible sessions is not evidence, it is `silent: eligible 0`.
-The verdict of a proposal is the first rule that holds: mode `disabled` or `revoked` (or a revoking approvals row) is `retired`;
-unlabelled rows are `label N fires`; no eligible session is `silent: eligible 0`; under 14 days since its newest approvals row is
-`warn earliest YYYY-MM-DD`; fewer than five human TPs is `needs 5 human TPs (has k)`; more than half of tp + fp being false
-positives is `noisy: add an exception or retire`; otherwise `warn eligible`. An approved copy with no shadow row is added
-with zero counts and its own rates from `metrics.compute`, because the report lists proposals with rows only. The `heartbeat`
+The verdict of a proposal is the first rule that holds, and never looser than the ladder (section 7.3, `ladder.check`): `retired` when
+the newest approvals row revokes it or its mode or approved mode is `disabled` or `revoked`; unlabelled rows are `label N fires`; no
+eligible session is `silent: eligible 0`; under 14 days since `window_start` (the counting window `modes.resolve` gives the hook and
+the ladder: the newest approvals row, or a later counter-resetting demotion) is `warn earliest YYYY-MM-DD`; fewer than five human TPs
+in that window is `needs 5 human TPs (has k)`; five or more labels with more than half false is `noisy: add an exception or retire`;
+any FP in the window is `not eligible: k FPs (warn needs 0)`; a detector that is not strong is `observe only: weak detector`; otherwise
+`warn eligible`. The window counts (`tp_window`, `fp_window`) are the ladder's (human `tp` rows only, live fires in observe mode since
+`window_start`); `tp`, `fp` and `unlabelled` stay the report's, so they equal `compile report --json`. An approved copy with no shadow
+row is added with zero counts and its own rates from `metrics.compute`, because the report lists proposals with rows only. The `heartbeat`
 block (last hook row, last live fire, `offline_state.json` mtime, last good nightly run, notes such as `chain_key:missing`,
-`approvals:broken:<where>` and `silent:<detector>`) says whether the instruments are alive. `measurement.start` is the newest
-approvals row in observe, warn or block mode. `compile digest [--since ISO] [--days N]` (`compile/digest.py`) renders the same dict as six
+`approvals:broken:<where>` and `silent:<detector>`) says whether the instruments are alive; `silent:<detector>` needs a live mode,
+eligible sessions, no fires AND no hook row at all (a row that is not a scanned fire is awaiting the scan, truncated or a
+disagreement, never silence), and `agreement.awaiting_scan` counts the fires waiting for the offline scan. `measurement.start` is the
+greatest, over proposals not retired, of each proposal's newest `observe` approvals row (the ladder restart point, section 7.3): a warn
+or block promotion does not move it, a revoked proposal does not set it. `seal --dry-run`'s `measurement_start` is the newest row of any
+mode of a proposal that is not revoked, so the two agree until the first promotion. The queue (`queue`, `queue_total`) lists the fired rows
+that no human `tp`/`fp` covers; the fires of retired proposals are not listed but counted in `queue_retired` (`label --queue --all` offers
+them). `compile digest [--since ISO] [--days N]` (`compile/digest.py`) renders the same dict as six
 plain-text blocks: `status` (protocol `shadow-v1`, report hash, day, keyed, chains), `needs you` (the label queue and the command to
 work it), `detectors` (the status table), `health` (silent detectors, stale heartbeats over 36 hours, a spike when a proposal has at
 least 3 rows today and more than 3 times its daily mean over the window, chain notes), `changes` (approvals and demotions after
-`--since`, default 24 hours) and `next` (week-one date, earliest warn dates). Each run appends one JSON line `{ts, report_sha256, queue,
-notes}` to `data_dir/digest.log` (0600, O_APPEND); `hooks/nightly_sweep.py` does that after the offline pass, so a missing line is a missed night.
+`--since`, default the last digest logged, else 24 hours) and `next` (week-one date, earliest warn dates). Each run appends one JSON line
+`{ts, report_sha256, queue, notes}` to `data_dir/digest.log` (0600, O_APPEND). `hooks/nightly_sweep.py` runs it quietly AFTER the sweep (so the
+line carries that night's health), refreshes `status.json` for the status line and writes the log line, so a missing line is a missed night.
 
 | Surface | Entry | Shows |
 |---|---|---|
@@ -1166,6 +1178,12 @@ one-clause edits were made outside this file so the repository's claims match th
 3. hooks/INSTALL.md:96-97 (onFailure paragraph): same qualification; `onFailure: "continue"` stays.
 
 No block mode can be promoted until step 4 has shipped; these amendments change wording only.
+
+`report_sha256` changed from `3c94c88235c2...` (main, 198ea65) to `5c9cb343...` (branch feat/status). `report.run` was split into
+`collect()` and `run()` (behaviour-neutral: for the same inputs the `--json` dict and the text are byte-identical, checked against the main
+tree; `tests/test_compile_report.py` pins that `run` prints exactly the dumped `collect` dict and `render` of its parts), and
+`metrics.upper95_zero` was added for the status page. The seal has not been executed, so no committed hash is broken; the operator can
+object before `prereg-v1`.
 
 ## Files read
 
