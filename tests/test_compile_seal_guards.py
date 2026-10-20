@@ -116,6 +116,28 @@ def test_two_n_lines_refuse(ready):
     assert code == 1 and asked == [] and prereg.read_bytes() == before
 
 
+@pytest.mark.parametrize("value", ["-", "TBD", "n/a"])
+def test_an_n_value_without_a_number_refuses(ready, value):
+    cfg, prereg = ready
+    prereg.write_text(prereg.read_text().replace("\nN per detector: 40\n", f"\nN per detector: {value}\n", 1))
+    before = prereg.read_bytes()
+    code, asked = real(cfg, prereg)
+    assert code == 1 and asked == [] and prereg.read_bytes() == before
+
+
+@pytest.mark.parametrize("keep", ["seed", "arm"])
+def test_each_half_of_the_seed_and_arm_rate_refusal_refuses_alone(world, monkeypatch, capsys, keep):
+    orig = seal.frozen_block
+    fix = (lambda b: b.replace("shadow_seed_sha256 -", f"shadow_seed_sha256 {SEED}")) if keep == "seed" else (lambda b: b.replace(seal.PLANNED, "arm_rate 0.5"))
+    monkeypatch.setattr(seal, "frozen_block", lambda cfg, sealed_at="-": fix(orig(cfg, sealed_at)))
+    cfg, prereg = world
+    prereg.write_text(prereg.read_text().replace(seal.HAND, "40", 1))
+    before = prereg.read_bytes()
+    code, asked = real(cfg, prereg)
+    assert code == 1 and asked == [] and prereg.read_bytes() == before
+    assert "shadow_seed_sha256" in capsys.readouterr().err
+
+
 def test_an_indented_duplicate_heading_is_a_usage_error(ready):
     cfg, prereg = ready
     prereg.write_text(prereg.read_text().rstrip("\n") + "\n\n  ##  Shadow-mode additions (DRAFT until sealed)\n")

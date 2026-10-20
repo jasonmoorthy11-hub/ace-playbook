@@ -24,7 +24,7 @@ PREREG = REPO / "PREREGISTRATION.md"                         # tests point this 
 TAG, FILLER, HAND, SEED = "prereg-v1", "(filled by compile seal)", "(filled by hand before the seal)", "shadow_seed_sha256"
 _HEAD = re.compile(r"^## Shadow-mode additions \((DRAFT until sealed|SEALED[^)\n]*)\)$", re.M)
 _COUNT = re.compile(r"^ {0,3}##\s+Shadow-mode additions", re.M)           # looser than _HEAD: an indented or double-spaced heading counts
-_N_LINE = re.compile(r"^N per detector: (?!\(filled by hand)\S.*$", re.M)
+_N_LINE = re.compile(r"^N per detector: (?!\(filled by hand)(?=[^\n]*\d)\S.*$", re.M)   # a value with a number
 PLANNED = "arm_rate 0.5 (planned)"
 
 

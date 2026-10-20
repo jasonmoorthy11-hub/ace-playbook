@@ -918,7 +918,7 @@ section in PREREGISTRATION.md still says `(DRAFT until sealed)`. The sealing its
   (2) the file does not hold exactly one `## Shadow-mode additions` heading (counted loosely: an indented or double-spaced heading also
   counts): exit 2; (3) the heading already says SEALED (later changes go in dated amendments; this wins over every later check): exit 1;
   (4) the Frozen instruments subsection (that heading to the next `###`, inside the shadow-mode section) does not hold exactly one
-  `(filled by compile seal)` line: exit 2; (5) the Timing and stopping subsection does not hold exactly one line `N per detector: <value>`
+  `(filled by compile seal)` line: exit 2; (5) the Timing and stopping subsection does not hold exactly one line `N per detector: <value>` (a value containing a number)
   that is not the placeholder `(filled by hand before the seal)` (a deleted line, the placeholder or a second line all refuse), or the
   placeholder is still anywhere in the shadow-mode section: exit 1; (6) the approvals chain is broken or unreadable: exit 1; (7) the
   block holds `shadow_seed_sha256 -` or `arm_rate 0.5 (planned)`: exit 1; (8) the y/N answer is anything but yes: exit 1; (9) the file
