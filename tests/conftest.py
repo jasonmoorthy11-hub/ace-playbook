@@ -9,6 +9,9 @@ uses `PRODUCTION_CHAIN_KEY` (captured here before any patch) so the literal stay
 
 from __future__ import annotations
 
+import signal
+import threading
+
 import pytest
 
 from ace_playbook import config as cfgmod
@@ -26,3 +29,56 @@ def hermetic_chain_key(tmp_path_factory, monkeypatch):
     monkeypatch.setenv(cfgmod.ENV_CONFIG, str(base / "no-config.json"))
     yield path
     assert not path.exists(), "a test created the redirected default chain key; it must set chain_key_path explicitly"
+
+
+TIMEOUT_SECONDS = 60          # per test; `@pytest.mark.timeout(n)` overrides it (seconds, may be fractional)
+
+
+class PerTestTimeout(BaseException):
+    """Raised by the per-test alarm. A BaseException on purpose: the fail-open paths (`catalogue.evaluate` non-strict, `modes.read_*`,
+    `shadow.py`) catch `Exception`, and a swallowed timeout would let the loop resume with nothing left to stop it."""
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    yield
+    if call.excinfo is not None and call.excinfo.errisinstance(PerTestTimeout):
+        item.timeout_surfaced = True                       # the timeout reached a report (any phase): teardown has nothing to add
+
+
+@pytest.fixture(autouse=True)
+def per_test_timeout(request):
+    """An infinite loop (the mutation run found two) fails its test instead of hanging the suite. Stdlib only.
+
+    A SIGALRM handler raises `PerTestTimeout` in the main thread. The interval timer re-fires every second, so a handler call that a
+    `except BaseException` swallows is followed by another; if the test still passes after a firing, teardown fails it
+    ("per-test timeout fired"). The hard stop is pytest's own `faulthandler_timeout` / `faulthandler_exit_on_timeout` (pyproject.toml,
+    125 s): it dumps every thread's stack and ends the run. The alarm is armed before the test body, so it fires before a child process's
+    own `timeout=`, which only matters for a hung child: `subprocess.run` kills the child on any exception. Skipped where there is no
+    SIGALRM (Windows) or off the main thread; the timer is disarmed and the previous handler restored in `finally`."""
+    if not hasattr(signal, "SIGALRM") or threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    marker = request.node.get_closest_marker("timeout")
+    seconds = TIMEOUT_SECONDS
+    if marker is not None:
+        arg = marker.args[0] if marker.args else None
+        if isinstance(arg, bool) or not isinstance(arg, (int, float)) or not arg > 0:
+            pytest.fail("timeout marker must be a positive number")
+        seconds = float(arg)
+    fired = []
+
+    def expired(signum, frame):
+        fired.append(signum)
+        raise PerTestTimeout(f"test exceeded {seconds} s")
+
+    previous = signal.signal(signal.SIGALRM, expired)
+    signal.setitimer(signal.ITIMER_REAL, seconds, 1.0)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGALRM, signal.SIG_IGN)       # first: a firing pending at disarm time must not raise in here
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, signal.SIG_DFL if previous is None else previous)
+    if fired and not getattr(request.node, "timeout_surfaced", False):
+        pytest.fail(f"per-test timeout fired after {seconds} s but the test finished: something swallowed it")

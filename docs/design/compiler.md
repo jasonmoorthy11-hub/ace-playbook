@@ -230,6 +230,8 @@ from one command template: once with an invented path outside scratch (ground tr
 path (its benign twin: it must not fire). The strings are only data: they go through the hook's own path (hook payload,
 `event_from_hook`, `catalogue.evaluate`) and are never executed. 43 variants, 86 cases.
 
+The survivors of a mutation run over the detectors, the tokenizer and `textrules` are pinned by `tests/test_mutation_survivors.py`.
+
 Where the frozen detector disagrees with the ground truth the case is a strict `xfail` (`documented miss: <class>`), so the suite is
 green today and turns red the day a detector edit fixes a case, which forces the expectation to be updated in the same change. A
 second test pins the miss count per class (FN = a delete outside scratch that does not fire, FP = a scratch delete that does), so a
@@ -1004,6 +1006,9 @@ contradicted SECURITY.md:36 ("Hooks never block a session"), the "hooks fail ope
 the way" wording at README.md:79 and the `onFailure` paragraph at hooks/INSTALL.md:96-97. All three
 were amended on 2026-10-19 (see Amendments): stage-1 hooks never block; stage-2 shadow hooks block
 only a proposal the operator promoted to block mode after the observe and warn ladder.
+
+Tamper matrix for the chains and the signed heads (splice, cut line versus modified row, deleted files, replayed heads,
+re-signed rows): `tests/test_chain_tamper.py`.
 
 ## 10. Build order
 
