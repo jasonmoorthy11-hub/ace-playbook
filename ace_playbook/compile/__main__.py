@@ -1,4 +1,4 @@
-"""CLI: `python -m ace_playbook.compile cards|propose|validate|approve|unapprove|keygen|label|report|offline|shadow|replay-synthetic` (design 10).
+"""CLI: `python -m ace_playbook.compile cards|propose|validate|approve|unapprove|keygen|label|report|offline|shadow|replay-synthetic|seal` (design 10).
 
 No network, no model, stdlib only. Exit codes: 0 ok, 1 a proposal failed validation or was not approved (the step is
 named), 2 usage, configuration, store or id errors. `approve`, `unapprove` and `keygen` need a terminal; `approve` appends every
@@ -20,7 +20,7 @@ from .. import config as cfgmod
 from .. import ttyio
 from ..atomic import write_private
 from ..canon import now_iso
-from . import approvals, chains, chains_cli, chains_io, evidence, labels, modes, proposal, report, shadow, synth
+from . import approvals, chains, chains_cli, chains_io, evidence, labels, modes, proposal, report, seal, shadow, synth
 
 LEGACY_BANNER = ("This lesson's stored evidence is self-quoted legacy text; "
                  "the human incident label is the only evidence.")
@@ -272,6 +272,7 @@ def main(argv: list[str] | None = None) -> int:
     kg = sub.add_parser("keygen", help="TTY only: create the chain key (HMAC key of approvals.jsonl and demotions.jsonl, never overwritten), "
                         "re-seal both chains under it and sign their heads")
     kg.add_argument("--rehead", action="store_true", help="rewrite the signed chain heads from the (verified) chains after you confirm the listed rows; needs the key")
+    sub.add_parser("seal", help="freeze the pre-registration's shadow-mode instruments: --dry-run prints the block, else TTY only").add_argument("--dry-run", action="store_true")
     sub.add_parser("replay-synthetic", help="replay the frozen corpus; exit 1 on a disagreement").add_argument("--out", help="rows file")
     sub.add_parser("shadow", help="the hook entry (what hooks/shadow.sh runs); reads a payload on stdin").add_argument("event", choices=["pre", "stop"])
     args = ap.parse_args(argv)
@@ -280,6 +281,7 @@ def main(argv: list[str] | None = None) -> int:
         return {"cards": cmd_cards, "propose": cmd_propose, "validate": cmd_validate, "approve": cmd_approve,
                 "unapprove": cmd_unapprove, "label": lambda c, a: labels.run(c, a, lambda prompt: _ask(prompt), _need_tty), "report": lambda c, a: report.run(c, a.days, a.json), "shadow": lambda c, a: shadow.main([a.event], c),
                 "offline": cmd_offline, "keygen": lambda c, a: chains_cli.keygen(c, _need_tty, a.rehead, lambda prompt: _ask(prompt)),
+                "seal": lambda c, a: seal.run(c, a, lambda prompt: _ask(prompt), _need_tty),
                 "replay-synthetic": lambda c, a: synth.run(c, a.out)}[args.cmd](cfg, args)
     except proposal.ProposalError as exc:
         print(f"error: {exc}", file=sys.stderr)

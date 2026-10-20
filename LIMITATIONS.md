@@ -51,8 +51,7 @@ repository.
 ## Not built yet
 
 The curator and refiner, the replay and task-suite evaluation harness, the judge, and the
-state-versus-lesson classifier. In the stage-2 compiler: the arms (randomization of the check per session), the seal of the
-pre-registration, the evaluation of an effect (randomization inference, the spillover flag), the review packet and the review record. `PREREGISTRATION.md` describes them as plans only and is not sealed.
+state-versus-lesson classifier. In the stage-2 compiler: the arms (randomization of the check per session), the evaluation of an effect (randomization inference, the spillover flag), the review packet (`packet`) and the review record (`review-record`). The seal command exists (`compile seal`, with `--dry-run`); the pre-registration is not sealed until the go/no-go, and `shadow_seed_sha256` and `arm_rate` stay placeholders in its block until the arms are built. `PREREGISTRATION.md` describes the rest as plans only.
 
 ## Compiler (stage 2)
 

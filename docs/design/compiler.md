@@ -67,6 +67,7 @@ RESULTS.md:62), alongside `edit_unread_turn` and `rm_rf` (RESULTS.md:34). The ve
 | `compile/chains.py` | What the two chains share (7.3, "Keyed chains (as built)"): the `Keyring`, the signed heads file, the keyed-install marker `key_of`, `hash_ok` (the verifier rule), `head_state`, `seal`, `has_v2`, `notes`, `read_regular`; stdlib and `canon` only, on the hook path | 150 (cap 150) |
 | `compile/chains_io.py` | The re-seal of both chains under a new key with `.bak` copies and rollback, the file helpers and `need_key` for the writers; not on the hook path | 111 (cap 150) |
 | `compile/chains_cli.py` | `compile keygen` (never-keyed installs only: lists, asks, seals) and `keygen --rehead` (shows what differs from the old heads, asks y/N); not on the hook path | 126 (cap 150) |
+| `compile/seal.py` | `compile seal [--dry-run]` (section 8, "Seal (as built, not executed)"): the Frozen instruments block from live values and the TTY-only rewrite of the PREREGISTRATION.md shadow-mode heading; prints the git commands, never runs git; not on the hook path | 90 (cap 150) |
 | `compile/modes.py` | `resolve` and the frozen `Resolution`: the one answer to "what does this proposal run at" for the hook, the ladder, the offline pass and the report (7.3, "Mode resolution"); `in_force`, `anchor`, `lifted` (an operator approvals row stamped strictly later lifts older demotions); stdlib, `approvals`, `demotions` only, on the hook path (integration wave after 5a and 5b) | 117 |
 | `compile/metrics.py` | Stdlib-only rate code behind the report: Wilson 95 % interval, nearest-rank percentile, `_session` summary rows, eligible sessions, friction, hook cost, live-versus-offline agreement (section 8); hashed into `report_sha256` together with `report.py`; never on the hook path (step 5c) | 154 |
 | `compile/synth.py` | `replay-synthetic`: the frozen invented corpus and the examples through `shadow._evaluate` with a temporary state dir into `shadow.synthetic.jsonl` only (`--out` confined by file identity); exits 1 on an `expect` disagreement; never on the hook path (step 5c) | 144 |
@@ -899,6 +900,25 @@ at. To stop the forking-paths risk, two things are committed **before** observe 
 detector `source_sha256` list and the report code hash. Seal (`prereg-v1`) happens after the
 observe week and before the first randomized warn session; anything randomized before the tag is
 exploratory (PREREGISTRATION.md:6-7).
+
+### Seal (as built, not executed)
+
+`python3 -m ace_playbook.compile seal [--dry-run]` (`compile/seal.py`) is built; the pre-registration is not sealed, and the
+section in PREREGISTRATION.md still says `(DRAFT until sealed)`. The sealing itself is the go/no-go decision, taken after the observe week.
+
+- `--dry-run` needs no terminal, asks nothing and writes nothing. It prints the Frozen instruments block with live values:
+  `detectors:` (one `name sha256` line per `catalogue.source_table()` entry, sorted), `report_sha256`, `proposals:` (the newest
+  `approvals.jsonl` row of each proposal id that is not revoked, as `id mode`, sorted; `(none)` when there are none, or a notice line
+  when the chain is unreadable or broken, still exit 0), `shadow_seed_sha256`, `arm_rate`, `measurement_start` (the greatest `ts`
+  over those listed rows, `-` when none is listed) and `sealed_at -`.
+- Without `--dry-run` it needs a terminal (exit 2 otherwise), refuses a broken approvals chain, a missing section, a section already
+  sealed (exit 1; later changes go in dated amendments) or a file without exactly one `(filled by compile seal)` line. It prints the block with the
+  real `sealed_at`, asks y/N, and on yes rewrites the heading to `## Shadow-mode additions (SEALED <date> prereg-v1)` and replaces the
+  filler line with the block in a `text` fence. Anything but yes writes nothing.
+- It prints the two commands `git -C <repo> tag -a prereg-v1 -m "pre-registration sealed <date>"` and `git -C <repo> push origin prereg-v1`
+  for the operator to run; it never runs git and imports no `subprocess`.
+- Until the config fields land with the executed seal, `shadow_seed_sha256` is `-` and `arm_rate` prints `0.5 (planned)`; the prompt
+  names the open seed hash. The seal is therefore not executable in a meaningful way before the arms exist.
 
 ## 9. Security
 
