@@ -43,7 +43,10 @@ def w(tmp_path):
 
 
 def env_of(w, **extra):
-    return {**os.environ, "ACE_PLAYBOOK_CONFIG": w.conf, "ACE_PLAYBOOK_HOME": str(ROOT), "ACE_PYTHON": sys.executable, **extra}
+    home = Path(w.conf).parent / "home"                          # the child's HOME: its `~` never reaches the operator's key dir
+    home.mkdir(exist_ok=True)
+    return {**os.environ, "ACE_PLAYBOOK_CONFIG": w.conf, "ACE_PLAYBOOK_HOME": str(ROOT), "ACE_PYTHON": sys.executable,
+            "HOME": str(home), **extra}
 
 
 def hook(w, raw, arg="pre", **extra):
@@ -140,9 +143,11 @@ def test_a_state_lock_held_by_another_process_is_skipped_quickly_and_the_row_is_
 
 def test_a_missing_data_dir_exits_0_and_is_not_created(tmp_path):
     conf = tmp_path / "config.json"
+    (tmp_path / "home").mkdir()
     conf.write_text(json.dumps({"data_dir": str(tmp_path / "no" / "such" / "dir"), "chain_key_path": str(tmp_path / "k")}))
     p = subprocess.run([str(ROOT / "hooks" / "shadow.sh"), "pre"], input=json.dumps(cs.pre_payload(RM)).encode(), capture_output=True,
-                       env={**os.environ, "ACE_PLAYBOOK_CONFIG": str(conf), "ACE_PLAYBOOK_HOME": str(ROOT), "ACE_PYTHON": sys.executable},
+                       env={**os.environ, "ACE_PLAYBOOK_CONFIG": str(conf), "ACE_PLAYBOOK_HOME": str(ROOT), "ACE_PYTHON": sys.executable,
+                            "HOME": str(tmp_path / "home")},
                        timeout=60)
     assert (p.returncode, p.stdout, p.stderr) == (0, b"", b"")
     assert not (tmp_path / "no").exists()
@@ -150,10 +155,12 @@ def test_a_missing_data_dir_exits_0_and_is_not_created(tmp_path):
 
 def test_a_data_dir_that_is_a_file_exits_0(tmp_path):
     (tmp_path / "datafile").write_text("x")
+    (tmp_path / "home").mkdir()
     conf = tmp_path / "config.json"
     conf.write_text(json.dumps({"data_dir": str(tmp_path / "datafile"), "chain_key_path": str(tmp_path / "k")}))
     p = subprocess.run([str(ROOT / "hooks" / "shadow.sh"), "pre"], input=json.dumps(cs.pre_payload(RM)).encode(), capture_output=True,
-                       env={**os.environ, "ACE_PLAYBOOK_CONFIG": str(conf), "ACE_PLAYBOOK_HOME": str(ROOT), "ACE_PYTHON": sys.executable},
+                       env={**os.environ, "ACE_PLAYBOOK_CONFIG": str(conf), "ACE_PLAYBOOK_HOME": str(ROOT), "ACE_PYTHON": sys.executable,
+                            "HOME": str(tmp_path / "home")},
                        timeout=60)
     assert (p.returncode, p.stdout, p.stderr) == (0, b"", b"") and (tmp_path / "datafile").read_text() == "x"
 
