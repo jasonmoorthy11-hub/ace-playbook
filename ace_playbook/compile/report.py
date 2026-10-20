@@ -264,30 +264,35 @@ def render(sha: str, days: int, private: dict, synthetic: dict, broken: int | No
     return "\n".join(lines) + "\n"
 
 
+def collect(cfg: Config, days: int, now: str | None = None) -> dict:
+    """Everything `compile report` prints, as the `--json` dict (also what `compile dashboard` renders); raises labels.Refusal."""
+    if not 1 <= days <= MAX_DAYS:
+        raise labels.Refusal(f"--days must be 1..{MAX_DAYS}", 2)
+    now = now or now_iso()
+    priv_rows, syn_rows = read_corpora(cfg)
+    labs, broken = label_map(cfg)
+    private = summarize(cfg, priv_rows, labs, now, days)
+    synthetic = summarize(cfg, [r for r in syn_rows if r.get("would_fire") is not False], {}, now, days, True)   # labels: private only
+    dem, (events, evasion) = demotion_summary(cfg, now), (_read(cfg.path(EVENTS)), _read(cfg.path(EVASION)))
+    from . import catalogue
+    syn_det = {r["proposal_id"]: r["detector"] for r in syn_rows if PID.fullmatch(r["proposal_id"]) and r.get("detector") in catalogue.CATALOGUE}
+    stop = {k for k, p in private["proposals"].items() if p["event"] == "Stop"}
+    known = {k: p["detector"] for k, p in private["proposals"].items() if p["detector"] != "-"}       # no proposal file: no rate
+    rates = {"private": metrics.compute("private", priv_rows, known, events, evasion, stop),
+             "synthetic": metrics.compute("synthetic", syn_rows, syn_det, [], [])}
+    return {"report_sha256": source_sha256(), "days": days, "private": private, "synthetic": synthetic, "rates": rates,
+            "demotions": dem, "labels": {"chain_ok": broken is None, "broken_at": broken}}
+
+
 def run(cfg: Config, days: int, as_json: bool = False, now: str | None = None) -> int:
     """Entry of `compile report`: exit 0 (also with no rows), 2 for usage, a corpus mix-up or an unsafe file."""
     try:
-        if not 1 <= days <= MAX_DAYS:
-            raise labels.Refusal(f"--days must be 1..{MAX_DAYS}", 2)
-        now = now or now_iso()
-        priv_rows, syn_rows = read_corpora(cfg)
-        labs, broken = label_map(cfg)
-        private = summarize(cfg, priv_rows, labs, now, days)
-        synthetic = summarize(cfg, [r for r in syn_rows if r.get("would_fire") is not False], {}, now, days, True)   # labels: private only
-        dem, (events, evasion) = demotion_summary(cfg, now), (_read(cfg.path(EVENTS)), _read(cfg.path(EVASION)))
-        from . import catalogue
-        syn_det = {r["proposal_id"]: r["detector"] for r in syn_rows if PID.fullmatch(r["proposal_id"]) and r.get("detector") in catalogue.CATALOGUE}
-        stop = {k for k, p in private["proposals"].items() if p["event"] == "Stop"}
-        known = {k: p["detector"] for k, p in private["proposals"].items() if p["detector"] != "-"}       # no proposal file: no rate
-        rates = {"private": metrics.compute("private", priv_rows, known, events, evasion, stop),
-                 "synthetic": metrics.compute("synthetic", syn_rows, syn_det, [], [])}
+        d = collect(cfg, days, now)
     except labels.Refusal as exc:
         print(f"error: {exc}", file=sys.stderr)
         return exc.code
-    sha = source_sha256()
     if as_json:
-        print(json.dumps({"report_sha256": sha, "days": days, "private": private, "synthetic": synthetic, "rates": rates,
-                          "demotions": dem, "labels": {"chain_ok": broken is None, "broken_at": broken}}, indent=1, sort_keys=True))
+        print(json.dumps(d, indent=1, sort_keys=True))
     else:
-        print(render(sha, days, private, synthetic, broken, dem, rates), end="")
+        print(render(d["report_sha256"], days, d["private"], d["synthetic"], d["labels"]["broken_at"], d["demotions"], d["rates"]), end="")
     return 0
