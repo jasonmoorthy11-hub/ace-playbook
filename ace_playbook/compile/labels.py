@@ -1,10 +1,9 @@
 """Human labels (docs/design/compiler.md 7.3): `compile label` appends to the hash-chained `labels.jsonl`.
 
-A row is `{ref, label: incident|tp|fp, reason_code: human, at, [lesson_id, session], [note], prev_hash, hash}`, read
-by `evidence._labels`. The nightly offline pass also writes auto rows (`reason_code` one of AUTO, label `fp` or
-`tp_candidate`); `effective` lets a human row beat them. Append-only (O_APPEND, 0600), the whole chain is verified
-before every append, notes are scrubbed. Imports: stdlib, `..canon`, `..config`; the store, scrub engine and
-`evidence` load lazily (hook path).
+A row is `{ref, label: incident|tp|fp, reason_code: human, at, [lesson_id, session], [note], prev_hash, hash}`, read by `evidence._labels`. The nightly offline
+pass also writes auto rows (`reason_code` one of AUTO, label `fp` or `tp_candidate`); `effective` lets a human row beat them. Append-only (O_APPEND, 0600), the
+whole chain is verified before every append, notes are scrubbed. Imports: stdlib, `..canon`, `..config`; the store, scrub engine and `evidence` load lazily
+(hook path).
 """
 
 from __future__ import annotations
@@ -70,8 +69,7 @@ def _clean(value: object) -> str:
 
 
 def shadow_rows(cfg: Config) -> list[dict]:
-    keys = ("ts", "session", "proposal_id", "payload_sha256")
-    return [r for r in _read(cfg.path("shadow.jsonl")) if all(isinstance(r.get(k), str) for k in keys)]
+    return [r for r in _read(cfg.path("shadow.jsonl")) if all(isinstance(r.get(k), str) for k in ("ts", "session", "proposal_id", "payload_sha256"))]
 
 
 def _verify(recs: list[dict]) -> tuple[list[dict], int | None]:
@@ -234,9 +232,12 @@ def run(cfg: Config, args, ask: Callable[[str], str], need_tty: Callable[[str], 
     """Entry of `compile label`; exit 0 ok, 1 refused (chain, scrub, evidence, answer), 2 usage or unsafe file."""
     try:
         bad = [f for f, v, ok in (("--lesson", args.lesson, args.incident), ("--session", args.session, args.incident),
-                                  ("--note", args.note, not (args.list or args.rows)), ("--kind", args.kind, args.list),
-                                  ("--limit", args.limit, args.rows)) if v is not None and not ok]
+                                  ("--note", args.note, not (args.list or args.rows or args.queue)), ("--kind", args.kind, args.list),
+                                  ("--limit", args.limit, args.rows or args.queue)) if v is not None and not ok]
         _need(not bad, f"{', '.join(bad)} do not apply to this action", 2)
+        if args.queue:
+            from . import queue                                 # lazy: the queue stays off the hook path
+            return queue.run(cfg, 50 if args.limit is None else args.limit, ask, need_tty)
         if args.list or args.rows:
             return _list(cfg, args.kind) if args.list else _rows(cfg, 50 if args.limit is None else args.limit)
         if not need_tty("label"):

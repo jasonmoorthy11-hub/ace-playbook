@@ -3,9 +3,8 @@
 No network, no model, stdlib only. Exit codes: 0 ok, 1 a proposal failed validation or was not approved (the step is
 named), 2 usage, configuration, store or id errors. `approve`, `unapprove` and `keygen` need a terminal; `approve` appends every
 approval to the hash-chained `approvals.jsonl` (approvals.py; keyed `v: 2` rows once `keygen` made the chain key) and `--mode warn|block`
-is the promotion ladder (ladder.py, imported on demand); `label` writes human labels (labels.py; `--list`, `--rows` need no terminal); `report` prints per-proposal
-shadow counts with labels (report.py; exit 2 on a corpus mix-up); `offline` is the nightly pass (offline.py; `--dry-run` writes nothing);
-`replay-synthetic` replays the frozen corpus into `shadow.synthetic.jsonl` (synth.py; exit 1 on a disagreement).
+is the promotion ladder (ladder.py, imported on demand); `label` writes human labels (labels.py; `--list`, `--rows` need no terminal; `--queue` is the blind label queue, queue.py); `report` prints per-proposal
+shadow counts with labels (report.py; exit 2 on a corpus mix-up); `offline` is the nightly pass (offline.py; `--dry-run` writes nothing); `replay-synthetic` replays the frozen corpus into `shadow.synthetic.jsonl` (synth.py; exit 1 on a disagreement).
 """
 
 from __future__ import annotations
@@ -257,11 +256,12 @@ def main(argv: list[str] | None = None) -> int:
     act.add_argument("--fp", metavar="ROW_ID", help="a shadow.jsonl row (see --rows) is a false positive")
     act.add_argument("--list", action="store_true", help="print labels.jsonl and verify its hash chain")
     act.add_argument("--rows", action="store_true", help="print shadow.jsonl rows with their row ids")
+    act.add_argument("--queue", action="store_true", help="the blind label queue: unlabelled fires, oldest first, one key each (needs a terminal)")
     lb.add_argument("--lesson", metavar="L-xxxxxxxx")
     lb.add_argument("--session", metavar="SESSION_ID", help="the raw session id; only its hash is stored")
     lb.add_argument("--note", help=f"at most {labels.NOTE_MAX} characters, scrubbed")
     lb.add_argument("--kind", choices=labels.KINDS, help="with --list: only this label")
-    lb.add_argument("--limit", type=int, help="with --rows: how many (default 50, newest last)")
+    lb.add_argument("--limit", type=int, help="with --rows: how many (default 50, newest last); with --queue: how many cards (default 50, oldest first)")
     rp = sub.add_parser("report", help="counts per proposal from shadow rows and labels; synthetic kept apart")
     rp.add_argument("--days", type=int, default=14, help="days in the rows-per-day block (default 14, 1 to 3660)")
     rp.add_argument("--json", action="store_true", help="one JSON object instead of text")

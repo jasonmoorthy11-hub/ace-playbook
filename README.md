@@ -95,6 +95,8 @@ changes nothing and cannot block; `approve --mode warn|block` is the promotion l
 positives and no false positive, a hash-chained `approvals.jsonl`, HMAC-keyed once `compile keygen` has made the chain key; warn reaches the model through `additionalContext`).
 `compile label` records human labels at a terminal in a hash-chained `labels.jsonl`: an `incident` label is
 the only way a legacy lesson gets an evidence card, and `tp`/`fp` labels on shadow rows feed the ladder.
+`compile label --queue` is the labelling path: a blind queue of unlabelled fires, oldest first, one key each (tp, fp, skip);
+`label --rows` stays for audit.
 `compile report` prints counts per proposal from the shadow rows and those human labels, then per corpus the eligible-session
 rates with Wilson intervals, friction, hook cost and live-versus-offline agreement; synthetic rows are reported
 apart and never blended with the private ones. There are still no results: to produce the reproducible synthetic table run

@@ -192,6 +192,8 @@ A lesson whose evidence is migrated legacy text first needs
 `python3 -m ace_playbook.compile label --incident --lesson L-xxxxxxxx --session <id>`, which shows the incident
 and asks y/N on /dev/tty; only then does `propose` have a card for it.
 
+To label shadow fires, run `python3 -m ace_playbook.compile label --queue [--limit N]` at a terminal: one blind card per unlabelled fire, oldest first.
+
 Then add these two entries to
 the same `"hooks"` object of your user-level `settings.json` (adjust the path to your checkout):
 
