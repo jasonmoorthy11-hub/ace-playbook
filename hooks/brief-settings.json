@@ -1,0 +1,19 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I -S \"$ACE_PLAYBOOK_REPO/hooks/brief_guard.py\" || exit 2",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "deny": ["Bash", "Edit", "Write", "WebFetch", "WebSearch", "Agent"]
+  }
+}
