@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Example changelog</title>
+    <link>https://example.test/changelog</link>
+    <item>
+      <title>Release 9.1.0: new hooks events</title>
+      <link>https://example.test/changelog#9-1-0</link>
+      <guid>example-9.1.0</guid>
+      <pubDate>Mon, 19 Oct 2026 10:00:00 GMT</pubDate>
+      <description>Adds a hooks event and fixes a status line bug.</description>
+    </item>
+    <item>
+      <title>Release 9.0.4</title>
+      <link>https://example.test/changelog#9-0-4</link>
+      <pubDate>Fri, 16 Oct 2026 10:00:00 GMT</pubDate>
+      <description>Small fixes.</description>
+    </item>
+  </channel>
+</rss>

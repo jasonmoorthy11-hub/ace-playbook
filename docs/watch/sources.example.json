@@ -1,0 +1,9 @@
+[
+  {"id": "cc-changelog", "url": "https://code.claude.com/docs/en/changelog/rss.xml", "kind": "rss", "tier": 0, "cadence": "daily"},
+  {"id": "cc-releases", "url": "https://github.com/anthropics/claude-code/releases.atom", "kind": "atom", "tier": 0, "cadence": "daily"},
+  {"id": "cc-npm-tags", "url": "https://registry.npmjs.org/-/package/@anthropic-ai/claude-code/dist-tags", "kind": "npm", "tier": 0, "cadence": "daily"},
+  {"id": "model-deprecations", "url": "https://platform.claude.com/docs/en/about-claude/model-deprecations.md", "kind": "deprecations", "tier": 0, "cadence": "daily"},
+  {"id": "cc-docs-sitemap", "url": "https://code.claude.com/sitemap.xml", "kind": "sitemap", "tier": 0, "cadence": "daily"},
+  {"id": "bsky-staff-mirror", "url": "https://bsky.app/profile/bcherny.xmirror.bot/rss", "kind": "rss", "tier": 1, "cadence": "weekly"},
+  {"id": "arxiv-cs-se", "url": "https://rss.arxiv.org/rss/cs.SE", "kind": "rss", "tier": 1, "cadence": "weekly"}
+]
