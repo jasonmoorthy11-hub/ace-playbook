@@ -414,11 +414,16 @@ def test_nightly_dry_run_that_crashes_after_a_clean_offline_pass_records_the_fai
     with pytest.raises(RuntimeError):
         mod.main()
     rec = json.loads((w.data / "health.json").read_text())
-    assert rec["ok"] is False and rec["consecutive_failures"] == 1 and "RuntimeError" in rec["last_error"]
+    assert rec["ok"] is False and rec["consecutive_failures"] == 1 and rec["last_error"] == "sweep raised RuntimeError"
     monkeypatch.setattr(sys, "argv", ["nightly_sweep.py", "--config", w.conf, "--dry-run", "--offline-dry-run"])
     with pytest.raises(RuntimeError):                                     # an offline dry run records nothing, crash or not
         mod.main()
     assert json.loads((w.data / "health.json").read_text())["consecutive_failures"] == 1
+    (w.data / "health.json").unlink()
+    monkeypatch.setattr(sys, "argv", ["nightly_sweep.py", "--config", w.conf, "--dry-run", "--no-offline"])
+    with pytest.raises(RuntimeError):                                     # nothing real ran: no record, so nothing a later night cannot clear
+        mod.main()
+    assert not (w.data / "health.json").exists()
 
 
 def test_nightly_records_nothing_when_the_offline_pass_was_a_dry_run_or_skipped(sweep, w):

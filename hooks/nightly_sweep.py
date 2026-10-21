@@ -36,8 +36,8 @@ def main() -> int:
     try:
         report["sweep"] = run_sweep(cfg, max_n=args.max_n, dry_run=args.dry_run, idle_minutes=args.idle_minutes)
     except Exception as exc:                          # run_sweep records its own crash unless it was a dry run: a crashed night is a failed night
-        if args.dry_run and not failed and not args.offline_dry_run:
-            health.record(cfg, False, exc=exc)
+        if args.dry_run and not failed and not (args.no_offline or args.offline_dry_run):
+            health.record(cfg, False, f"sweep raised {type(exc).__name__}")   # type only, like the offline stage above
         raise
     finally:
         if failed and not args.offline_dry_run:       # a real offline pass failed, whatever --dry-run says about reflection
