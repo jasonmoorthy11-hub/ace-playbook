@@ -4,11 +4,9 @@
 `metrics.wilson`; this module does no other rate arithmetic), so the text, `status.json` and `digest` can never disagree with
 `compile report --json`. A proposal approved but never fired has no row in the report; it is added with `metrics.compute` over the
 same inputs, so a silent detector is visible. Nothing here reaches a model or the hook path (the shadow hook never imports it).
-No session hash is printed: the queue shows eight characters of it. Imports: stdlib, `..atomic`, `..config`, `.measure` and `.ladder`
-(the clock and the window counts), `.report` and its neighbours; `..health` and `.catalogue` load lazily
-(`__main__` imports this module and must stay free of the scrub engine).
+No session hash is printed: the queue shows eight characters of it. Imports: stdlib, `..atomic`, `..config`, `.measure`, `.ladder`, `.report` and neighbours,
+and `.watch.summary` (the watcher's counts: a pure read, no network); `..health` and `.catalogue` load lazily (`__main__` must stay free of the scrub engine).
 """
-
 from __future__ import annotations
 
 import json
@@ -26,6 +24,7 @@ from ..atomic import write_private
 from ..canon import now_iso
 from ..config import Config
 from . import approvals, chains, labels, ladder, measure, metrics, report
+from .watch import summary as watch_summary
 
 SCHEMA, WARN_DAYS, WEEK, QUEUE_MAX, COST_MS, MIN_LABELS, MIN_TP = 1, 14, 7, 50, 200, 5, 5
 STAMP, WORD = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ"), re.compile(r"[A-Za-z0-9_:.-]{1,40}")
@@ -237,7 +236,8 @@ def build(cfg: Config, days: int = 14, now: str | None = None) -> dict:
             "heartbeat": _heartbeat(cfg, rows, notes), "proposals": props, "queue": queue[:QUEUE_MAX], "queue_total": len(queue),
             "queue_retired": hidden, "per_day": d["private"]["per_day"],
             "cost": {"p50_ms": corpus["cost_p50_ms"], "p95_ms": corpus["cost_p95_ms"], "rows": corpus["cost_rows"], "threshold_ms": COST_MS},
-            "agreement": {**live, "awaiting_scan": corpus["awaiting_offline_scan"]}, "demotions": d["demotions"]["rows"]}
+            "agreement": {**live, "awaiting_scan": corpus["awaiting_offline_scan"]}, "demotions": d["demotions"]["rows"],
+            **watch_summary.fields(cfg, now)}
 
 
 def _precision(v: object) -> str:

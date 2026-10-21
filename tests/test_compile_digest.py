@@ -1,4 +1,4 @@
-"""`compile digest` (docs/design/compiler.md 8.x): six plain-text blocks rendered from status.json, one log line per run."""
+"""`compile digest` (docs/design/compiler.md 8.x): seven plain-text blocks rendered from status.json, one log line per run."""
 
 import json
 import os
@@ -15,7 +15,7 @@ from . import compile_support as cs
 from .test_compile_status import NOW, ROOT, approve, build, fire, labelled_world, pid_of, w  # noqa: F401 - w is a fixture
 from .test_hooks import HOOKS, env  # noqa: F401 - env is a fixture
 
-HEADINGS = ["status", "needs you", "detectors", "health", "changes", "next"]
+HEADINGS = ["status", "needs you", "detectors", "health", "proposals", "changes", "next"]
 LABEL_CMD = "python3 -m ace_playbook.compile label --queue"
 
 
@@ -38,7 +38,7 @@ def spiky(w, today: int, others: list[int], days: int = 14) -> dict:
     return s
 
 
-def test_six_headings_appear_once_and_in_order(w):
+def test_seven_headings_appear_once_and_in_order(w):
     labelled_world(w)
     text = digest.render(build(w), None)
     assert headings(text) == HEADINGS and all(text.splitlines().count(h) == 1 for h in HEADINGS)

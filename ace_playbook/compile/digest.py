@@ -1,9 +1,10 @@
-"""`compile digest` (docs/design/compiler.md 8.x): the nightly read-out, six plain-text blocks rendered from `status.build` and nothing else.
+"""`compile digest` (docs/design/compiler.md 8.x): the nightly read-out, seven plain-text blocks rendered from `status.build` and nothing else.
 
-Blocks, in order: `status`, `needs you`, `detectors`, `health`, `changes`, `next`. Every figure comes from the status dict (so from
+Blocks, in order: `status`, `needs you`, `detectors`, `health`, `proposals` (the watcher: open, leads, oldest, last scan, up to three
+titles; `none` or `disabled`), `changes`, `next`. Every figure comes from the status dict (so from
 `report.collect`), and there is no rate arithmetic here: the spike rule compares integers. Each run appends ONE JSON line to
 `<data_dir>/digest.log` (0600, O_APPEND) so that a night without a digest can be seen. Nothing reaches a model and the shadow hook
-never imports this module. Imports: stdlib, `..config`, `.chains`, `.labels`, `.modes`, `.status`.
+never imports this module. Imports: stdlib, `..config`, `.chains`, `.labels`, `.modes`, `.status`, `.watch.summary`.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from datetime import timedelta
 
 from ..config import Config
 from . import chains, labels, modes, status
+from .watch import summary as watch_summary
 
 PROTOCOL, LOG, STALE_HOURS, SPIKE_FACTOR, SPIKE_MIN = "shadow-v1", "digest.log", 36, 3, 3
 LABEL_CMD = "python3 -m ace_playbook.compile label --queue"
@@ -82,7 +84,7 @@ def render(s: dict, since: str | None, approvals: list[dict] = ()) -> str:
     (the status dict holds the demotion rows but not these)."""
     since = since or (status.parse_ts(s["generated_at"]) - timedelta(hours=24)).strftime(status.FMT)
     blocks = (("status", _status_block(s)), ("needs you", _needs(s)), ("detectors", status.table(s)), ("health", _health(s)),
-              ("changes", _changes(s, since, list(approvals))), ("next", _next(s)))
+              ("proposals", watch_summary.block(s, s["generated_at"], status.age)), ("changes", _changes(s, since, list(approvals))), ("next", _next(s)))
     return "\n".join(line for name, lines in blocks for line in (name, *lines, "")) + "\n"
 
 
