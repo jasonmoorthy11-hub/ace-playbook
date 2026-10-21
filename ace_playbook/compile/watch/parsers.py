@@ -20,9 +20,13 @@ NONE_WORDS = ("", "n/a", "na", "-", "—", "none", "tbd", "tba", "null", "to be 
 MAX_ENTRIES = 100
 
 
+class DTDRefused(ValueError):
+    """XML with a DOCTYPE or ENTITY declaration (entity expansion); `fetch` drops it with the reason `xml`."""
+
+
 def _xml(text: str) -> ET.Element:
-    if re.search(r"<!(?:DOCTYPE|ENTITY)", text, re.I):
-        raise ValueError("DTD refused")
+    if re.search(r"<!\s*(?:DOCTYPE|ENTITY)", text, re.I):
+        raise DTDRefused("DTD refused")
     return ET.fromstring(text)
 
 

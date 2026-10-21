@@ -2,7 +2,6 @@
 
 import hashlib
 import json
-import urllib.request
 
 import pytest
 
@@ -124,9 +123,10 @@ def test_http_errors_and_other_schemes_are_dropped():
     assert get(url="ftp://example.test/x", opener=Opener({}))["dropped"] == "scheme"
 
 
-def test_urlopen_is_looked_up_at_call_time_so_it_can_be_patched(monkeypatch):
+def test_the_default_opener_is_the_same_host_opener_and_is_looked_up_at_call_time(monkeypatch):
+    from ace_playbook.compile.watch import netguard
     seen = []
-    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: seen.append(req.full_url) or Resp(b"<p>ok</p>", "text/html"))
+    monkeypatch.setattr(netguard, "open_url", lambda req, timeout=None: seen.append(req.full_url) or Resp(b"<p>ok</p>", "text/html"))
     assert get()["body"] == "ok" and seen == [URL]
 
 

@@ -6,13 +6,12 @@ import os
 import stat
 import subprocess
 import sys
-import urllib.request
 from pathlib import Path
 
 import pytest
 
 from ace_playbook.compile import __main__ as cli_main
-from ace_playbook.compile.watch import cli, inventory, match, scan, store
+from ace_playbook.compile.watch import cli, inventory, match, netguard, scan, store
 
 from .watch_support import INJECTION, Resp, fixture
 
@@ -48,7 +47,7 @@ class World:
             body, ctype = self.pages[req.full_url]
             return Resp(body, ctype)
 
-        monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+        monkeypatch.setattr(netguard, "open_url", urlopen)
         monkeypatch.setattr(inventory, "claude_version", lambda *a, **k: "9.0.1 (Claude Code)")
 
     def run(self, capsys, *argv):

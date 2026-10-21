@@ -64,7 +64,12 @@ def test_hidden_html_injection_in_feeds_and_pages_never_reaches_a_body_or_a_pars
 
 def test_a_dtd_or_entity_declaration_is_refused():
     bomb = b'<?xml version="1.0"?><!DOCTYPE lolz [<!ENTITY a "aaaa">]><rss version="2.0"><channel><item><title>&a;</title></item></channel></rss>'
-    assert get("rss", bomb, "application/rss+xml")["dropped"] == "parse"
+    assert get("rss", bomb, "application/rss+xml")["dropped"] == "xml"
+    for decl in (b"<!DOCTYPE rss>", b"<!doctype rss>", b'<!ENTITY x "y">', b"<! DOCTYPE rss>"):
+        for kind, name, ctype in (("rss", "rss_ok.xml", "application/rss+xml"), ("atom", "atom_ok.xml", "application/atom+xml"),
+                                  ("sitemap", "sitemap.xml", "application/xml")):
+            body = fixture(name).replace(b"?>", b"?>\n" + decl, 1)
+            assert get(kind, body, ctype)["dropped"] == "xml", (kind, decl)
 
 
 # ------------------------------------------------------------------ the parsers
