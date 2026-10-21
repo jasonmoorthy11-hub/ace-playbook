@@ -27,6 +27,12 @@ def test_the_config_file_is_pinned_to_a_missing_path_so_a_forgetful_test_cannot_
         cfgmod.load()
 
 
+def test_the_default_config_location_is_pinned_too_so_a_test_that_unsets_the_variable_cannot_see_the_real_one(hermetic_config, monkeypatch):
+    monkeypatch.delenv(cfgmod.ENV_CONFIG)
+    assert cfgmod.DEFAULT_CONFIG == hermetic_config and cfgmod.config_file() == hermetic_config
+    assert cfgmod.load().chain_key_path is None and cfgmod.load().source == hermetic_config
+
+
 def test_child_processes_get_a_throwaway_home(env):  # noqa: F811
     e, _ = env
     assert e["HOME"] != os.environ.get("HOME") and os.path.isdir(e["HOME"])

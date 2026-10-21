@@ -199,6 +199,32 @@ def test_keygen_refuses_when_an_unnamed_key_file_already_sits_at_the_suggested_p
     assert conf.read_bytes() == before and key.read_bytes() == key_before and tty.asked == [] and not (conf.parent / chains.HEADS).exists()
 
 
+def test_keygen_keeps_an_edit_made_to_the_config_while_the_prompt_is_open(tmp_path, tty, monkeypatch):
+    conf = conf_at(tmp_path, {"data_dir": str(tmp_path / "data")})
+
+    def edit_then_yes(prompt):
+        conf.write_text(json.dumps({"data_dir": str(tmp_path / "data"), "model": "claude-sonnet-5-5"}, indent=2) + "\n")
+        return "y"
+    monkeypatch.setattr(cli, "_ask", edit_then_yes)
+    assert cli.main(["--config", str(conf), "keygen"]) == 0
+    assert json.loads(conf.read_text())["model"] == "claude-sonnet-5-5" and "chain_key_path" in json.loads(conf.read_text())
+
+
+def test_keygen_says_the_config_was_rewritten_when_the_key_file_appears_during_the_prompt(tmp_path, tty, monkeypatch, capsys):
+    conf = conf_at(tmp_path, {"data_dir": str(tmp_path / "data")})
+    key = conf.parent / "chain_key"
+
+    def key_then_yes(prompt):
+        write_key(key)
+        return "y"
+    monkeypatch.setattr(cli, "_ask", key_then_yes)
+    before = key.read_bytes() if key.exists() else None
+    assert cli.main(["--config", str(conf), "keygen"]) == 1
+    err = capsys.readouterr().err
+    assert "nothing was written" not in err and "now names it" in err and "chain_key_path" in json.loads(conf.read_text())
+    assert before is None and key.read_text() == K1.hex()
+
+
 # ------------------------------------------------------------------ the config is found from any directory
 def test_load_makes_the_source_absolute_and_keygen_never_writes_a_relative_path(tmp_path, tty, monkeypatch, capsys):
     conf = conf_at(tmp_path, {"data_dir": str(tmp_path / "data")})
@@ -244,6 +270,16 @@ def test_v2_rows_in_either_chain_mark_the_install_keyed_when_the_config_names_no
         chains_io.need_key(cfg, approvals)
     assert "restore the chain key file" in run.capsys.readouterr().err                  # the writer's refusal, not the hook's
     assert run(cs.pre_payload(RM)) == (0, "", "") and run.log.count("chain_key:missing") == 1
+
+
+def test_the_synthetic_replay_keeps_the_config_source_of_its_scratch_copy(tmp_path, monkeypatch):
+    from ace_playbook.compile import shadow, synth
+    seen = []
+    monkeypatch.setattr(shadow, "_evaluate", lambda scratch, ev, sid, names, log: seen.append((scratch.source, scratch.data_dir)) or [])
+    cfg = cfgmod.Config(data_dir=tmp_path)
+    cfg.source = tmp_path / "config.json"
+    synth.replay(cfg, [("s", [("rm_rf_nonscratch", "none", cs.pre_payload(RM))])])
+    assert seen and seen[0][0] == cfg.source and seen[0][1] != tmp_path
 
 
 def test_v1_only_rows_and_no_marker_stay_an_unkeyed_install_wherever_the_config_sits(w, tmp_path, monkeypatch):

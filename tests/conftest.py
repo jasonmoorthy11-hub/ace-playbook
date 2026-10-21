@@ -20,9 +20,11 @@ from ace_playbook import config as cfgmod
 
 @pytest.fixture(autouse=True)
 def hermetic_config(tmp_path_factory, monkeypatch):
-    """A test that forgets to name its config file fails loudly (`ACE_PLAYBOOK_CONFIG` → a missing file) instead of reading the operator's."""
+    """A test that forgets to name its config file fails loudly (`ACE_PLAYBOOK_CONFIG` → a missing file) instead of reading the operator's;
+    the default location points at the same missing file, so a test that unsets the variable cannot see the real config or the heads beside it."""
     path = tmp_path_factory.mktemp("no-operator-config") / "no-config.json"
     monkeypatch.setenv(cfgmod.ENV_CONFIG, str(path))
+    monkeypatch.setattr(cfgmod, "DEFAULT_CONFIG", path)
     yield path
 
 

@@ -20,7 +20,8 @@ from .chains import Keyring
 
 MODS = {"approvals": approvals, "demotions": demotions}
 RESTORE = ("error: chain key missing: this install is keyed but the key is unusable: restore the chain key file (named by chain_key_path in "
-           "config.json; a config without that line names no key) from your backup, or move the unusable key file away, delete "
+           "config.json) from your backup; if the key file is present, config.json probably does not name it (a config without that line "
+           "names no key): add chain_key_path; or move the unusable key file away, delete "
            "approvals.jsonl, demotions.jsonl and chain_heads.json, unset ACE_PLAYBOOK_KEYED in this shell,"
            " and run keygen again (every approval must then be re-made)")
 

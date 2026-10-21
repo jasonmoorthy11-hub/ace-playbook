@@ -13,7 +13,7 @@ import secrets
 import sys
 from pathlib import Path
 
-from .. import atomic, config as cfgmod
+from .. import config as cfgmod
 from ..canon import GENESIS, chain_key
 from . import chains, chains_io
 from .chains import Keyring
@@ -105,7 +105,8 @@ def keygen(cfg, need_tty, rehead: bool = False, ask=None) -> int:
         print("error: chain_key_path is not set in the configuration", file=sys.stderr)
         return 2
     path = Path(cfg.chain_key_path) if cfg.chain_key_path else src.parent / cfgmod.SUGGESTED_KEY
-    new_conf = cfgmod.with_chain_key(src, path) if src else None                # ValueError: not an object, or a null (off) to leave alone
+    if src:
+        cfgmod.with_chain_key(src, path)                        # only checks (ValueError: not an object, or a null to leave alone); rebuilt after y
     if rehead:
         return reheads(cfg, path, ask)
     if src and os.path.lexists(path):
@@ -130,13 +131,13 @@ def keygen(cfg, need_tty, rehead: bool = False, ask=None) -> int:
             print("error: nothing was written", file=sys.stderr)
             return 1
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        if new_conf:                                            # before the key: a failure leaves nothing but an unkeyed install
-            atomic.write_private(Path(os.path.realpath(src)), new_conf)
+        if src:                                                 # before the key: a failure leaves nothing but an unkeyed install
+            cfgmod.name_chain_key(src, path)
         key = secrets.token_bytes(32)
         try:
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         except FileExistsError:
-            print("error: the chain key file already exists; nothing was written", file=sys.stderr)
+            print(f"error: the chain key file already exists; {src.name + ' now names it' if src else 'nothing was written'}", file=sys.stderr)
             return 1
         with os.fdopen(fd, "w") as fh:
             fh.write(key.hex())
