@@ -144,7 +144,7 @@ def test_queue_is_capped_at_fifty_but_the_total_is_not(w):
 
 # ------------------------------------------------------------------ verdicts
 def row(**over):
-    base = {"mode": "observe", "approved_mode": "observe", "revoked": False, "unlabelled": 0, "eligible": 4, "strength": "strong",
+    base = {"mode": "observe", "approved_mode": "observe", "revoked": False, "unlabelled": 0, "to_label": 0, "eligible": 4, "strength": "strong",
             "window_start": "2026-10-01T00:00:00Z", "tp_window": 5, "fp_window": 0, "compilable": "block", "event": "PreToolUse"}
     return {**base, **over}
 
@@ -154,9 +154,11 @@ def row(**over):
     ({"mode": "revoked"}, "retired"),
     ({"approved_mode": "disabled"}, "retired"),
     ({"revoked": True}, "retired"),
-    ({"mode": "disabled", "unlabelled": 3}, "retired"),                              # retired wins over labelling
-    ({"unlabelled": 2}, "label 2 fires"),
-    ({"unlabelled": 2, "eligible": 0}, "label 2 fires"),
+    ({"mode": "disabled", "to_label": 3}, "retired"),                                # retired wins over labelling
+    ({"to_label": 2}, "label 2 fires"),
+    ({"to_label": 2, "eligible": 0}, "label 2 fires"),
+    ({"to_label": 3, "unlabelled": 1}, "label 3 fires"),                             # N is to_label, not the report's unlabelled
+    ({"to_label": 0, "unlabelled": 4}, "warn eligible"),
     ({"eligible": 0}, "silent: eligible 0"),
     ({"eligible": None}, "silent: eligible 0"),
     ({"window_start": "2026-10-10T08:00:00Z"}, "warn earliest 2026-10-24"),
@@ -187,11 +189,11 @@ def row(**over):
     ({"mode": "warn", "event": "-"}, "warn only: block is for PreToolUse"),              # an unknown event is never PreToolUse
     ({"mode": "warn", "compilable": "warn", "event": "Stop"}, "warn only: detector allows warn"),
     ({"mode": "warn", "strength": "weak"}, "warn only: weak detector"),
-    ({"mode": "warn", "unlabelled": 1}, "label 1 fires"),
+    ({"mode": "warn", "to_label": 1}, "label 1 fires"),
     ({"mode": "warn", "eligible": 0}, "silent: eligible 0"),
     ({"mode": "block", "approved_mode": "block"}, "block (top rung)"),
     ({"mode": "block", "event": "Stop", "fp_window": 3}, "block (top rung)"),             # nothing is left to promote to
-    ({"mode": "block", "unlabelled": 2}, "label 2 fires"),
+    ({"mode": "block", "to_label": 2}, "label 2 fires"),
     ({"mode": "block", "revoked": True}, "retired"),
 ])
 def test_verdict_rules_in_order(over, want):
@@ -501,6 +503,30 @@ def test_a_tp_candidate_row_is_no_label_so_the_row_stays_pending(w):
     assert after["proposals"][pid_of(w)]["tp"] == 0                                           # and it is no TP either
 
 
+def test_a_tp_candidate_row_counts_in_to_label_and_the_verdict_but_not_in_unlabelled(w):
+    a, b = fire(w, "rm_rf_nonscratch", "s1", 2)
+    cs.write_labels(w.cfg, [auto_row(a), hum(b, "tp")])                                       # a is only a candidate, b is a human tp
+    scan(w)
+    p = build(w)["proposals"][pid_of(w)]
+    assert (p["to_label"], p["unlabelled"], p["verdict"]) == (1, 0, "label 1 fires")          # unlabelled stays the report's count
+    assert p["unlabelled"] == report.collect(w.cfg, 14, NOW)["private"]["proposals"][pid_of(w)]["unlabelled"]
+
+
+def test_to_label_is_the_queue_rows_of_each_proposal_and_sums_to_the_queue_and_the_hidden_rows(w):
+    labelled_world(w)                                                                         # 2 pending on rm_rf_nonscratch, 1 on rm_rf
+    s = build(w)
+    assert {pid: p["to_label"] for pid, p in s["proposals"].items()} == {pid_of(w): 2, pid_of(w, "rm_rf"): 1}
+    assert sum(p["to_label"] for p in s["proposals"].values()) == s["queue_total"] + s["queue_retired"] == 3
+    assert s["proposals"][pid_of(w)]["verdict"] == "label 2 fires" and s["proposals"][pid_of(w, "rm_rf")]["to_label"] == 1
+
+
+def test_a_covering_label_removes_a_row_from_to_label_and_an_unfired_proposal_has_zero(w):
+    ids = fire(w, "rm_rf_nonscratch", "s1", 3)
+    cs.write_labels(w.cfg, [hum(ids[0], "tp"), auto_row(ids[1], "fp", "auto_fp_correction")])     # an auto fp covers a row too
+    p = build(w)["proposals"]
+    assert (p[pid_of(w)]["to_label"], p[pid_of(w, "rm_rf")]["to_label"]) == (1, 0)
+
+
 def test_an_auto_fp_and_a_human_row_do_cover_a_row(w):
     a, b = fire(w, "rm_rf_nonscratch", "s1", 2)
     cs.write_labels(w.cfg, [auto_row(a, "fp", "auto_fp_correction"), hum(b, "tp")])
@@ -531,6 +557,7 @@ def test_rows_of_retired_proposals_are_left_out_of_the_queue_and_counted(w):
     s = build(w)
     assert s["queue_total"] == 2 and s["queue_retired"] == 1 and {x["proposal_id"] for x in s["queue"]} == {pid_of(w)}
     assert s["proposals"][pid_of(w, "rm_rf")]["unlabelled"] == 1 and s["proposals"][pid_of(w, "rm_rf")]["verdict"] == "retired"
+    assert s["proposals"][pid_of(w, "rm_rf")]["to_label"] == 1                           # counted although the default queue hides it
     assert s["proposals"][pid_of(w, "rm_rf")]["revoked"] is True
     assert [x["proposal_id"] for x in queue.pending(w.cfg, now=NOW)] == [pid_of(w)] * 2
     both = queue.pending(w.cfg, include_retired=True, now=NOW)

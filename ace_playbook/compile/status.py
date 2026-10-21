@@ -4,8 +4,9 @@
 `metrics.wilson`; this module does no other rate arithmetic), so the text, `status.json` and `digest` can never disagree with
 `compile report --json`. A proposal approved but never fired has no row in the report; it is added with `metrics.compute` over the
 same inputs, so a silent detector is visible. Nothing here reaches a model or the hook path (the shadow hook never imports it).
-No session hash is printed: the queue shows eight characters of it. Imports: stdlib, `..atomic`, `..config`, `.ladder` (its window counts),
-`.report` and its neighbours; `..health` and `.catalogue` load lazily (`__main__` imports this module and must stay free of the scrub engine).
+No session hash is printed: the queue shows eight characters of it. Imports: stdlib, `..atomic`, `..config`, `.measure` and `.ladder`
+(the clock and the window counts), `.report` and its neighbours; `..health` and `.catalogue` load lazily
+(`__main__` imports this module and must stay free of the scrub engine).
 """
 
 from __future__ import annotations
@@ -16,13 +17,15 @@ import re
 import stat
 import sys
 import time
+from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Iterator
 
 from ..atomic import write_private
 from ..canon import now_iso
 from ..config import Config
-from . import approvals, chains, labels, ladder, measure, metrics, modes, report
+from . import approvals, chains, labels, ladder, measure, metrics, report
 
 SCHEMA, WARN_DAYS, WEEK, QUEUE_MAX, COST_MS, MIN_LABELS, MIN_TP = 1, 14, 7, 50, 200, 5, 5
 STAMP, WORD = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ"), re.compile(r"[A-Za-z0-9_:.-]{1,40}")
@@ -89,14 +92,14 @@ def _rung(mode: object) -> str:
 
 def verdict(p: dict, now: str) -> str:
     """The first rule that holds, never looser than the ladder (`ladder.check`, design 7.3). On the rung `m` (observe, warn or block) the
-    next rung `n` is warn from observe and block from warn: retired, label N fires, silent, `block (top rung)`, `n earliest
+    next rung `n` is warn from observe and block from warn: retired, label N fires (`to_label`), silent, `block (top rung)`, `n earliest
     DATE` (14 days from `window_start`, the resolved counting window), needs 5 human TPs, noisy, not eligible (any FP), then `m only: weak
     detector`, `m only: detector allows X` (catalogue ceiling below `n`), `warn only: block is for PreToolUse`, else `n eligible`.
     `tp_window` and `fp_window` are the ladder's counts since `window_start`, of fires in mode `m`."""
     if retired(p):
         return "retired"
-    if p["unlabelled"] > 0:
-        return f"label {p['unlabelled']} fires"
+    if p["to_label"] > 0:
+        return f"label {p['to_label']} fires"
     if not p["eligible"]:
         return "silent: eligible 0"
     m = _rung(p["mode"])
@@ -118,42 +121,22 @@ def verdict(p: dict, now: str) -> str:
     return "warn only: block is for PreToolUse" if n == "block" and p["event"] != "PreToolUse" else f"{n} eligible"
 
 
-def _proposal(p: dict, rate: dict, last: dict | None, start: str | None, win: tuple[int, int], now: str, event: str = "-") -> dict:
+def _proposal(p: dict, rate: dict, last: dict | None, start: str | None, win: tuple[int, int], now: str, event: str = "-", to_label: int = 0) -> dict:
     """One `proposals` entry: the report's counts (`p`) and rates, the newest approvals row, the resolved `window_start`, the ladder's
-    (tp, fp) since it in the current mode, and the proposal's `event` and the catalogue's `compilable` ceiling (the next rung's checks)."""
+    (tp, fp) since it in the current mode, `to_label` (see `_uncovered`), and the proposal's `event` and the catalogue's `compilable` ceiling
+    (the next rung's checks)."""
     from . import catalogue
     n, at, cat = p["tp"] + p["fp"], last["ts"] if last else None, catalogue.CATALOGUE.get(p["detector"])
     row = {"detector": p["detector"], "strength": getattr(cat, "strength", None), "compilable": getattr(cat, "compilable", "none"), "event": event,
            "mode": p["mode"], "approved_mode": p["approved_mode"], "revoked": bool(last and last["mode"] == "revoked"), "approved_at": at,
            "window_start": start, "rows": p["rows"], "fires": rate.get("fires"), "tp": p["tp"], "fp": p["fp"], "tp_window": win[0],
-           "fp_window": win[1], "unlabelled": p["unlabelled"], "eligible": rate.get("eligible"), "fires_per_eligible": rate.get("fires_per_eligible"),
+           "fp_window": win[1], "unlabelled": p["unlabelled"], "to_label": to_label, "eligible": rate.get("eligible"),
+           "fires_per_eligible": rate.get("fires_per_eligible"),
            "precision": metrics.wilson(p["tp"], n) if n >= MIN_LABELS else INSUFFICIENT,
            "fp_upper_95": metrics.upper95_zero(n) if p["fp"] == 0 and n >= 1 else None,
            "warn_earliest": (parse_ts(start) + timedelta(days=WARN_DAYS)).strftime(FMT) if parse_ts(start) else None}
     row["verdict"] = verdict(row, now)
     return row
-
-
-def _window(cfg: Config, pid: str, ring: tuple, now: str) -> str | None:
-    """The proposal's counting window start as `modes.resolve` says (the hook's and the ladder's clock); None without a backed copy."""
-    from . import proposal, shadow
-    try:
-        rec = proposal.load(shadow.approved_path(cfg, pid))
-        body, _ = shadow.pending_body(rec)
-    except (ValueError, OSError):
-        return None
-    return (modes.resolve(pid, rec, *ring, now).window_start or None) if body is not None else None
-
-
-def _window_counts(pid: str, start: str | None, now: str, fires: dict, eff: dict, mode: str) -> tuple[int, int]:
-    """(human tps, fps) the ladder counts for `pid` since `start`: live fires in the proposal's current `mode` (the rung it stands on,
-    as `ladder.check` counts them for the next one), `ladder.effective` labels."""
-    tp = fp = 0
-    for ref, (_, lab, human) in eff.items() if start else ():
-        kind, f = ladder._counted(lab, human), fires.get(ref)
-        if kind and f and f["proposal_id"] == pid and f.get("tier") == "live" and f.get("mode") == mode and start <= f["ts"] <= now:
-            tp, fp = tp + (kind == "tp"), fp + (kind == "fp")
-    return tp, fp
 
 
 def _unfired(cfg: Config, d: dict, rows: list[dict], now: str) -> tuple[dict, dict]:
@@ -169,20 +152,26 @@ def _unfired(cfg: Config, d: dict, rows: list[dict], now: str) -> tuple[dict, di
     return counts, rates
 
 
-def _queue(rows: list[dict], labs: dict, props: dict) -> tuple[list[dict], int]:
-    """(entries, hidden): every fired row that no human tp/fp covers (a `tp_candidate` covers nothing), oldest first, one per row id; the
-    rows of retired proposals are counted in `hidden`, not listed."""
-    seen, out, hidden = set(), [], 0
+def _uncovered(rows: list[dict], labs: dict) -> Iterator[dict]:
+    """Every fired row that no human tp/fp covers (a `tp_candidate` covers nothing), oldest first, one per row id: the label queue before
+    retired proposals are set aside."""
+    seen = set()
     for r in sorted(rows, key=lambda r: r["ts"]):
         rid = labels.row_id(r)
-        if not fired(r) or labs.get(rid) in COVERING or rid in seen:
-            continue
-        seen.add(rid)
+        if fired(r) and labs.get(rid) not in COVERING and rid not in seen:
+            seen.add(rid)
+            yield r
+
+
+def _queue(rows: list[dict], labs: dict, props: dict) -> tuple[list[dict], int]:
+    """(entries, hidden): the `_uncovered` rows, oldest first; the rows of retired proposals are counted in `hidden`, not listed."""
+    out, hidden = [], 0
+    for r in _uncovered(rows, labs):
         info = props.get(r["proposal_id"])
         if info and retired(info):
             hidden += 1
             continue
-        out.append({"id": rid, "ts": _stamp(r["ts"]), "proposal_id": _tok(r["proposal_id"]), "detector": info["detector"] if info else "-",
+        out.append({"id": labels.row_id(r), "ts": _stamp(r["ts"]), "proposal_id": _tok(r["proposal_id"]), "detector": info["detector"] if info else "-",
                     "session8": _tok(r["session"][:8]), "event": _tok(r.get("event")), "cause": _tok(r.get("cause"))})
     return out, hidden
 
@@ -216,13 +205,13 @@ def build(cfg: Config, days: int = 14, now: str | None = None) -> dict:
     counts, rates = d["private"]["proposals"], d["rates"]["private"]
     extra_counts, extra_rates = _unfired(cfg, d, rows, now)
     counts, per = {**counts, **extra_counts}, {**rates["proposals"], **extra_rates}
-    fires, eff, props = {}, ladder.effective(lab_rows), {}
+    fires, eff, props, owed = {}, ladder.effective(lab_rows), {}, Counter(r["proposal_id"] for r in _uncovered(rows, labs))
     for r in rows:
         fires.setdefault(labels.row_id(r), r)
     for pid, p in sorted(counts.items()):
-        start = _window(cfg, pid, chain4, now)
-        win = _window_counts(pid, start, now, fires, eff, _rung(p["mode"]))
-        props[pid] = _proposal(p, per.get(pid, {}), approvals.newest(arows, pid), start, win, now, report._meta(cfg, pid)[1])
+        start = measure.window_start(cfg, pid, chain4, now)
+        win = measure.window_counts(pid, start, now, fires, eff, _rung(p["mode"]))
+        props[pid] = _proposal(p, per.get(pid, {}), approvals.newest(arows, pid), start, win, now, report._meta(cfg, pid)[1], owed[pid])
     start, here = measure.start_of(arows), parse_ts(now)
     t0, corpus = parse_ts(start), rates["corpus"]
     notes = [*chains.notes(ring, (abroken, dem_broken)),

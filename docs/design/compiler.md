@@ -962,7 +962,7 @@ labels is the word `INSUFFICIENT`; (4) zero fires with zero eligible sessions is
 The verdict of a proposal is the first rule that holds, and never looser than the ladder (section 7.3, `ladder.check`). It is
 rung-aware: the proposal stands on its current mode `m` (`observe`, `warn` or `block`) and the next rung `n` is `warn` from `observe`
 and `block` from `warn`. The rules, in order: `retired` when the newest approvals row revokes it or its mode or approved mode is
-`disabled` or `revoked`; unlabelled rows are `label N fires`; no eligible session is `silent: eligible 0`; at `block` there is nothing
+`disabled` or `revoked`; rows still to label are `label N fires`, N being `to_label`; no eligible session is `silent: eligible 0`; at `block` there is nothing
 left to promote to, `block (top rung)`; under 14 days since `window_start` (the counting window `modes.resolve` gives the hook and the
 ladder: the newest approvals row, or a later counter-resetting demotion) is `<n> earliest YYYY-MM-DD`; fewer than five human TPs in that
 window is `needs 5 human TPs (has k)`; five or more labels with more than half false is `noisy: add an exception or retire`; any FP in
@@ -973,7 +973,11 @@ not reach warn; `warn only: detector allows warn` for one that may not reach blo
 (`tp_window`, `fp_window`) are the ladder's: human `tp` rows only, live fires in the proposal's CURRENT mode `m` since
 `window_start` (a warn-mode proposal counts its warn-mode fires, not the observe-mode fires it earned before it was promoted); each
 `proposals[pid]` also carries `event` (the proposal's, `-` when unknown, which is never `PreToolUse`) and `compilable` (the catalogue's)
-for these checks; `tp`, `fp` and `unlabelled` stay the report's, so they equal `compile report --json`. An approved copy with no shadow
+for these checks. `to_label` is the number of that proposal's fired rows that no human `tp`/`fp` covers (one per row id): the label
+queue rows of the proposal INCLUDING `tp_candidate` rows (a candidate covers nothing) and INCLUDING the rows of a retired proposal,
+which the default queue hides (`queue_retired`), so the `to_label` of all proposals sum to `queue_total + queue_retired`. It is the N of
+`label N fires`. `tp`, `fp` and `unlabelled` stay the report's, so they equal `compile report --json` (`unlabelled` is the report's count
+of rows with no label of any kind, so it can be lower than `to_label` by the `tp_candidate` rows). An approved copy with no shadow
 row is added with zero counts and its own rates from `metrics.compute`, because the report lists proposals with rows only. The `heartbeat`
 block (last hook row, last live fire, `offline_state.json` mtime, last good nightly run, notes such as `chain_key:missing`,
 `approvals:broken:<where>` and `silent:<detector>`) says whether the instruments are alive; `silent:<detector>` needs a live mode,
@@ -995,7 +999,7 @@ line carries that night's health), refreshes `status.json` for the status line a
 
 | Surface | Entry | Shows |
 |---|---|---|
-| Dashboard | `compile dashboard [--days N] [--out PATH]` | one static HTML file (0600) from `status.build`: day, tiles, table, Wilson bars |
+| Dashboard | `compile dashboard [--days N] [--out PATH]` | one static HTML file (0600) from `status.build`: day, tiles, table (its verdict column carries `label N fires` with N = `to_label`, and the rung-aware verdicts above), Wilson bars |
 | Status line | `hooks/statusline.sh` (Claude Code `statusLine`) | one line from `status.json`: approved, unlab24h, unlabelled, chains, heartbeat |
 
 ### Seal (as built, not executed)
