@@ -185,12 +185,9 @@ def test_garbage_that_only_says_v2_is_a_broken_chain_not_a_missing_key(tmp_path,
 
 
 # ------------------------------------------------------------------ config
-def test_chain_key_path_defaults_to_the_config_dir_under_home_and_can_be_overridden(tmp_path, monkeypatch):
+def test_chain_key_path_has_no_default_and_can_be_set_or_switched_off(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
-    from .conftest import PRODUCTION_CHAIN_KEY                                  # captured before the autouse redirect
-    assert PRODUCTION_CHAIN_KEY == "~/.config/ace-playbook/chain_key"           # pins config.py's literal
-    monkeypatch.setattr(cfgmod, "DEFAULT_CHAIN_KEY", PRODUCTION_CHAIN_KEY)
-    assert cfgmod.from_dict({}).chain_key_path == tmp_path / ".config" / "ace-playbook" / "chain_key"
+    assert cfgmod.from_dict({}).chain_key_path is None                          # no ambient key (tests/test_keypath.py)
     assert cfgmod.from_dict({"chain_key_path": "~/k"}).chain_key_path == tmp_path / "k"
     assert cfgmod.from_dict({"chain_key_path": None}).chain_key_path is None
     assert cfgmod.Config().chain_key_path is None                              # a bare Config has no key: tests stay hermetic
@@ -200,7 +197,8 @@ def test_the_heads_file_sits_beside_the_key(tmp_path):
     write_key(tmp_path / "chain_key")
     ring = chains.key_of(cfgmod.Config(chain_key_path=tmp_path / "chain_key"))
     assert ring.key == K1 and ring.heads_path == tmp_path / "chain_heads.json"
-    assert chains.key_of(cfgmod.Config()) is None and chains.key_of(cfgmod.Config(chain_key_path=tmp_path / "none")) is None
+    bare = cfgmod.Config(data_dir=tmp_path)                                    # never the default data dir: key_of reads the chain files there
+    assert chains.key_of(bare) is None and chains.key_of(cfgmod.Config(data_dir=tmp_path, chain_key_path=tmp_path / "none")) is None
 
 
 # ------------------------------------------------------------------ structure
