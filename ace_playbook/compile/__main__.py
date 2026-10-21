@@ -1,11 +1,8 @@
-"""CLI: `python -m ace_playbook.compile cards|propose|validate|approve|unapprove|keygen|label|report|offline|shadow|replay-synthetic|seal` (design 10).
+"""CLI of the compiler: cards, propose, validate, approve, unapprove, keygen, label, report, status, digest, dashboard, offline, shadow, seal.
 
-No network, no model, stdlib only. Exit codes: 0 ok, 1 a proposal failed validation or was not approved (the step is
-named), 2 usage, configuration, store or id errors. `approve`, `unapprove` and `keygen` need a terminal; `approve` appends every
-approval to the hash-chained `approvals.jsonl` (approvals.py; keyed `v: 2` rows once `keygen` made the chain key) and `--mode warn|block`
-is the promotion ladder (ladder.py, imported on demand); `label` writes human labels (labels.py; `--list`, `--rows` need no terminal); `report` prints per-proposal
-shadow counts with labels (report.py; exit 2 on a corpus mix-up); `offline` is the nightly pass (offline.py; `--dry-run` writes nothing);
-`replay-synthetic` replays the frozen corpus into `shadow.synthetic.jsonl` (synth.py; exit 1 on a disagreement).
+No network, no model, stdlib only. Exit codes: 0 ok, 1 refused or failed validation, 2 usage, configuration, store or id errors. `approve`, `unapprove` and
+`keygen` need a terminal (`approve --mode warn|block` is the promotion ladder, ladder.py). `label --queue` is the blind label queue (queue.py).
+`report`, `status`, `digest` and `dashboard` only read; the last three register their own parsers and `run` callables. `offline` is the nightly pass.
 """
 
 from __future__ import annotations
@@ -20,10 +17,9 @@ from .. import config as cfgmod
 from .. import ttyio
 from ..atomic import write_private
 from ..canon import now_iso
-from . import approvals, chains, chains_cli, chains_io, evidence, labels, modes, proposal, report, seal, shadow, synth
+from . import approvals, chains, chains_cli, chains_io, dashboard, digest, evidence, labels, modes, proposal, report, seal, shadow, status, synth
 
-LEGACY_BANNER = ("This lesson's stored evidence is self-quoted legacy text; "
-                 "the human incident label is the only evidence.")
+LEGACY_BANNER = "This lesson's stored evidence is self-quoted legacy text; the human incident label is the only evidence."
 
 
 def _steps(rep: proposal.Report) -> None:
@@ -257,32 +253,36 @@ def main(argv: list[str] | None = None) -> int:
     act.add_argument("--fp", metavar="ROW_ID", help="a shadow.jsonl row (see --rows) is a false positive")
     act.add_argument("--list", action="store_true", help="print labels.jsonl and verify its hash chain")
     act.add_argument("--rows", action="store_true", help="print shadow.jsonl rows with their row ids")
+    act.add_argument("--queue", action="store_true", help="the blind label queue: unlabelled fires, oldest first, one key each (needs a terminal)")
     lb.add_argument("--lesson", metavar="L-xxxxxxxx")
     lb.add_argument("--session", metavar="SESSION_ID", help="the raw session id; only its hash is stored")
     lb.add_argument("--note", help=f"at most {labels.NOTE_MAX} characters, scrubbed")
     lb.add_argument("--kind", choices=labels.KINDS, help="with --list: only this label")
-    lb.add_argument("--limit", type=int, help="with --rows: how many (default 50, newest last)")
+    lb.add_argument("--limit", type=int, help="with --rows: how many (default 50, newest last); with --queue: how many cards (default 50)")
+    lb.add_argument("--all", action="store_true", help="with --queue: also the fires of retired proposals (left out by default)")
     rp = sub.add_parser("report", help="counts per proposal from shadow rows and labels; synthetic kept apart")
     rp.add_argument("--days", type=int, default=14, help="days in the rows-per-day block (default 14, 1 to 3660)")
     rp.add_argument("--json", action="store_true", help="one JSON object instead of text")
+    for verb in (status, digest, dashboard): verb.add_parser(sub)       # noqa: E701 - the read-side verbs own their arguments
     of = sub.add_parser("offline", help="the nightly pass: detector events, auto labels, demotions, evasion, state cleanup")
     of.add_argument("--dry-run", action="store_true", help="compute and print the counts, write nothing")
     of.add_argument("--since", type=int, default=7, help="only transcripts modified in the last N days (1 to 3660, default 7)")
     of.add_argument("--idle-minutes", type=float, default=60.0, help="skip transcripts modified more recently (default 60)")
     kg = sub.add_parser("keygen", help="TTY only: create the chain key (HMAC key of approvals.jsonl and demotions.jsonl, never overwritten), "
                         "re-seal both chains under it and sign their heads")
-    kg.add_argument("--rehead", action="store_true", help="rewrite the signed chain heads from the (verified) chains after you confirm the listed rows; needs the key")
-    sub.add_parser("seal", help="freeze the pre-registration's shadow-mode instruments: --dry-run prints the block, else TTY only").add_argument("--dry-run", action="store_true")
+    kg.add_argument("--rehead", action="store_true", help="rewrite the signed chain heads from the verified chains after you confirm the rows; needs the key")
+    sub.add_parser("seal", help="freeze the pre-registration's instruments: --dry-run prints the block").add_argument("--dry-run", action="store_true")
     sub.add_parser("replay-synthetic", help="replay the frozen corpus; exit 1 on a disagreement").add_argument("--out", help="rows file")
     sub.add_parser("shadow", help="the hook entry (what hooks/shadow.sh runs); reads a payload on stdin").add_argument("event", choices=["pre", "stop"])
     args = ap.parse_args(argv)
     try:
         cfg = cfgmod.load(args.config)
-        return {"cards": cmd_cards, "propose": cmd_propose, "validate": cmd_validate, "approve": cmd_approve,
-                "unapprove": cmd_unapprove, "label": lambda c, a: labels.run(c, a, lambda prompt: _ask(prompt), _need_tty), "report": lambda c, a: report.run(c, a.days, a.json), "shadow": lambda c, a: shadow.main([a.event], c),
-                "offline": cmd_offline, "keygen": lambda c, a: chains_cli.keygen(c, _need_tty, a.rehead, lambda prompt: _ask(prompt)),
-                "seal": lambda c, a: seal.run(c, a, lambda prompt: _ask(prompt), _need_tty),
-                "replay-synthetic": lambda c, a: synth.run(c, a.out)}[args.cmd](cfg, args)
+        return (getattr(args, "run", None) or {
+            "cards": cmd_cards, "propose": cmd_propose, "validate": cmd_validate, "approve": cmd_approve, "unapprove": cmd_unapprove,
+            "label": lambda c, a: labels.run(c, a, lambda prompt: _ask(prompt), _need_tty), "report": lambda c, a: report.run(c, a.days, a.json),
+            "shadow": lambda c, a: shadow.main([a.event], c), "offline": cmd_offline, "replay-synthetic": lambda c, a: synth.run(c, a.out),
+            "keygen": lambda c, a: chains_cli.keygen(c, _need_tty, a.rehead, lambda prompt: _ask(prompt)),
+            "seal": lambda c, a: seal.run(c, a, lambda prompt: _ask(prompt), _need_tty)}[args.cmd])(cfg, args)
     except proposal.ProposalError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

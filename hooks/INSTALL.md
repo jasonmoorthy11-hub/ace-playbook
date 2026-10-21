@@ -192,6 +192,9 @@ A lesson whose evidence is migrated legacy text first needs
 `python3 -m ace_playbook.compile label --incident --lesson L-xxxxxxxx --session <id>`, which shows the incident
 and asks y/N on /dev/tty; only then does `propose` have a card for it.
 
+To label shadow fires, run `python3 -m ace_playbook.compile label --queue [--limit N]` at a terminal: one blind card per unlabelled fire, oldest first
+(`--all` also offers the fires of retired proposals).
+
 Then add these two entries to
 the same `"hooks"` object of your user-level `settings.json` (adjust the path to your checkout):
 
@@ -351,6 +354,29 @@ P-xxxxxxxx` at a terminal. `shadow.jsonl`, `shadow.log` and `shadow_state/` are 
 differs; `compile report` then prints the synthetic table apart from the private one.
 
 **Seal preview.** `python3 -m ace_playbook.compile seal --dry-run` prints the pre-registration's Frozen instruments block (detector hashes, report hash, approved proposals, measurement start) and writes nothing; without `--dry-run` it needs a terminal, refuses until the `shadow_seed`/`arm_rate` config fields exist (the executed seal, next version) and until N is filled by hand in the pre-registration, and only prints the git tag commands, it never runs git.
+
+**Status.** `python3 -m ace_playbook.compile status` prints one screen (measurement day, per proposal fires over eligible sessions, tp/fp/unlabelled,
+precision, a verdict, the label queue, heartbeat ages, hook cost against 200 ms, notes) and writes `data_dir/status.json` (0600; `--out PATH` elsewhere,
+`--json` prints it). It reads only; the `heartbeat` block shows when the hook, the offline scan and the nightly run last worked.
+`python3 -m ace_playbook.compile digest [--since ISO]` prints the same data as six blocks. `hooks/nightly_sweep.py` runs it quietly after the
+sweep (`digest` in its JSON report), refreshes `status.json` and appends one line `{ts, report_sha256, queue, notes}` to `data_dir/digest.log`
+(0600); in an offline dry run it writes neither. Check `digest.log` for a line per night: a missing night means the sweep did not run.
+`python3 -m ace_playbook.compile dashboard [--days N] [--out PATH]` renders the same data as one self-contained HTML page (`data_dir/dashboard.html`,
+0600; inline CSS, no script, no network) that you open in a browser.
+
+**Status line.** `hooks/statusline.sh` is a Claude Code status-line command. Add it to your user-level `settings.json` (adjust the path to your checkout):
+
+```json
+{"statusLine": {"type": "command", "command": "$HOME/ace-playbook/hooks/statusline.sh", "refreshInterval": 30}}
+```
+
+It prints one line, `<model> | ctx <pct>% | ace approved N  unlab24h N  unlabelled N  chains ok|BROKEN  heartbeat <age>`, from `status.json`
+in the data dir (the config is found as for the other hooks: `ACE_PLAYBOOK_CONFIG`, else the default config file; `ACE_PYTHON` picks the interpreter).
+`approved` counts proposals in observe, warn or block mode. `unlab24h` counts the unlabelled queue rows stamped within 24 hours
+of `generated_at` (`N+` when the queue, capped at 50 oldest first, is shorter than `unlabelled`). `unlabelled` is `queue_total`. `chains` is `ok`
+only when the approvals, demotions and labels chains all are. `heartbeat` is the age of the last hook row. Without a readable `status.json` it prints
+`<model> | ctx <pct>% | ace: no status file`. It runs one `python3 -I -S` (stdlib only, about 15 ms) and exits 0 on any error.
+The numbers are as fresh as `status.json`, which `compile status` and the nightly digest rewrite.
 
 ## What the hooks write
 

@@ -95,6 +95,8 @@ changes nothing and cannot block; `approve --mode warn|block` is the promotion l
 positives and no false positive, a hash-chained `approvals.jsonl`, HMAC-keyed once `compile keygen` has made the chain key; warn reaches the model through `additionalContext`).
 `compile label` records human labels at a terminal in a hash-chained `labels.jsonl`: an `incident` label is
 the only way a legacy lesson gets an evidence card, and `tp`/`fp` labels on shadow rows feed the ladder.
+`compile label --queue` is the labelling path: a blind queue of unlabelled fires, oldest first, one key each (tp, fp, skip);
+`label --rows` stays for audit.
 `compile report` prints counts per proposal from the shadow rows and those human labels, then per corpus the eligible-session
 rates with Wilson intervals, friction, hook cost and live-versus-offline agreement; synthetic rows are reported
 apart and never blended with the private ones. There are still no results: to produce the reproducible synthetic table run
@@ -102,6 +104,13 @@ apart and never blended with the private ones. There are still no results: to pr
 records detector events from finished transcripts, pre-fills labels that a human row always overrides, and
 appends hash-chained demotions that only ever lower a proposal's mode and that the shadow hook honours until the operator approves it again.
 `python3 -m ace_playbook.compile seal --dry-run` prints the pre-registration's frozen-instruments block with live values and writes nothing (the real seal is built but refuses until the seed commitment exists). No model writes a check, a hook or a setting, and nothing is installed for you.
+`python3 -m ace_playbook.compile status [--json] [--out PATH]` is the operator's one screen: measurement day, per-proposal fires, labels,
+precision with a Wilson interval (`INSUFFICIENT` below five labels), the label queue, a heartbeat and a verdict per proposal. It is built
+from the same dict as `compile report --json`, writes `status.json` (0600) and shows nothing to a model.
+`compile digest [--since ISO]` prints the same data as six short blocks (status, needs you, detectors, health, changes, next); the nightly
+sweep runs it quietly and appends one line to `digest.log`, so a night without a digest shows.
+`compile dashboard [--days N] [--out PATH]` renders the same status as one self-contained HTML page (no script, no network; `dashboard.html`, 0600).
+`hooks/statusline.sh` is an optional Claude Code status-line command: one line from `status.json` (approved, fires in 24 h, unlabelled, chains, heartbeat).
 
 ## Run it
 
