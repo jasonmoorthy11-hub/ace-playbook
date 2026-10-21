@@ -156,6 +156,14 @@ synthetic corpus is generated to match its own patterns, so detection on it is c
 Paraphrase leakage (a lesson that restates a token's prefix or last characters) is a hypothesis
 the long-token lint partly covers and nothing measures.
 
+## Brief on wake
+
+The brief's Hammerspoon trigger (`hooks/hammerspoon/ace.lua`) has no test here: no Lua interpreter is installed on the build machine, so the
+file is checked as text and reviewed by eye, and the LaunchAgent template is only `plutil -lint`ed. The brief's tool allowlist does not shrink
+the prompt: every connector's tool definitions still load, about 140k cached input tokens per stage-1 run (phase-0 measurement), and the
+operator's own SessionStart hooks fire inside the scheduled `claude -p` runs. The window figures in its ledger are one reading per stream, so a
+single run cannot show its own cost in plan share; only the trend over consecutive rows does.
+
 ## Platform assumptions
 
 Behavior of Claude Code hooks (SessionStart context cap, SessionEnd budget, Stop payload,

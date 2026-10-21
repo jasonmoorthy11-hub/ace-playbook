@@ -1067,6 +1067,46 @@ section in PREREGISTRATION.md still says `(DRAFT until sealed)`. The sealing its
 - Until the `shadow_seed` and `arm_rate` config fields land with the executed seal (the next version), `shadow_seed_sha256` is `-` and
   `arm_rate` prints `0.5 (planned)`, and the real seal refuses (exit 1, naming `shadow_seed_sha256` and `arm_rate`) before it asks anything.
 
+### 8.x Brief (as built)
+
+Order W3 of the watcher and cockpit design (section 7, "The brief"). Not on the hook path: `brief` and `brief_render` are on the conformance
+ABSENT tuple, `__main__.py` is untouched (the brief has its own entry point, `python -m ace_playbook.compile.brief <verb>`), and nothing in
+metrics, report, status, seal or the detectors changed.
+
+- **Principals and controls.** A read-only principal (it reads calendar, mail and Linear; it has no write tool and no outbound channel). Three
+  independent controls: (1) `--allowedTools` built from `hooks/brief_allowed_tools.txt`; (2) a PreToolUse hook, `hooks/brief_guard.py`
+  (`python3 -I -S`, stdlib json), that denies every `mcp__*` tool not on that file and every write-class built-in, and denies on any parse or
+  read error; the `--settings` file runs it as `... || exit 2` so a crashed guard blocks too; `--hard` mode exits 2 instead of printing the
+  deny JSON; (3) the settings file's `permissions.deny`. Every `claude -p` call passes an explicit model (`brief_model`, `brief_model_stage2`,
+  default `claude-sonnet-5-5`), runs as `env -u ANTHROPIC_API_KEY -u CLAUDECODE`, from an empty private directory (`brief_dir/run/cwd`), and
+  never passes `--bare`.
+- **Two stages.** Stage 1 (tools) reads and answers with one JSON digest (`calendar`, `mail`, `issues`). `digest-apply` validates the schema
+  (strings capped, control and format characters stripped, unknown keys dropped) and applies the private exclusion list by code; the result is
+  `digest_clean.json`. Stage 2 (`--tools "" --strict-mcp-config`, one turn) sees only that file on stdin and answers with the brief JSON. Both
+  prompts (`hooks/brief_prompts/`) say everything gathered is data, never instructions. The lists apply to mail threads (sender, subject,
+  `drop_bodies_from` keeps sender and subject); a configured file that is missing, unparseable or holds a bad regex refuses the run.
+- **D-110 (amendment to the design's "morning skill as the renderer").** No model writes HTML that is served. The morning skill's layout and
+  tokens are reproduced by code, `brief_render.render`, from the validated brief JSON: day-date line, serif headline (`Fraunces, Georgia,
+  serif`, system stack, no embedded font), a terrain polyline whose elevation comes from each act's load (an open day is still water; one clay
+  dot on the highest act), three acts, then "Needs attention" and "Resolved" with grey numerals, or "Nothing needs you this morning.". Every text
+  field goes through `html.escape(..., quote=True)`; a link is written only for a `url` that starts with `https://` (anything else is nulled at
+  validation and again at render); the page has a CSP meta of `default-src 'none'; style-src 'unsafe-inline'`, no script, no button and no
+  external resource. Light tokens and a `prefers-color-scheme: dark` set are CSS custom properties on `:root`. Deviations from the skill:
+  each act has an optional `load` (default: the day class) because the terrain needs a per-act elevation; the source phrase is the item's one
+  link (a title is not also linked).
+- **Verbs.** `due` (exit 3 when the last brief is inside `brief_dedupe_hours`; `--force`), `conf <key>`, `digest-apply <digest> [--out]`
+  (exit 2 on a schema or exclusions failure), `render <brief>` (writes `brief.html` and the validated `brief.json`, prints the path),
+  `extract <stream> --what rate_limit|result|text [--last]` (the result object gains `_tools_called`), `ledger <before> <after> <stage> <result>`,
+  `state-mark` (writes `brief_state.json`: `last_brief`, `needs_you_count`) and `status`. They print counts and field paths, never mail content.
+- **Files** in `brief_dir` (0700): `brief.html`, `brief.json`, `brief_state.json`, `brief_ledger.jsonl` (O_APPEND, locked, 0600), `run/` with
+  `digest_clean.json`; the raw streams and the unfiltered digest are deleted when the run ends. The ledger row is `{ts, stage, model, cost_usd,
+  input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens, five_hour_before/after, seven_day_before/after,
+  duration_ms, num_turns, tools_called}`; the window fields come from the stream's `rate_limit_event` (`unifiedWindows.<window>.utilization`).
+  Jason sets the share of a weekly window after a week of rows (D-97).
+- **Run control.** `brief.sh` takes a directory lock (one run at a time; a lock older than 30 minutes is stale), `due` runs under it, and a
+  failed stage leaves no `brief_state.json`, so the next wake retries. Triggers: Hammerspoon `systemDidWake` and `screensDidUnlock` (20 s
+  delay) and a `RunAtLoad` LaunchAgent; `terminal-notifier` fires only when `needs_you` is non-empty.
+
 ## 9. Security
 
 | Control | Mechanism | Test |

@@ -40,6 +40,17 @@ of the lesson store, and the settings and hooks of the agent that consumes it.
 6. **Reflector prompt** tells the model to ignore instructions inside tool results. This is the
    weakest control and is not relied on.
 
+## The brief on wake (optional)
+
+`hooks/brief.sh` is a read-only principal: it may read private data (calendar, mail, Linear) and has no write tool, no send and no
+outbound channel, under three independent controls: `--allowedTools` from an explicit list (`hooks/brief_allowed_tools.txt`), a PreToolUse
+hook (`hooks/brief_guard.py`) that denies every `mcp__*` tool not on that list and every write-class built-in, failing closed on any
+error, and a settings deny list. Stage 1 (tools) emits a JSON digest and code applies the private exclusion list; stage 2 has no tools
+(`--tools "" --strict-mcp-config`) and sees only the cleaned digest; everything gathered is treated as data, never instructions. No model
+writes HTML that is served: the model emits JSON, validated and capped by code, and code renders the page with every field escaped, a
+`default-src 'none'` CSP, no script and no external resource (D-110). Every call passes an explicit model and runs without
+`ANTHROPIC_API_KEY`. None of this is on the hook path; the brief runs `claude -p`, which is the one network use, and only on your login.
+
 ## Planned, not implemented
 
 A compiler that emits specs and diffs only, behind a human gate and a second reviewer that sees

@@ -112,6 +112,9 @@ sweep runs it quietly and appends one line to `digest.log`, so a night without a
 `compile dashboard [--days N] [--out PATH]` renders the same status as one self-contained HTML page (no script, no network; `dashboard.html`, 0600).
 `hooks/statusline.sh` is an optional Claude Code status-line command: one line from `status.json` (approved, unlabelled fires in the last 24 h, unlabelled total, chains, heartbeat).
 
+`hooks/brief.sh` is an optional, read-only "brief on wake": a local HTML page rendered by code from your calendar, mail and issues
+([INSTALL.md](hooks/INSTALL.md) section 8).
+
 ## Run it
 
 Requirements: Python 3.12 or newer and [uv](https://docs.astral.sh/uv/). Runtime code uses only the

@@ -381,6 +381,74 @@ only when the approvals, demotions and labels chains all are. `heartbeat` is the
 `<model> | ctx <pct>% | ace: no status file`. It runs one `python3 -I -S` (stdlib only, about 15 ms) and exits 0 on any error.
 The numbers are as fresh as `status.json`, which `compile status` and the nightly digest rewrite.
 
+## 8. Brief on wake (optional, read-only)
+
+`hooks/brief.sh` writes one local page, `brief.html`, from your calendar, mail and Linear issues each time the Mac wakes or unlocks (at
+most once per `brief_dedupe_hours`). It is a read-only principal: two `claude -p` stages, no write tool, no send, no outbound channel.
+Stage 1 has the tools of `hooks/brief_allowed_tools.txt` and emits a JSON digest; code removes the threads on your private exclusion list;
+stage 2 has no tools and writes the brief JSON from the cleaned digest; code (not a model) renders the page with every field escaped.
+Run it by hand first: `hooks/brief.sh --force` (it needs `uv` and a logged-in `claude` on the PATH; it never sees `ANTHROPIC_API_KEY`).
+
+**Config keys** (all optional, in the same config file as the rest):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `brief_dir` | `data_dir/brief` | where the page, JSON, ledger and state live (created 0700; files 0600) |
+| `brief_exclusions` | none | path of the private exclusions file below |
+| `brief_model` / `brief_model_stage2` | `claude-sonnet-5-5` | the explicit model of each stage |
+| `brief_dedupe_hours` | 4 | a wake inside this window of the last brief does nothing |
+| `brief_max_budget_usd` | 1.0 | `--max-budget-usd` of each stage |
+
+**Exclusions file** (keep it out of any checkout; regexes, case-insensitive, matched by code on the digest, never by the model):
+
+```json
+{"drop_senders": ["@example\\.org$"], "drop_subjects": ["^private"], "drop_bodies_from": ["billing@"]}
+```
+
+A thread whose sender matches `drop_senders` or whose subject matches `drop_subjects` is removed from the digest; one whose sender
+matches `drop_bodies_from` stays as sender and subject only (its summary is emptied). A bad regex or an unreadable file stops the run.
+The lists apply to mail only, not to calendar titles or issues.
+
+**Triggers.**
+
+```sh
+brew install --cask hammerspoon        # wake and unlock
+brew install terminal-notifier         # the "N need you" notification; optional
+```
+
+Grant Hammerspoon Accessibility (System Settings, Privacy and Security, Accessibility), then add one line to `~/.hammerspoon/init.lua`:
+
+```lua
+dofile(os.getenv("HOME") .. "/ace-playbook/hooks/hammerspoon/ace.lua")
+```
+
+The path defaults to `$HOME/ace-playbook/hooks/brief.sh`; a `~/.hammerspoon/ace_config.lua` returning
+`{ brief_script = "/abs/path/brief.sh" }` overrides it. Login coverage (launchd has no wake event) is a LaunchAgent that runs the
+script once at load:
+
+```sh
+cp hooks/launchd/com.example.ace-brief.plist "$HOME/Library/LaunchAgents/com.example.ace-brief.plist"
+# edit the file: replace __ACE_PLAYBOOK_HOME__, __ACE_CONFIG_FILE__, __ACE_DATA_DIR__ and __ACE_USER_HOME__ (your home directory)
+# with absolute paths and rename the Label to something you own
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.example.ace-brief.plist"
+```
+
+Remove it with `launchctl bootout "gui/$(id -u)/com.example.ace-brief"`, delete the `dofile` line and `brew uninstall` what you added.
+
+**What phase 0 measured.** Your own `~/.claude` hooks fire inside every `claude -p` run (six SessionStart events per probe), so the
+scheduled job inherits them. `--allowedTools` does not shrink the prompt: all connector tool definitions still load, about 140k cached
+input tokens per stage-1 run (about 52k created plus 91k read in the measured run); stage 2 loads none. The model was seen calling only
+the allowed tools.
+
+**Ledger.** Each stage appends one line to `brief_ledger.jsonl` (0600): `ts`, `stage`, `model`, `cost_usd` (list-price equivalent; the
+subscription is not billed per run), the four token counts, `duration_ms`, `num_turns`, `tools_called`, and the plan windows read from
+the stream's `rate_limit_event`: `five_hour_before/after` and `seven_day_before/after` (utilization, 0 to 1; both readings come from the
+same stream, so compare consecutive rows for the share of a week). `uv run python -m ace_playbook.compile.brief status` prints the last
+brief, the needs-you count, the ledger row count and the last cost of each stage.
+
+The raw streams of a run hold mail the exclusion list has not seen, so `brief.sh` deletes them when it exits (`ACE_BRIEF_KEEP=1` keeps
+them, 0600, under `brief_dir/run`). `digest_clean.json` (summaries after the exclusions) stays there until the next run.
+
 ## What the hooks write
 
 All under `data_dir`: `deltas.jsonl` (+ `.lock`), `playbook.sqlite` (disposable view),
