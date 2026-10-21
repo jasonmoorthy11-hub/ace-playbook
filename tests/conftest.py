@@ -9,6 +9,7 @@ only ambient input left is the config file itself: `ACE_PLAYBOOK_CONFIG` is pinn
 
 from __future__ import annotations
 
+import math
 import signal
 import threading
 
@@ -33,11 +34,21 @@ class PerTestTimeout(BaseException):
     `shadow.py`) catch `Exception`, and a swallowed timeout would let the loop resume with nothing left to stop it."""
 
 
+def timeout_seconds(arg) -> float:
+    """The seconds of a `@pytest.mark.timeout(arg)`: a positive finite number (not a bool); ValueError otherwise (`inf` would never fire)."""
+    if isinstance(arg, bool) or not isinstance(arg, (int, float)) or not (arg > 0 and math.isfinite(arg)):
+        raise ValueError("timeout marker must be a positive finite number")
+    return float(arg)
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     yield
     if call.excinfo is not None and call.excinfo.errisinstance(PerTestTimeout):
         item.timeout_surfaced = True                       # the timeout reached a report (any phase): teardown has nothing to add
+        if hasattr(signal, "SIGALRM") and threading.current_thread() is threading.main_thread():
+            signal.signal(signal.SIGALRM, signal.SIG_IGN)  # it has surfaced: the interval timer must not re-fire into the other fixtures' teardown
+            signal.setitimer(signal.ITIMER_REAL, 0)
 
 
 @pytest.fixture(autouse=True)
@@ -49,17 +60,18 @@ def per_test_timeout(request):
     ("per-test timeout fired"). The hard stop is pytest's own `faulthandler_timeout` / `faulthandler_exit_on_timeout` (pyproject.toml,
     125 s): it dumps every thread's stack and ends the run. The alarm is armed before the test body, so it fires before a child process's
     own `timeout=`, which only matters for a hung child: `subprocess.run` kills the child on any exception. Skipped where there is no
-    SIGALRM (Windows) or off the main thread; the timer is disarmed and the previous handler restored in `finally`."""
+    SIGALRM (Windows) or off the main thread; the timer is disarmed as soon as the alarm has surfaced in a report
+    (`pytest_runtest_makereport`, so it cannot re-fire into teardown) and again, with the previous handler restored, in `finally`."""
     if not hasattr(signal, "SIGALRM") or threading.current_thread() is not threading.main_thread():
         yield
         return
     marker = request.node.get_closest_marker("timeout")
     seconds = TIMEOUT_SECONDS
     if marker is not None:
-        arg = marker.args[0] if marker.args else None
-        if isinstance(arg, bool) or not isinstance(arg, (int, float)) or not arg > 0:
-            pytest.fail("timeout marker must be a positive number")
-        seconds = float(arg)
+        try:
+            seconds = timeout_seconds(marker.args[0] if marker.args else None)
+        except ValueError as exc:
+            pytest.fail(str(exc))
     fired = []
 
     def expired(signum, frame):

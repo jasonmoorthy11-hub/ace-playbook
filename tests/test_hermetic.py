@@ -11,7 +11,7 @@ from ace_playbook import config as cfgmod
 from ace_playbook.compile import catalogue, events
 from ace_playbook.compile import state as state_mod
 
-from .conftest import PerTestTimeout
+from .conftest import PerTestTimeout, timeout_seconds
 from .test_hooks import env  # noqa: F401  (fixture)
 
 
@@ -42,6 +42,30 @@ def test_every_test_runs_under_the_default_re_arming_alarm_of_60_seconds():
 @pytest.mark.timeout(1)
 @pytest.mark.xfail(strict=True, raises=PerTestTimeout, reason="proof of conftest.per_test_timeout: an infinite loop fails after 1 s")
 def test_an_infinite_loop_fails_with_the_timeout_instead_of_hanging():
+    while True:
+        pass
+
+
+@pytest.mark.parametrize("arg", [float("inf"), float("-inf"), float("nan"), 0, -1, 0.0, True, "5", None])
+def test_the_timeout_marker_rejects_a_value_that_is_not_a_positive_finite_number(arg):
+    with pytest.raises(ValueError, match="positive finite number"):
+        timeout_seconds(arg)
+
+
+@pytest.mark.parametrize("arg,seconds", [(1, 1.0), (0.25, 0.25), (90, 90.0)])
+def test_the_timeout_marker_takes_a_positive_finite_number(arg, seconds):
+    assert timeout_seconds(arg) == seconds
+
+
+@pytest.fixture
+def timer_disarmed_at_teardown():
+    yield
+    assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0), "the alarm re-fires into teardown after it has surfaced"
+
+
+@pytest.mark.timeout(1)
+@pytest.mark.xfail(strict=True, raises=PerTestTimeout, reason="proof: once the alarm has surfaced the timer is disarmed before teardown runs")
+def test_the_interval_timer_is_disarmed_once_the_alarm_has_surfaced(timer_disarmed_at_teardown):
     while True:
         pass
 
