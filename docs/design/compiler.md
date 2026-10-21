@@ -966,11 +966,15 @@ rows still to label are `label N fires`, N being `to_label`; no eligible session
 is refused before any rung rule, as `ladder.check` refuses it: `not backed: no approved copy`; `not backed: newest approvals row is dated in
 the future` when the proposal's newest approvals row is stamped after now (`check`: "newest approvals row is dated in the future"); `demoted:<cap>
 (approve --mode observe restarts)` when a demotion in force caps the copy below the next rung (`ladder.RANK[cap] < ladder.RANK[n]`); and, when
-the approvals chain does not back the copy, `not backed: no approvals row (approve --mode observe records it)` if the proposal has no row at all
-(a copy from before the chain, observe included) or `not backed: newest approvals row is <mode>` otherwise (the newest row names another
-`proposal_sha256` than the copy, the copy's mode differs from the row's, or the chain is broken). "Backed" is `approvals.verify_copy(copy, rows) == "ok"`
-on an intact chain, the very test behind `ladder.check`'s "copy not backed by the approvals chain" (`measure.resolve` returns it as `backed`); the
-hook runs observe for an unbacked copy of a higher mode; at `block`
+the approvals chain does not back the copy, in this order: `not backed: approvals chain broken` when `approvals.jsonl` does not verify
+(named before any row, since `ladder.run` refuses a broken chain outright; it also wins over the future-date and cap refusals);
+`not backed: proposal file differs from the approved copy` when the copy's body is no longer the proposal file's (`ladder._load`:
+`shadow.pending_body(rec)[0] == p`; a file that cannot be loaded counts as different; editing even `created` is enough); then
+`not backed: no approvals row (approve --mode observe records it)` if the proposal has no row at all (a copy from before the chain,
+observe included) or `not backed: newest approvals row is <mode>` otherwise (the newest row names another `proposal_sha256` than the
+copy, or the copy's mode differs from the row's). The last two are `approvals.verify_copy(copy, rows) != "ok"`, the test behind
+`ladder.check`'s "copy not backed by the approvals chain"; `measure.resolve` returns the outcome as `backing` (`ok`, `chain`, `proposal`,
+`row` or `none`). The hook runs observe for an unbacked copy of a higher mode; at `block`
 there is nothing left to promote to, `block (top rung)`; under 14 days since `window_start` (the counting window `modes.resolve` gives the
 hook and the ladder: the newest approvals row, or a later counter-resetting demotion) is `<n> earliest YYYY-MM-DD`; fewer than five human
 TPs in that window is `needs 5 human TPs (has k)`; five or more labels with more than half false is `noisy: add an exception or retire`; any

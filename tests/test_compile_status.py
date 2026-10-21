@@ -11,7 +11,7 @@ import pytest
 
 from ace_playbook.atomic import write_private
 from ace_playbook.compile import __main__ as cli
-from ace_playbook.compile import approvals, demotions, labels, metrics, offline, queue, report, seal, shadow, status
+from ace_playbook.compile import approvals, demotions, labels, metrics, offline, proposal, queue, report, seal, shadow, status
 from ace_playbook.compile import state as st
 
 from . import compile_support as cs
@@ -144,7 +144,7 @@ def test_queue_is_capped_at_fifty_but_the_total_is_not(w):
 
 # ------------------------------------------------------------------ verdicts
 def row(**over):
-    base = {"mode": "observe", "revoked": False, "cap": None, "approvals_mode": "observe", "backed": True, "approved_at": "2026-10-01T00:00:00Z",
+    base = {"mode": "observe", "revoked": False, "cap": None, "approvals_mode": "observe", "backing": "ok", "approved_at": "2026-10-01T00:00:00Z",
             "unlabelled": 0, "to_label": 0, "eligible": 4, "strength": "strong",
             "window_start": "2026-10-01T00:00:00Z", "tp_window": 5, "fp_window": 0, "compilable": "block", "event": "PreToolUse"}
     return {"approved_mode": over.get("mode", "observe"), **base, **over}
@@ -198,9 +198,13 @@ def row(**over):
     ({"mode": "warn", "cap": "warn"}, "demoted:warn (approve --mode observe restarts)"),
     ({"mode": "warn", "approved_mode": "block", "cap": "warn"}, "demoted:warn (approve --mode observe restarts)"),    # a block copy capped to warn
     ({"mode": "warn", "approved_mode": "warn", "cap": "block"}, "block eligible"),                              # a cap at or above the next rung holds nothing
-    ({"approved_mode": "warn", "approvals_mode": "observe", "backed": False}, "not backed: newest approvals row is observe"),   # an unbacked warn copy
-    ({"backed": False}, "not backed: newest approvals row is observe"),                                     # an unbacked OBSERVE copy is refused too
-    ({"backed": False, "approvals_mode": "none"}, "not backed: no approvals row (approve --mode observe records it)"),
+    ({"approved_mode": "warn", "approvals_mode": "observe", "backing": "row"}, "not backed: newest approvals row is observe"),   # an unbacked warn copy
+    ({"backing": "row"}, "not backed: newest approvals row is observe"),                                     # an unbacked OBSERVE copy is refused too
+    ({"backing": "row", "approvals_mode": "none"}, "not backed: no approvals row (approve --mode observe records it)"),
+    ({"backing": "proposal"}, "not backed: proposal file differs from the approved copy"),
+    ({"backing": "chain", "approvals_mode": "none"}, "not backed: approvals chain broken"),                # a broken chain is named, never a row
+    ({"backing": "chain", "approvals_mode": "observe", "cap": "observe"}, "not backed: approvals chain broken"),
+    ({"backing": "chain", "approved_at": "2026-12-01T00:00:00Z"}, "not backed: approvals chain broken"),
     ({"mode": "warn", "approved_at": "2026-12-01T00:00:00Z"}, "not backed: newest approvals row is dated in the future"),
     ({"approved_at": "2026-12-01T00:00:00Z", "cap": "observe"}, "not backed: newest approvals row is dated in the future"),
     ({"mode": "-", "approved_mode": "-", "approvals_mode": "none"}, "not backed: no approved copy"),
@@ -492,6 +496,33 @@ def world_warn_row_dated_after_now(w):                                          
     five_tps(w, "warn")
 
 
+def world_proposal_file_rewritten_after_approval(w):                                             # B4
+    five_tps(w, "observe")
+    path = proposal.proposal_path(w.cfg, pid_of(w))
+    raw = json.loads(path.read_text())
+    raw["created"] = "2026-10-02T00:00:00Z" if raw.get("created") != "2026-10-02T00:00:00Z" else "2026-10-03T00:00:00Z"
+    path.write_text(json.dumps(raw, indent=1, sort_keys=True) + "\n")                           # only `created` changed: proposal.load accepts it
+
+
+def break_approvals(w, index, ts="2026-09-30T00:00:00Z"):
+    """Edit one approvals row in place (its hash no longer matches), so the chain is broken at that row."""
+    path = w.data / "approvals.jsonl"
+    lines = path.read_text().splitlines()
+    row = json.loads(lines[index])
+    lines[index] = json.dumps({**row, "ts": ts})
+    path.write_text("\n".join(lines) + "\n")
+
+
+def world_chain_broken_at_row_1(w):                                                              # B1
+    five_tps(w, "observe")
+    break_approvals(w, 0)
+
+
+def world_chain_broken_after_this_proposals_row(w):                                              # B1b
+    five_tps(w, "observe")
+    break_approvals(w, -1)                                                                       # rm_rf's row: this proposal's own row still verifies
+
+
 def world_unbacked_warn_copy(w):
     cs.approve_file(w.cfg, w.props["rm_rf_nonscratch"], "warn")                                  # the copy says warn, the chain only says observe
     five_tps(w, "observe")
@@ -506,6 +537,7 @@ def world_unbacked_warn_copy(w):
     (world_warn_row_copy_edited_down_to_observe, "not backed: newest approvals row is warn", "copy not backed by the approvals chain"),
     (world_newest_observe_row_names_another_hash, "not backed: newest approvals row is observe", "copy not backed by the approvals chain"),
     (world_warn_row_dated_after_now, "not backed: newest approvals row is dated in the future", "dated in the future"),
+    (world_proposal_file_rewritten_after_approval, "not backed: proposal file differs from the approved copy", "copy not backed by the approvals chain"),
 ])
 def test_a_demoted_or_unbacked_copy_is_refused_by_the_verdict_exactly_where_ladder_check_refuses(w, world, want, check_says):
     world(w)
@@ -514,6 +546,15 @@ def test_a_demoted_or_unbacked_copy_is_refused_by_the_verdict_exactly_where_ladd
     nxt = p["next_rung"]
     res = check_of(w, "rm_rf_nonscratch", nxt, LATER)
     assert not res.ok and any(check_says in r for r in res.reasons)
+
+
+@pytest.mark.parametrize("world", [world_chain_broken_at_row_1, world_chain_broken_after_this_proposals_row])
+def test_a_broken_approvals_chain_is_named_not_a_row(w, world):
+    world(w)
+    s = build(w, now=LATER)
+    assert s["measurement"]["chains"]["approvals"].startswith("broken:")
+    p = s["proposals"][pid_of(w)]
+    assert p["backing"] == "chain" and p["verdict"] == "not backed: approvals chain broken"      # ladder.run refuses a broken chain outright
 
 
 def test_a_block_copy_demoted_to_warn_no_longer_reads_block_eligible(w):
@@ -534,6 +575,7 @@ def test_a_re_approval_lifts_the_cap_and_the_verdict_follows(w):
 @pytest.mark.parametrize("world", [None, world_block_copy_demoted_to_warn, world_observe_copy_capped_at_observe, world_warn_copy_demoted_to_observe,
                                    world_unbacked_warn_copy, world_prechain_observe_copy_no_row, world_warn_row_copy_edited_down_to_observe,
                                    world_newest_observe_row_names_another_hash, world_warn_row_dated_after_now,
+                                   world_proposal_file_rewritten_after_approval, world_chain_broken_at_row_1, world_chain_broken_after_this_proposals_row,
                                    lambda w: (approve(w, "rm_rf_nonscratch", "2026-10-05T00:00:00Z", "warn"), five_tps(w, "warn")),
                                    lambda w: (approve(w, "rm_rf_nonscratch", "2026-10-05T00:00:00Z", "warn"), five_tps(w, "observe")),
                                    lambda w: five_tps(w, "observe")])

@@ -161,8 +161,8 @@ OVERRIDES = ({}, {"to_label": 2}, {"eligible": 0}, {"window_start": "2026-10-19T
              {"fp_window": 1}, {"strength": "weak"}, {"compilable": "observe"}, {"compilable": "warn"}, {"compilable": "none"}, {"event": "Stop"},
              {"revoked": True}, {"auto_fp": 2, "auto_fp_oldest": "abcd1234"}, {"cap": "observe"}, {"cap": "warn"},
              {"approved_mode": "block", "cap": "warn"},
-             {"approved_mode": "warn", "approvals_mode": "observe", "backed": False}, {"mode": "-", "approved_mode": "-"},
-             {"backed": False, "approvals_mode": "none"}, {"approved_at": "2026-12-01T00:00:00Z"})
+             {"approved_mode": "warn", "approvals_mode": "observe", "backing": "row"}, {"mode": "-", "approved_mode": "-"},
+             {"backing": "row", "approvals_mode": "none"}, {"backing": "chain"}, {"backing": "proposal"}, {"approved_at": "2026-12-01T00:00:00Z"})
 
 
 def emitted_verdicts():

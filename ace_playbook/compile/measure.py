@@ -23,19 +23,36 @@ def start_of(arows: list[dict]) -> str | None:
     return max((ts for pid, ts in observe.items() if approvals.newest(arows, pid)["mode"] != "revoked"), default=None)
 
 
-def resolve(cfg: Config, pid: str, ring: tuple, now: str) -> tuple[modes.Resolution | None, bool]:
-    """(what `modes.resolve` says about the proposal (the hook's and the ladder's view: mode, cap, counting window), whether the approvals
-    chain backs the copy). The resolution is None without an approved copy. `backed` is the test `ladder.check` applies for its
-    "copy not backed by the approvals chain" reason: an intact chain whose newest row for the proposal has the copy's hash and mode
-    (`approvals.verify_copy`); an observe copy with no row at all is NOT backed (the hook runs it, the ladder will not promote it)."""
+def resolve(cfg: Config, pid: str, ring: tuple, now: str) -> tuple[modes.Resolution | None, str]:
+    """(what `modes.resolve` says about the proposal (the hook's and the ladder's view: mode, cap, counting window), `backing`). The
+    resolution is None without an approved copy (`backing` is then `none`). `backing` is `ok` only when `ladder.check` would accept the copy
+    as the one the operator approved: the approvals chain is intact (`chain` if not; `ladder.run` refuses a broken one), the copy's body is the
+    proposal file's (`proposal` if not: `ladder._load`'s `shadow.pending_body(rec)[0] == p`, a load error counting as a difference), and the
+    newest approvals row has the copy's hash and mode (`row` if not: `approvals.verify_copy`, which also fails on no row at all, observe
+    copies included, as `check`'s "copy not backed by the approvals chain" does)."""
     try:
         rec = proposal.load(shadow.approved_path(cfg, pid))
         body, _ = shadow.pending_body(rec)
     except (ValueError, OSError):
-        return None, False
+        return None, "none"
     if body is None:
-        return None, False
-    return modes.resolve(pid, rec, *ring, now), ring[1] is None and approvals.verify_copy(rec, ring[0]) == "ok"
+        return None, "none"
+    try:
+        same = body == proposal.load(proposal.proposal_path(cfg, pid))
+    except (ValueError, OSError):
+        same = False
+    backing = "chain" if ring[1] is not None else "proposal" if not same else "ok" if approvals.verify_copy(rec, ring[0]) == "ok" else "row"
+    return modes.resolve(pid, rec, *ring, now), backing
+
+
+def not_backed(backing: str, approvals_mode: str) -> str:
+    """The verdict for a copy whose `backing` (see `resolve`) is not `ok`; `approvals_mode` is the newest approvals row's mode or `none`."""
+    if backing == "chain":
+        return "not backed: approvals chain broken"
+    if backing == "proposal":
+        return "not backed: proposal file differs from the approved copy"
+    return ("not backed: no approvals row (approve --mode observe records it)" if approvals_mode == "none"
+            else f"not backed: newest approvals row is {approvals_mode}")
 
 
 def unfired(cfg: Config, d: dict, rows: list[dict], now: str) -> tuple[dict, dict]:
