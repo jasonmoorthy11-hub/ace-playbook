@@ -44,14 +44,17 @@ def test_an_allowed_tool_prints_nothing_and_exits_0(name):
 
 @pytest.mark.parametrize("name", ["mcp__claude_ai_Gmail__send_message", "mcp__claude_ai_Gmail__trash_thread", "mcp__claude_ai_Gmail__reply",
                                   "mcp__claude_ai_Google_Calendar__create_event", "mcp__claude_ai_Linear__save_issue", "mcp__unknown__x",
-                                  "Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "WebFetch", "WebSearch", "Agent", "Task"])
-def test_every_other_connector_and_every_write_tool_is_denied(name):
+                                  "Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "WebFetch", "WebSearch", "Agent", "Task",
+                                  "Read", "Glob", "Grep", "LS", "NotebookRead", "TodoWrite", "SomeFutureTool", "toolsearch", "ToolSearch2"])
+def test_deny_by_default_every_tool_not_on_the_allowlist_is_denied(name):
     code, out, _ = guard(call(name))
     assert code == 0 and json.loads(out) == DENY
 
 
-def test_a_plain_non_mcp_read_tool_is_not_the_guards_business():
-    assert guard(call("Read")) == (0, "", "")
+def test_read_and_glob_are_denied_and_toolsearch_is_allowed():
+    assert json.loads(guard(call("Read"))[1]) == DENY and json.loads(guard(call("Glob"))[1]) == DENY
+    assert guard(call("ToolSearch")) == (0, "", "")
+    assert not {"Read", "Glob", "Grep", "LS", "NotebookRead"} & set(names())
 
 
 @pytest.mark.parametrize("stdin", ["", "not json", "[]", "null", '{"tool_name": 7}', "{}", '{"tool_name": null}', "\x00"])
@@ -88,6 +91,7 @@ def test_the_settings_file_parses_wires_the_guard_to_every_tool_and_denies_write
     assert entry["matcher"] == "" and entry["hooks"][0]["type"] == "command" and entry["hooks"][0]["timeout"] == 5
     cmd = entry["hooks"][0]["command"]
     assert cmd.startswith('python3 -I -S "$ACE_PLAYBOOK_REPO/hooks/brief_guard.py"') and cmd.endswith("|| exit 2")   # a crash blocks too
-    assert s["permissions"]["deny"] == ["Bash", "Edit", "Write", "WebFetch", "WebSearch", "Agent"]
+    assert s["permissions"]["deny"] == ["Bash", "Edit", "Write", "WebFetch", "WebSearch", "Agent", "Read", "Glob", "Grep", "LS",
+                                        "NotebookRead", "MultiEdit", "NotebookEdit", "Task"]
     load = "import json,sys; json.load(open(sys.argv[1]))"
     assert subprocess.run(["python3", "-I", "-S", "-c", load, str(ROOT / "hooks/brief-settings.json")]).returncode == 0

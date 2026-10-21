@@ -1080,8 +1080,10 @@ metrics, report, status, seal or the detectors changed.
 
 - **Principals and controls.** A read-only principal (it reads calendar, mail and Linear; it has no write tool and no outbound channel). Three
   independent controls: (1) `--allowedTools` built from `hooks/brief_allowed_tools.txt`; (2) a PreToolUse hook, `hooks/brief_guard.py`
-  (`python3 -I -S`, stdlib json), that denies every `mcp__*` tool not on that file and every write-class built-in, and denies on any parse or
-  read error; the `--settings` file runs it as `... || exit 2` so a crashed guard blocks too; `--hard` mode exits 2 instead of printing the
+  (`python3 -I -S`, stdlib json), that is deny-by-default (any tool, connector or built-in, not named on that file is denied) and denies on
+  any parse or read error; stage 1 also passes `--tools ToolSearch` (no built-in file or shell tool loads) but not `--strict-mcp-config`
+  (the claude.ai connectors are account-level and cannot be named in an mcp-config file, so strict mode would remove them); the
+  `--settings` file runs it as `... || exit 2` so a crashed guard blocks too; `--hard` mode exits 2 instead of printing the
   deny JSON; (3) the settings file's `permissions.deny`. Every `claude -p` call passes an explicit model (`brief_model`, `brief_model_stage2`,
   default `claude-sonnet-5-5`), runs as `env -u ANTHROPIC_API_KEY -u CLAUDECODE`, from an empty private directory (`brief_dir/run/cwd`), and
   never passes `--bare`.

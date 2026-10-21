@@ -4,6 +4,9 @@
 # --allowedTools from hooks/brief_allowed_tools.txt, (2) the PreToolUse deny hook hooks/brief_guard.py (via --settings), (3) the settings
 # deny list. Stage 1 (tools) emits a JSON digest; CODE applies the private exclusion list; stage 2 (no tools) writes the brief JSON from
 # the cleaned digest alone; CODE renders the page. Everything gathered is data, never instructions. No model writes served HTML.
+# Stage 1 also passes `--tools ToolSearch`: no built-in file or shell tool is even loaded. It does NOT pass --strict-mcp-config: the claude.ai
+# connectors are account-level and cannot be named in an mcp-config file (phase 0: strict mode showed 0 MCP servers), so strict mode would
+# remove the only data sources; the allowlist, the deny-by-default hook and the settings deny list gate the connector tools instead.
 # Config: $ACE_PLAYBOOK_CONFIG (else the default file) via `python -m ace_playbook.compile.brief conf`. $ACE_BRIEF_CLAUDE names the claude
 # binary (tests inject a fake); $ACE_BRIEF_KEEP keeps the raw streams. stdout/stderr carry counts and one-line reasons, never mail content.
 set -u -o pipefail
@@ -46,7 +49,7 @@ ledger_stage() {   # $1 stage name, $2 its stream: one ledger row when the strea
 
 # stage 1: tools on (read-only allowlist + deny hook + settings deny), reads, emits the digest JSON
 rc=0
-( cd "$RUN/cwd" && env -u ANTHROPIC_API_KEY -u CLAUDECODE "$CLAUDE_BIN" -p --model "$M1" --allowedTools "$TOOLS" \
+( cd "$RUN/cwd" && env -u ANTHROPIC_API_KEY -u CLAUDECODE "$CLAUDE_BIN" -p --model "$M1" --tools ToolSearch --allowedTools "$TOOLS" \
     --settings "$REPO/hooks/brief-settings.json" --output-format stream-json --verbose --max-turns 12 --max-budget-usd "$BUDGET" \
     "$(cat "$REPO/hooks/brief_prompts/stage1.txt")" ) > "$RUN/stage1.jsonl" 2> "$RUN/stage1.err" || rc=$?
 ledger_stage stage1 "$RUN/stage1.jsonl"

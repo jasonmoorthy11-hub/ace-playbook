@@ -91,7 +91,8 @@ def test_the_two_stages_get_exactly_the_flags_the_design_names(w):
     flag = lambda argv, name: argv[argv.index(name) + 1]  # noqa: E731
     assert "-p" in one and flag(one, "--allowedTools") == ",".join(allowed) and flag(one, "--model") == "claude-sonnet-5-5"
     assert flag(one, "--settings") == str(ROOT / "hooks" / "brief-settings.json") and flag(one, "--output-format") == "stream-json"
-    assert "--verbose" in one and flag(one, "--max-turns") == "12" and flag(one, "--max-budget-usd") == "1.0" and "--tools" not in one
+    assert "--verbose" in one and flag(one, "--max-turns") == "12" and flag(one, "--max-budget-usd") == "1.0"
+    assert flag(one, "--tools") == "ToolSearch" and "--strict-mcp-config" not in one          # connectors are account-level: strict would drop them
     assert one[-1].startswith("You are the read-only gatherer") and "--bare" not in one + two
     assert flag(two, "--tools") == "" and "--strict-mcp-config" in two and flag(two, "--max-turns") == "1" and flag(two, "--model") == "claude-sonnet-5-5"
     assert flag(two, "--system-prompt").startswith("You write a calm morning brief") and "--allowedTools" not in two

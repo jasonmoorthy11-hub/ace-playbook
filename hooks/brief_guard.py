@@ -1,9 +1,10 @@
 """PreToolUse deny hook of the brief (read-only principal). Stdlib json only; run as `python3 -I -S brief_guard.py [--hard]`.
 
-Reads the hook JSON on stdin. Denies (prints the deny JSON, exit 0) when the input cannot be parsed, when the allowlist cannot be read
-or is empty, when an `mcp__*` tool is not listed in hooks/brief_allowed_tools.txt (override: $ACE_BRIEF_ALLOWLIST), or when a write-class
-built-in is called. `--hard` blocks with exit 2 and the reason on stderr instead (Claude Code treats exit 2 as a block). Anything else
-prints nothing. Every error path denies: a failure of this script must never let a tool through.
+Deny by default: reads the hook JSON on stdin and allows ONLY a tool whose exact name is listed in hooks/brief_allowed_tools.txt
+(override: $ACE_BRIEF_ALLOWLIST), whether it is an `mcp__*` connector tool or a built-in. Everything else is denied (prints the deny JSON,
+exit 0), as is any input that cannot be parsed and any allowlist that cannot be read or is empty. `--hard` blocks with exit 2 and the
+reason on stderr instead (Claude Code treats exit 2 as a block). An allowed tool prints nothing. Every error path denies: a failure of
+this script must never let a tool through.
 """
 
 import json
@@ -11,7 +12,6 @@ import os
 import sys
 
 REASON = "brief is read-only"
-WRITE_TOOLS = {"Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "WebFetch", "WebSearch", "Agent", "Task"}
 DENY = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": REASON}}
 
 
@@ -27,10 +27,8 @@ def verdict(raw: str) -> bool:
     name = event["tool_name"]
     if not isinstance(name, str) or not name:
         return False
-    if name.startswith("mcp__"):
-        listed = allowed_names()
-        return bool(listed) and name in listed
-    return name not in WRITE_TOOLS
+    listed = allowed_names()
+    return bool(listed) and name in listed
 
 
 def main(argv: list) -> int:
