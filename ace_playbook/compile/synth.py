@@ -74,6 +74,7 @@ def replay(cfg, sessions: list | None = None) -> tuple[list[dict], dict]:
     rows, counts, errors = [], dict.fromkeys(("sessions", "events", "fired", "disagreements", "errors"), 0), []
     with tempfile.TemporaryDirectory() as tmp:
         scratch = dataclasses.replace(cfg, data_dir=Path(tmp))
+        scratch.source = getattr(cfg, "source", None)           # `replace` copies fields only: `key_of` looks for the heads file beside it
         for sid, events in sessions or plan():
             counts["sessions"] += 1
             for det, expect, payload in events:
