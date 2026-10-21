@@ -109,8 +109,7 @@ def _verdict(p: dict, now: str) -> str:
         return f"label {p['to_label']} fires"
     if not p["eligible"]:
         return "silent: eligible 0"
-    m, cap = p["mode"], p.get("cap")
-    n = measure.NEXT.get(m)
+    m, cap, n = p["mode"], p.get("cap"), measure.NEXT.get(p["mode"])
     if m not in LIVE:
         return "not backed: no approved copy"
     if p["backing"] == "chain":                                                 # ladder.run refuses a broken chain: name it, not a row
@@ -118,7 +117,7 @@ def _verdict(p: dict, now: str) -> str:
     if (p["approved_at"] or "") > now:                                          # ladder.check: newest approvals row is dated in the future
         return "not backed: newest approvals row is dated in the future"
     if n and cap and ladder.RANK[cap] < ladder.RANK[n]:                         # ladder.check: demoted:<cap>
-        return f"demoted:{cap} (approve --mode observe restarts)"
+        return f"demoted:{cap} ({p['cap_note']})"
     if p["backing"] != "ok":                                                    # ladder.check: copy not backed by the approvals chain
         return measure.not_backed(p["backing"], p["approvals_mode"])
     if n is None:
@@ -140,16 +139,17 @@ def _verdict(p: dict, now: str) -> str:
 
 
 def _proposal(p: dict, rate: dict, last: dict | None, start: str | None, win: tuple[int, int], now: str, event: str = "-", to_label: int = 0,
-              auto: tuple[str, ...] = (), cap: str | None = None, backing: str = "ok") -> dict:
+              auto: tuple[str, ...] = (), cap: tuple[str | None, str] = (None, ""), backing: str = "ok") -> dict:
     """One `proposals` entry: the report's counts (`p`) and rates, the newest approvals row, the resolved `window_start`, the ladder's
-    (tp, fp) since it in the current mode, `to_label` (see `_uncovered`), the demotion `cap` in force, the newest approvals row's mode
+    (tp, fp) since it in the current mode, `to_label` (see `_uncovered`), the demotion `cap` in force and its `cap_note` remedy, the newest approvals row's mode
     (`approvals_mode`), the `next_rung` and its earliest date, and the proposal's `event` and the catalogue's `compilable` ceiling (the
     next rung's checks)."""
     from . import catalogue
     n, at, cat = p["tp"] + p["fp"], last["ts"] if last else None, catalogue.CATALOGUE.get(p["detector"])
     nxt = measure.NEXT.get(_rung(p["mode"]))
     row = {"detector": p["detector"], "strength": getattr(cat, "strength", None), "compilable": getattr(cat, "compilable", "none"), "event": event,
-           "mode": p["mode"], "approved_mode": p["approved_mode"], "cap": cap, "backing": backing, "approvals_mode": last["mode"] if last else "none",
+           "mode": p["mode"], "approved_mode": p["approved_mode"], "cap": cap[0], "cap_note": cap[1],
+           "backing": backing, "approvals_mode": last["mode"] if last else "none",
            "revoked": bool(last and last["mode"] == "revoked"), "approved_at": at,
            "window_start": start, "rows": p["rows"], "fires": rate.get("fires"), "tp": p["tp"], "fp": p["fp"], "tp_window": win[0],
            "fp_window": win[1], "unlabelled": p["unlabelled"], "to_label": to_label, "auto_fp": len(auto),
@@ -222,7 +222,7 @@ def build(cfg: Config, days: int = 14, now: str | None = None) -> dict:
         start = (res.window_start or None) if res else None
         where = (pid, start, now, fires, eff, _rung(p["mode"]))
         props[pid] = _proposal(p, per.get(pid, {}), approvals.newest(arows, pid), start, measure.window_counts(*where), now,
-                               report._meta(cfg, pid)[1], owed[pid], measure.auto_fps(*where), res.cap if res else None, backing)
+                               report._meta(cfg, pid)[1], owed[pid], measure.auto_fps(*where), measure.cap_of(res), backing)
     start, here = measure.start_of(arows), parse_ts(now)
     t0, corpus = parse_ts(start), rates["corpus"]
     notes = [*chains.notes(ring, (abroken, dem_broken)),

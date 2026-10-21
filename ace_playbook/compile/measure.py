@@ -45,6 +45,15 @@ def resolve(cfg: Config, pid: str, ring: tuple, now: str) -> tuple[modes.Resolut
     return modes.resolve(pid, rec, *ring, now), backing
 
 
+def cap_of(res: modes.Resolution | None) -> tuple[str | None, str]:
+    """(the demotion cap in force or None, the remedy to show beside it). A broken demotions chain caps at observe and no re-approval lifts
+    that cap (`modes.resolve` fails toward observe until the chain is repaired); any other cap is lifted by `approve --mode observe`."""
+    if res is None:
+        return None, ""
+    broken = any(pr.startswith("demotions:") for pr in res.problems)
+    return res.cap, "demotions chain broken" if broken else "approve --mode observe restarts"
+
+
 def not_backed(backing: str, approvals_mode: str) -> str:
     """The verdict for a copy whose `backing` (see `resolve`) is not `ok`; `approvals_mode` is the newest approvals row's mode or `none`."""
     if backing == "chain":

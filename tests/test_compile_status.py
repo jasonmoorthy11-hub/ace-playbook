@@ -144,7 +144,8 @@ def test_queue_is_capped_at_fifty_but_the_total_is_not(w):
 
 # ------------------------------------------------------------------ verdicts
 def row(**over):
-    base = {"mode": "observe", "revoked": False, "cap": None, "approvals_mode": "observe", "backing": "ok", "approved_at": "2026-10-01T00:00:00Z",
+    base = {"mode": "observe", "revoked": False, "cap": None, "cap_note": "approve --mode observe restarts",
+            "approvals_mode": "observe", "backing": "ok", "approved_at": "2026-10-01T00:00:00Z",
             "unlabelled": 0, "to_label": 0, "eligible": 4, "strength": "strong",
             "window_start": "2026-10-01T00:00:00Z", "tp_window": 5, "fp_window": 0, "compilable": "block", "event": "PreToolUse"}
     return {"approved_mode": over.get("mode", "observe"), **base, **over}
@@ -196,6 +197,7 @@ def row(**over):
     # a copy the verdict must not trust: capped by a demotion, or not backed by the newest approvals row
     ({"cap": "observe"}, "demoted:observe (approve --mode observe restarts)"),
     ({"mode": "warn", "cap": "warn"}, "demoted:warn (approve --mode observe restarts)"),
+    ({"cap": "observe", "cap_note": "demotions chain broken"}, "demoted:observe (demotions chain broken)"),        # a re-approval does not lift this one
     ({"mode": "warn", "approved_mode": "block", "cap": "warn"}, "demoted:warn (approve --mode observe restarts)"),    # a block copy capped to warn
     ({"mode": "warn", "approved_mode": "warn", "cap": "block"}, "block eligible"),                              # a cap at or above the next rung holds nothing
     ({"approved_mode": "warn", "approvals_mode": "observe", "backing": "row"}, "not backed: newest approvals row is observe"),   # an unbacked warn copy
@@ -523,6 +525,15 @@ def world_chain_broken_after_this_proposals_row(w):                             
     break_approvals(w, -1)                                                                       # rm_rf's row: this proposal's own row still verifies
 
 
+def world_demotions_chain_broken(w):                                                             # C3
+    five_tps(w, "observe")
+    demotions.append(w.data, {"proposal_id": pid_of(w, "rm_rf"), "from_mode": "observe", "to_mode": "observe", "cause": "label_fp_pair",
+                              "ref": "feedbeef", "review_required": True, "ts": "2026-10-16T00:00:00Z"})
+    path = w.data / "demotions.jsonl"
+    row = json.loads(path.read_text().splitlines()[0])
+    path.write_text(json.dumps({**row, "ts": "2026-10-16T00:00:01Z"}) + "\n")                    # edited in place: the chain breaks at row 1
+
+
 def world_unbacked_warn_copy(w):
     cs.approve_file(w.cfg, w.props["rm_rf_nonscratch"], "warn")                                  # the copy says warn, the chain only says observe
     five_tps(w, "observe")
@@ -538,6 +549,7 @@ def world_unbacked_warn_copy(w):
     (world_newest_observe_row_names_another_hash, "not backed: newest approvals row is observe", "copy not backed by the approvals chain"),
     (world_warn_row_dated_after_now, "not backed: newest approvals row is dated in the future", "dated in the future"),
     (world_proposal_file_rewritten_after_approval, "not backed: proposal file differs from the approved copy", "copy not backed by the approvals chain"),
+    (world_demotions_chain_broken, "demoted:observe (demotions chain broken)", "demoted:observe"),                   # the broken chain caps at observe
 ])
 def test_a_demoted_or_unbacked_copy_is_refused_by_the_verdict_exactly_where_ladder_check_refuses(w, world, want, check_says):
     world(w)
@@ -555,6 +567,27 @@ def test_a_broken_approvals_chain_is_named_not_a_row(w, world):
     assert s["measurement"]["chains"]["approvals"].startswith("broken:")
     p = s["proposals"][pid_of(w)]
     assert p["backing"] == "chain" and p["verdict"] == "not backed: approvals chain broken"      # ladder.run refuses a broken chain outright
+
+
+def test_a_broken_demotions_chain_caps_with_its_own_remedy_and_a_re_approval_does_not_lift_it(w):
+    world_demotions_chain_broken(w)
+    p = build(w, now=LATER)["proposals"][pid_of(w)]
+    assert (p["cap"], p["cap_note"], p["verdict"]) == ("observe", "demotions chain broken", "demoted:observe (demotions chain broken)")
+    approve(w, "rm_rf_nonscratch", "2026-10-19T00:00:00Z")
+    assert build(w, now=LATER)["proposals"][pid_of(w)]["verdict"] == "demoted:observe (demotions chain broken)"
+    assert build(w, now=LATER)["proposals"][pid_of(w, "rm_rf")]["cap_note"] == "demotions chain broken"
+
+
+def test_known_gap_the_verdict_does_not_replay_proposal_validate_so_missing_evidence_cards_still_read_eligible(w):
+    """GAP, pinned on purpose: `ladder.run` runs `proposal.validate` before `check` and refuses on a failure; the read-only verdict does not.
+    A change that closes this gap must update this test (design 8.x, "Known gap")."""
+    five_tps(w, "observe")
+    for card in (w.data / "cards").glob("*.json"):
+        card.unlink()
+    src = proposal.proposal_path(w.cfg, pid_of(w))
+    assert not proposal.validate(proposal.load(src), w.cfg, path=src).ok                          # ladder.run would refuse here
+    assert build(w, now=LATER)["proposals"][pid_of(w)]["verdict"] == "warn eligible"
+    assert check_of(w, "rm_rf_nonscratch", "warn", LATER).ok                                      # and `check` alone accepts
 
 
 def test_a_block_copy_demoted_to_warn_no_longer_reads_block_eligible(w):
@@ -575,7 +608,8 @@ def test_a_re_approval_lifts_the_cap_and_the_verdict_follows(w):
 @pytest.mark.parametrize("world", [None, world_block_copy_demoted_to_warn, world_observe_copy_capped_at_observe, world_warn_copy_demoted_to_observe,
                                    world_unbacked_warn_copy, world_prechain_observe_copy_no_row, world_warn_row_copy_edited_down_to_observe,
                                    world_newest_observe_row_names_another_hash, world_warn_row_dated_after_now,
-                                   world_proposal_file_rewritten_after_approval, world_chain_broken_at_row_1, world_chain_broken_after_this_proposals_row,
+                                   world_proposal_file_rewritten_after_approval, world_demotions_chain_broken, world_chain_broken_at_row_1,
+                                   world_chain_broken_after_this_proposals_row,
                                    lambda w: (approve(w, "rm_rf_nonscratch", "2026-10-05T00:00:00Z", "warn"), five_tps(w, "warn")),
                                    lambda w: (approve(w, "rm_rf_nonscratch", "2026-10-05T00:00:00Z", "warn"), five_tps(w, "observe")),
                                    lambda w: five_tps(w, "observe")])
