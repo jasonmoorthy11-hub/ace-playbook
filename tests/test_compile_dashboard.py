@@ -36,7 +36,7 @@ def synth(n: int = 4, queue: int = 3, **over) -> dict:
         props[f"P-a1b2c3{i:02d}"] = {
             "detector": f"det_{i}", "strength": "strong", "mode": mode, "approved_mode": mode, "approved_at": "2026-10-18T16:10:29Z",
             "rows": tp + fp + unlab, "fires": tp + fp + unlab, "tp": tp, "fp": fp, "unlabelled": unlab, "eligible": elig,
-            "fires_per_eligible": 0.5, "precision": prec, "fp_upper_95": None, "warn_earliest": "2026-11-01T16:10:29Z", "verdict": verdict}
+            "fires_per_eligible": 0.5, "precision": prec, "fp_upper_95": None, "next_rung": "warn", "next_earliest": "2026-11-01T16:10:29Z", "verdict": verdict}
     pids = list(props) or ["P-a1b2c300"]
     qs = [{"id": f"{i:08x}", "ts": f"2026-10-20T{i % 12:02d}:00:00Z", "proposal_id": pids[i % len(pids)], "detector": "det_0",
            "session8": "38946dc9", "event": "PreToolUse", "cause": "detector"} for i in range(min(queue, 50))]
@@ -159,19 +159,21 @@ def test_verdict_families_pair_a_colour_class_with_a_glyph(verdict, cls, glyph):
 
 OVERRIDES = ({}, {"to_label": 2}, {"eligible": 0}, {"window_start": "2026-10-19T00:00:00Z"}, {"tp_window": 2}, {"tp_window": 5, "fp_window": 6},
              {"fp_window": 1}, {"strength": "weak"}, {"compilable": "observe"}, {"compilable": "warn"}, {"compilable": "none"}, {"event": "Stop"},
-             {"revoked": True}, {"auto_fp": 2, "auto_fp_oldest": "abcd1234"})
+             {"revoked": True}, {"auto_fp": 2, "auto_fp_oldest": "abcd1234"}, {"cap": "observe"}, {"cap": "warn"},
+             {"approved_mode": "block", "cap": "warn"}, {"approved_mode": "warn", "approvals_mode": "observe"}, {"mode": "-", "approved_mode": "-"})
 
 
 def emitted_verdicts():
     """Every verdict family `status.verdict` can emit: each rung of `measure.NEXT` (and the top rung) against each refusal."""
     rungs = [*measure.NEXT, "block"]
-    return {status.verdict(status_row(mode=m, approved_mode=m, **over), "2026-10-20T12:00:00Z") for m in rungs for over in OVERRIDES}
+    return {status.verdict(status_row(**{"mode": m, **over}), "2026-10-20T12:00:00Z") for m in rungs for over in OVERRIDES}
 
 
 def test_every_verdict_status_can_emit_maps_to_a_known_family():
     seen = emitted_verdicts()
     assert {"block eligible", "warn eligible", "block (top rung)", "warn only: block is for PreToolUse", "observe only: weak detector",
-            "warn only: detector allows warn"} <= seen
+            "warn only: detector allows warn", "demoted:warn (approve --mode observe restarts)", "not backed: no approved copy",
+            "not backed: newest approvals row is observe"} <= seen
     unknown = sorted(v for v in seen if not any(v.startswith(word) for word, _, _ in dashboard.FAMILIES))
     assert unknown == []                                               # no verdict falls through to the default family by accident
 
@@ -185,7 +187,9 @@ def test_a_next_rung_verdict_renders_like_the_warn_one(n):
 @pytest.mark.parametrize("verdict, cls, glyph", [
     ("block (top rung)", "neutral", "◦"), ("warn only: detector allows warn", "muted", "⊘"), ("warn only: block is for PreToolUse", "muted", "⊘"),
     ("warn only: weak detector", "muted", "⊘"), ("observe only: detector allows observe", "muted", "⊘"),
-    ("block eligible; 1 auto FPs (label --tp abcd1234 overturns)", "good", "✓")])
+    ("block eligible; 1 auto FPs (label --tp abcd1234 overturns)", "good", "✓"),
+    ("demoted:warn (approve --mode observe restarts)", "warn", "⚠"), ("not backed: newest approvals row is observe", "warn", "⚠"),
+    ("not backed: no approved copy", "warn", "⚠")])
 def test_the_rung_aware_verdicts_have_a_colour_class_and_glyph(verdict, cls, glyph):
     assert dashboard.family(verdict) == (cls, glyph)
 

@@ -144,9 +144,9 @@ def test_queue_is_capped_at_fifty_but_the_total_is_not(w):
 
 # ------------------------------------------------------------------ verdicts
 def row(**over):
-    base = {"mode": "observe", "approved_mode": "observe", "revoked": False, "unlabelled": 0, "to_label": 0, "eligible": 4, "strength": "strong",
+    base = {"mode": "observe", "revoked": False, "cap": None, "approvals_mode": "observe", "unlabelled": 0, "to_label": 0, "eligible": 4, "strength": "strong",
             "window_start": "2026-10-01T00:00:00Z", "tp_window": 5, "fp_window": 0, "compilable": "block", "event": "PreToolUse"}
-    return {**base, **over}
+    return {"approved_mode": over.get("mode", "observe"), **base, **over}
 
 
 @pytest.mark.parametrize("over, want", [
@@ -191,8 +191,18 @@ def row(**over):
     ({"mode": "warn", "strength": "weak"}, "warn only: weak detector"),
     ({"mode": "warn", "to_label": 1}, "label 1 fires"),
     ({"mode": "warn", "eligible": 0}, "silent: eligible 0"),
-    ({"mode": "block", "approved_mode": "block"}, "block (top rung)"),
-    ({"mode": "block", "event": "Stop", "fp_window": 3}, "block (top rung)"),             # nothing is left to promote to
+    ({"mode": "block"}, "block (top rung)"),
+    # a copy the verdict must not trust: capped by a demotion, or not backed by the newest approvals row
+    ({"cap": "observe"}, "demoted:observe (approve --mode observe restarts)"),
+    ({"mode": "warn", "cap": "warn"}, "demoted:warn (approve --mode observe restarts)"),
+    ({"mode": "warn", "approved_mode": "block", "cap": "warn"}, "demoted:warn (approve --mode observe restarts)"),    # a block copy capped to warn
+    ({"mode": "warn", "approved_mode": "warn", "cap": "block"}, "block eligible"),                              # a cap at or above the next rung holds nothing
+    ({"approved_mode": "warn", "approvals_mode": "observe"}, "not backed: newest approvals row is observe"),          # an unbacked warn copy runs observe
+    ({"mode": "-", "approved_mode": "-", "approvals_mode": "none"}, "not backed: no approved copy"),
+    ({"cap": "observe", "to_label": 2}, "label 2 fires"),                                                                # labelling is named first
+    ({"cap": "observe", "eligible": 0}, "silent: eligible 0"),
+    ({"mode": "block", "event": "Stop", "fp_window": 3}, "block (top rung)"),
+    ({"mode": "block", "approved_mode": "block", "cap": "block"}, "block (top rung)"),             # nothing is left to promote to
     ({"mode": "block", "to_label": 2}, "label 2 fires"),
     ({"mode": "block", "revoked": True}, "retired"),
 ])
@@ -224,10 +234,10 @@ def test_a_revoked_approval_row_retires_the_proposal_even_without_a_copy(w):
     assert build(w)["proposals"][pid_of(w, "rm_rf")]["verdict"] == "retired"
 
 
-def test_a_new_approval_shows_the_warn_earliest_date_in_json_and_verdict(w):
+def test_a_new_approval_shows_the_next_earliest_date_in_json_and_verdict(w):
     p = build(w)["proposals"][pid_of(w, "rm_rf")]
-    assert p["approved_at"] == "2026-10-15T00:00:00Z" and p["warn_earliest"] == "2026-10-29T00:00:00Z"
-    assert p["verdict"] == "warn earliest 2026-10-29" and p["strength"] == "weak"
+    assert p["approved_at"] == "2026-10-15T00:00:00Z" and p["next_earliest"] == "2026-10-29T00:00:00Z"
+    assert (p["next_rung"], p["verdict"], p["strength"]) == ("warn", "warn earliest 2026-10-29", "weak")
     assert build(w)["proposals"][pid_of(w)]["strength"] == "strong"
 
 
@@ -409,14 +419,124 @@ def test_the_clock_is_the_resolved_window_start_so_a_demotion_restarts_it(w):
                               "ref": "0123abcd", "review_required": False, "ts": "2026-10-18T00:00:00Z"})
     p = build(w)["proposals"][pid_of(w)]
     assert p["approved_at"] == "2026-10-01T00:00:00Z" and p["window_start"] == "2026-10-18T00:00:00Z"
-    assert p["warn_earliest"] == "2026-11-01T00:00:00Z" and p["verdict"] == "warn earliest 2026-11-01"
+    assert p["next_earliest"] == "2026-11-01T00:00:00Z" and p["cap"] == "observe"
+    assert p["verdict"] == "demoted:observe (approve --mode observe restarts)"                   # the demotion caps the copy until it is re-approved
+
+
+def check_of(w, det, mode, now):
+    """`ladder.check` for `det` going up to `mode`, from the world's own files (the lesson is taken as active: the verdict does not look)."""
+    from ace_playbook.compile import catalogue, ladder, modes, proposal
+    pid = pid_of(w, det)
+    p, rec = proposal.load(proposal.proposal_path(w.cfg, pid)), proposal.load(shadow.approved_path(w.cfg, pid))
+    copy = rec if shadow.pending_body(rec)[0] == p else None
+    arows, drows = approvals.read_chain(w.data, None)[0], modes.read_demotions(w.data, None)
+    resolved = modes.resolve(pid, copy, arows, None, drows[0], drows[1], now)
+    return ladder.check(p, copy, labels.shadow_rows(w.cfg), labels.read_chain(w.cfg)[0], arows, catalogue.CATALOGUE[det], "active", now, resolved, mode=mode)
+
+
+def demote(w, frm, to, at, cause="label_fp"):
+    demotions.append(w.data, {"proposal_id": pid_of(w), "from_mode": frm, "to_mode": to, "cause": cause, "ref": "0123abcd",
+                              "review_required": False, "ts": at})
+
+
+LATER = "2026-10-30T00:00:00Z"
+
+
+def five_tps(w, mode):
+    ids = fire(w, "rm_rf_nonscratch", "s1", 5, mode=mode)
+    cs.write_labels(w.cfg, [hum(r, "tp") for r in ids])
+    return ids
+
+
+def world_block_copy_demoted_to_warn(w):
+    approve(w, "rm_rf_nonscratch", "2026-10-05T00:00:00Z", "warn")
+    approve(w, "rm_rf_nonscratch", "2026-10-10T00:00:00Z", "block")
+    demote(w, "block", "warn", "2026-10-12T00:00:00Z")
+    five_tps(w, "warn")                                                                          # five human TPs on warn-mode fires after the demotion
+
+
+def world_observe_copy_capped_at_observe(w):
+    demote(w, "observe", "observe", "2026-10-12T00:00:00Z", "label_fp_pair")
+    five_tps(w, "observe")
+
+
+def world_warn_copy_demoted_to_observe(w):
+    approve(w, "rm_rf_nonscratch", "2026-10-05T00:00:00Z", "warn")
+    demote(w, "warn", "observe", "2026-10-12T00:00:00Z")
+    five_tps(w, "observe")
+
+
+def world_unbacked_warn_copy(w):
+    cs.approve_file(w.cfg, w.props["rm_rf_nonscratch"], "warn")                                  # the copy says warn, the chain only says observe
+    five_tps(w, "observe")
+
+
+@pytest.mark.parametrize("world, want, check_says", [
+    (world_block_copy_demoted_to_warn, "demoted:warn (approve --mode observe restarts)", "demoted:warn"),
+    (world_observe_copy_capped_at_observe, "demoted:observe (approve --mode observe restarts)", "demoted:observe"),
+    (world_warn_copy_demoted_to_observe, "demoted:observe (approve --mode observe restarts)", "demoted:observe"),
+    (world_unbacked_warn_copy, "not backed: newest approvals row is observe", "not in observe"),
+])
+def test_a_demoted_or_unbacked_copy_is_refused_by_the_verdict_exactly_where_ladder_check_refuses(w, world, want, check_says):
+    world(w)
+    p = build(w, now=LATER)["proposals"][pid_of(w)]
+    assert p["verdict"] == want
+    nxt = p["next_rung"]
+    res = check_of(w, "rm_rf_nonscratch", nxt, LATER)
+    assert not res.ok and any(check_says in r for r in res.reasons)
+
+
+def test_a_block_copy_demoted_to_warn_no_longer_reads_block_eligible(w):
+    world_block_copy_demoted_to_warn(w)
+    p = build(w, now=LATER)["proposals"][pid_of(w)]
+    assert (p["mode"], p["approved_mode"], p["cap"], p["next_rung"]) == ("warn", "block", "warn", "block")
+    assert (p["tp_window"], p["verdict"]) == (5, "demoted:warn (approve --mode observe restarts)")
+    assert {"not in warn", "demoted:warn"} <= {r for r in check_of(w, "rm_rf_nonscratch", "block", LATER).reasons if r in ("not in warn", "demoted:warn")}
+
+
+def test_a_re_approval_lifts_the_cap_and_the_verdict_follows(w):
+    world_observe_copy_capped_at_observe(w)
+    approve(w, "rm_rf_nonscratch", "2026-10-13T00:00:00Z")                  # approve --mode observe restarts: strictly newer than the demotion
+    p = build(w, now="2026-10-30T00:00:00Z")["proposals"][pid_of(w)]
+    assert p["cap"] is None and p["window_start"] == "2026-10-13T00:00:00Z"
+
+
+@pytest.mark.parametrize("world", [None, world_block_copy_demoted_to_warn, world_observe_copy_capped_at_observe, world_warn_copy_demoted_to_observe,
+                                   world_unbacked_warn_copy, lambda w: (approve(w, "rm_rf_nonscratch", "2026-10-05T00:00:00Z", "warn"), five_tps(w, "warn")),
+                                   lambda w: (approve(w, "rm_rf_nonscratch", "2026-10-05T00:00:00Z", "warn"), five_tps(w, "observe")),
+                                   lambda w: five_tps(w, "observe")])
+def test_the_verdict_is_never_looser_than_ladder_check(w, world):
+    """For each synthetic world: an `<next> eligible` verdict implies `ladder.check` accepts the promotion to that rung."""
+    world and world(w)
+    for det in ("rm_rf_nonscratch", "rm_rf"):
+        p = build(w, now=LATER)["proposals"][pid_of(w, det)]
+        if p["verdict"].endswith(" eligible") and p["verdict"].split()[0] == p["next_rung"]:
+            assert check_of(w, det, p["next_rung"], LATER).ok, (det, p["verdict"], check_of(w, det, p["next_rung"], LATER).reasons)
+
+
+def test_the_eligible_worlds_are_really_eligible(w):
+    seen = five_tps(w, "observe")
+    assert build(w, now=LATER)["proposals"][pid_of(w)]["verdict"] == "warn eligible" and check_of(w, "rm_rf_nonscratch", "warn", LATER).ok
+    approve(w, "rm_rf_nonscratch", "2026-10-05T00:00:00Z", "warn")
+    w.cfg.path("labels.jsonl").unlink()
+    cs.write_labels(w.cfg, [hum(r, "tp") for r in seen + fire(w, "rm_rf_nonscratch", "s2", 5, mode="warn", ts="2026-10-18T10:00:{:02d}Z")])
+    assert build(w, now=LATER)["proposals"][pid_of(w)]["verdict"] == "block eligible" and check_of(w, "rm_rf_nonscratch", "block", LATER).ok
+
+
+def test_next_rung_and_next_earliest_are_null_at_block_and_follow_the_mode_below_it(w):
+    s = build(w)["proposals"]
+    assert (s[pid_of(w)]["next_rung"], s[pid_of(w)]["next_earliest"]) == ("warn", "2026-10-15T00:00:00Z")
+    approve(w, "rm_rf_nonscratch", "2026-10-05T00:00:00Z", "warn")
+    approve(w, "rm_rf_nonscratch", "2026-10-10T00:00:00Z", "block")
+    p = build(w)["proposals"][pid_of(w)]
+    assert (p["mode"], p["next_rung"], p["next_earliest"], p["verdict"]) == ("block", None, None, "block (top rung)")
 
 
 def test_a_proposal_without_a_backed_copy_has_no_window(w):
     fire(w, "rm_rf", "s1", 1)
     (w.data / "proposals" / "approved" / (pid_of(w, "rm_rf") + ".json")).unlink()
     p = build(w)["proposals"][pid_of(w, "rm_rf")]
-    assert p["window_start"] is None and p["warn_earliest"] is None
+    assert p["window_start"] is None and p["next_earliest"] is None and p["verdict"] == "label 1 fires"
 
 
 def test_verdict_counts_tps_and_fps_in_the_ladders_window_only(w):

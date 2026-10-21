@@ -1,6 +1,7 @@
 """The measurement clock, one rule for every reader (docs/design/compiler.md 7.3 and 8.x): `start_of` is the measurement start that `status`
-(`measurement.start`) and `seal` (`measurement_start`) both print, so the two cannot drift; `window_start` and `window_counts` are the
-counting window of one proposal and the ladder's TP/FP counts inside it (and the automatic FPs among them), which `status` shows beside the verdict.
+(`measurement.start`) and `seal` (`measurement_start`) both print, so the two cannot drift; `resolve` is what the mode resolver says of one
+proposal (its counting window and cap), `window_counts` and `auto_fps` the ladder's TP/FP counts inside that window (and the automatic FPs
+among them), which `status` shows beside the verdict; `unfired` adds the approved copies the report leaves out.
 
 Not on the hook path (the shadow hook never imports it): stdlib, `..config` and sibling modules.
 """
@@ -8,7 +9,7 @@ Not on the hook path (the shadow hook never imports it): stdlib, `..config` and 
 from __future__ import annotations
 
 from ..config import Config
-from . import approvals, labels, ladder, modes, proposal, shadow
+from . import approvals, labels, ladder, metrics, modes, proposal, report, shadow
 
 NEXT = {"observe": "warn", "warn": "block"}       # the next rung of the promotion ladder (7.3); block is the top
 
@@ -22,14 +23,26 @@ def start_of(arows: list[dict]) -> str | None:
     return max((ts for pid, ts in observe.items() if approvals.newest(arows, pid)["mode"] != "revoked"), default=None)
 
 
-def window_start(cfg: Config, pid: str, ring: tuple, now: str) -> str | None:
-    """The proposal's counting window start as `modes.resolve` says (the hook's and the ladder's clock); None without a backed copy."""
+def resolve(cfg: Config, pid: str, ring: tuple, now: str) -> modes.Resolution | None:
+    """What `modes.resolve` says about the proposal (the hook's and the ladder's view: mode, cap, counting window); None without a backed copy."""
     try:
         rec = proposal.load(shadow.approved_path(cfg, pid))
         body, _ = shadow.pending_body(rec)
     except (ValueError, OSError):
         return None
-    return (modes.resolve(pid, rec, *ring, now).window_start or None) if body is not None else None
+    return modes.resolve(pid, rec, *ring, now) if body is not None else None
+
+
+def unfired(cfg: Config, d: dict, rows: list[dict], now: str) -> tuple[dict, dict]:
+    """(counts, rates) of approved copies with no shadow row, which `report.collect` leaves out; `metrics.compute` as in `collect`."""
+    have, ring = set(d["private"]["proposals"]), report._chains(cfg)
+    meta = {rec["id"]: report._meta(cfg, rec["id"], ring, now) for _, _, rec in shadow.approved_records(cfg) if rec["id"] not in have}
+    known = {pid: m[0] for pid, m in meta.items() if m[0] != "-"}
+    counts = {pid: {"detector": m[0], "approved_mode": m[2], "mode": m[3], "rows": 0, "tp": 0, "fp": 0, "unlabelled": 0}
+              for pid, m in meta.items()}
+    rates = metrics.compute("private", rows, known, report._read(cfg.path(report.EVENTS)), report._read(cfg.path(report.EVASION)),
+                            {pid for pid, m in meta.items() if m[1] == "Stop"})["proposals"] if known else {}
+    return counts, rates
 
 
 def _counted_fires(pid: str, start: str | None, now: str, fires: dict, eff: dict, mode: str):

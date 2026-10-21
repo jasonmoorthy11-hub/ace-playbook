@@ -959,31 +959,40 @@ the two chains only, so each count and rate in it equals the `compile report --j
 (2) nothing reaches the model: the screen, the JSON and the digest are written for the terminal, never to an injector, a hook or a prompt,
 and the module is not imported on the hook path; (3) rates carry denominators and intervals, never bare counts, and fewer than five
 labels is the word `INSUFFICIENT`; (4) zero fires with zero eligible sessions is not evidence, it is `silent: eligible 0`.
-The verdict of a proposal is the first rule that holds, and never looser than the ladder (section 7.3, `ladder.check`). It is
-rung-aware: the proposal stands on its current mode `m` (`observe`, `warn` or `block`) and the next rung `n` is `warn` from `observe`
-and `block` from `warn`. The rules, in order: `retired` when the newest approvals row revokes it or its mode or approved mode is
-`disabled` or `revoked`; rows still to label are `label N fires`, N being `to_label`; no eligible session is `silent: eligible 0`; at `block` there is nothing
-left to promote to, `block (top rung)`; under 14 days since `window_start` (the counting window `modes.resolve` gives the hook and the
-ladder: the newest approvals row, or a later counter-resetting demotion) is `<n> earliest YYYY-MM-DD`; fewer than five human TPs in that
-window is `needs 5 human TPs (has k)`; five or more labels with more than half false is `noisy: add an exception or retire`; any FP in
-the window is `not eligible: k FPs (<n> needs 0)`; a detector that is not strong is `<m> only: weak detector`; a catalogue `compilable`
-ceiling below `n` is `<m> only: detector allows <compilable>` (`observe only: detector allows observe` for a strong detector that may
-not reach warn; `warn only: detector allows warn` for one that may not reach block); a block promotion of a proposal whose event is not
-`PreToolUse` is `warn only: block is for PreToolUse`; otherwise `<n> eligible` (`warn eligible` or `block eligible`). The window counts
-(`tp_window`, `fp_window`) are the ladder's: human `tp` rows only, live fires in the proposal's CURRENT mode `m` since
-`window_start` (a warn-mode proposal counts its warn-mode fires, not the observe-mode fires it earned before it was promoted); each
-`proposals[pid]` also carries `event` (the proposal's, `-` when unknown, which is never `PreToolUse`) and `compilable` (the catalogue's)
-for these checks. `to_label` is the number of that proposal's fired rows that no human `tp`/`fp` covers (one per row id): the label
-queue rows of the proposal INCLUDING `tp_candidate` rows (a candidate covers nothing) and INCLUDING the rows of a retired proposal,
-which the default queue hides (`queue_retired`), so the `to_label` of all proposals sum to `queue_total + queue_retired`. It is the N of
-`label N fires`. `tp`, `fp` and `unlabelled` stay the report's, so they equal `compile report --json` (`unlabelled` is the report's count
-of rows with no label of any kind, so it can be lower than `to_label` by the `tp_candidate` rows). `auto_fp` is the number of fires in
-the proposal's window (live, current mode, since `window_start`) whose only label is an automatic `fp` (an offline-pass `reason_code` of
-`labels.AUTO`, no human row), and `auto_fp_oldest` the 8-character row id of the oldest such fire (`label --rows` prints it), else null.
-The ladder counts such a fire as an FP (`ladder._counted`: `fp` from any reason code) while the label queue does not list it (an `fp`
-covers the row), so it can hold a promotion back with no row to label; when `auto_fp > 0` the verdict (any but `retired`) gains the suffix
-`; k auto FPs (label --tp <id> overturns)`: a human `tp` on that row, newer than the automatic one, overturns it (`ladder.effective`
-prefers a human row), after which the fire is no FP and no auto FP. This is a mention only: there is no queue flag for these rows. An approved copy with no shadow
+The verdict of a proposal is the first rule that holds, and never looser than the ladder (section 7.3, `ladder.check`). It is rung-aware:
+the proposal stands on its current mode `m` (`observe`, `warn` or `block`) and the next rung `n` is `warn` from `observe` and `block` from
+`warn`. The rules, in order: `retired` when the newest approvals row revokes it or its mode or approved mode is `disabled` or `revoked`;
+rows still to label are `label N fires`, N being `to_label`; no eligible session is `silent: eligible 0`; a copy the verdict must not trust
+is refused before any rung rule, as `ladder.check` refuses it: `not backed: no approved copy`, `demoted:<cap> (approve --mode observe
+restarts)` when a demotion in force caps the copy below the next rung (`ladder.RANK[cap] < ladder.RANK[n]`), and `not backed: newest
+approvals row is <mode>` when the copy's mode is not the one the approvals chain gives (the hook runs observe for such a copy); at `block`
+there is nothing left to promote to, `block (top rung)`; under 14 days since `window_start` (the counting window `modes.resolve` gives the
+hook and the ladder: the newest approvals row, or a later counter-resetting demotion) is `<n> earliest YYYY-MM-DD`; fewer than five human
+TPs in that window is `needs 5 human TPs (has k)`; five or more labels with more than half false is `noisy: add an exception or retire`; any
+FP in the window is `not eligible: k FPs (<n> needs 0)`; a detector that is not strong is `<m> only: weak detector`; a catalogue
+`compilable` ceiling below `n` is `<m> only: detector allows <compilable>` (`observe only: detector allows observe` for a strong detector
+that may not reach warn; `warn only: detector allows warn` for one that may not reach block); a block promotion of a proposal whose event is
+not `PreToolUse` is `warn only: block is for PreToolUse`; otherwise `<n> eligible` (`warn eligible` or `block eligible`). The window counts
+(`tp_window`, `fp_window`) are the ladder's: human `tp` rows only, live fires in the proposal's CURRENT mode `m` since `window_start` (a
+warn-mode proposal counts its warn-mode fires, not the observe-mode fires it earned before it was promoted); each `proposals[pid]` also
+carries `event` (the proposal's, `-` when unknown, which is never `PreToolUse`) and `compilable` (the catalogue's) for these checks, `cap`
+(the lowest `to_mode` of the demotion rows in force, null without one) and `approvals_mode` (the mode of the newest approvals row, `none`
+without one) for the refusals above, and `next_rung` (`warn` from observe, `block` from warn, null at block) with `next_earliest`
+(`window_start` plus 14 days, null without a window or at block), which the digest reads. `to_label` is the number of that proposal's fired
+rows that no human `tp`/`fp` covers (one per row id): the label queue rows of the proposal INCLUDING `tp_candidate` rows (a candidate covers
+nothing) and INCLUDING the rows of a retired proposal, which the default queue hides (`queue_retired`), so the `to_label` of all proposals
+sum to `queue_total + queue_retired`. It is the N of `label N fires`. `tp`, `fp` and `unlabelled` stay the report's, so they equal `compile
+report --json` (`unlabelled` is the report's count of rows with no label of any kind, so it can be lower than `to_label` by the
+`tp_candidate` rows). `auto_fp` is the number of fires in the proposal's window (live, current mode, since `window_start`) whose only label
+is an automatic `fp` (an offline-pass `reason_code` of `labels.AUTO`, no human row), and `auto_fp_oldest` the 8-character row id of the
+oldest such fire (`label --rows` prints it), else null. The ladder counts such a fire as an FP (`ladder._counted`: `fp` from any reason
+code) while the label queue does not list it (an `fp` covers the row), so it can hold a promotion back with no row to label; when `auto_fp >
+0` the verdict (any but `retired`) gains the suffix `; k auto FPs (label --tp <id> overturns)`: a human `tp` on that row, newer than the
+automatic one, overturns it (`ladder.effective` prefers a human row), after which the fire is no FP and no auto FP. This is a mention only:
+there is no queue flag for these rows. Known gap: the verdict does not re-check that the lesson is `active`, that the detector's
+`source_sha256` still matches the proposal's, or the integrity of the labels (forged, dated before their fire, dated in the future);
+`ladder.check` does all three at approval time, and the nightly demotion pass covers the first two with a delay.
+An approved copy with no shadow
 row is added with zero counts and its own rates from `metrics.compute`, because the report lists proposals with rows only. The `heartbeat`
 block (last hook row, last live fire, `offline_state.json` mtime, last good nightly run, notes such as `chain_key:missing`,
 `approvals:broken:<where>` and `silent:<detector>`) says whether the instruments are alive; `silent:<detector>` needs a live mode,
@@ -999,13 +1008,15 @@ them). `compile digest [--since ISO] [--days N]` (`compile/digest.py`) renders t
 plain-text blocks: `status` (protocol `shadow-v1`, report hash, day, keyed, chains), `needs you` (the label queue and the command to
 work it), `detectors` (the status table), `health` (silent detectors, stale heartbeats over 36 hours, a spike when a proposal has at
 least 3 rows today and more than 3 times its daily mean over the window, chain notes), `changes` (approvals and demotions after
-`--since`, default the last digest logged, else 24 hours) and `next` (week-one date, and for each proposal still short of the 14 days the earliest date of its next rung: `warn earliest` for an observe-mode one, `block earliest` for a warn-mode one, nothing at block). Each run appends one JSON line
+`--since`, default the last digest logged, else 24 hours) and `next` (week-one date, and for each proposal still short of the 14 days
+the earliest date of its next rung from `next_rung` and `next_earliest`: `warn earliest` for an observe-mode one, `block earliest` for a
+warn-mode one, nothing at block). Each run appends one JSON line
 `{ts, report_sha256, queue, notes}` to `data_dir/digest.log` (0600, O_APPEND). `hooks/nightly_sweep.py` runs it quietly AFTER the sweep (so the
 line carries that night's health), refreshes `status.json` for the status line and writes the log line, so a missing line is a missed night.
 
 | Surface | Entry | Shows |
 |---|---|---|
-| Dashboard | `compile dashboard [--days N] [--out PATH]` | one static HTML file (0600) from `status.build`: day, tiles, table (its verdict column carries `label N fires` with N = `to_label`, and the rung-aware verdicts above), Wilson bars |
+| Dashboard | `compile dashboard [--days N] [--out PATH]` | one static HTML file (0600) from `status.build`: day, tiles, table, Wilson bars |
 | Status line | `hooks/statusline.sh` (Claude Code `statusLine`) | one line from `status.json`: approved, unlab24h, unlabelled, chains, heartbeat |
 
 ### Seal (as built, not executed)
@@ -1208,6 +1219,9 @@ No block mode can be promoted until step 4 has shipped; these amendments change 
 tree; `tests/test_compile_report.py` pins that `run` prints exactly the dumped `collect` dict and `render` of its parts), and
 `metrics.upper95_zero` was added for the status page. The seal has not been executed, so no committed hash is broken; the operator can
 object before `prereg-v1`.
+
+The `status.json` key `warn_earliest` was renamed `next_earliest` (with the new `next_rung`) on branch feat/measure, because the verdict
+became rung-aware and the date is the next rung's, not always warn's. It was never sealed or consumed outside `digest`.
 
 ## Files read
 

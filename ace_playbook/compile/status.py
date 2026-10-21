@@ -98,7 +98,8 @@ def verdict(p: dict, now: str) -> str:
 
 def _verdict(p: dict, now: str) -> str:
     """The first rule that holds, never looser than the ladder (`ladder.check`, design 7.3). On the rung `m` (observe, warn or block) the
-    next rung `n` is warn from observe and block from warn: retired, label N fires (`to_label`), silent, `block (top rung)`, `n earliest
+    next rung `n` is warn from observe and block from warn: retired, label N fires (`to_label`), silent, `not backed` (no copy, or the
+    copy's mode is not the one the approvals chain gives), `demoted:<cap>` (a demotion caps the copy below `n`), `block (top rung)`, `n earliest
     DATE` (14 days from `window_start`, the resolved counting window), needs 5 human TPs, noisy, not eligible (any FP), then `m only: weak
     detector`, `m only: detector allows X` (catalogue ceiling below `n`), `warn only: block is for PreToolUse`, else `n eligible`.
     `tp_window` and `fp_window` are the ladder's counts since `window_start`, of fires in mode `m`."""
@@ -108,10 +109,17 @@ def _verdict(p: dict, now: str) -> str:
         return f"label {p['to_label']} fires"
     if not p["eligible"]:
         return "silent: eligible 0"
-    m = _rung(p["mode"])
-    if m == "block":
+    m, cap = p["mode"], p.get("cap")
+    n = measure.NEXT.get(m)
+    if m not in LIVE:
+        return "not backed: no approved copy"
+    if n and cap and ladder.RANK[cap] < ladder.RANK[n]:                         # ladder.check: demoted:<cap>
+        return f"demoted:{cap} (approve --mode observe restarts)"
+    if p["approved_mode"] != m:                                                 # ladder.check: copy not backed by the approvals chain
+        return f"not backed: newest approvals row is {p['approvals_mode']}"
+    if n is None:
         return "block (top rung)"
-    n, start, here, tp, fp = measure.NEXT[m], parse_ts(p["window_start"]), parse_ts(now), p["tp_window"], p["fp_window"]
+    start, here, tp, fp = parse_ts(p["window_start"]), parse_ts(now), p["tp_window"], p["fp_window"]
     if start and here and here - start < timedelta(days=WARN_DAYS):
         return f"{n} earliest " + (start + timedelta(days=WARN_DAYS)).strftime("%Y-%m-%d")
     if tp < MIN_TP:
@@ -128,35 +136,25 @@ def _verdict(p: dict, now: str) -> str:
 
 
 def _proposal(p: dict, rate: dict, last: dict | None, start: str | None, win: tuple[int, int], now: str, event: str = "-", to_label: int = 0,
-              auto: tuple[str, ...] = ()) -> dict:
+              auto: tuple[str, ...] = (), cap: str | None = None) -> dict:
     """One `proposals` entry: the report's counts (`p`) and rates, the newest approvals row, the resolved `window_start`, the ladder's
-    (tp, fp) since it in the current mode, `to_label` (see `_uncovered`), and the proposal's `event` and the catalogue's `compilable` ceiling
-    (the next rung's checks)."""
+    (tp, fp) since it in the current mode, `to_label` (see `_uncovered`), the demotion `cap` in force, the newest approvals row's mode
+    (`approvals_mode`), the `next_rung` and its earliest date, and the proposal's `event` and the catalogue's `compilable` ceiling (the
+    next rung's checks)."""
     from . import catalogue
     n, at, cat = p["tp"] + p["fp"], last["ts"] if last else None, catalogue.CATALOGUE.get(p["detector"])
+    nxt = measure.NEXT.get(_rung(p["mode"]))
     row = {"detector": p["detector"], "strength": getattr(cat, "strength", None), "compilable": getattr(cat, "compilable", "none"), "event": event,
-           "mode": p["mode"], "approved_mode": p["approved_mode"], "revoked": bool(last and last["mode"] == "revoked"), "approved_at": at,
+           "mode": p["mode"], "approved_mode": p["approved_mode"], "cap": cap, "approvals_mode": last["mode"] if last else "none",
+           "revoked": bool(last and last["mode"] == "revoked"), "approved_at": at,
            "window_start": start, "rows": p["rows"], "fires": rate.get("fires"), "tp": p["tp"], "fp": p["fp"], "tp_window": win[0],
            "fp_window": win[1], "unlabelled": p["unlabelled"], "to_label": to_label, "auto_fp": len(auto),
            "auto_fp_oldest": auto[0] if auto else None, "eligible": rate.get("eligible"), "fires_per_eligible": rate.get("fires_per_eligible"),
            "precision": metrics.wilson(p["tp"], n) if n >= MIN_LABELS else INSUFFICIENT,
            "fp_upper_95": metrics.upper95_zero(n) if p["fp"] == 0 and n >= 1 else None,
-           "warn_earliest": (parse_ts(start) + timedelta(days=WARN_DAYS)).strftime(FMT) if parse_ts(start) else None}
+           "next_rung": nxt, "next_earliest": (parse_ts(start) + timedelta(days=WARN_DAYS)).strftime(FMT) if nxt and parse_ts(start) else None}
     row["verdict"] = verdict(row, now)
     return row
-
-
-def _unfired(cfg: Config, d: dict, rows: list[dict], now: str) -> tuple[dict, dict]:
-    """(counts, rates) of approved copies with no shadow row, which `report.collect` leaves out; `metrics.compute` as in `collect`."""
-    from . import shadow
-    have, ring = set(d["private"]["proposals"]), report._chains(cfg)
-    meta = {rec["id"]: report._meta(cfg, rec["id"], ring, now) for _, _, rec in shadow.approved_records(cfg) if rec["id"] not in have}
-    known = {pid: m[0] for pid, m in meta.items() if m[0] != "-"}
-    counts = {pid: {"detector": m[0], "approved_mode": m[2], "mode": m[3], "rows": 0, "tp": 0, "fp": 0, "unlabelled": 0}
-              for pid, m in meta.items()}
-    rates = metrics.compute("private", rows, known, report._read(cfg.path(report.EVENTS)), report._read(cfg.path(report.EVASION)),
-                            {pid for pid, m in meta.items() if m[1] == "Stop"})["proposals"] if known else {}
-    return counts, rates
 
 
 def _uncovered(rows: list[dict], labs: dict) -> Iterator[dict]:
@@ -210,16 +208,17 @@ def build(cfg: Config, days: int = 14, now: str | None = None) -> dict:
     rows, labs = report.read_corpora(cfg)[0], report.label_map(cfg)[0]
     lab_rows = labels.read_chain(cfg)[0] if lab_broken is None else []
     counts, rates = d["private"]["proposals"], d["rates"]["private"]
-    extra_counts, extra_rates = _unfired(cfg, d, rows, now)
+    extra_counts, extra_rates = measure.unfired(cfg, d, rows, now)
     counts, per = {**counts, **extra_counts}, {**rates["proposals"], **extra_rates}
     fires, eff, props, owed = {}, ladder.effective(lab_rows), {}, Counter(r["proposal_id"] for r in _uncovered(rows, labs))
     for r in rows:
         fires.setdefault(labels.row_id(r), r)
     for pid, p in sorted(counts.items()):
-        start = measure.window_start(cfg, pid, chain4, now)
+        res = measure.resolve(cfg, pid, chain4, now)
+        start = (res.window_start or None) if res else None
         where = (pid, start, now, fires, eff, _rung(p["mode"]))
         props[pid] = _proposal(p, per.get(pid, {}), approvals.newest(arows, pid), start, measure.window_counts(*where), now,
-                               report._meta(cfg, pid)[1], owed[pid], measure.auto_fps(*where))
+                               report._meta(cfg, pid)[1], owed[pid], measure.auto_fps(*where), res.cap if res else None)
     start, here = measure.start_of(arows), parse_ts(now)
     t0, corpus = parse_ts(start), rates["corpus"]
     notes = [*chains.notes(ring, (abroken, dem_broken)),
