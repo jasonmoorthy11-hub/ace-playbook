@@ -50,8 +50,8 @@ def read_approvals(data_dir, ring: chains.Keyring | None = None) -> tuple[list[d
 def v2_rows(data_dir) -> bool:
     """True when `approvals.jsonl` or `demotions.jsonl` holds a shape-valid `v: 2` row: the install was keyed, whatever the config names now
     (the marker `chains.key_of` falls back to when no key or heads file is found). An unreadable chain file counts as no row. One bytes regex
-    over the whole file gates the JSON parse (a hook pays this per call: parsing 1 MiB of junk lines took 438 ms); it matches the compact
-    spelling of the writers, so a row that hides its key behind a `\\u0076` escape is not a marker (it breaks an unkeyed chain anyway)."""
+    over the whole file gates the JSON parse (a hook pays this per call: parsing 1 MiB of junk lines took 438 ms); it matches the writers'
+    spelling with or without spaces, so a row that hides its key behind a `\\u0076` escape is not a marker (it breaks an unkeyed chain anyway)."""
     for mod in (approvals, demotions):
         with contextlib.suppress(OSError):
             raw = chains.read_regular(Path(data_dir) / mod.FILE, mod.MAX_BYTES) or b""

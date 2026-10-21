@@ -73,7 +73,9 @@ state-versus-lesson classifier. In the stage-2 compiler: the arms (randomization
   cut or roll back a chain. The key is readable by the operator's user, hence by the agent: a keyed row proves its writer read, replaced or
   redirected the key (the key file, its directory, or `chain_key_path` in `config.json`; there is no default key path, so deleting that line
   also drops the key, but the install still fails closed while `ACE_PLAYBOOK_KEYED=1` is set, `chain_heads.json` sits beside the config file
-  or a chain holds a `v: 2` row; deleting the rows and the heads file as well is the stated residual). The deny rules in hooks/INSTALL.md section 7 cover
+  or a chain holds a `v: 2` row; deleting the rows and the heads file as well is the stated residual). The `v: 2` marker scan is gated by
+  one regex pass, so junk chain files cost well under a millisecond, but a chain file full of short `{"v": 2}` lines passes the regex and is
+  fully parsed (about 190 ms for two 1 MiB files on this Mac): a slow-hook residual with no bypass, bounded by the hook timeout. The deny rules in hooks/INSTALL.md section 7 cover
   Read, Edit and Write on `~/.config/ace-playbook/**`; they do not cover a shell command (the substring guard does not catch
   `cd ~/.config/ace-playbook; mv chain_key x`), a same-user process outside the permission layer, or deleting both the key file and the heads
   file, which returns the install to the unkeyed v1-only rule unless `ACE_PLAYBOOK_KEYED=1` is set in the hook command (an install counts as
