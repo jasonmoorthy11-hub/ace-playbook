@@ -1,15 +1,79 @@
-"""The brief as one HTML file (docs/design/compiler.md 8.x "Brief (as built)", D-110): the model emits JSON, this code writes the page.
+"""The shape of a brief and its page (docs/design/compiler.md 8.x "Brief (as built)", D-110): the model emits JSON, this code writes HTML.
 
-The layout and tokens follow the morning skill (day-date line, serif headline, terrain, three acts, Needs attention, Resolved); the page
-has no script, no button, no external resource (system fonts only) and a CSP meta of `default-src 'none'; style-src 'unsafe-inline'`.
-Every text field goes through `esc`; a link is written only for a `url` that starts with `https://`.
+`validate_digest` / `validate_brief` check the two JSON schemas with plain code (strings capped and stripped of control characters, a `url`
+that is not https becomes null). `render` writes one page in the morning skill's layout and tokens (day-date line, serif headline,
+terrain, three acts, Needs attention, Resolved): no script, no button, no external resource (system fonts only), a CSP meta of
+`default-src 'none'; style-src 'unsafe-inline'`, every text field through `esc`, a link only for a `url` that starts with `https://`.
 """
 
 from __future__ import annotations
 
 import html
 import math
+import re
+import unicodedata
 from datetime import datetime
+
+CLASSES = ("heavy", "normal", "open")
+ITEM = {"title": ("s", 80), "sentence": ("s", 300), "source": ("s", 80), "url": ("u", 500)}   # kinds: s str, n str|null, u https|null, o enum|null
+DIGEST = {"generated_at": ("s", 40),
+          "calendar": ("l", 60, 0, {"start": ("s", 40), "end": ("s", 40), "title": ("s", 200), "organizer_is_me": "b", "optional": "b",
+                                    "attendees_n": "i"}),
+          "mail": ("l", 60, 0, {"thread_id": ("s", 120), "sender": ("s", 200), "subject": ("s", 300), "received": ("s", 40), "asked_me": "b",
+                                "replied": "b", "summary": ("s", 300)}),
+          "issues": ("l", 60, 0, {"id": ("s", 40), "title": ("s", 200), "state": ("s", 60), "due": ("n", 40)})}
+BRIEF = {"generated_at": ("s", 40), "day_class": ("e", CLASSES), "headline": ("s", 140),
+         "acts": ("l", 3, 3, {"range": ("s", 60), "sentence": ("s", 200), "load": ("o", CLASSES)}),
+         "needs_you": ("l", 20, 0, ITEM), "resolved": ("l", 20, 0, ITEM)}
+
+
+class SchemaError(ValueError):
+    """Refused; the message is a field path or a short reason, never content."""
+
+
+def _clean(text: str, cap: int) -> str:
+    text = "".join(" " if c in "\n\r\t" else c for c in text)
+    return "".join(c for c in text if unicodedata.category(c) not in ("Cc", "Cf", "Zl", "Zp")).strip()[:cap].rstrip()
+
+
+def _val(v, t, path: str):
+    kind = t if isinstance(t, str) else t[0]
+    text = isinstance(v, str)
+    if kind == "b" and isinstance(v, bool):
+        return v
+    if kind == "i" and isinstance(v, int) and not isinstance(v, bool):
+        return max(0, min(v, 10_000))
+    if kind in "sn" and text:
+        return _clean(v, t[1])
+    if kind == "n" and v is None:
+        return None
+    if kind == "e" and text and v in t[1]:
+        return v
+    if kind == "o":
+        return v if text and v in t[1] else None
+    if kind == "u":       # https only, no whitespace or control characters, else null
+        return v if text and v.startswith("https://") and len(v) <= t[1] and not re.search(r"[\s\x00-\x1f\x7f]", v) else None
+    if kind == "l" and isinstance(v, list) and len(v) >= t[2]:
+        return [_obj(x, t[3], f"{path}[{i}]") for i, x in enumerate(v[:t[1]])]
+    raise SchemaError(path)
+
+
+def _obj(raw, spec: dict, path: str) -> dict:
+    if not isinstance(raw, dict):
+        raise SchemaError(path)
+    return {k: _val(raw.get(k), t, f"{path}.{k}") for k, t in spec.items()}
+
+
+def validate_digest(raw) -> dict:
+    return _obj(raw, DIGEST, "digest")
+
+
+def validate_brief(raw) -> dict:
+    out = _obj(raw, BRIEF, "brief")
+    for act in out["acts"]:
+        act["load"] = act["load"] or out["day_class"]
+    return out
+
 
 CSP = "default-src 'none'; style-src 'unsafe-inline'"
 CALM = "Nothing needs you this morning."

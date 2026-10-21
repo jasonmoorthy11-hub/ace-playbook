@@ -89,4 +89,5 @@ def test_the_settings_file_parses_wires_the_guard_to_every_tool_and_denies_write
     cmd = entry["hooks"][0]["command"]
     assert cmd.startswith('python3 -I -S "$ACE_PLAYBOOK_REPO/hooks/brief_guard.py"') and cmd.endswith("|| exit 2")   # a crash blocks too
     assert s["permissions"]["deny"] == ["Bash", "Edit", "Write", "WebFetch", "WebSearch", "Agent"]
-    assert subprocess.run(["python3", "-I", "-S", "-c", "import json,sys; json.load(open(sys.argv[1]))", str(ROOT / "hooks/brief-settings.json")]).returncode == 0
+    load = "import json,sys; json.load(open(sys.argv[1]))"
+    assert subprocess.run(["python3", "-I", "-S", "-c", load, str(ROOT / "hooks/brief-settings.json")]).returncode == 0
