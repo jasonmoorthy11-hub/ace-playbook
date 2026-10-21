@@ -50,12 +50,21 @@ class Config:
         default_factory=lambda: ["upstream/", "node_modules/", ".venv/", "vendor/"]
     )
     deny_terms: list[str] = field(default_factory=list)
+    # the brief on wake (docs/design/compiler.md 8.x "Brief"): read-only, its own private directory under data_dir
+    brief_dir: Path | None = None  # None means data_dir / "brief"
+    brief_exclusions: Path | None = None  # private JSON: drop_senders, drop_subjects, drop_bodies_from (regex lists)
+    brief_model: str = "claude-sonnet-5-5"  # stage 1 (tools: reads calendar, mail, issues)
+    brief_model_stage2: str = "claude-sonnet-5-5"  # stage 2 (no tools: writes the brief JSON from the cleaned digest)
+    brief_dedupe_hours: int = 4
+    brief_max_budget_usd: float = 1.0
 
     def __post_init__(self) -> None:
         if not 200 <= self.inject_max_chars <= MAX_INJECT_CHARS:
             raise ValueError(f"inject_max_chars must be 200..{MAX_INJECT_CHARS}")
         if not 0.0 <= self.holdout_rate <= 1.0:
             raise ValueError("holdout_rate must be between 0 and 1")
+        if self.brief_dedupe_hours < 0 or not 0 < self.brief_max_budget_usd <= 100:
+            raise ValueError("brief_dedupe_hours must be >= 0 and brief_max_budget_usd in (0, 100]")
 
     def check_holdout(self) -> None:
         """Raise ValueError if holdout is on without a usable private seed."""
@@ -70,6 +79,10 @@ class Config:
     # derived paths -------------------------------------------------------
     def path(self, name: str) -> Path:
         return Path(self.data_dir) / name
+
+    @property
+    def brief_path(self) -> Path:
+        return Path(self.brief_dir) if self.brief_dir else self.path("brief")
 
     @property
     def deltas(self) -> Path:
@@ -104,7 +117,7 @@ class Config:
         return self.path("reflect.log")
 
 
-_PATH_FIELDS = {"data_dir", "transcripts_root", "api_key_path", "engagements_path", "chain_key_path"}
+_PATH_FIELDS = {"data_dir", "transcripts_root", "api_key_path", "engagements_path", "chain_key_path", "brief_dir", "brief_exclusions"}
 
 
 def from_dict(raw: dict[str, Any]) -> Config:
