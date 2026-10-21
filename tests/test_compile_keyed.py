@@ -197,7 +197,8 @@ def test_the_heads_file_sits_beside_the_key(tmp_path):
     write_key(tmp_path / "chain_key")
     ring = chains.key_of(cfgmod.Config(chain_key_path=tmp_path / "chain_key"))
     assert ring.key == K1 and ring.heads_path == tmp_path / "chain_heads.json"
-    assert chains.key_of(cfgmod.Config()) is None and chains.key_of(cfgmod.Config(chain_key_path=tmp_path / "none")) is None
+    bare = cfgmod.Config(data_dir=tmp_path)                                    # never the default data dir: key_of reads the chain files there
+    assert chains.key_of(bare) is None and chains.key_of(cfgmod.Config(data_dir=tmp_path, chain_key_path=tmp_path / "none")) is None
 
 
 # ------------------------------------------------------------------ structure

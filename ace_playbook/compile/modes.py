@@ -9,7 +9,9 @@ or unreadable chain caps at observe. Imports: stdlib, `.approvals`, `.chains`, `
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional, Union
 
 from . import approvals, chains, demotions
@@ -41,6 +43,16 @@ def read_approvals(data_dir, ring: chains.Keyring | None = None) -> tuple[list[d
         return approvals.read_chain(data_dir, ring)
     except Exception:
         return [], "unreadable"
+
+
+def v2_rows(data_dir) -> bool:
+    """True when `approvals.jsonl` or `demotions.jsonl` holds a shape-valid `v: 2` row: the install was keyed, whatever the config names now
+    (the marker `chains.key_of` falls back to when no key or heads file is found). An unreadable chain file counts as no row."""
+    for mod in (approvals, demotions):
+        with contextlib.suppress(OSError):
+            if chains.has_v2(chains.read_regular(Path(data_dir) / mod.FILE, mod.MAX_BYTES) or b"", mod.shape):
+                return True
+    return False
 
 
 def anchor(rows: list[dict], pid: str, now: str, broken: Broken = None) -> dict | None:

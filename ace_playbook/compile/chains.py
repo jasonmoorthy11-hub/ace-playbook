@@ -43,8 +43,7 @@ def read_regular(path: Path, cap: int) -> bytes | None:
 
 @dataclass(frozen=True)
 class Keyring:
-    """The chain key (None: a keyed install whose key is unusable) and the heads file beside it (`heads_path` None: heads are neither
-    checked nor written; unit tests only)."""
+    """The chain key (None: a keyed install whose key is unusable) and the heads file beside it (`heads_path` None: heads not checked or written)."""
     key: bytes | None
     heads_path: Path | None = None
 
@@ -134,13 +133,14 @@ def has_v2(raw: bytes, shape) -> bool:
 
 
 def key_of(cfg) -> Keyring | None:
-    """The keyring of a KEYED install (key or heads file, any file type, or `ACE_PLAYBOOK_KEYED=1`); `Keyring(None, ...)` if the key is unusable."""
+    """The keyring of a KEYED install (key or heads file, a `v: 2` row in a chain, or `ACE_PLAYBOOK_KEYED=1`); `Keyring(None, ...)` if the key is unusable."""
     path, src = getattr(cfg, "chain_key_path", None), getattr(cfg, "source", None)
     near = Path(path).parent if path else src.parent if src else None     # the key's directory; a config naming no key: its own
     heads = near / HEADS if near else None
     if (key := chain_key(path) if path else None) is not None:
         return Keyring(key, heads)
-    marked = os.environ.get(ENV) == "1" or any(p is not None and os.path.lexists(p) for p in (path, heads))
+    from . import modes                                                      # lazy: modes imports this module
+    marked = os.environ.get(ENV) == "1" or any(map(os.path.lexists, filter(None, (path, heads)))) or modes.v2_rows(cfg.data_dir)
     return Keyring(None, heads) if marked else None
 
 

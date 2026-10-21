@@ -14,12 +14,13 @@ import pytest
 from ace_playbook import config as cfgmod
 from ace_playbook.canon import chain_key
 from ace_playbook.compile import __main__ as cli
-from ace_playbook.compile import approvals, chains, chains_cli
+from ace_playbook.compile import approvals, chains, chains_cli, chains_io
 from ace_playbook.compile import demotions as dm
 
 from . import compile_support as cs
 from .test_compile_cli import run as cli_run, tty, world, written  # noqa: F401  (fixtures)
-from .test_compile_keyed_heads import w, run  # noqa: F401  (fixtures)
+from .test_compile_keyed import K1, write_key
+from .test_compile_keyed_heads import demote, keyed, promote, w, run  # noqa: F401  (fixtures and helpers)
 from .test_compile_shadow import RM
 
 
@@ -186,3 +187,66 @@ def test_keygen_follows_a_symlinked_config_file_instead_of_replacing_the_link(tm
     link.symlink_to(real)
     assert cli.main(["--config", str(link), "keygen"]) == 0
     assert link.is_symlink() and "chain_key_path" in json.loads(real.read_text())
+
+
+def test_keygen_refuses_when_an_unnamed_key_file_already_sits_at_the_suggested_path(tmp_path, tty, capsys):
+    conf = conf_at(tmp_path, {"data_dir": str(tmp_path / "data")})
+    key = write_key(conf.parent / "chain_key", mode=0o600)
+    before, key_before = conf.read_bytes(), key.read_bytes()
+    assert cli.main(["--config", str(conf), "keygen"]) == 1
+    err = capsys.readouterr().err
+    assert "does not name it" in err and err.count("\n") == 1
+    assert conf.read_bytes() == before and key.read_bytes() == key_before and tty.asked == [] and not (conf.parent / chains.HEADS).exists()
+
+
+# ------------------------------------------------------------------ the config is found from any directory
+def test_load_makes_the_source_absolute_and_keygen_never_writes_a_relative_path(tmp_path, tty, monkeypatch, capsys):
+    conf = conf_at(tmp_path, {"data_dir": str(tmp_path / "data")})
+    monkeypatch.chdir(conf.parent)
+    assert cfgmod.load("config.json").source == conf.absolute() and cfgmod.load("config.json").source.is_absolute()
+    assert cli.main(["--config", "config.json", "keygen"]) == 0
+    written_path = json.loads(conf.read_text())["chain_key_path"]
+    assert os.path.isabs(written_path) or written_path.startswith("~/")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    assert chains.key_of(cfgmod.load(conf)).key == chain_key(conf.parent / "chain_key")
+    assert cfgmod.load(conf).chain_key_path == conf.parent / "chain_key"
+
+
+# ------------------------------------------------------------------ v2 rows mark a keyed install wherever the config sits
+def relocate(w, tmp_path, monkeypatch):
+    """The key and heads move to an 'old default' directory the config does not name; the config moves to a third directory."""
+    old, new = tmp_path / "olddefault", tmp_path / "elsewhere"
+    old.mkdir()
+    new.mkdir()
+    for name in ("chain_key", chains.HEADS):
+        if (tmp_path / name).exists():
+            (tmp_path / name).rename(old / name)
+    conf = new / "config.json"
+    conf.write_text(json.dumps({"data_dir": str(w.data)}))
+    monkeypatch.delenv(chains.ENV, raising=False)
+    monkeypatch.setenv(cfgmod.ENV_CONFIG, str(conf))
+    return conf
+
+
+@pytest.mark.parametrize("chain", ["approvals", "demotions"])
+def test_v2_rows_in_either_chain_mark_the_install_keyed_when_the_config_names_no_key_and_sits_elsewhere(w, run, tmp_path, monkeypatch, chain):
+    ring = keyed(w)
+    promote(w, "observe", ring) if chain == "approvals" else demote(w, ring)
+    conf = relocate(w, tmp_path, monkeypatch)
+    cfg = cfgmod.load(conf)
+    assert cfg.chain_key_path is None and not (conf.parent / chains.HEADS).exists()
+    ring = chains.key_of(cfg)
+    assert ring is not None and ring.key is None                                      # was keyed yesterday: fail closed, not unkeyed
+    assert approvals.read_chain(w.data, ring)[1] is not None and dm.read_chain(w.data, ring)[1] is not None
+    with pytest.raises(chains.KeyMissing):
+        chains_io.need_key(cfg, approvals)
+    assert "restore the chain key file" in run.capsys.readouterr().err                  # the writer's refusal, not the hook's
+    assert run(cs.pre_payload(RM)) == (0, "", "") and run.log.count("chain_key:missing") == 1
+
+
+def test_v1_only_rows_and_no_marker_stay_an_unkeyed_install_wherever_the_config_sits(w, tmp_path, monkeypatch):
+    cs.approve_file(w.cfg, w.props["rm_rf_nonscratch"], "warn", row=True)             # a v1 row
+    cfg = cfgmod.load(relocate(w, tmp_path, monkeypatch))
+    assert chains.key_of(cfg) is None and approvals.read_chain(w.data, None)[1] is None

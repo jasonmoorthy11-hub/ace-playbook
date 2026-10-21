@@ -9,6 +9,8 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, ClassVar
 
+from . import atomic
+
 ENV_CONFIG = "ACE_PLAYBOOK_CONFIG"
 DEFAULT_CONFIG = Path.home() / ".config" / "ace-playbook" / "config.json"
 DEFAULT_DATA = Path.home() / ".local" / "share" / "ace-playbook"
@@ -137,7 +139,7 @@ def load(path: str | Path | None = None) -> Config:
         cfg = from_dict({})
     else:
         cfg = from_dict(json.loads(target.read_text()))
-    cfg.source = target
+    cfg.source = target.absolute()                       # a relative --config or env path must not outlive the working directory
     return cfg
 
 
@@ -149,10 +151,19 @@ def tilde(path: Path) -> str:
 
 def with_chain_key(conf: Path, key: Path) -> str:
     """The text of config file `conf` (a JSON object, or none yet) with `"chain_key_path"` added as `key` (home spelled `~`); every other
-    key keeps its place and value, 2-space indent. ValueError when the file is not an object or already says `chain_key_path` (null = off)."""
+    key keeps its place and value, 2-space indent. ValueError when the file is not an object or already says `chain_key_path`."""
     raw = json.loads(conf.read_text()) if conf.exists() else {}
     if not isinstance(raw, dict):
         raise ValueError("the configuration file is not a JSON object")
     if "chain_key_path" in raw:
-        raise ValueError("chain_key_path is already in the configuration file (null switches keyed chains off): set it by hand")
+        raise ValueError("chain_key_path is already in the configuration file (null means no key, and fails closed on an install that "
+                         "has a chain_heads.json beside the config or v2 rows in a chain): set it by hand")
     return json.dumps({**raw, "chain_key_path": tilde(key)}, indent=2, ensure_ascii=False) + "\n"
+
+
+def name_chain_key(conf: Path, key: Path) -> None:
+    """Add `"chain_key_path": key` to config file `conf`, read again now so an edit made meanwhile is kept: an atomic 0600 write to the
+    file a symlink points at, its directory made 0700 if missing."""
+    real = Path(os.path.realpath(conf))
+    real.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    atomic.write_private(real, with_chain_key(conf, key))
