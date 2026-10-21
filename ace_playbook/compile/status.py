@@ -189,11 +189,11 @@ def _heartbeat(cfg: Config, rows: list[dict], notes: list[str]) -> dict:
             "notes": [*notes, *(["nightly:failed"] if rec.get("ok") is False else [])]}
 
 
-def _start(arows: list[dict], props: dict) -> str | None:
-    """The measurement start: the greatest, over proposals not retired, of the newest `observe` approvals row (the ladder's restart point;
-    a warn or block promotion does not move it)."""
+def _start(arows: list[dict]) -> str | None:
+    """The measurement start: the greatest, over proposals whose newest approvals row is not a revocation, of the newest `observe` approvals
+    row (the ladder's restart point; a warn or block promotion does not move it, a demotion to disabled does not remove the proposal)."""
     newest, observe = {r["proposal_id"]: r for r in arows}, {r["proposal_id"]: r["ts"] for r in arows if r["mode"] == "observe"}
-    return max((ts for pid, ts in observe.items() if newest[pid]["mode"] != "revoked" and not retired(props.get(pid, {}))), default=None)
+    return max((ts for pid, ts in observe.items() if newest[pid]["mode"] != "revoked"), default=None)
 
 
 def build(cfg: Config, days: int = 14, now: str | None = None) -> dict:
@@ -213,7 +213,7 @@ def build(cfg: Config, days: int = 14, now: str | None = None) -> dict:
     for pid, p in sorted(counts.items()):
         start = _window(cfg, pid, chain4, now)
         props[pid] = _proposal(p, per.get(pid, {}), approvals.newest(arows, pid), start, _window_counts(pid, start, now, fires, eff), now)
-    start, here = _start(arows, props), parse_ts(now)
+    start, here = _start(arows), parse_ts(now)
     t0, corpus = parse_ts(start), rates["corpus"]
     notes = [*chains.notes(ring, (abroken, dem_broken)),
              *(f"{name}:broken:{b}" for name, b in (("approvals", abroken), ("demotions", dem_broken), ("labels", lab_broken)) if b is not None),

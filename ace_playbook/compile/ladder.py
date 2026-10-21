@@ -4,7 +4,7 @@
 re-derives every counted TP and FP from `shadow.jsonl` and returns a `Result` (reasons that failed, the listings, the flagged
 labels). `run` is the CLI around it: it reads the files, refuses a broken chain, prints the listing, asks on the TTY and,
 on `y`, appends the `approvals.jsonl` row and writes the approved copy.
-Imported lazily by `cmd_approve`. Stdlib, this package and `..atomic`/`..canon`; the store loads inside `lesson_status`.
+Imported lazily by `cmd_approve` and by `status` (its window counts); never on the hook path. Stdlib, this package and `..atomic`/`..canon`; the store loads inside `lesson_status`.
 """
 
 from __future__ import annotations

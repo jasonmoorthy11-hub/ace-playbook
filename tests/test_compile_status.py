@@ -230,14 +230,17 @@ def test_a_warn_promotion_does_not_move_the_measurement_start_and_seal_agrees_un
     assert seal_start() == "2026-10-25T00:00:00Z"                                        # seal takes the newest row of any mode
 
 
-def test_a_retired_proposal_with_a_copy_in_disabled_mode_does_not_set_the_start(w):
+def test_a_demotion_disabled_proposal_still_counts_so_a_nightly_demotion_cannot_move_the_start_back(w):
     s = build(w)
     p = s["proposals"][pid_of(w, "rm_rf")]
     assert (p["mode"], s["measurement"]["start"]) == ("observe", "2026-10-15T00:00:00Z")
     demotions.append(w.data, {"proposal_id": pid_of(w, "rm_rf"), "from_mode": "observe", "to_mode": "disabled", "cause": "label_fp",
                               "ref": "0123abcd", "review_required": False, "ts": "2026-10-16T00:00:00Z"})
     s = build(w)
-    assert s["proposals"][pid_of(w, "rm_rf")]["mode"] == "disabled" and s["measurement"]["start"] == "2026-10-01T00:00:00Z"
+    assert s["proposals"][pid_of(w, "rm_rf")]["mode"] == "disabled" and s["proposals"][pid_of(w, "rm_rf")]["verdict"] == "retired"
+    assert s["measurement"]["start"] == seal._proposals(w.cfg)[1] == "2026-10-15T00:00:00Z"          # equals seal --dry-run until a promotion
+    revoke(w, "rm_rf", "2026-10-17T00:00:00Z")                                                       # only a revocation takes it out
+    assert build(w)["measurement"]["start"] == seal._proposals(w.cfg)[1] == "2026-10-01T00:00:00Z"
 
 
 def test_a_broken_labels_chain_and_a_broken_approvals_chain_are_named(w):

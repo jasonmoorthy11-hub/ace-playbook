@@ -370,10 +370,10 @@ sweep (`digest` in its JSON report), refreshes `status.json` and appends one lin
 {"statusLine": {"type": "command", "command": "$HOME/ace-playbook/hooks/statusline.sh", "refreshInterval": 30}}
 ```
 
-It prints one line, `<model> | ctx <pct>% | ace approved N  fires24h N  unlabelled N  chains ok|BROKEN  heartbeat <age>`, from `status.json`
+It prints one line, `<model> | ctx <pct>% | ace approved N  unlab24h N  unlabelled N  chains ok|BROKEN  heartbeat <age>`, from `status.json`
 in the data dir (the config is found as for the other hooks: `ACE_PLAYBOOK_CONFIG`, else the default config file; `ACE_PYTHON` picks the interpreter).
-`approved` counts proposals in observe, warn or block mode. `fires24h` counts the label-queue entries (unlabelled fires) stamped within 24 hours
-before `generated_at` (`N+` when the queue, capped at 50 oldest first, is shorter than `unlabelled`). `unlabelled` is `queue_total`. `chains` is `ok`
+`approved` counts proposals in observe, warn or block mode. `unlab24h` counts the unlabelled queue rows stamped within 24 hours
+of `generated_at` (`N+` when the queue, capped at 50 oldest first, is shorter than `unlabelled`). `unlabelled` is `queue_total`. `chains` is `ok`
 only when the approvals, demotions and labels chains all are. `heartbeat` is the age of the last hook row. Without a readable `status.json` it prints
 `<model> | ctx <pct>% | ace: no status file`. It runs one `python3 -I -S` (stdlib only, about 15 ms) and exits 0 on any error.
 The numbers are as fresh as `status.json`, which `compile status` and the nightly digest rewrite.

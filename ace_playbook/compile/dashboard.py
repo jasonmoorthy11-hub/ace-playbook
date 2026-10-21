@@ -15,7 +15,7 @@ from pathlib import Path
 
 from ..atomic import write_private
 from ..config import Config
-from . import dashboard_html, labels, status
+from . import dashboard_html, labels, metrics, status
 
 OUT, CAP, STALE_HOURS = "dashboard.html", status.QUEUE_MAX, 36
 THRESHOLDS, TICKS = ((0.8, "0.8"), (0.9, "0.9")), ((0.0, "0"), (0.5, ".5"), (1.0, "1"))
@@ -76,8 +76,8 @@ def pct(v: float) -> float:
 
 def point(p: dict) -> float | None:
     """The point estimate tp/(tp+fp); None when nothing is labelled."""
-    n = p["tp"] + p["fp"]
-    return p["tp"] / n if n else None
+    r = metrics.ratio(p["tp"], p["tp"] + p["fp"], digits=4)
+    return None if isinstance(r, str) else r
 
 
 def wrow(pid: str, p: dict) -> str:

@@ -970,9 +970,9 @@ block (last hook row, last live fire, `offline_state.json` mtime, last good nigh
 `approvals:broken:<where>` and `silent:<detector>`) says whether the instruments are alive; `silent:<detector>` needs a live mode,
 eligible sessions, no fires AND no hook row at all (a row that is not a scanned fire is awaiting the scan, truncated or a
 disagreement, never silence), and `agreement.awaiting_scan` counts the fires waiting for the offline scan. `measurement.start` is the
-greatest, over proposals not retired, of each proposal's newest `observe` approvals row (the ladder restart point, section 7.3): a warn
-or block promotion does not move it, a revoked proposal does not set it. `seal --dry-run`'s `measurement_start` is the newest row of any
-mode of a proposal that is not revoked, so the two agree until the first promotion. The queue (`queue`, `queue_total`) lists the fired rows
+greatest, over proposals whose newest approvals row is not a revocation, of each proposal's newest `observe` approvals row (the ladder
+restart point, section 7.3): a warn or block promotion does not move it, and neither does a demotion to disabled. `seal --dry-run`'s
+`measurement_start` is the newest row of any mode of a proposal that is not revoked, so the two are equal until the first promotion. The queue (`queue`, `queue_total`) lists the fired rows
 that no human `tp`/`fp` covers; the fires of retired proposals are not listed but counted in `queue_retired` (`label --queue --all` offers
 them). `compile digest [--since ISO] [--days N]` (`compile/digest.py`) renders the same dict as six
 plain-text blocks: `status` (protocol `shadow-v1`, report hash, day, keyed, chains), `needs you` (the label queue and the command to
@@ -985,7 +985,7 @@ line carries that night's health), refreshes `status.json` for the status line a
 | Surface | Entry | Shows |
 |---|---|---|
 | Dashboard | `compile dashboard [--days N] [--out PATH]` | one static HTML file (0600) from `status.build`: day, tiles, table, Wilson bars |
-| Status line | `hooks/statusline.sh` (Claude Code `statusLine`) | one line from `status.json`: approved, fires24h, unlabelled, chains, heartbeat |
+| Status line | `hooks/statusline.sh` (Claude Code `statusLine`) | one line from `status.json`: approved, unlab24h, unlabelled, chains, heartbeat |
 
 ### Seal (as built, not executed)
 
