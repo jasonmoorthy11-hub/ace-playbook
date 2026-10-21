@@ -31,7 +31,6 @@ SCHEMA, WARN_DAYS, WEEK, QUEUE_MAX, COST_MS, MIN_LABELS, MIN_TP = 1, 14, 7, 50, 
 STAMP, WORD = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ"), re.compile(r"[A-Za-z0-9_:.-]{1,40}")
 FMT, OFFLINE_STATE = "%Y-%m-%dT%H:%M:%SZ", "offline_state.json"       # offline.SEEN, named here so this module does not import the pass
 LIVE, RETIRED, INSUFFICIENT, COVERING = ("observe", "warn", "block"), ("disabled", "revoked"), "INSUFFICIENT", ("tp", "fp")
-NEXT = {"observe": "warn", "warn": "block"}
 HEADS = ("proposal", "detector", "mode", "fires/eligible", "tp/fp/unlab", "precision", "verdict")
 
 
@@ -91,6 +90,13 @@ def _rung(mode: object) -> str:
 
 
 def verdict(p: dict, now: str) -> str:
+    """`_verdict`, plus `; k auto FPs (label --tp <oldest id> overturns)` when fires in the window carry only an automatic fp (not a
+    retired proposal): the ladder counts them as FPs, the queue does not list them, one human `tp` on the row overturns each."""
+    text, k = _verdict(p, now), p.get("auto_fp", 0)
+    return f"{text}; {k} auto FPs (label --tp {p['auto_fp_oldest']} overturns)" if k and text != "retired" else text
+
+
+def _verdict(p: dict, now: str) -> str:
     """The first rule that holds, never looser than the ladder (`ladder.check`, design 7.3). On the rung `m` (observe, warn or block) the
     next rung `n` is warn from observe and block from warn: retired, label N fires (`to_label`), silent, `block (top rung)`, `n earliest
     DATE` (14 days from `window_start`, the resolved counting window), needs 5 human TPs, noisy, not eligible (any FP), then `m only: weak
@@ -105,7 +111,7 @@ def verdict(p: dict, now: str) -> str:
     m = _rung(p["mode"])
     if m == "block":
         return "block (top rung)"
-    n, start, here, tp, fp = NEXT[m], parse_ts(p["window_start"]), parse_ts(now), p["tp_window"], p["fp_window"]
+    n, start, here, tp, fp = measure.NEXT[m], parse_ts(p["window_start"]), parse_ts(now), p["tp_window"], p["fp_window"]
     if start and here and here - start < timedelta(days=WARN_DAYS):
         return f"{n} earliest " + (start + timedelta(days=WARN_DAYS)).strftime("%Y-%m-%d")
     if tp < MIN_TP:
@@ -121,7 +127,8 @@ def verdict(p: dict, now: str) -> str:
     return "warn only: block is for PreToolUse" if n == "block" and p["event"] != "PreToolUse" else f"{n} eligible"
 
 
-def _proposal(p: dict, rate: dict, last: dict | None, start: str | None, win: tuple[int, int], now: str, event: str = "-", to_label: int = 0) -> dict:
+def _proposal(p: dict, rate: dict, last: dict | None, start: str | None, win: tuple[int, int], now: str, event: str = "-", to_label: int = 0,
+              auto: tuple[str, ...] = ()) -> dict:
     """One `proposals` entry: the report's counts (`p`) and rates, the newest approvals row, the resolved `window_start`, the ladder's
     (tp, fp) since it in the current mode, `to_label` (see `_uncovered`), and the proposal's `event` and the catalogue's `compilable` ceiling
     (the next rung's checks)."""
@@ -130,8 +137,8 @@ def _proposal(p: dict, rate: dict, last: dict | None, start: str | None, win: tu
     row = {"detector": p["detector"], "strength": getattr(cat, "strength", None), "compilable": getattr(cat, "compilable", "none"), "event": event,
            "mode": p["mode"], "approved_mode": p["approved_mode"], "revoked": bool(last and last["mode"] == "revoked"), "approved_at": at,
            "window_start": start, "rows": p["rows"], "fires": rate.get("fires"), "tp": p["tp"], "fp": p["fp"], "tp_window": win[0],
-           "fp_window": win[1], "unlabelled": p["unlabelled"], "to_label": to_label, "eligible": rate.get("eligible"),
-           "fires_per_eligible": rate.get("fires_per_eligible"),
+           "fp_window": win[1], "unlabelled": p["unlabelled"], "to_label": to_label, "auto_fp": len(auto),
+           "auto_fp_oldest": auto[0] if auto else None, "eligible": rate.get("eligible"), "fires_per_eligible": rate.get("fires_per_eligible"),
            "precision": metrics.wilson(p["tp"], n) if n >= MIN_LABELS else INSUFFICIENT,
            "fp_upper_95": metrics.upper95_zero(n) if p["fp"] == 0 and n >= 1 else None,
            "warn_earliest": (parse_ts(start) + timedelta(days=WARN_DAYS)).strftime(FMT) if parse_ts(start) else None}
@@ -210,8 +217,9 @@ def build(cfg: Config, days: int = 14, now: str | None = None) -> dict:
         fires.setdefault(labels.row_id(r), r)
     for pid, p in sorted(counts.items()):
         start = measure.window_start(cfg, pid, chain4, now)
-        win = measure.window_counts(pid, start, now, fires, eff, _rung(p["mode"]))
-        props[pid] = _proposal(p, per.get(pid, {}), approvals.newest(arows, pid), start, win, now, report._meta(cfg, pid)[1], owed[pid])
+        where = (pid, start, now, fires, eff, _rung(p["mode"]))
+        props[pid] = _proposal(p, per.get(pid, {}), approvals.newest(arows, pid), start, measure.window_counts(*where), now,
+                               report._meta(cfg, pid)[1], owed[pid], measure.auto_fps(*where))
     start, here = measure.start_of(arows), parse_ts(now)
     t0, corpus = parse_ts(start), rates["corpus"]
     notes = [*chains.notes(ring, (abroken, dem_broken)),

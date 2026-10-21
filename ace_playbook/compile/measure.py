@@ -1,6 +1,6 @@
 """The measurement clock, one rule for every reader (docs/design/compiler.md 7.3 and 8.x): `start_of` is the measurement start that `status`
 (`measurement.start`) and `seal` (`measurement_start`) both print, so the two cannot drift; `window_start` and `window_counts` are the
-counting window of one proposal and the ladder's TP/FP counts inside it, which `status` shows beside the verdict.
+counting window of one proposal and the ladder's TP/FP counts inside it (and the automatic FPs among them), which `status` shows beside the verdict.
 
 Not on the hook path (the shadow hook never imports it): stdlib, `..config` and sibling modules.
 """
@@ -8,7 +8,9 @@ Not on the hook path (the shadow hook never imports it): stdlib, `..config` and 
 from __future__ import annotations
 
 from ..config import Config
-from . import approvals, ladder, modes, proposal, shadow
+from . import approvals, labels, ladder, modes, proposal, shadow
+
+NEXT = {"observe": "warn", "warn": "block"}       # the next rung of the promotion ladder (7.3); block is the top
 
 
 def start_of(arows: list[dict]) -> str | None:
@@ -30,12 +32,25 @@ def window_start(cfg: Config, pid: str, ring: tuple, now: str) -> str | None:
     return (modes.resolve(pid, rec, *ring, now).window_start or None) if body is not None else None
 
 
-def window_counts(pid: str, start: str | None, now: str, fires: dict, eff: dict, mode: str) -> tuple[int, int]:
-    """(human tps, fps) the ladder counts for `pid` since `start`: live fires in the proposal's current `mode` (the rung it stands on,
-    as `ladder.check` counts them for the next one), `ladder.effective` labels."""
-    tp = fp = 0
+def _counted_fires(pid: str, start: str | None, now: str, fires: dict, eff: dict, mode: str):
+    """(ref, kind, row, human) for each label the ladder counts for `pid` since `start`: live fires in `mode`, `ladder.effective` labels."""
     for ref, (_, lab, human) in eff.items() if start else ():
         kind, f = ladder._counted(lab, human), fires.get(ref)
         if kind and f and f["proposal_id"] == pid and f.get("tier") == "live" and f.get("mode") == mode and start <= f["ts"] <= now:
-            tp, fp = tp + (kind == "tp"), fp + (kind == "fp")
-    return tp, fp
+            yield ref, kind, lab, human, f
+
+
+def window_counts(pid: str, start: str | None, now: str, fires: dict, eff: dict, mode: str) -> tuple[int, int]:
+    """(human tps, fps) the ladder counts for `pid` since `start`: live fires in the proposal's current `mode` (the rung it stands on,
+    as `ladder.check` counts them for the next one), `ladder.effective` labels."""
+    kinds = [kind for _, kind, *_ in _counted_fires(pid, start, now, fires, eff, mode)]
+    return kinds.count("tp"), kinds.count("fp")
+
+
+def auto_fps(pid: str, start: str | None, now: str, fires: dict, eff: dict, mode: str) -> list[str]:
+    """Row ids, oldest fire first, of the fires in the window (as `window_counts`) whose only label is an automatic `fp` (an offline-pass
+    `reason_code` of `labels.AUTO`, no human row): the ladder counts them as FPs, the label queue does not list them, and a human
+    `tp` on the row overturns them."""
+    found = [(f["ts"], ref) for ref, kind, lab, human, f in _counted_fires(pid, start, now, fires, eff, mode)
+             if kind == "fp" and not human and lab.get("reason_code") in labels.AUTO]
+    return [ref for _, ref in sorted(found)]

@@ -200,6 +200,16 @@ def test_verdict_rules_in_order(over, want):
     assert status.verdict(row(**over), NOW) == want
 
 
+def test_auto_fps_add_a_suffix_naming_the_oldest_row_to_overturn_and_retired_adds_none():
+    suffix = "; 2 auto FPs (label --tp abcd1234 overturns)"
+    got = status.verdict(row(tp_window=5, fp_window=2, auto_fp=2, auto_fp_oldest="abcd1234"), NOW)
+    assert got == "not eligible: 2 FPs (warn needs 0)" + suffix
+    assert status.verdict(row(auto_fp=2, auto_fp_oldest="abcd1234"), NOW) == "warn eligible" + suffix
+    assert status.verdict(row(mode="block", auto_fp=2, auto_fp_oldest="abcd1234"), NOW) == "block (top rung)" + suffix
+    assert status.verdict(row(revoked=True, auto_fp=2, auto_fp_oldest="abcd1234"), NOW) == "retired"
+    assert status.verdict(row(auto_fp=0, auto_fp_oldest=None), NOW) == "warn eligible"
+
+
 @pytest.mark.parametrize("tp, fp, shown", [(3, 1, False), (4, 0, False), (5, 0, True), (4, 1, True), (2, 3, True)])
 def test_precision_is_a_wilson_interval_from_five_labels_on(tp, fp, shown):
     p = {"detector": "rm_rf", "mode": "observe", "approved_mode": "observe", "rows": 0, "tp": tp, "fp": fp, "unlabelled": 0}
@@ -525,6 +535,41 @@ def test_a_covering_label_removes_a_row_from_to_label_and_an_unfired_proposal_ha
     cs.write_labels(w.cfg, [hum(ids[0], "tp"), auto_row(ids[1], "fp", "auto_fp_correction")])     # an auto fp covers a row too
     p = build(w)["proposals"]
     assert (p[pid_of(w)]["to_label"], p[pid_of(w, "rm_rf")]["to_label"]) == (1, 0)
+
+
+def auto_fp_world(w):
+    """rm_rf_nonscratch: five human tps and one fire (the oldest, `ids[0]`) whose only label is an automatic fp; returns the six ids."""
+    ids = fire(w, "rm_rf_nonscratch", "s1", 6)
+    cs.write_labels(w.cfg, [auto_row(ids[0], "fp", "auto_fp_correction"), *(hum(r, "tp") for r in ids[1:])])
+    return ids
+
+
+def test_an_auto_fp_only_fire_is_counted_and_named_in_the_verdict_and_changes_no_other_count(w):
+    rid = auto_fp_world(w)[0]
+    p = build(w, now="2026-10-30T00:00:00Z")["proposals"][pid_of(w)]
+    assert (p["auto_fp"], p["auto_fp_oldest"]) == (1, rid)
+    assert (p["unlabelled"], p["to_label"], p["tp_window"]) == (0, 0, 5)                      # it covers the row: nothing to label
+    assert p["verdict"] == f"not eligible: 1 FPs (warn needs 0); 1 auto FPs (label --tp {rid} overturns)"   # the ladder counts the fp itself
+    assert build(w, now="2026-10-30T00:00:00Z")["queue_total"] == 0
+
+
+def test_a_human_tp_label_on_the_same_row_overturns_the_auto_fp(w):
+    ids = auto_fp_world(w)
+    rid = ids[0]
+    w.cfg.path("labels.jsonl").unlink()
+    cs.write_labels(w.cfg, [auto_row(rid, "fp", "auto_fp_correction"), *(hum(r, "tp") for r in ids[1:]), hum(rid, "tp")])      # the human row is newer
+    p = build(w, now="2026-10-30T00:00:00Z")["proposals"][pid_of(w)]
+    assert (p["auto_fp"], p["auto_fp_oldest"], p["tp_window"], p["fp_window"]) == (0, None, 6, 0)
+    assert p["verdict"] == "warn eligible"
+
+
+def test_a_human_fp_is_no_auto_fp_and_the_auto_fp_count_is_per_window_and_per_mode(w):
+    ids = fire(w, "rm_rf_nonscratch", "s1", 3)
+    old = labels.row_id(cs.put_shadow(w, "s1", cs.RM_PROMPT_CMD, ts="2026-09-30T09:00:00Z", pid=pid_of(w)))      # before the window
+    cs.write_labels(w.cfg, [hum(ids[0], "fp"), auto_row(ids[1], "fp", "auto_fp_shell_rerun"), auto_row(ids[2], "fp", "auto_fp_prompt_target"),
+                            auto_row(old, "fp", "auto_fp_correction")])
+    p = build(w, now="2026-10-30T00:00:00Z")["proposals"][pid_of(w)]
+    assert (p["auto_fp"], p["auto_fp_oldest"], p["fp_window"]) == (2, ids[1], 3)
 
 
 def test_an_auto_fp_and_a_human_row_do_cover_a_row(w):

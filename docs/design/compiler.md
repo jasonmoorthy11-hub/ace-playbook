@@ -977,7 +977,13 @@ for these checks. `to_label` is the number of that proposal's fired rows that no
 queue rows of the proposal INCLUDING `tp_candidate` rows (a candidate covers nothing) and INCLUDING the rows of a retired proposal,
 which the default queue hides (`queue_retired`), so the `to_label` of all proposals sum to `queue_total + queue_retired`. It is the N of
 `label N fires`. `tp`, `fp` and `unlabelled` stay the report's, so they equal `compile report --json` (`unlabelled` is the report's count
-of rows with no label of any kind, so it can be lower than `to_label` by the `tp_candidate` rows). An approved copy with no shadow
+of rows with no label of any kind, so it can be lower than `to_label` by the `tp_candidate` rows). `auto_fp` is the number of fires in
+the proposal's window (live, current mode, since `window_start`) whose only label is an automatic `fp` (an offline-pass `reason_code` of
+`labels.AUTO`, no human row), and `auto_fp_oldest` the 8-character row id of the oldest such fire (`label --rows` prints it), else null.
+The ladder counts such a fire as an FP (`ladder._counted`: `fp` from any reason code) while the label queue does not list it (an `fp`
+covers the row), so it can hold a promotion back with no row to label; when `auto_fp > 0` the verdict (any but `retired`) gains the suffix
+`; k auto FPs (label --tp <id> overturns)`: a human `tp` on that row, newer than the automatic one, overturns it (`ladder.effective`
+prefers a human row), after which the fire is no FP and no auto FP. This is a mention only: there is no queue flag for these rows. An approved copy with no shadow
 row is added with zero counts and its own rates from `metrics.compute`, because the report lists proposals with rows only. The `heartbeat`
 block (last hook row, last live fire, `offline_state.json` mtime, last good nightly run, notes such as `chain_key:missing`,
 `approvals:broken:<where>` and `silent:<detector>`) says whether the instruments are alive; `silent:<detector>` needs a live mode,
