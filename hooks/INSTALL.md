@@ -151,9 +151,10 @@ or usage cap), a missing key or a delta log that fails verification. Under `--dr
 reflects the offline pass and the script itself only: a real, clean offline pass records `ok` (the
 nightly ran), a failing pass or a crash records the failure, and reflection-side failures (key,
 cap, API) are not seen; `--dry-run` together with `--offline-dry-run` or `--no-offline` leaves the
-record untouched. Check it with `PYTHONPATH="$ACE_PLAYBOOK_HOME" python3 -m ace_playbook.inject
---health` (prints `no health record` before the first run). After 3 failures in a row the
-SessionStart block adds one line telling you to read the reflect log (`reflect.log`) in the data dir.
+record untouched. Check it with
+`PYTHONPATH="$ACE_PLAYBOOK_HOME" python3 -m ace_playbook.inject --health` (prints
+`no health record` before the first run). After 3 failures in a row the SessionStart block adds
+one line telling you to read the reflect log (`reflect.log`) in the data dir.
 
 ## 5. Optional: git pre-commit scrub
 
