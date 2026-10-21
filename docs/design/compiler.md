@@ -963,9 +963,14 @@ The verdict of a proposal is the first rule that holds, and never looser than th
 the proposal stands on its current mode `m` (`observe`, `warn` or `block`) and the next rung `n` is `warn` from `observe` and `block` from
 `warn`. The rules, in order: `retired` when the newest approvals row revokes it or its mode or approved mode is `disabled` or `revoked`;
 rows still to label are `label N fires`, N being `to_label`; no eligible session is `silent: eligible 0`; a copy the verdict must not trust
-is refused before any rung rule, as `ladder.check` refuses it: `not backed: no approved copy`, `demoted:<cap> (approve --mode observe
-restarts)` when a demotion in force caps the copy below the next rung (`ladder.RANK[cap] < ladder.RANK[n]`), and `not backed: newest
-approvals row is <mode>` when the copy's mode is not the one the approvals chain gives (the hook runs observe for such a copy); at `block`
+is refused before any rung rule, as `ladder.check` refuses it: `not backed: no approved copy`; `not backed: newest approvals row is dated in
+the future` when the proposal's newest approvals row is stamped after now (`check`: "newest approvals row is dated in the future"); `demoted:<cap>
+(approve --mode observe restarts)` when a demotion in force caps the copy below the next rung (`ladder.RANK[cap] < ladder.RANK[n]`); and, when
+the approvals chain does not back the copy, `not backed: no approvals row (approve --mode observe records it)` if the proposal has no row at all
+(a copy from before the chain, observe included) or `not backed: newest approvals row is <mode>` otherwise (the newest row names another
+`proposal_sha256` than the copy, the copy's mode differs from the row's, or the chain is broken). "Backed" is `approvals.verify_copy(copy, rows) == "ok"`
+on an intact chain, the very test behind `ladder.check`'s "copy not backed by the approvals chain" (`measure.resolve` returns it as `backed`); the
+hook runs observe for an unbacked copy of a higher mode; at `block`
 there is nothing left to promote to, `block (top rung)`; under 14 days since `window_start` (the counting window `modes.resolve` gives the
 hook and the ladder: the newest approvals row, or a later counter-resetting demotion) is `<n> earliest YYYY-MM-DD`; fewer than five human
 TPs in that window is `needs 5 human TPs (has k)`; five or more labels with more than half false is `noisy: add an exception or retire`; any

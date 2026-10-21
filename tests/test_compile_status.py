@@ -144,7 +144,8 @@ def test_queue_is_capped_at_fifty_but_the_total_is_not(w):
 
 # ------------------------------------------------------------------ verdicts
 def row(**over):
-    base = {"mode": "observe", "revoked": False, "cap": None, "approvals_mode": "observe", "unlabelled": 0, "to_label": 0, "eligible": 4, "strength": "strong",
+    base = {"mode": "observe", "revoked": False, "cap": None, "approvals_mode": "observe", "backed": True, "approved_at": "2026-10-01T00:00:00Z",
+            "unlabelled": 0, "to_label": 0, "eligible": 4, "strength": "strong",
             "window_start": "2026-10-01T00:00:00Z", "tp_window": 5, "fp_window": 0, "compilable": "block", "event": "PreToolUse"}
     return {"approved_mode": over.get("mode", "observe"), **base, **over}
 
@@ -197,7 +198,11 @@ def row(**over):
     ({"mode": "warn", "cap": "warn"}, "demoted:warn (approve --mode observe restarts)"),
     ({"mode": "warn", "approved_mode": "block", "cap": "warn"}, "demoted:warn (approve --mode observe restarts)"),    # a block copy capped to warn
     ({"mode": "warn", "approved_mode": "warn", "cap": "block"}, "block eligible"),                              # a cap at or above the next rung holds nothing
-    ({"approved_mode": "warn", "approvals_mode": "observe"}, "not backed: newest approvals row is observe"),          # an unbacked warn copy runs observe
+    ({"approved_mode": "warn", "approvals_mode": "observe", "backed": False}, "not backed: newest approvals row is observe"),   # an unbacked warn copy
+    ({"backed": False}, "not backed: newest approvals row is observe"),                                     # an unbacked OBSERVE copy is refused too
+    ({"backed": False, "approvals_mode": "none"}, "not backed: no approvals row (approve --mode observe records it)"),
+    ({"mode": "warn", "approved_at": "2026-12-01T00:00:00Z"}, "not backed: newest approvals row is dated in the future"),
+    ({"approved_at": "2026-12-01T00:00:00Z", "cap": "observe"}, "not backed: newest approvals row is dated in the future"),
     ({"mode": "-", "approved_mode": "-", "approvals_mode": "none"}, "not backed: no approved copy"),
     ({"cap": "observe", "to_label": 2}, "label 2 fires"),                                                                # labelling is named first
     ({"cap": "observe", "eligible": 0}, "silent: eligible 0"),
@@ -466,6 +471,27 @@ def world_warn_copy_demoted_to_observe(w):
     five_tps(w, "observe")
 
 
+def world_prechain_observe_copy_no_row(w):                                                       # A1
+    w.cfg.path("approvals.jsonl").unlink()                                                       # a copy from before the chain: no approvals row at all
+    five_tps(w, "observe")
+
+
+def world_warn_row_copy_edited_down_to_observe(w):                                               # A2
+    approve(w, "rm_rf_nonscratch", "2026-10-05T00:00:00Z", "warn")
+    cs.approve_file(w.cfg, w.props["rm_rf_nonscratch"], "observe")                               # the copy now says observe, the newest row says warn
+    five_tps(w, "observe")
+
+
+def world_newest_observe_row_names_another_hash(w):                                              # A3
+    approvals.append(w.data, {"proposal_id": pid_of(w), "proposal_sha256": "e" * 64, "mode": "observe", "ts": "2026-10-03T00:00:00Z"})
+    five_tps(w, "observe")
+
+
+def world_warn_row_dated_after_now(w):                                                           # A4
+    approve(w, "rm_rf_nonscratch", "2026-11-05T00:00:00Z", "warn")
+    five_tps(w, "warn")
+
+
 def world_unbacked_warn_copy(w):
     cs.approve_file(w.cfg, w.props["rm_rf_nonscratch"], "warn")                                  # the copy says warn, the chain only says observe
     five_tps(w, "observe")
@@ -476,6 +502,10 @@ def world_unbacked_warn_copy(w):
     (world_observe_copy_capped_at_observe, "demoted:observe (approve --mode observe restarts)", "demoted:observe"),
     (world_warn_copy_demoted_to_observe, "demoted:observe (approve --mode observe restarts)", "demoted:observe"),
     (world_unbacked_warn_copy, "not backed: newest approvals row is observe", "not in observe"),
+    (world_prechain_observe_copy_no_row, "not backed: no approvals row (approve --mode observe records it)", "copy not backed by the approvals chain"),
+    (world_warn_row_copy_edited_down_to_observe, "not backed: newest approvals row is warn", "copy not backed by the approvals chain"),
+    (world_newest_observe_row_names_another_hash, "not backed: newest approvals row is observe", "copy not backed by the approvals chain"),
+    (world_warn_row_dated_after_now, "not backed: newest approvals row is dated in the future", "dated in the future"),
 ])
 def test_a_demoted_or_unbacked_copy_is_refused_by_the_verdict_exactly_where_ladder_check_refuses(w, world, want, check_says):
     world(w)
@@ -502,7 +532,9 @@ def test_a_re_approval_lifts_the_cap_and_the_verdict_follows(w):
 
 
 @pytest.mark.parametrize("world", [None, world_block_copy_demoted_to_warn, world_observe_copy_capped_at_observe, world_warn_copy_demoted_to_observe,
-                                   world_unbacked_warn_copy, lambda w: (approve(w, "rm_rf_nonscratch", "2026-10-05T00:00:00Z", "warn"), five_tps(w, "warn")),
+                                   world_unbacked_warn_copy, world_prechain_observe_copy_no_row, world_warn_row_copy_edited_down_to_observe,
+                                   world_newest_observe_row_names_another_hash, world_warn_row_dated_after_now,
+                                   lambda w: (approve(w, "rm_rf_nonscratch", "2026-10-05T00:00:00Z", "warn"), five_tps(w, "warn")),
                                    lambda w: (approve(w, "rm_rf_nonscratch", "2026-10-05T00:00:00Z", "warn"), five_tps(w, "observe")),
                                    lambda w: five_tps(w, "observe")])
 def test_the_verdict_is_never_looser_than_ladder_check(w, world):

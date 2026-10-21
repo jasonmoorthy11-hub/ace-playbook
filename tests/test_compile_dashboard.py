@@ -160,7 +160,9 @@ def test_verdict_families_pair_a_colour_class_with_a_glyph(verdict, cls, glyph):
 OVERRIDES = ({}, {"to_label": 2}, {"eligible": 0}, {"window_start": "2026-10-19T00:00:00Z"}, {"tp_window": 2}, {"tp_window": 5, "fp_window": 6},
              {"fp_window": 1}, {"strength": "weak"}, {"compilable": "observe"}, {"compilable": "warn"}, {"compilable": "none"}, {"event": "Stop"},
              {"revoked": True}, {"auto_fp": 2, "auto_fp_oldest": "abcd1234"}, {"cap": "observe"}, {"cap": "warn"},
-             {"approved_mode": "block", "cap": "warn"}, {"approved_mode": "warn", "approvals_mode": "observe"}, {"mode": "-", "approved_mode": "-"})
+             {"approved_mode": "block", "cap": "warn"},
+             {"approved_mode": "warn", "approvals_mode": "observe", "backed": False}, {"mode": "-", "approved_mode": "-"},
+             {"backed": False, "approvals_mode": "none"}, {"approved_at": "2026-12-01T00:00:00Z"})
 
 
 def emitted_verdicts():

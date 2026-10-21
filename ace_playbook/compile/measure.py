@@ -23,14 +23,19 @@ def start_of(arows: list[dict]) -> str | None:
     return max((ts for pid, ts in observe.items() if approvals.newest(arows, pid)["mode"] != "revoked"), default=None)
 
 
-def resolve(cfg: Config, pid: str, ring: tuple, now: str) -> modes.Resolution | None:
-    """What `modes.resolve` says about the proposal (the hook's and the ladder's view: mode, cap, counting window); None without a backed copy."""
+def resolve(cfg: Config, pid: str, ring: tuple, now: str) -> tuple[modes.Resolution | None, bool]:
+    """(what `modes.resolve` says about the proposal (the hook's and the ladder's view: mode, cap, counting window), whether the approvals
+    chain backs the copy). The resolution is None without an approved copy. `backed` is the test `ladder.check` applies for its
+    "copy not backed by the approvals chain" reason: an intact chain whose newest row for the proposal has the copy's hash and mode
+    (`approvals.verify_copy`); an observe copy with no row at all is NOT backed (the hook runs it, the ladder will not promote it)."""
     try:
         rec = proposal.load(shadow.approved_path(cfg, pid))
         body, _ = shadow.pending_body(rec)
     except (ValueError, OSError):
-        return None
-    return modes.resolve(pid, rec, *ring, now) if body is not None else None
+        return None, False
+    if body is None:
+        return None, False
+    return modes.resolve(pid, rec, *ring, now), ring[1] is None and approvals.verify_copy(rec, ring[0]) == "ok"
 
 
 def unfired(cfg: Config, d: dict, rows: list[dict], now: str) -> tuple[dict, dict]:
