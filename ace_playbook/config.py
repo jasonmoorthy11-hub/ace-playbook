@@ -7,12 +7,12 @@ import json
 import os
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 ENV_CONFIG = "ACE_PLAYBOOK_CONFIG"
 DEFAULT_CONFIG = Path.home() / ".config" / "ace-playbook" / "config.json"
 DEFAULT_DATA = Path.home() / ".local" / "share" / "ace-playbook"
-DEFAULT_CHAIN_KEY = "~/.config/ace-playbook/chain_key"   # expanded at load; a bare Config() has no key (None)
+SUGGESTED_KEY = "chain_key"   # keygen's suggestion beside the config file; never read unless `chain_key_path` in the config names it
 MAX_INJECT_CHARS = 7000
 
 
@@ -22,7 +22,7 @@ class Config:
     transcripts_root: Path | None = None
     api_key_path: Path | None = None
     engagements_path: Path | None = None
-    chain_key_path: Path | None = None  # the HMAC key of the approvals and demotions chains; `load` fills in DEFAULT_CHAIN_KEY
+    chain_key_path: Path | None = None  # the HMAC key of the approvals and demotions chains; None unless the config file names it
     fold_key_separators: bool = False
     model: str = "claude-haiku-5-5"
     api_url: str = "https://api.anthropic.com/v1/messages"
@@ -50,6 +50,7 @@ class Config:
         default_factory=lambda: ["upstream/", "node_modules/", ".venv/", "vendor/"]
     )
     deny_terms: list[str] = field(default_factory=list)
+    source: ClassVar[Path | None] = None  # not a config key: the file `load` read (or would have read), set on the instance by `load`
 
     def __post_init__(self) -> None:
         if not 200 <= self.inject_max_chars <= MAX_INJECT_CHARS:
@@ -108,7 +109,6 @@ _PATH_FIELDS = {"data_dir", "transcripts_root", "api_key_path", "engagements_pat
 
 
 def from_dict(raw: dict[str, Any]) -> Config:
-    raw = {"chain_key_path": DEFAULT_CHAIN_KEY, **raw}   # an explicit null switches the key off
     known = {f.name for f in fields(Config)}
     unknown = set(raw) - known
     if unknown:
@@ -118,15 +118,41 @@ def from_dict(raw: dict[str, Any]) -> Config:
     return Config(**kwargs)
 
 
+def config_file(path: str | Path | None = None) -> Path:
+    """The config file `load` reads: `path`, else $ACE_PLAYBOOK_CONFIG, else the default location."""
+    explicit = path or os.environ.get(ENV_CONFIG)
+    return Path(explicit) if explicit else DEFAULT_CONFIG
+
+
 def load(path: str | Path | None = None) -> Config:
     """Load config from `path`, $ACE_PLAYBOOK_CONFIG, or the default location.
 
-    A missing default file yields defaults; a missing explicit path is an error.
+    A missing default file yields defaults; a missing explicit path is an error. No key is implied: `chain_key_path` is None
+    unless the file names it.
     """
-    explicit = path or os.environ.get(ENV_CONFIG)
-    target = Path(explicit) if explicit else DEFAULT_CONFIG
+    target = config_file(path)
     if not target.exists():
-        if explicit:
+        if path or os.environ.get(ENV_CONFIG):
             raise FileNotFoundError(f"config not found: {target}")
-        return from_dict({})
-    return from_dict(json.loads(target.read_text()))
+        cfg = from_dict({})
+    else:
+        cfg = from_dict(json.loads(target.read_text()))
+    cfg.source = target
+    return cfg
+
+
+def tilde(path: Path) -> str:
+    """`path` with the home directory spelled `~` (in full when it is not under home)."""
+    home = Path(os.path.expanduser("~"))
+    return "~/" + path.relative_to(home).as_posix() if path.is_relative_to(home) else str(path)
+
+
+def with_chain_key(conf: Path, key: Path) -> str:
+    """The text of config file `conf` (a JSON object, or none yet) with `"chain_key_path"` added as `key` (home spelled `~`); every other
+    key keeps its place and value, 2-space indent. ValueError when the file is not an object or already says `chain_key_path` (null = off)."""
+    raw = json.loads(conf.read_text()) if conf.exists() else {}
+    if not isinstance(raw, dict):
+        raise ValueError("the configuration file is not a JSON object")
+    if "chain_key_path" in raw:
+        raise ValueError("chain_key_path is already in the configuration file (null switches keyed chains off): set it by hand")
+    return json.dumps({**raw, "chain_key_path": tilde(key)}, indent=2, ensure_ascii=False) + "\n"

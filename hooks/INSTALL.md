@@ -257,8 +257,11 @@ block wins over any warn in the same call. Every approval is a row in the hash-c
 key. At a terminal, with `ACE_PLAYBOOK_KEYED` NOT set in that shell, run `uv run python -m ace_playbook.compile keygen`. It runs on a
 never-keyed install only (no key file, no `chain_heads.json`, no flag): it lists every row of `approvals.jsonl` and `demotions.jsonl` it will
 re-seal, asks y/N (it holds both chain locks from the one read of the files to the last replace, so a file swapped while the prompt is open
-cannot change what is sealed), then writes 32 random bytes as 64 hex characters to `~/.config/ace-playbook/chain_key` (`chain_key_path` in `config.json` moves
-it; mode 0600; if the directory is missing it is created 0700, an existing directory keeps its mode, so make it private yourself; it never
+cannot change what is sealed), then writes 32 random bytes as 64 hex characters to the file `chain_key_path` names in `config.json`. There is no default key path (a
+config that names no key reads none): if the line is missing, keygen proposes `chain_key` beside the config file, says so in the prompt
+and, on y, writes `"chain_key_path": "~/..."` into `config.json` itself first (atomic, 0600, every other key kept), so you add no line by
+hand; an install whose config already names the key is unchanged, `--rehead` never writes the config, and an explicit `"chain_key_path": null`
+is left alone (keygen refuses). The key file is mode 0600; if the directory is missing it is created 0700, an existing directory keeps its mode, so make it private yourself; it never
 overwrites a key and prints only the path). Next to the key it keeps byte-for-byte copies of both chains as they were
 (`approvals.jsonl.bak`, `demotions.jsonl.bak`, 0600): keep them, they are your record of the pre-keygen state. READ EVERY `warn` AND `block`
 ROW in the listing against your own record of what you approved before answering y: a row you did not approve is sealed like any other (this is
@@ -272,7 +275,8 @@ ladder step and nightly demotion appends a `v: 2` row and moves its head, and a 
 (deleted, mode other than owner-only, wrong owner) has both chains broken: the hook runs observe, logs `chain_key:missing` once, and `approve`,
 `unapprove`, the ladder and the nightly pass refuse to write and print the restore message (restore the key file from your backup, or move
 the unusable key file away, delete `approvals.jsonl`, `demotions.jsonl` and `chain_heads.json`, unset the flag in that shell and run `keygen`
-again, re-making every approval); `unapprove` still removes the approved copy. A
+again, re-making every approval); `unapprove` still removes the approved copy. A config with no `chain_key_path` line names no key, so with
+the flag set (or a `chain_heads.json` beside that config file) both chains are broken (`chain_key:missing`), never a silent v1 rule. A
 cut or rolled-back chain is `approvals:head_mismatch` or `demotions:head_mismatch`; a missing or forged heads file breaks both chains
 (`chain_heads:missing`). Back the key file up with your other secrets: losing it breaks both chains. On a keyed install `keygen` refuses
 (there is no resume and no overwrite), because re-sealing plain v1 rows there would sign a forgery under a new key.

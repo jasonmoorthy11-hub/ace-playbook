@@ -13,6 +13,7 @@ import secrets
 import sys
 from pathlib import Path
 
+from .. import atomic, config as cfgmod
 from ..canon import GENESIS, chain_key
 from . import chains, chains_io
 from .chains import Keyring
@@ -95,15 +96,21 @@ def keygen(cfg, need_tty, rehead: bool = False, ask=None) -> int:
     """`compile keygen`: never-keyed installs only; refuses (exit 1) on every keyed one. Lists the rows of both chains and asks y/N (`ask`,
     the TTY prompt; there is no `--yes`), then makes 32 `secrets.token_bytes` as 64 hex characters in `cfg.chain_key_path` (0600, O_EXCL,
     synced; a missing parent is made 0700), keeps `approvals.jsonl.bak` and `demotions.jsonl.bak` beside it, re-seals both chains, writes
-    the heads; prints only the path. Exit 2 without a terminal or a path. `rehead` (with `ask`): see `reheads` below."""
+    the heads; prints only the path. Exit 2 without a terminal or a path. `rehead` (with `ask`): see `reheads` below. Without `chain_key_path`
+    the key goes beside the config file (`cfg.source`; the prompt says where) and, on y, the line naming it is written to that file first."""
     if not need_tty("keygen"):
         return 2
-    if not cfg.chain_key_path:
+    src = None if cfg.chain_key_path or rehead else getattr(cfg, "source", None)
+    if not (cfg.chain_key_path or src):
         print("error: chain_key_path is not set in the configuration", file=sys.stderr)
         return 2
-    path = Path(cfg.chain_key_path)
+    path = Path(cfg.chain_key_path) if cfg.chain_key_path else src.parent / cfgmod.SUGGESTED_KEY
+    new_conf = cfgmod.with_chain_key(src, path) if src else None                # ValueError: not an object, or a null (off) to leave alone
     if rehead:
         return reheads(cfg, path, ask)
+    if src and os.path.lexists(path):
+        print(f"error: {cfgmod.tilde(path)} exists but {src.name} does not name it: add chain_key_path there or move it away", file=sys.stderr)
+        return 1
     if why := _refusal(cfg, path):
         print(why, file=sys.stderr)
         return 1
@@ -118,10 +125,13 @@ def keygen(cfg, need_tty, rehead: bool = False, ask=None) -> int:
             print(f"{name}: {len(rows)} row(s) to re-seal", *show(1, rows), sep="\n")
             if broken is not None:
                 print(f"{name}: row {broken + mod.BASE} onward does not verify and will be kept as is (see hooks/INSTALL.md section 7, Repair)")
-        if ask is None or ask("Re-seal these rows under a new chain key? [y/N] ").lower() not in ("y", "yes"):
+        where = f" at {cfgmod.tilde(path)} and name it in {src.name}" if src else ""
+        if ask is None or ask(f"Re-seal these rows under a new chain key{where}? [y/N] ").lower() not in ("y", "yes"):
             print("error: nothing was written", file=sys.stderr)
             return 1
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if new_conf:                                            # before the key: a failure leaves nothing but an unkeyed install
+            atomic.write_private(Path(os.path.realpath(src)), new_conf)
         key = secrets.token_bytes(32)
         try:
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)

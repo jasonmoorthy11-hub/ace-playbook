@@ -15,12 +15,16 @@ from .conftest import PerTestTimeout
 from .test_hooks import env  # noqa: F401  (fixture)
 
 
-def test_a_config_file_without_chain_key_path_never_resolves_to_the_real_key(tmp_path, hermetic_chain_key):
+def test_a_config_file_without_chain_key_path_resolves_to_no_key_at_all(tmp_path):
     conf = tmp_path / "c.json"
     conf.write_text(json.dumps({"data_dir": str(tmp_path / "data")}))
-    cfg = cfgmod.load(conf)
-    assert cfg.chain_key_path == hermetic_chain_key and not cfg.chain_key_path.exists()
-    assert ".config" not in cfg.chain_key_path.parts
+    assert cfgmod.load(conf).chain_key_path is None and not hasattr(cfgmod, "DEFAULT_CHAIN_KEY")
+
+
+def test_the_config_file_is_pinned_to_a_missing_path_so_a_forgetful_test_cannot_read_the_operators(hermetic_config):
+    assert os.environ[cfgmod.ENV_CONFIG] == str(hermetic_config) and not hermetic_config.exists()
+    with pytest.raises(FileNotFoundError):
+        cfgmod.load()
 
 
 def test_child_processes_get_a_throwaway_home(env):  # noqa: F811
