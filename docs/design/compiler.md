@@ -248,7 +248,8 @@ change in either direction shows up. As of this commit:
 | `control`, `flags`, `shell_construct` | 0 | 0 | |
 
 That is 19 false negatives and 2 false positives. `trash` and the Finder delete are recoverable, but they still count as should-fire:
-the lesson's letter is "confirm the target first", and a recoverable delete outside scratch has not been confirmed. The matrix is the input to the next detector edit after the measurement week
+the lesson's letter is "confirm the target first", and a recoverable delete outside scratch has not been confirmed.
+The matrix is the input to the next detector edit after the measurement week
 ends: fix a class, flip its cases from xfail to plain, update the pinned counts, and re-propose and re-approve (the edit moves
 `source_sha256`). Nothing in the detector changes while the week runs. `tests/test_hook_conformance.py` is the other half: the real
 `hooks/shadow.sh` in a child process against malformed, empty, non-UTF-8 and over-cap stdin (exactly `MAX_STDIN` is evaluated, one
@@ -657,7 +658,10 @@ deltas log that fails verification gives `lesson_check: chain invalid` (an error
 feed the ladder: the agent can print a guard-looking line into its own tool output in observe and warn mode. `shell_keys`
 skips `meta` records (`isMeta`, compact summary, transcript-only) and still requires the whole-record `<bash-input>`
 shape. A failed offline pass (an exception or `errors > 0`) is recorded as a health failure by
-`nightly_sweep.py` whatever `--dry-run` says about reflection, unless `--offline-dry-run` is given.
+`nightly_sweep.py` whatever `--dry-run` says about reflection, unless `--offline-dry-run` is given. A clean, real offline
+pass under `--dry-run` records a health success (the heartbeat's last good nightly run) and a crash of the script under
+`--dry-run` records a failure, because `run_sweep` writes no record on a dry run; `--dry-run` with `--offline-dry-run` or
+`--no-offline` records nothing.
 
 **Mode ladder.**
 

@@ -33,7 +33,7 @@ def scrub_error(text: str, deny_terms: tuple[str, ...] = ()) -> str:
 
 def _write_private(path, payload: dict) -> None:
     """Atomic replace; the file is created 0600 and never readable by others."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)   # a fresh data dir is private, as status.write_json makes it
     write_private(path, json.dumps(payload, sort_keys=True) + "\n")
 
 
