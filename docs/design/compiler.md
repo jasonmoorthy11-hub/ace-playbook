@@ -999,7 +999,7 @@ them). `compile digest [--since ISO] [--days N]` (`compile/digest.py`) renders t
 plain-text blocks: `status` (protocol `shadow-v1`, report hash, day, keyed, chains), `needs you` (the label queue and the command to
 work it), `detectors` (the status table), `health` (silent detectors, stale heartbeats over 36 hours, a spike when a proposal has at
 least 3 rows today and more than 3 times its daily mean over the window, chain notes), `changes` (approvals and demotions after
-`--since`, default the last digest logged, else 24 hours) and `next` (week-one date, earliest warn dates). Each run appends one JSON line
+`--since`, default the last digest logged, else 24 hours) and `next` (week-one date, and for each proposal still short of the 14 days the earliest date of its next rung: `warn earliest` for an observe-mode one, `block earliest` for a warn-mode one, nothing at block). Each run appends one JSON line
 `{ts, report_sha256, queue, notes}` to `data_dir/digest.log` (0600, O_APPEND). `hooks/nightly_sweep.py` runs it quietly AFTER the sweep (so the
 line carries that night's health), refreshes `status.json` for the status line and writes the log line, so a missing line is a missed night.
 

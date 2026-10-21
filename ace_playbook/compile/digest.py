@@ -3,7 +3,7 @@
 Blocks, in order: `status`, `needs you`, `detectors`, `health`, `changes`, `next`. Every figure comes from the status dict (so from
 `report.collect`), and there is no rate arithmetic here: the spike rule compares integers. Each run appends ONE JSON line to
 `<data_dir>/digest.log` (0600, O_APPEND) so that a night without a digest can be seen. Nothing reaches a model and the shadow hook
-never imports this module. Imports: stdlib, `..config`, `.chains`, `.labels`, `.modes`, `.status`.
+never imports this module. Imports: stdlib, `..config`, `.chains`, `.labels`, `.measure`, `.modes`, `.status`.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import sys
 from datetime import timedelta
 
 from ..config import Config
-from . import chains, labels, modes, status
+from . import chains, labels, measure, modes, status
 
 PROTOCOL, LOG, STALE_HOURS, SPIKE_FACTOR, SPIKE_MIN = "shadow-v1", "digest.log", 36, 3, 3
 LABEL_CMD = "python3 -m ace_playbook.compile label --queue"
@@ -73,8 +73,8 @@ def _changes(s: dict, since: str, rows: list[dict]) -> list[str]:
 def _next(s: dict) -> list[str]:
     due = s["measurement"]["week1_due"]
     return [f"week 1 due {due}" if due else "week 1 not started",
-            *(f"{pid} {p['detector']}: warn earliest {p['warn_earliest'][:10]}" for pid, p in s["proposals"].items()
-              if p["warn_earliest"] and p["warn_earliest"] > s["generated_at"] and p["verdict"] != "retired")]
+            *(f"{pid} {p['detector']}: {measure.NEXT[status._rung(p['mode'])]} earliest {p['warn_earliest'][:10]}" for pid, p in s["proposals"].items()
+              if p["warn_earliest"] and p["warn_earliest"] > s["generated_at"] and p["verdict"] != "retired" and p["mode"] != "block")]
 
 
 def render(s: dict, since: str | None, approvals: list[dict] = ()) -> str:
