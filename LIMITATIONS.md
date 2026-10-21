@@ -90,7 +90,9 @@ state-versus-lesson classifier. In the stage-2 compiler: the arms (randomization
   the weak spot: each alternation branch and `\b` needs its own case. Every test runs under a 60 s SIGALRM timer (`tests/conftest.py`) that
   raises a `BaseException` and re-fires every second, so a fail-open `except Exception` cannot swallow it; a swallowed firing fails the test at
   teardown, and pytest's faulthandler aborts the whole run after 125 s with every thread's stack (the per-test alarm is the normal failure
-  path). It needs SIGALRM and the main thread, so it is not active on Windows.
+  path). It needs SIGALRM and the main thread, so it is not active on Windows. The alarm cannot cancel work after a test has already failed:
+  once a timeout has surfaced it is disarmed (so it cannot fire into teardown), so a hang in the teardown that follows, or a thread or child
+  process the test left running, is bounded only by the 125 s faulthandler.
 - A proposal's `provenance.source_sha256` is a per-detector hash by exclusion: the text of `detectors.py` and `catalogue.py`, minus
   the bodies of the other rows' `fire` functions (`catalogue.py` is hashed whole, the `CATALOGUE` registry literal included, because
   an expression inside it runs at import time in every process), plus the row's name, fire name and catalogue fields (the `meta`
