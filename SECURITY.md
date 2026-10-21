@@ -37,6 +37,7 @@ of the lesson store, and the settings and hooks of the agent that consumes it.
    block only a proposal the operator promoted to block mode after the observe/warn ladder (see
    docs/design/compiler.md; amended 2026-10-19). No hook calls the API; only the reflector does,
    with no tools, from a path-configured key that is never logged.
+   `compile watch` (the watcher) is the one network-using module; it is not on the hook path and the conformance test asserts that.
 6. **Reflector prompt** tells the model to ignore instructions inside tool results. This is the
    weakest control and is not relied on.
 

@@ -147,6 +147,12 @@ dir and writes only `status.json`, `digest.log` and `dashboard.html` there (0600
 is rendered by Claude Code outside the context window, and nothing is injected. A stale `status.json` shows stale numbers until
 the next `compile status` or nightly; the heartbeat tile reports the staleness rather than hiding it.
 
+- Watcher (W1, `compile watch`): proposals are rule-matched by plain code, no model reads a source. Model-pin diffs are generated from
+  a template over the matched inventory lines (the page's successor id replaces the pinned id, nothing else); a docs proposal says only
+  that a mapped page changed (its sitemap `lastmod` moved or its `.md` hash differs), not what changed; version and lead proposals have
+  no diff. The first scan of a page or sitemap entry is a baseline and proposes nothing. Docs and feed-lead proposals are events and run
+  to their 30-day expiry; model-pin and version proposals close themselves when their trigger vanishes. Nothing is applied by the watcher.
+
 ## Security and scrubbing
 
 Secret scanners have measured recall well below 100% (31 to 88% in one comparison, 36.6% for the
