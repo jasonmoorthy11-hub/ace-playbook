@@ -658,7 +658,10 @@ deltas log that fails verification gives `lesson_check: chain invalid` (an error
 feed the ladder: the agent can print a guard-looking line into its own tool output in observe and warn mode. `shell_keys`
 skips `meta` records (`isMeta`, compact summary, transcript-only) and still requires the whole-record `<bash-input>`
 shape. A failed offline pass (an exception or `errors > 0`) is recorded as a health failure by
-`nightly_sweep.py` whatever `--dry-run` says about reflection, unless `--offline-dry-run` is given.
+`nightly_sweep.py` whatever `--dry-run` says about reflection, unless `--offline-dry-run` is given. A clean, real offline
+pass under `--dry-run` records a health success (the heartbeat's last good nightly run) and a crash of the script under
+`--dry-run` records a failure, because `run_sweep` writes no record on a dry run; `--dry-run` with `--offline-dry-run` or
+`--no-offline` records nothing.
 
 **Mode ladder.**
 
