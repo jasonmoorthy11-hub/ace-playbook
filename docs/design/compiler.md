@@ -959,7 +959,8 @@ the two chains only, so each count and rate in it equals the `compile report --j
 (2) nothing reaches the model: the screen, the JSON and the digest are written for the terminal, never to an injector, a hook or a prompt,
 and the module is not imported on the hook path; (3) rates carry denominators and intervals, never bare counts, and fewer than five
 labels is the word `INSUFFICIENT`; (4) zero fires with zero eligible sessions is not evidence, it is `silent: eligible 0`.
-The verdict of a proposal is the first rule that holds, and never looser than `ladder.check` (section 7.3; see the known gap below). It is
+The verdict of a proposal is the first rule that holds, and never looser than `ladder.check` (section 7.3) except for the four checks in the known gap below.
+It is
 rung-aware: the proposal stands on its current mode `m` (`observe`, `warn` or `block`) and the next rung `n` is `warn` from `observe` and
 `block` from `warn`. The rules, in order: `retired` when the newest approvals row revokes it or its mode or approved mode is `disabled` or
 `revoked`; rows still to label are `label N fires`, N being `to_label`; no eligible session is `silent: eligible 0`; a copy the verdict must
@@ -999,7 +1000,7 @@ queue_retired`. It is the N of `label N fires`. `tp`, `fp` and `unlabelled` stay
 does not list it (an `fp` covers the row), so it can hold a promotion back with no row to label; when `auto_fp > 0` the verdict (any but
 `retired`) gains the suffix `; k auto FPs (label --tp <id> overturns)`: a human `tp` on that row, newer than the automatic one, overturns it
 (`ladder.effective` prefers a human row), after which the fire is no FP and no auto FP. This is a mention only: there is no queue flag for
-these rows. Known gap: "never looser than the ladder" means `ladder.check`. `ladder.run` does four more things before and around it, and the
+these rows. Known gap: one `ladder.run` check (validate) and three `ladder.check` checks are not repeated by the verdict, and the
 read-only verdict does none of them: it does not re-run `proposal.validate` (the replay and validation of the proposal against the current
 code, which `ladder.run` runs before `check` and refuses on; the verdict of a proposal whose evidence cards were deleted, so that validation
 fails at `schema`, still reads `warn eligible`, pinned by a test), it does not re-check that the lesson is `active`, that the detector's
