@@ -1,0 +1,164 @@
+"""The watcher's private store (docs/design/compiler.md 8.x "Watch (as built)"): everything lives under `watch_dir`, nothing outside it.
+
+`proposals/W-<8 hex>.json` (0600, written once, never replaced), `decisions.jsonl` (append-only, 0600, O_APPEND, flock like
+`digest.append_log`), `seen.json` and `inventory.json` (0600, atomic) and the kill file `DISABLED`. The current status of a proposal is its
+newest decision row, else the file's own `status`; `expired` once past `expires` while still open or queued. At most CAP proposals are
+open at once, leads excepted; the rest are `queued` and a `promoted` decision row opens them in ranking order when a slot frees.
+Stdlib and `...atomic` only: no network, so `summary.py` (imported by `status.py`) can use it.
+"""
+
+from __future__ import annotations
+
+import fcntl
+import json
+import os
+import re
+import stat
+import unicodedata
+from pathlib import Path
+
+from ...atomic import write_private
+from ...config import Config
+
+CAP, KILL, PROPOSALS, DECISIONS, SEEN, INVENTORY = 5, "DISABLED", "proposals", "decisions.jsonl", "seen.json", "inventory.json"
+RANK = {"model_pin": 0, "version": 1, "docs": 2}                            # every other class (leads) ranks after these
+ID = re.compile(r"W-[0-9a-f]{8}")
+WORDS = {"accepted": "accepted", "dismissed": "dismissed", "closed": "auto-closed", "later": "open", "promoted": "open"}
+FINAL = ("accepted", "dismissed", "closed")
+NOTE_MAX = 500
+
+
+def clean(text: object, limit: int = 120) -> str:
+    """`text` without control, format and line-separator characters (so no escape sequence reaches a terminal), at most `limit` long."""
+    s = text if isinstance(text, str) else ""
+    return "".join(c for c in s if c >= " " and c != "\x7f" and not "\x80" <= c <= "\x9f"
+                   and unicodedata.category(c) not in ("Cf", "Zl", "Zp"))[:limit]
+
+
+def watch_dir(cfg: Config) -> Path:
+    return Path(cfg.watch_dir) if cfg.watch_dir else Path(cfg.data_dir) / "watch"
+
+
+def ensure(wd: Path) -> Path:
+    """Create `wd` and `wd/proposals` (0700) and return `wd`."""
+    for d in (Path(wd), Path(wd) / PROPOSALS):
+        if not d.is_dir():
+            d.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return Path(wd)
+
+
+def disabled(wd: Path) -> bool:
+    return os.path.lexists(Path(wd) / KILL)
+
+
+def _json(path: Path) -> object:
+    try:
+        if path.is_symlink() or not path.is_file():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def load_proposals(wd: Path) -> list[dict]:
+    """Every readable proposal whose id matches its file name, oldest first."""
+    out = []
+    for path in sorted((Path(wd) / PROPOSALS).glob("W-*.json")):
+        rec = _json(path)
+        if ID.fullmatch(path.stem) and isinstance(rec, dict) and rec.get("id") == path.stem:
+            out.append(rec)
+    return sorted(out, key=lambda p: (str(p.get("created")), p["id"]))
+
+
+def write_proposal(wd: Path, rec: dict) -> bool:
+    """Write `rec` once (0600, atomic); False when that id already exists. ValueError for an id that is not `W-<8 hex>`."""
+    if not isinstance(rec.get("id"), str) or not ID.fullmatch(rec["id"]):
+        raise ValueError("bad proposal id")
+    path = Path(wd) / PROPOSALS / (rec["id"] + ".json")
+    if os.path.lexists(path):
+        return False
+    write_private(path, json.dumps(rec, indent=1, sort_keys=True) + "\n")
+    return True
+
+
+def append_decision(wd: Path, pid: str, decision: str, note: str, now: str) -> dict:
+    """Append one `{ts, id, decision, note}` row (0600, O_APPEND, no-follow, locked); ValueError for an unknown id or decision."""
+    if not ID.fullmatch(pid) or decision not in WORDS:
+        raise ValueError("bad decision")
+    row = {"ts": now, "id": pid, "decision": decision, "note": clean(note, NOTE_MAX)}
+    with os.fdopen(os.open(Path(wd) / DECISIONS, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600), "ab") as fh:
+        fd = fh.fileno()
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError("not a regular file")
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        os.fchmod(fd, 0o600)
+        size = os.fstat(fd).st_size
+        lead = b"\n" if size and os.pread(fd, 1, size - 1) != b"\n" else b""            # a cut last line
+        fh.write(lead + json.dumps(row, sort_keys=True).encode() + b"\n")
+        fh.flush()
+        os.fsync(fd)
+    return row
+
+
+def read_decisions(wd: Path) -> list[dict]:
+    """The readable decision rows in file order (a cut or foreign line is skipped)."""
+    path = Path(wd) / DECISIONS
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() and not path.is_symlink() else ""
+    except OSError:
+        return []
+    out = []
+    for line in text.splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and ID.fullmatch(str(row.get("id"))) and row.get("decision") in WORDS:
+            out.append(row)
+    return out
+
+
+def status_of(p: dict, decisions: list[dict], now: str) -> str:
+    """open | queued | accepted | dismissed | auto-closed | expired for proposal `p` at `now`."""
+    mine = [d for d in decisions if d.get("id") == p.get("id")]
+    if mine and mine[-1]["decision"] in FINAL:
+        return WORDS[mine[-1]["decision"]]
+    base = "open" if mine else p.get("status") if p.get("status") in ("open", "queued") else "open"
+    exp = p.get("expires")
+    return "expired" if isinstance(exp, str) and exp < now else base
+
+
+def statuses(wd: Path, now: str) -> list[tuple[dict, str]]:
+    decisions = read_decisions(wd)
+    return [(p, status_of(p, decisions, now)) for p in load_proposals(wd)]
+
+
+def rank_key(p: dict) -> tuple:
+    return (RANK.get(p.get("class"), 9), str(p.get("created")), p.get("id"))
+
+
+def open_count(rows: list[tuple[dict, str]]) -> int:
+    """Open proposals that count against the cap (leads do not)."""
+    return sum(1 for p, s in rows if s == "open" and p.get("class") != "lead")
+
+
+def rebalance(wd: Path, now: str) -> list[str]:
+    """Promote queued proposals, in ranking order, while fewer than CAP are open; returns the promoted ids."""
+    rows = statuses(wd, now)
+    n, promoted = open_count(rows), []
+    for p in sorted((p for p, s in rows if s == "queued"), key=rank_key):
+        if n >= CAP:
+            break
+        append_decision(wd, p["id"], "promoted", "slot freed", now)
+        promoted.append(p["id"])
+        n += 1
+    return promoted
+
+
+def read_seen(wd: Path) -> dict:
+    seen = _json(Path(wd) / SEEN)
+    return seen if isinstance(seen, dict) else {}
+
+
+def save_seen(wd: Path, seen: dict) -> None:
+    write_private(Path(wd) / SEEN, json.dumps(seen, indent=1, sort_keys=True) + "\n")
