@@ -959,14 +959,21 @@ the two chains only, so each count and rate in it equals the `compile report --j
 (2) nothing reaches the model: the screen, the JSON and the digest are written for the terminal, never to an injector, a hook or a prompt,
 and the module is not imported on the hook path; (3) rates carry denominators and intervals, never bare counts, and fewer than five
 labels is the word `INSUFFICIENT`; (4) zero fires with zero eligible sessions is not evidence, it is `silent: eligible 0`.
-The verdict of a proposal is the first rule that holds, and never looser than the ladder (section 7.3, `ladder.check`): `retired` when
-the newest approvals row revokes it or its mode or approved mode is `disabled` or `revoked`; unlabelled rows are `label N fires`; no
-eligible session is `silent: eligible 0`; under 14 days since `window_start` (the counting window `modes.resolve` gives the hook and
-the ladder: the newest approvals row, or a later counter-resetting demotion) is `warn earliest YYYY-MM-DD`; fewer than five human TPs
-in that window is `needs 5 human TPs (has k)`; five or more labels with more than half false is `noisy: add an exception or retire`;
-any FP in the window is `not eligible: k FPs (warn needs 0)`; a detector that is not strong is `observe only: weak detector`; otherwise
-`warn eligible`. The window counts (`tp_window`, `fp_window`) are the ladder's (human `tp` rows only, live fires in observe mode since
-`window_start`); `tp`, `fp` and `unlabelled` stay the report's, so they equal `compile report --json`. An approved copy with no shadow
+The verdict of a proposal is the first rule that holds, and never looser than the ladder (section 7.3, `ladder.check`). It is
+rung-aware: the proposal stands on its current mode `m` (`observe`, `warn` or `block`) and the next rung `n` is `warn` from `observe`
+and `block` from `warn`. The rules, in order: `retired` when the newest approvals row revokes it or its mode or approved mode is
+`disabled` or `revoked`; unlabelled rows are `label N fires`; no eligible session is `silent: eligible 0`; at `block` there is nothing
+left to promote to, `block (top rung)`; under 14 days since `window_start` (the counting window `modes.resolve` gives the hook and the
+ladder: the newest approvals row, or a later counter-resetting demotion) is `<n> earliest YYYY-MM-DD`; fewer than five human TPs in that
+window is `needs 5 human TPs (has k)`; five or more labels with more than half false is `noisy: add an exception or retire`; any FP in
+the window is `not eligible: k FPs (<n> needs 0)`; a detector that is not strong is `<m> only: weak detector`; a catalogue `compilable`
+ceiling below `n` is `<m> only: detector allows <compilable>` (`observe only: detector allows observe` for a strong detector that may
+not reach warn; `warn only: detector allows warn` for one that may not reach block); a block promotion of a proposal whose event is not
+`PreToolUse` is `warn only: block is for PreToolUse`; otherwise `<n> eligible` (`warn eligible` or `block eligible`). The window counts
+(`tp_window`, `fp_window`) are the ladder's: human `tp` rows only, live fires in the proposal's CURRENT mode `m` since
+`window_start` (a warn-mode proposal counts its warn-mode fires, not the observe-mode fires it earned before it was promoted); each
+`proposals[pid]` also carries `event` (the proposal's, `-` when unknown, which is never `PreToolUse`) and `compilable` (the catalogue's)
+for these checks; `tp`, `fp` and `unlabelled` stay the report's, so they equal `compile report --json`. An approved copy with no shadow
 row is added with zero counts and its own rates from `metrics.compute`, because the report lists proposals with rows only. The `heartbeat`
 block (last hook row, last live fire, `offline_state.json` mtime, last good nightly run, notes such as `chain_key:missing`,
 `approvals:broken:<where>` and `silent:<detector>`) says whether the instruments are alive; `silent:<detector>` needs a live mode,

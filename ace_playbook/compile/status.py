@@ -28,6 +28,7 @@ SCHEMA, WARN_DAYS, WEEK, QUEUE_MAX, COST_MS, MIN_LABELS, MIN_TP = 1, 14, 7, 50, 
 STAMP, WORD = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ"), re.compile(r"[A-Za-z0-9_:.-]{1,40}")
 FMT, OFFLINE_STATE = "%Y-%m-%dT%H:%M:%SZ", "offline_state.json"       # offline.SEEN, named here so this module does not import the pass
 LIVE, RETIRED, INSUFFICIENT, COVERING = ("observe", "warn", "block"), ("disabled", "revoked"), "INSUFFICIENT", ("tp", "fp")
+NEXT = {"observe": "warn", "warn": "block"}
 HEADS = ("proposal", "detector", "mode", "fires/eligible", "tp/fp/unlab", "precision", "verdict")
 
 
@@ -81,34 +82,48 @@ def is_revoked(arows: list[dict], pid: str) -> bool:
     return bool(last and last["mode"] == "revoked")
 
 
+def _rung(mode: object) -> str:
+    """The rung a live proposal stands on: its mode, or `observe` for a mode that is not live (no backed copy)."""
+    return mode if mode in LIVE else "observe"
+
+
 def verdict(p: dict, now: str) -> str:
-    """The first rule that holds, never looser than the ladder (`ladder.check`, design 7.3): retired, label N fires, silent, warn earliest
-    DATE (14 days from `window_start`, the resolved counting window), needs 5 human TPs, noisy, not eligible (any FP), observe only
-    (weak detector), else warn eligible. `tp_window` and `fp_window` are the ladder's counts since `window_start`."""
+    """The first rule that holds, never looser than the ladder (`ladder.check`, design 7.3). On the rung `m` (observe, warn or block) the
+    next rung `n` is warn from observe and block from warn: retired, label N fires, silent, `block (top rung)`, `n earliest
+    DATE` (14 days from `window_start`, the resolved counting window), needs 5 human TPs, noisy, not eligible (any FP), then `m only: weak
+    detector`, `m only: detector allows X` (catalogue ceiling below `n`), `warn only: block is for PreToolUse`, else `n eligible`.
+    `tp_window` and `fp_window` are the ladder's counts since `window_start`, of fires in mode `m`."""
     if retired(p):
         return "retired"
     if p["unlabelled"] > 0:
         return f"label {p['unlabelled']} fires"
     if not p["eligible"]:
         return "silent: eligible 0"
-    start, here, tp, fp = parse_ts(p["window_start"]), parse_ts(now), p["tp_window"], p["fp_window"]
+    m = _rung(p["mode"])
+    if m == "block":
+        return "block (top rung)"
+    n, start, here, tp, fp = NEXT[m], parse_ts(p["window_start"]), parse_ts(now), p["tp_window"], p["fp_window"]
     if start and here and here - start < timedelta(days=WARN_DAYS):
-        return "warn earliest " + (start + timedelta(days=WARN_DAYS)).strftime("%Y-%m-%d")
+        return f"{n} earliest " + (start + timedelta(days=WARN_DAYS)).strftime("%Y-%m-%d")
     if tp < MIN_TP:
         return f"needs {MIN_TP} human TPs (has {tp})"
     if tp + fp >= MIN_LABELS and 2 * fp > tp + fp:
         return "noisy: add an exception or retire"
     if fp > 0:
-        return f"not eligible: {fp} FPs (warn needs 0)"
-    return "warn eligible" if p["strength"] == "strong" else "observe only: weak detector"
+        return f"not eligible: {fp} FPs ({n} needs 0)"
+    if p["strength"] != "strong":
+        return f"{m} only: weak detector"
+    if ladder.RANK.get(p["compilable"], 0) < ladder.RANK[n]:
+        return f"{m} only: detector allows {p['compilable']}"
+    return "warn only: block is for PreToolUse" if n == "block" and p["event"] != "PreToolUse" else f"{n} eligible"
 
 
-def _proposal(p: dict, rate: dict, last: dict | None, start: str | None, win: tuple[int, int], now: str) -> dict:
-    """One `proposals` entry: the report's counts (`p`) and rates, the newest approvals row, the resolved `window_start` and the
-    ladder's (tp, fp) since it."""
+def _proposal(p: dict, rate: dict, last: dict | None, start: str | None, win: tuple[int, int], now: str, event: str = "-") -> dict:
+    """One `proposals` entry: the report's counts (`p`) and rates, the newest approvals row, the resolved `window_start`, the ladder's
+    (tp, fp) since it in the current mode, and the proposal's `event` and the catalogue's `compilable` ceiling (the next rung's checks)."""
     from . import catalogue
-    n, at = p["tp"] + p["fp"], last["ts"] if last else None
-    row = {"detector": p["detector"], "strength": getattr(catalogue.CATALOGUE.get(p["detector"]), "strength", None),
+    n, at, cat = p["tp"] + p["fp"], last["ts"] if last else None, catalogue.CATALOGUE.get(p["detector"])
+    row = {"detector": p["detector"], "strength": getattr(cat, "strength", None), "compilable": getattr(cat, "compilable", "none"), "event": event,
            "mode": p["mode"], "approved_mode": p["approved_mode"], "revoked": bool(last and last["mode"] == "revoked"), "approved_at": at,
            "window_start": start, "rows": p["rows"], "fires": rate.get("fires"), "tp": p["tp"], "fp": p["fp"], "tp_window": win[0],
            "fp_window": win[1], "unlabelled": p["unlabelled"], "eligible": rate.get("eligible"), "fires_per_eligible": rate.get("fires_per_eligible"),
@@ -130,12 +145,13 @@ def _window(cfg: Config, pid: str, ring: tuple, now: str) -> str | None:
     return (modes.resolve(pid, rec, *ring, now).window_start or None) if body is not None else None
 
 
-def _window_counts(pid: str, start: str | None, now: str, fires: dict, eff: dict) -> tuple[int, int]:
-    """(human tps, fps) the ladder counts for `pid` since `start`: live fires in observe mode, `ladder.effective` labels."""
+def _window_counts(pid: str, start: str | None, now: str, fires: dict, eff: dict, mode: str) -> tuple[int, int]:
+    """(human tps, fps) the ladder counts for `pid` since `start`: live fires in the proposal's current `mode` (the rung it stands on,
+    as `ladder.check` counts them for the next one), `ladder.effective` labels."""
     tp = fp = 0
     for ref, (_, lab, human) in eff.items() if start else ():
         kind, f = ladder._counted(lab, human), fires.get(ref)
-        if kind and f and f["proposal_id"] == pid and f.get("tier") == "live" and f.get("mode") == "observe" and start <= f["ts"] <= now:
+        if kind and f and f["proposal_id"] == pid and f.get("tier") == "live" and f.get("mode") == mode and start <= f["ts"] <= now:
             tp, fp = tp + (kind == "tp"), fp + (kind == "fp")
     return tp, fp
 
@@ -205,7 +221,8 @@ def build(cfg: Config, days: int = 14, now: str | None = None) -> dict:
         fires.setdefault(labels.row_id(r), r)
     for pid, p in sorted(counts.items()):
         start = _window(cfg, pid, chain4, now)
-        props[pid] = _proposal(p, per.get(pid, {}), approvals.newest(arows, pid), start, _window_counts(pid, start, now, fires, eff), now)
+        win = _window_counts(pid, start, now, fires, eff, _rung(p["mode"]))
+        props[pid] = _proposal(p, per.get(pid, {}), approvals.newest(arows, pid), start, win, now, report._meta(cfg, pid)[1])
     start, here = measure.start_of(arows), parse_ts(now)
     t0, corpus = parse_ts(start), rates["corpus"]
     notes = [*chains.notes(ring, (abroken, dem_broken)),

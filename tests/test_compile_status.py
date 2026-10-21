@@ -40,10 +40,10 @@ def pid_of(w, det="rm_rf_nonscratch"):
     return w.props[det]["id"]
 
 
-def fire(w, det, sid, n, ts="2026-10-18T09:00:{:02d}Z"):
+def fire(w, det, sid, n, ts="2026-10-18T09:00:{:02d}Z", mode="observe"):
     """`n` distinct rows (one per second) of proposal `det` in session `sid`, stamped before the session's last transcript record
-    (a later fire waits for the next offline scan); returns their row ids."""
-    return [labels.row_id(cs.put_shadow(w, sid, cs.RM_PROMPT_CMD, ts=ts.format(i), pid=pid_of(w, det))) for i in range(n)]
+    (a later fire waits for the next offline scan), written in hook mode `mode`; returns their row ids."""
+    return [labels.row_id(cs.put_shadow(w, sid, cs.RM_PROMPT_CMD, mode=mode, ts=ts.format(i), pid=pid_of(w, det))) for i in range(n)]
 
 
 @pytest.fixture
@@ -145,7 +145,7 @@ def test_queue_is_capped_at_fifty_but_the_total_is_not(w):
 # ------------------------------------------------------------------ verdicts
 def row(**over):
     base = {"mode": "observe", "approved_mode": "observe", "revoked": False, "unlabelled": 0, "eligible": 4, "strength": "strong",
-            "window_start": "2026-10-01T00:00:00Z", "tp_window": 5, "fp_window": 0}
+            "window_start": "2026-10-01T00:00:00Z", "tp_window": 5, "fp_window": 0, "compilable": "block", "event": "PreToolUse"}
     return {**base, **over}
 
 
@@ -172,6 +172,27 @@ def row(**over):
     ({"tp_window": 5, "fp_window": 0, "strength": "weak"}, "observe only: weak detector"),
     ({"strength": None}, "observe only: weak detector"),
     ({}, "warn eligible"),
+    # the ladder's rungs: observe -> warn -> block, and nothing above block
+    ({"compilable": "observe"}, "observe only: detector allows observe"),               # a strong detector that may not reach warn
+    ({"compilable": "none"}, "observe only: detector allows none"),
+    ({"compilable": "warn"}, "warn eligible"),
+    ({"mode": "warn", "approved_mode": "warn"}, "block eligible"),
+    ({"mode": "warn", "window_start": "2026-10-10T08:00:00Z"}, "block earliest 2026-10-24"),
+    ({"mode": "warn", "tp_window": 4}, "needs 5 human TPs (has 4)"),
+    ({"mode": "warn", "tp_window": 5, "fp_window": 6}, "noisy: add an exception or retire"),
+    ({"mode": "warn", "fp_window": 1}, "not eligible: 1 FPs (block needs 0)"),
+    ({"mode": "warn", "compilable": "warn"}, "warn only: detector allows warn"),         # block needs a detector that allows block
+    ({"mode": "warn", "compilable": "observe"}, "warn only: detector allows observe"),
+    ({"mode": "warn", "event": "Stop"}, "warn only: block is for PreToolUse"),
+    ({"mode": "warn", "event": "-"}, "warn only: block is for PreToolUse"),              # an unknown event is never PreToolUse
+    ({"mode": "warn", "compilable": "warn", "event": "Stop"}, "warn only: detector allows warn"),
+    ({"mode": "warn", "strength": "weak"}, "warn only: weak detector"),
+    ({"mode": "warn", "unlabelled": 1}, "label 1 fires"),
+    ({"mode": "warn", "eligible": 0}, "silent: eligible 0"),
+    ({"mode": "block", "approved_mode": "block"}, "block (top rung)"),
+    ({"mode": "block", "event": "Stop", "fp_window": 3}, "block (top rung)"),             # nothing is left to promote to
+    ({"mode": "block", "unlabelled": 2}, "label 2 fires"),
+    ({"mode": "block", "revoked": True}, "retired"),
 ])
 def test_verdict_rules_in_order(over, want):
     assert status.verdict(row(**over), NOW) == want
@@ -410,6 +431,58 @@ def test_a_weak_detector_never_reaches_warn_eligible(w):
     scan(w)
     assert build(w, now="2026-10-30T00:00:00Z")["proposals"][pid_of(w, "rm_rf")]["verdict"] == "observe only: weak detector"
     assert build(w, now="2026-10-30T00:00:00Z")["proposals"][pid_of(w)]["verdict"] != "observe only: weak detector"
+
+
+def promote(w, det, mode, at):
+    """Move `det` up a rung: the approved copy and its approvals row, both stamped `at`."""
+    approve(w, det, at, mode)
+
+
+def test_a_warn_proposal_counts_only_its_warn_mode_fires_and_the_next_rung_is_block(w):
+    promote(w, "rm_rf_nonscratch", "warn", "2026-10-05T00:00:00Z")
+    old = fire(w, "rm_rf_nonscratch", "s1", 5, ts="2026-10-18T09:01:{:02d}Z")                      # fired while still in observe
+    ids = fire(w, "rm_rf_nonscratch", "s2", 5, mode="warn")
+    cs.write_labels(w.cfg, [hum(r, "tp") for r in old + ids])
+    scan(w)
+    p = build(w, now="2026-10-30T00:00:00Z")["proposals"][pid_of(w)]
+    assert (p["mode"], p["tp"], p["tp_window"]) == ("warn", 10, 5)                               # the report counts both, the ladder only warn
+    assert p["window_start"] == "2026-10-05T00:00:00Z" and p["verdict"] == "block eligible"
+
+
+def test_four_warn_mode_tps_are_short_of_block_however_many_observe_mode_tps_there_are(w):
+    promote(w, "rm_rf_nonscratch", "warn", "2026-10-05T00:00:00Z")
+    old = fire(w, "rm_rf_nonscratch", "s1", 5, ts="2026-10-18T09:01:{:02d}Z")
+    cs.write_labels(w.cfg, [hum(r, "tp") for r in old + fire(w, "rm_rf_nonscratch", "s2", 4, mode="warn")])
+    scan(w)
+    assert build(w, now="2026-10-30T00:00:00Z")["proposals"][pid_of(w)]["verdict"] == "needs 5 human TPs (has 4)"
+
+
+def test_observe_mode_labels_alone_do_not_make_a_warn_proposal_eligible(w):
+    promote(w, "rm_rf_nonscratch", "warn", "2026-10-05T00:00:00Z")
+    cs.write_labels(w.cfg, [hum(r, "tp") for r in fire(w, "rm_rf_nonscratch", "s1", 5)])        # all five were fired in observe mode
+    scan(w)
+    p = build(w, now="2026-10-30T00:00:00Z")["proposals"][pid_of(w)]
+    assert (p["tp"], p["tp_window"], p["verdict"]) == (5, 0, "needs 5 human TPs (has 0)")
+
+
+def test_a_warn_proposal_with_an_fp_in_its_warn_window_is_not_eligible_for_block(w):
+    promote(w, "rm_rf_nonscratch", "warn", "2026-10-05T00:00:00Z")
+    ids = fire(w, "rm_rf_nonscratch", "s1", 6, mode="warn")
+    cs.write_labels(w.cfg, [*(hum(r, "tp") for r in ids[:5]), hum(ids[5], "fp")])                 # no offline scan: it would demote on the FP
+    assert build(w, now="2026-10-30T00:00:00Z")["proposals"][pid_of(w)]["verdict"] == "not eligible: 1 FPs (block needs 0)"
+
+
+def test_a_block_mode_proposal_is_at_the_top_rung(w):
+    promote(w, "rm_rf_nonscratch", "warn", "2026-10-05T00:00:00Z")
+    promote(w, "rm_rf_nonscratch", "block", "2026-10-10T00:00:00Z")
+    p = build(w, now="2026-10-30T00:00:00Z")["proposals"][pid_of(w)]
+    assert (p["mode"], p["verdict"]) == ("block", "block (top rung)")
+
+
+def test_the_event_and_compilable_ceiling_of_each_proposal_reach_the_verdict(w):
+    p = build(w)["proposals"]
+    assert (p[pid_of(w)]["event"], p[pid_of(w)]["compilable"]) == ("PreToolUse", "block")
+    assert p[pid_of(w, "rm_rf")]["compilable"] == "observe"
 
 
 # ------------------------------------------------------------------ the queue and its covering rule (items 1, 2, 8)
