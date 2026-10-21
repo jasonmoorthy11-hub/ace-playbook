@@ -387,4 +387,28 @@ def test_an_offline_failure_is_recorded_in_health_even_when_reflection_is_a_dry_
     assert rec["consecutive_failures"] == 2 and "KeyError" in rec["last_error"]
     monkeypatch.setattr(offline, "run", lambda cfg, **kw: {"errors": 0})
     sweep("--dry-run")
-    assert healthmod.read(w.cfg)["consecutive_failures"] == 2               # a clean pass leaves the record alone
+    rec = healthmod.read(w.cfg)                                             # a clean real pass is a nightly that ran: it resets
+    assert rec["ok"] is True and rec["consecutive_failures"] == 0           # the streak (the heartbeat tile reads this record)
+
+
+def test_nightly_dry_run_with_a_real_clean_offline_pass_records_health_ok(sweep, w):
+    # the reflection dry run itself writes no record (`run_sweep` rule); the nightly still ran, so the heartbeat must not say never
+    out, _ = sweep("--dry-run")
+    rec = json.loads((w.data / "health.json").read_text())
+    assert rec["ok"] is True and rec["consecutive_failures"] == 0 and rec["last_error"] == ""
+    assert out["digest"]["notes"] == []
+
+
+def test_nightly_records_nothing_when_the_offline_pass_was_a_dry_run_or_skipped(sweep, w):
+    sweep("--dry-run", "--offline-dry-run")
+    assert not (w.data / "health.json").exists()
+    sweep("--dry-run", "--no-offline")
+    assert not (w.data / "health.json").exists()
+
+
+def test_nightly_dry_run_with_a_failing_offline_pass_records_the_failure_not_ok(sweep, w, monkeypatch):
+    monkeypatch.setattr(offline, "run", lambda cfg, **kw: {"errors": 2})
+    out, _ = sweep("--dry-run")
+    rec = json.loads((w.data / "health.json").read_text())
+    assert rec["ok"] is False and rec["consecutive_failures"] == 1 and "2 errors" in rec["last_error"]
+    assert out["digest"]["notes"] == ["nightly:failed"]

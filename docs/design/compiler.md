@@ -248,7 +248,8 @@ change in either direction shows up. As of this commit:
 | `control`, `flags`, `shell_construct` | 0 | 0 | |
 
 That is 19 false negatives and 2 false positives. `trash` and the Finder delete are recoverable, but they still count as should-fire:
-the lesson's letter is "confirm the target first", and a recoverable delete outside scratch has not been confirmed. The matrix is the input to the next detector edit after the measurement week
+the lesson's letter is "confirm the target first", and a recoverable delete outside scratch has not been confirmed.
+The matrix is the input to the next detector edit after the measurement week
 ends: fix a class, flip its cases from xfail to plain, update the pinned counts, and re-propose and re-approve (the edit moves
 `source_sha256`). Nothing in the detector changes while the week runs. `tests/test_hook_conformance.py` is the other half: the real
 `hooks/shadow.sh` in a child process against malformed, empty, non-UTF-8 and over-cap stdin (exactly `MAX_STDIN` is evaluated, one

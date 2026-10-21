@@ -38,6 +38,8 @@ def main() -> int:
     finally:
         if failed and not args.offline_dry_run:       # a real offline pass failed, whatever --dry-run says about reflection
             health.record(cfg, False, failed)
+    if args.dry_run and not failed and not (args.no_offline or args.offline_dry_run):
+        health.record(cfg, True)                      # a reflection dry run records nothing itself; a real, clean offline pass still means the nightly ran
     try:                                              # after the sweep, so tonight's line carries tonight's health; none written in an offline dry run
         from ace_playbook.compile import digest
         report["digest"] = digest.run_quiet(cfg, write=not args.offline_dry_run)
