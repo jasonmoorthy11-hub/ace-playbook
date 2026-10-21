@@ -116,13 +116,13 @@ def test_an_excluded_sender_is_cleaned_before_stage_two_sees_the_digest(w):
     assert [m["thread_id"] for m in clean["mail"]] == ["t1", "t3"] and clean["mail"][1]["summary"] == ""
     sent = (w.fake / "stdin_stage2.txt").read_text()
     assert sent == clean_text
-    for private in ("excluded.example", "Casey", "should never reach stage two", "HOLD-THIS", "account number in the body"):
+    for private in ("casey@", "Casey", "should never reach stage two", "HOLD-THIS", "account number in the body"):
         assert private not in sent
 
 
 def test_no_mail_content_reaches_the_output_and_the_raw_streams_do_not_outlive_the_run(w):
     p = w.run("--force")
-    assert bs.SECRET not in p.stdout + p.stderr and "FAKE-MAIL-BODY" not in p.stdout + p.stderr and "Pat" not in p.stdout + p.stderr
+    assert bs.MARKER not in p.stdout + p.stderr and "FAKE-MAIL-BODY" not in p.stdout + p.stderr and "Pat" not in p.stdout + p.stderr
     assert sorted(x.name for x in (w.dir / "run").iterdir()) == ["cwd", "digest_clean.json"]
     kept = w.run("--force", ACE_BRIEF_KEEP="1")
     assert kept.returncode == 0 and (w.dir / "run" / "stage1.jsonl").exists()

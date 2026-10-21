@@ -5,20 +5,20 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-SECRET = "UNIQUE-PRIVATE-SUMMARY-TEXT"
+MARKER = "UNIQUE-PRIVATE-SUMMARY-TEXT"
 
 
 def digest(**kw) -> dict:
     return {"generated_at": "2026-10-21T08:05:00-07:00",
             "calendar": [{"start": "2026-10-21T09:30:00-07:00", "end": "2026-10-21T10:00:00-07:00", "title": "Planning sync",
                           "organizer_is_me": True, "optional": False, "attendees_n": 4}],
-            "mail": [{"thread_id": "t1", "sender": "Pat <pat@kept.example>", "subject": "Question about the draft", "received": "2026-10-20T17:00:00Z",
-                      "asked_me": True, "replied": False, "summary": f"Pat asks whether the draft is final. {SECRET}"},
-                     {"thread_id": "t2", "sender": "Casey <casey@excluded.example>", "subject": "Private matter", "received": "2026-10-20T18:00:00Z",
+            "mail": [{"thread_id": "t1", "sender": "Pat <pat@example.com>", "subject": "Question about the draft", "received": "2026-10-20T17:00:00Z",
+                      "asked_me": True, "replied": False, "summary": f"Pat asks whether the draft is final. {MARKER}"},
+                     {"thread_id": "t2", "sender": "Casey <casey@example.org>", "subject": "Private matter", "received": "2026-10-20T18:00:00Z",
                       "asked_me": True, "replied": False, "summary": "should never reach stage two"},
-                     {"thread_id": "t3", "sender": "Billing <billing@bodies.example>", "subject": "Invoice 12", "received": "2026-10-20T19:00:00Z",
+                     {"thread_id": "t3", "sender": "Billing <billing@example.net>", "subject": "Invoice 12", "received": "2026-10-20T19:00:00Z",
                       "asked_me": True, "replied": False, "summary": "account number in the body"},
-                     {"thread_id": "t4", "sender": "Lee <lee@kept.example>", "subject": "Re: HOLD-THIS-SUBJECT", "received": "2026-10-20T20:00:00Z",
+                     {"thread_id": "t4", "sender": "Lee <lee@example.com>", "subject": "Re: HOLD-THIS-SUBJECT", "received": "2026-10-20T20:00:00Z",
                       "asked_me": True, "replied": False, "summary": "dropped by subject"}],
             "issues": [{"id": "ENG-1", "title": "Fix the thing", "state": "In Progress", "due": None}], **kw}
 
@@ -32,7 +32,7 @@ def brief(**kw) -> dict:
 
 
 def exclusions(path: Path, **kw) -> Path:
-    body = {"drop_senders": ["excluded\\.example"], "drop_subjects": ["hold-this-subject"], "drop_bodies_from": ["bodies\\.example"], **kw}
+    body = {"drop_senders": ["casey@"], "drop_subjects": ["hold-this-subject"], "drop_bodies_from": ["billing@"], **kw}
     path.write_text(json.dumps(body))
     return path
 

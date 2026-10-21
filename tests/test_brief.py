@@ -98,7 +98,7 @@ def test_digest_apply_removes_excluded_threads_by_code_and_keeps_sender_and_subj
     clean = json.loads(clean_path.read_text())
     assert [m["thread_id"] for m in clean["mail"]] == ["t1", "t3"]
     assert clean["mail"][1]["summary"] == "" and clean["mail"][1]["subject"] == "Invoice 12" and "Billing" in clean["mail"][1]["sender"]
-    assert "excluded.example" not in clean_path.read_text() and "HOLD-THIS" not in clean_path.read_text() and "account number" not in clean_path.read_text()
+    assert "casey@" not in clean_path.read_text() and "HOLD-THIS" not in clean_path.read_text() and "account number" not in clean_path.read_text()
     assert mode(clean_path) == 0o600 and mode(env / "brief") == 0o700
 
 
@@ -136,7 +136,7 @@ def test_a_configured_but_missing_or_unparseable_exclusions_file_fails_closed(en
 def test_exclusions_match_case_insensitively_on_the_cleaned_fields(env, capsys):
     os.environ["ACE_PLAYBOOK_CONFIG"] = str(bs.config(env, brief_exclusions=str(bs.exclusions(env / "ex.json", drop_senders=["^casey"]))))
     d = bs.digest()
-    d["mail"][1]["sender"] = "​CASEY <c@x.example>"                   # a zero-width prefix is stripped before the match
+    d["mail"][1]["sender"] = "​CASEY <c@example.org>"                   # a zero-width prefix is stripped before the match
     run(capsys, "digest-apply", put(env, "d.json", d))
     assert [m["thread_id"] for m in json.loads((env / "brief" / "digest_clean.json").read_text())["mail"]] == ["t1", "t3"]
 
@@ -173,8 +173,8 @@ def test_render_writes_page_and_json_0600_and_prints_the_path(env, capsys):
 
 
 def test_render_refuses_a_bad_brief_and_writes_nothing(env, capsys):
-    code, out, err = run(capsys, "render", put(env, "b.json", bs.brief(day_class="busy", headline=bs.SECRET)))
-    assert (code, out) == (2, "") and bs.SECRET not in err
+    code, out, err = run(capsys, "render", put(env, "b.json", bs.brief(day_class="busy", headline=bs.MARKER)))
+    assert (code, out) == (2, "") and bs.MARKER not in err
     assert not list((env / "brief").glob("brief.*"))
 
 
@@ -250,10 +250,10 @@ def test_ledger_survives_garbage_inputs_and_refuses_a_bad_stage(env, capsys):
 def test_the_module_runs_as_a_script_and_never_echoes_content(tmp_path):
     conf = bs.config(tmp_path)
     bad = tmp_path / "d.json"
-    bad.write_text(json.dumps({"mail": bs.SECRET}))
+    bad.write_text(json.dumps({"mail": bs.MARKER}))
     p = subprocess.run([sys.executable, "-m", "ace_playbook.compile.brief", "digest-apply", str(bad)], capture_output=True, text=True, cwd=ROOT,
                        env={**os.environ, "ACE_PLAYBOOK_CONFIG": str(conf)}, timeout=30)
-    assert p.returncode == 2 and bs.SECRET not in p.stdout + p.stderr
+    assert p.returncode == 2 and bs.MARKER not in p.stdout + p.stderr
     p = subprocess.run([sys.executable, "-m", "ace_playbook.compile.brief"], capture_output=True, text=True, cwd=ROOT, timeout=30,
                        env={**os.environ, "ACE_PLAYBOOK_CONFIG": str(conf)})
     assert p.returncode == 2 and "usage" in p.stderr

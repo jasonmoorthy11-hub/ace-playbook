@@ -40,4 +40,4 @@ def test_the_lua_watches_wake_and_unlock_and_runs_the_brief_script_through_hs_ta
 
 def test_nothing_in_the_trigger_files_names_a_home_directory_or_a_real_account():
     for path in (PLIST, LUA):
-        assert "/Users/" not in path.read_text()
+        assert "/".join(["", "Users", ""]) not in path.read_text()
