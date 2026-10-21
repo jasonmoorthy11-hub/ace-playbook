@@ -8,7 +8,7 @@
 # `python3 -I -S` with stdlib json only: no package import, no uv, no network. Always exits 0.
 PY="${ACE_PYTHON:-python3}"
 "$PY" -I -S -c '
-import calendar, json, math, os, sys, time
+import calendar, json, math, os, sys, time, unicodedata
 def jload(f):
     try:
         v = json.load(f)
@@ -27,9 +27,12 @@ def age(t, now):
     return "never" if secs is None else "%dm" % (secs // 60) if secs < 3600 else "%dh" % (secs // 3600) if secs < 172800 else "%dd" % (secs // 86400)
 inp, home = jload(sys.stdin), os.path.expanduser("~")
 model, pct = sub(inp, "model").get("display_name"), sub(inp, "context_window").get("used_percentage")
-ok_pct = isinstance(pct, (int, float)) and not isinstance(pct, bool) and math.isfinite(pct)
-model = "".join(c for c in model if 31 < ord(c) != 127) if isinstance(model, str) else ""
-head = "%s | ctx %s%% |" % (model or "claude", int(round(pct)) if ok_pct else "?")
+try:  # a bool, a string, NaN/inf, a 400-digit int (isfinite overflows) or 1e300 all end as "?" or a 0..100 clamp
+    pct = min(100, max(0, int(round(pct)))) if isinstance(pct, (int, float)) and not isinstance(pct, bool) and math.isfinite(pct) else "?"
+except Exception:
+    pct = "?"
+model = "".join(c for c in model if 31 < ord(c) != 127 and not 127 < ord(c) < 160 and unicodedata.category(c) != "Cf") if isinstance(model, str) else ""
+head = "%s | ctx %s%% |" % (model.encode("utf-8", "ignore").decode("utf-8") or "claude", pct)
 try:
     with open(os.environ.get("ACE_PLAYBOOK_CONFIG") or os.path.join(home, ".config", "ace-playbook", "config.json")) as f:
         cfg = jload(f)

@@ -160,7 +160,7 @@ def test_the_script_is_executable_syntax_clean_and_within_its_budget():
     assert status.QUEUE_MAX == 50                                                  # the "+" floor in the script assumes the queue cap
 
 
-@pytest.mark.parametrize("raw", ["NaN", "Infinity", "-Infinity", "1e400"])
+@pytest.mark.parametrize("raw", ["NaN", "Infinity", "-Infinity", "1e400", "true", "\"42\"", "1" + "0" * 400])
 def test_a_non_finite_context_percentage_prints_a_question_mark_not_the_unavailable_form(w, tmp_path, raw):
     write_status(w)
     out = line(tmp_path, '{"model": {"display_name": "Fable 5.1"}, "context_window": {"used_percentage": %s}}' % raw, w.conf)
@@ -182,3 +182,10 @@ def test_the_segment_is_named_unlab24h_and_documented_that_way():
     text = SCRIPT.read_text()
     assert "unlab24h" in text and "fires24h" not in text and len(text.splitlines()) <= 60
     assert "fires24h" not in (ROOT / "hooks" / "INSTALL.md").read_text()
+    assert "fires24h" not in (ROOT / "docs" / "design" / "compiler.md").read_text()
+
+
+def test_c1_controls_bidi_overrides_and_lone_surrogates_are_dropped_and_a_huge_percentage_is_clamped(w, tmp_path):
+    write_status(w)
+    out = line(tmp_path, {"model": {"display_name": "Fa\x9bble\u202e 5.1\ud800"}, "context_window": {"used_percentage": 1e300}}, w.conf)
+    assert out.startswith("Fable 5.1 | ctx 100% | ace approved 2")
