@@ -10,10 +10,11 @@ from html import unescape
 import pytest
 
 from ace_playbook.compile import __main__ as cli
-from ace_playbook.compile import dashboard, status
+from ace_playbook.compile import dashboard, measure, status
 
 from . import compile_support as cs
 from .test_compile_status import NOW, ROOT, build, labelled_world, pid_of, w  # noqa: F401 - w is a fixture
+from .test_compile_status import row as status_row
 
 FAMILIES = (          # verdict, mode, precision, tp, fp, unlabelled, eligible
     ("retired", "disabled", [0.0, 0.2281], 0, 13, 0, 17),
@@ -154,6 +155,39 @@ def test_verdict_families_pair_a_colour_class_with_a_glyph(verdict, cls, glyph):
     assert dashboard.family(verdict) == (cls, glyph)
     cell = str(dashboard.badge(verdict))
     assert glyph in cell and verdict in cell and f'class="st {cls}"' in cell
+
+
+OVERRIDES = ({}, {"to_label": 2}, {"eligible": 0}, {"window_start": "2026-10-19T00:00:00Z"}, {"tp_window": 2}, {"tp_window": 5, "fp_window": 6},
+             {"fp_window": 1}, {"strength": "weak"}, {"compilable": "observe"}, {"compilable": "warn"}, {"compilable": "none"}, {"event": "Stop"},
+             {"revoked": True}, {"auto_fp": 2, "auto_fp_oldest": "abcd1234"})
+
+
+def emitted_verdicts():
+    """Every verdict family `status.verdict` can emit: each rung of `measure.NEXT` (and the top rung) against each refusal."""
+    rungs = [*measure.NEXT, "block"]
+    return {status.verdict(status_row(mode=m, approved_mode=m, **over), "2026-10-20T12:00:00Z") for m in rungs for over in OVERRIDES}
+
+
+def test_every_verdict_status_can_emit_maps_to_a_known_family():
+    seen = emitted_verdicts()
+    assert {"block eligible", "warn eligible", "block (top rung)", "warn only: block is for PreToolUse", "observe only: weak detector",
+            "warn only: detector allows warn"} <= seen
+    unknown = sorted(v for v in seen if not any(v.startswith(word) for word, _, _ in dashboard.FAMILIES))
+    assert unknown == []                                               # no verdict falls through to the default family by accident
+
+
+@pytest.mark.parametrize("n", sorted(measure.NEXT.values()))
+def test_a_next_rung_verdict_renders_like_the_warn_one(n):
+    assert dashboard.family(f"{n} eligible") == dashboard.family("warn eligible") == ("good", "✓")
+    assert dashboard.family(f"{n} earliest 2026-11-03") == dashboard.family("warn earliest 2026-11-03")
+
+
+@pytest.mark.parametrize("verdict, cls, glyph", [
+    ("block (top rung)", "neutral", "◦"), ("warn only: detector allows warn", "muted", "⊘"), ("warn only: block is for PreToolUse", "muted", "⊘"),
+    ("warn only: weak detector", "muted", "⊘"), ("observe only: detector allows observe", "muted", "⊘"),
+    ("block eligible; 1 auto FPs (label --tp abcd1234 overturns)", "good", "✓")])
+def test_the_rung_aware_verdicts_have_a_colour_class_and_glyph(verdict, cls, glyph):
+    assert dashboard.family(verdict) == (cls, glyph)
 
 
 def test_the_table_has_one_row_per_proposal_inside_a_scroll_container():

@@ -20,8 +20,9 @@ from . import dashboard_html, labels, metrics, status
 OUT, CAP, STALE_HOURS = "dashboard.html", status.QUEUE_MAX, 36
 THRESHOLDS, TICKS = ((0.8, "0.8"), (0.9, "0.9")), ((0.0, "0"), (0.5, ".5"), (1.0, "1"))
 FAMILIES = (("retired", "muted", "⊘"), ("label", "warn", "⚠"), ("silent", "serious", "▲"), ("noisy", "crit", "✖"),
-            ("not eligible", "serious", "▲"), ("observe only", "muted", "⊘"),
-            ("warn eligible", "good", "✓"), ("needs", "neutral", "◦"), ("warn earliest", "neutral", "◦"))
+            ("not eligible", "serious", "▲"), ("observe only", "muted", "⊘"), ("warn only", "muted", "⊘"),
+            ("warn eligible", "good", "✓"), ("block eligible", "good", "✓"), ("needs", "neutral", "◦"), ("warn earliest", "neutral", "◦"),
+            ("block earliest", "neutral", "◦"), ("block (top rung)", "neutral", "◦"))      # the rungs of status.verdict (measure.NEXT) and block
 LEGEND = "Wilson 95 % interval; point = tp/(tp+fp); INSUFFICIENT below 5 labels"
 FOOT = "status.json is the single source; nothing here reaches the model"
 PROP_HEADS = ("detector", "proposal", "mode", "strength", "fires/eligible", "tp/fp/unlab", "precision", "verdict")
