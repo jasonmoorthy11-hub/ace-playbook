@@ -271,14 +271,14 @@ every row becomes a `v: 2` row hashed with HMAC-SHA256 under the key (same conte
 kept as it is and named before the prompt), and it writes `chain_heads.json` beside the key, the signed last hash of each chain. If keygen fails it puts
 the chains back and removes the key and the copies, so you can run it again. From then on only `v: 2` rows verify, every `approve`, `unapprove`,
 ladder step and nightly demotion appends a `v: 2` row and moves its head, and a `v: 1` row (a chain rewritten as plain hashes) is a broken chain. An install counts as KEYED when the key file or
-`chain_heads.json` exists (any file type) or the environment variable `ACE_PLAYBOOK_KEYED=1` is set; a keyed install without a usable key
+`chain_heads.json` exists (any file type), a chain holds a `v: 2` row, or the environment variable `ACE_PLAYBOOK_KEYED=1` is set (`keygen` refuses on all of these); a keyed install without a usable key
 (deleted, mode other than owner-only, wrong owner) has both chains broken: the hook runs observe, logs `chain_key:missing` once, and `approve`,
 `unapprove`, the ladder and the nightly pass refuse to write and print the restore message (restore the key file from your backup, or move
 the unusable key file away, delete `approvals.jsonl`, `demotions.jsonl` and `chain_heads.json`, unset the flag in that shell and run `keygen`
 again, re-making every approval); `unapprove` still removes the approved copy. A config with no `chain_key_path` line names no key, so with
 the flag set, a `chain_heads.json` beside that config file, or a `v: 2` row in `approvals.jsonl` or `demotions.jsonl`, both chains are broken
 (`chain_key:missing`), never a silent v1 rule. **Upgrading:** add `"chain_key_path": "~/.config/ace-playbook/chain_key"` (or wherever your key
-is) to `config.json` BEFORE you upgrade past the change that removed the default key path (Order 3a, branch `feat/keypath`); a keyed install
+is) to `config.json` BEFORE you take the first release that requires `chain_key_path` (installs from before 2026-10-21 relied on a default key path); a keyed install
 without that line fails closed (observe, `chain_key:missing`, writers refuse) until you add it. A
 cut or rolled-back chain is `approvals:head_mismatch` or `demotions:head_mismatch`; a missing or forged heads file breaks both chains
 (`chain_heads:missing`). Back the key file up with your other secrets: losing it breaks both chains. On a keyed install `keygen` refuses

@@ -4,6 +4,7 @@ import dataclasses
 import json
 import os
 import signal
+from pathlib import Path
 
 import pytest
 
@@ -31,6 +32,12 @@ def test_the_default_config_location_is_pinned_too_so_a_test_that_unsets_the_var
     monkeypatch.delenv(cfgmod.ENV_CONFIG)
     assert cfgmod.DEFAULT_CONFIG == hermetic_config and cfgmod.config_file() == hermetic_config
     assert cfgmod.load().chain_key_path is None and cfgmod.load().source == hermetic_config
+
+
+def test_a_bare_config_never_points_at_the_real_data_dir_during_the_suite(hermetic_config):
+    home = Path(os.path.expanduser("~"))
+    for cfg in (cfgmod.Config(), cfgmod.from_dict({})):
+        assert cfg.data_dir == cfgmod.DEFAULT_DATA and not cfg.data_dir.exists() and not cfg.data_dir.is_relative_to(home)
 
 
 def test_child_processes_get_a_throwaway_home(env):  # noqa: F811

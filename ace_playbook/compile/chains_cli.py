@@ -15,7 +15,7 @@ from pathlib import Path
 
 from .. import config as cfgmod
 from ..canon import GENESIS, chain_key
-from . import chains, chains_io
+from . import chains, chains_io, modes
 from .chains import Keyring
 
 
@@ -63,9 +63,9 @@ def reheads(cfg, path: Path, ask) -> int:
 
 
 def _refusal(cfg, path: Path) -> str | None:
-    """Why keygen must not run: the install is keyed (key file, heads file or the flag); None for a never-keyed install."""
+    """Why keygen must not run: the install is keyed (key file, heads file, a `v: 2` row or the flag); None for a never-keyed install."""
     heads = path.parent / chains.HEADS
-    if not (os.path.lexists(path) or os.path.lexists(heads) or os.environ.get(chains.ENV) == "1"):
+    if not (os.path.lexists(path) or os.path.lexists(heads) or os.environ.get(chains.ENV) == "1" or modes.v2_rows(cfg.data_dir)):
         return None
     if (key := chain_key(path)) is None:
         return chains_io.RESTORE

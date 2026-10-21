@@ -282,6 +282,46 @@ def test_the_synthetic_replay_keeps_the_config_source_of_its_scratch_copy(tmp_pa
     assert seen and seen[0][0] == cfg.source and seen[0][1] != tmp_path
 
 
+@pytest.mark.parametrize("chain", ["approvals", "demotions"])
+def test_keygen_refuses_the_upgrade_layout_instead_of_minting_a_second_key(w, tty, tmp_path, monkeypatch, capsys, chain):
+    ring = keyed(w)
+    promote(w, "observe", ring) if chain == "approvals" else demote(w, ring)
+    conf = relocate(w, tmp_path, monkeypatch)                  # the real key stays at the old location; the config names none
+    before, chains_before = conf.read_bytes(), {p.name: p.read_bytes() for p in w.data.glob("*.jsonl")}
+    assert cli.main(["--config", str(conf), "keygen"]) == 1
+    assert "restore the chain key file" in capsys.readouterr().err and tty.asked == []
+    assert conf.read_bytes() == before and sorted(p.name for p in conf.parent.iterdir()) == ["config.json"]
+    assert {p.name: p.read_bytes() for p in w.data.glob("*.jsonl")} == chains_before and not list(w.data.glob("*.bak"))
+
+
+def test_v2_rows_are_found_anywhere_in_a_large_chain_file_and_in_either_spacing(tmp_path):
+    from ace_playbook.compile import modes
+    ring = chains.Keyring(K1)                                  # no heads file: only the rows matter here
+    for _ in range(3):
+        approvals.append(tmp_path, {"proposal_id": "P-0123abcd", "proposal_sha256": "a" * 64, "mode": "observe"}, ring)
+    keyed_text = (tmp_path / approvals.FILE).read_text()
+    assert modes.v2_rows(tmp_path)
+    (tmp_path / approvals.FILE).write_text(keyed_text.replace('"v": 2', '"v":2'))
+    assert modes.v2_rows(tmp_path)
+    v1_first = '{"v": 1, "x": 1}\n' * 1000
+    (tmp_path / approvals.FILE).write_text(v1_first + keyed_text)                       # a v1 row placed first must not hide the marker
+    assert modes.v2_rows(tmp_path)
+    (tmp_path / approvals.FILE).write_text(v1_first)
+    assert not modes.v2_rows(tmp_path)
+
+
+def test_the_v2_marker_check_costs_milliseconds_on_two_chain_files_of_1_mib_of_junk(tmp_path):
+    """The hook pays this on every call of a never-keyed install: json-parsing 1 MiB of `{}` lines took 438 ms; the bytes regex that
+    gates the parse takes a few ms. The bound is generous (best of 3 under 100 ms) so a loaded machine cannot flake it."""
+    import time
+    from ace_playbook.compile import modes
+    junk = b"{}\n" * ((1 << 20) // 3)
+    for name in (approvals.FILE, dm.FILE):
+        (tmp_path / name).write_bytes(junk)
+    best = min((lambda t0: (modes.v2_rows(tmp_path), time.perf_counter() - t0)[1])(time.perf_counter()) for _ in range(3))
+    assert not modes.v2_rows(tmp_path) and best < 0.1, best
+
+
 def test_v1_only_rows_and_no_marker_stay_an_unkeyed_install_wherever_the_config_sits(w, tmp_path, monkeypatch):
     cs.approve_file(w.cfg, w.props["rm_rf_nonscratch"], "warn", row=True)             # a v1 row
     cfg = cfgmod.load(relocate(w, tmp_path, monkeypatch))

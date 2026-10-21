@@ -10,12 +10,14 @@ or unreadable chain caps at observe. Imports: stdlib, `.approvals`, `.chains`, `
 from __future__ import annotations
 
 import contextlib
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Union
 
 from . import approvals, chains, demotions
 
+V2 = re.compile(rb'"v"\s*:\s*2\s*[,}]')   # a candidate `v: 2` row anywhere in a chain file (`v2_rows`)
 Broken = Optional[Union[int, str]]   # None: intact; an index: broken there; "unreadable": the read failed; "head_mismatch" / "heads_missing": see chains.head_state
 
 
@@ -47,10 +49,13 @@ def read_approvals(data_dir, ring: chains.Keyring | None = None) -> tuple[list[d
 
 def v2_rows(data_dir) -> bool:
     """True when `approvals.jsonl` or `demotions.jsonl` holds a shape-valid `v: 2` row: the install was keyed, whatever the config names now
-    (the marker `chains.key_of` falls back to when no key or heads file is found). An unreadable chain file counts as no row."""
+    (the marker `chains.key_of` falls back to when no key or heads file is found). An unreadable chain file counts as no row. One bytes regex
+    over the whole file gates the JSON parse (a hook pays this per call: parsing 1 MiB of junk lines took 438 ms); it matches the compact
+    spelling of the writers, so a row that hides its key behind a `\\u0076` escape is not a marker (it breaks an unkeyed chain anyway)."""
     for mod in (approvals, demotions):
         with contextlib.suppress(OSError):
-            if chains.has_v2(chains.read_regular(Path(data_dir) / mod.FILE, mod.MAX_BYTES) or b"", mod.shape):
+            raw = chains.read_regular(Path(data_dir) / mod.FILE, mod.MAX_BYTES) or b""
+            if V2.search(raw) and chains.has_v2(raw, mod.shape):
                 return True
     return False
 

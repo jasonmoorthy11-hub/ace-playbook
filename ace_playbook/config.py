@@ -20,7 +20,7 @@ MAX_INJECT_CHARS = 7000
 
 @dataclass
 class Config:
-    data_dir: Path = DEFAULT_DATA
+    data_dir: Path = field(default_factory=lambda: DEFAULT_DATA)   # looked up per instance, so the test suite can pin it away from the real one
     transcripts_root: Path | None = None
     api_key_path: Path | None = None
     engagements_path: Path | None = None
