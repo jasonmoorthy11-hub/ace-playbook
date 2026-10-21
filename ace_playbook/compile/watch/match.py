@@ -141,23 +141,23 @@ def version(inv: dict, results: list[dict], now: str) -> list[dict]:
     return out
 
 
-def _norm(url: str) -> str:
+def norm(url: str) -> str:
     return url.split("#")[0].rstrip("/").removesuffix(".md")
 
 
 def docs(inv: dict, results: list[dict], mapping: dict, prev: dict, now: str) -> list[dict]:
-    mapped = {_norm(u): keys for u, keys in mapping.get("docs", {}).items()}
+    mapped = {norm(u): keys for u, keys in mapping.get("docs", {}).items()}
     out = []
 
     def add(page: str, ev: dict) -> None:
-        out.append(record("docs", f"docs page changed: {page}", ev, list(mapped[_norm(page)]), page, None, f"curl -sI {sh(page)} | head -1", now))
+        out.append(record("docs", f"docs page changed: {page}", ev, list(mapped[norm(page)]), page, None, f"curl -sI {sh(page)} | head -1", now))
 
     for res in results:
         if res["kind"] == "sitemap":
             for loc, lm in sorted(res["data"].items()):
-                if _norm(loc) in mapped and lm and prev.get(loc) and lm > prev[loc]:
+                if norm(loc) in mapped and lm and prev.get(loc) and lm > prev[loc]:
                     add(loc, {"url": res["url"], "sha256": res["sha256"], "quote": f"{loc} lastmod {lm}", "tier": res["tier"]})
-        elif res["kind"] == "md" and _norm(res["url"]) in mapped and res.get("prev_sha256") and res["prev_sha256"] != res["sha256"]:
+        elif res["kind"] == "md" and norm(res["url"]) in mapped and res.get("prev_sha256") and res["prev_sha256"] != res["sha256"]:
             add(res["url"], {"url": res["url"], "sha256": res["sha256"], "quote": res["heading"] or res["quote"], "tier": res["tier"]})
     return out
 

@@ -1,8 +1,7 @@
-"""CLI of the compiler: cards, propose, validate, approve, unapprove, keygen, label, report, status, digest, dashboard, offline, shadow, seal.
-
-No network, no model, stdlib only. Exit codes: 0 ok, 1 refused or failed validation, 2 usage, configuration, store or id errors. `approve`, `unapprove` and
-`keygen` need a terminal (`approve --mode warn|block` is the promotion ladder, ladder.py). `label --queue` is the blind label queue (queue.py).
-`report`, `status`, `digest` and `dashboard` only read; the last three register their own parsers and `run` callables. `offline` is the nightly pass.
+"""CLI of the compiler: cards, propose, validate, approve, unapprove, keygen, label, report, status, digest, dashboard, offline, shadow, seal, watch.
+No model, stdlib only, no network except `watch scan` (on demand, off the hook path). Exit codes: 0 ok, 1 refused or failed validation, 2 usage or store errors.
+`approve`, `unapprove`, `keygen`, `label --queue` and `watch queue` need a terminal (`approve --mode warn|block` is the promotion ladder, ladder.py).
+`report`, `status`, `digest` and `dashboard` only read; `status`, `digest`, `dashboard` and `watch` register their own parsers. `offline` is the nightly pass.
 """
 
 from __future__ import annotations
@@ -18,6 +17,7 @@ from .. import ttyio
 from ..atomic import write_private
 from ..canon import now_iso
 from . import approvals, chains, chains_cli, chains_io, dashboard, digest, evidence, labels, modes, proposal, report, seal, shadow, status, synth
+from .watch import cli as watch_cli                       # light: `scan` loads fetch and inventory only when it runs
 
 LEGACY_BANNER = "This lesson's stored evidence is self-quoted legacy text; the human incident label is the only evidence."
 
@@ -263,7 +263,7 @@ def main(argv: list[str] | None = None) -> int:
     rp = sub.add_parser("report", help="counts per proposal from shadow rows and labels; synthetic kept apart")
     rp.add_argument("--days", type=int, default=14, help="days in the rows-per-day block (default 14, 1 to 3660)")
     rp.add_argument("--json", action="store_true", help="one JSON object instead of text")
-    for verb in (status, digest, dashboard): verb.add_parser(sub)       # noqa: E701 - the read-side verbs own their arguments
+    for verb in (status, digest, dashboard, watch_cli): verb.add_parser(sub)       # noqa: E701 - these verbs own their arguments and `run`
     of = sub.add_parser("offline", help="the nightly pass: detector events, auto labels, demotions, evasion, state cleanup")
     of.add_argument("--dry-run", action="store_true", help="compute and print the counts, write nothing")
     of.add_argument("--since", type=int, default=7, help="only transcripts modified in the last N days (1 to 3660, default 7)")
