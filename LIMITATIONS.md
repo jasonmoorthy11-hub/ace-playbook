@@ -80,6 +80,16 @@ state-versus-lesson classifier. In the stage-2 compiler: the arms (randomization
   `keygen`, deleting `demotions.jsonl` lifts its caps. Until `keygen` runs the chains are unkeyed. `keygen` itself runs on a never-keyed install only (it lists the rows it will re-seal, asks, and keeps
   `.bak` copies in the key directory); on any keyed install it refuses, so it cannot be used to seal a forged chain under a new key.
   `labels.jsonl` stays unkeyed.
+  Approvals, demotions and the heads MAC share one key and the plain `keyed_hash`, with no chain or purpose label, so the separation of the
+  chains rests on their disjoint row schemas (`tests/test_chain_tamper.py`); a domain-separated MAC needs a format change and a re-seal migration.
+  The tamper matrix is `tests/test_chain_tamper.py`; it pins the accepted residual (an old chain restored with its old heads file verifies) and
+  that a cut last line in `labels.jsonl` is skipped by its tolerant read, where in the two keyed chains it is a break at that row.
+- A mutation run over `detectors.py`, `shell.py` and `textrules.py` (250 of 787 mutants, 72.0 % killed) left 68 survivors; those that were not
+  equivalent are pinned by `tests/test_mutation_survivors.py`. The module-level regexes (`CORRECTION`, `SCRATCH`, the `textrules` checks) remain
+  the weak spot: each alternation branch and `\b` needs its own case. Every test runs under a 60 s SIGALRM timer (`tests/conftest.py`) that
+  raises a `BaseException` and re-fires every second, so a fail-open `except Exception` cannot swallow it; a swallowed firing fails the test at
+  teardown, and pytest's faulthandler aborts the whole run after 125 s with every thread's stack (the per-test alarm is the normal failure
+  path). It needs SIGALRM and the main thread, so it is not active on Windows.
 - A proposal's `provenance.source_sha256` is a per-detector hash by exclusion: the text of `detectors.py` and `catalogue.py`, minus
   the bodies of the other rows' `fire` functions (`catalogue.py` is hashed whole, the `CATALOGUE` registry literal included, because
   an expression inside it runs at import time in every process), plus the row's name, fire name and catalogue fields (the `meta`
