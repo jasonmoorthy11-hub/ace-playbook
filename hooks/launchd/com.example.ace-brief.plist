@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Example only: LaunchAgent that runs the brief once at login (launchd has no wake event; Hammerspoon covers wake and unlock).
+     launchd does not expand ~ or $HOME: replace the four __PLACEHOLDERS__ (__ACE_USER_HOME__ is your home directory) with
+     absolute paths, rename the Label, then see hooks/INSTALL.md section 8. Load it with `launchctl bootstrap gui/$(id -u) <file>`. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.example.ace-brief</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__ACE_PLAYBOOK_HOME__/hooks/brief.sh</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>ACE_PLAYBOOK_CONFIG</key>
+    <string>__ACE_CONFIG_FILE__</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:__ACE_USER_HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__ACE_DATA_DIR__/brief.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__ACE_DATA_DIR__/brief.err.log</string>
+</dict>
+</plist>
