@@ -16,7 +16,7 @@ from .sanitize import one_line
 VERSION = re.compile(r"\d+\.\d+\.\d+(?:[-+][\w.-]+)?")
 MODEL = re.compile(r"claude-[A-Za-z0-9][A-Za-z0-9._-]*")
 SEPARATOR = re.compile(r"\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?")
-NONE_WORDS = ("", "n/a", "na", "-", "—", "none", "tbd", "null")
+NONE_WORDS = ("", "n/a", "na", "-", "—", "none", "tbd", "tba", "null", "to be announced")
 MAX_ENTRIES = 100
 
 
@@ -119,16 +119,17 @@ def _roles(header: list[str]) -> dict[str, int]:
     for i, h in enumerate(header):
         low = h.lower()
         role = ("successor" if re.search(r"replace|successor|recommended|migrat", low) else "retires" if re.search(r"retire|sunset", low)
-                else "model" if re.search(r"model|name", low) else "deprecated" if "deprecat" in low else None)
+                else "model" if re.search(r"model|name", low) else "state" if re.search(r"state|status", low)
+                else "deprecated" if "deprecat" in low else None)
         if role and role not in roles:
             roles[role] = i
     return roles
 
 
 def parse_deprecations_md(text: str) -> list[dict]:
-    """Rows `{model_id, deprecated, retires, successor, row}` of every Markdown table with a model column. Columns are found by their
-    header words, in any order (model | deprecat* | retire* | replace*/recommended/successor); `N/A` and empty cells are None; `row` is
-    the table line verbatim (at most 400 characters). A cell naming several `claude-...` ids gives one row per id."""
+    """Rows `{model_id, deprecated, retires, successor, state, row}` of every Markdown table with a model column. Columns are found by
+    their header words, in any order (model | state/status | deprecat* | retire* | replace*/recommended/successor); `N/A` and empty
+    cells are None; `row` is the table line verbatim (at most 400 characters). A cell naming several `claude-...` ids gives one row per id."""
     lines, rows, i = text.splitlines(), [], 0
     while i < len(lines) - 1:
         if not (lines[i].strip().startswith("|") and SEPARATOR.fullmatch(lines[i + 1].strip())):
@@ -142,7 +143,7 @@ def parse_deprecations_md(text: str) -> list[dict]:
                 val = lambda role: None if get(role).lower() in NONE_WORDS else get(role)[:80]  # noqa: E731
                 for mid in MODEL.findall(get("model")) or ([get("model")[:80]] if get("model") else []):
                     rows.append({"model_id": mid, "deprecated": val("deprecated"), "retires": val("retires"), "successor": val("successor"),
-                                 "row": lines[j].strip()[:400]})
+                                 "state": val("state"), "row": lines[j].strip()[:400]})
             j += 1
         i = j
     return rows

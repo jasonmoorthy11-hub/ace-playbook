@@ -112,19 +112,25 @@ def test_deprecations_rows_of_the_status_and_history_layout():
     by = {}
     for r in rows:
         by.setdefault(r["model_id"], []).append(r)
-    assert set(by) == {"claude-active-model-20260101", "claude-old-sonnet-20250101", "claude-old-haiku-20240101"}
+    assert set(by) == {"claude-active-model-20260101", "claude-future-model-20260401", "claude-preview-model-20260101",
+                       "claude-old-sonnet-20250101", "claude-old-haiku-20240101"}
+    assert [by[m][0]["state"] for m in sorted(by)] == ["Active", "Active", "Retired", "Deprecated", "Deprecated"]
+    future = by["claude-future-model-20260401"][0]
+    assert (future["deprecated"], future["retires"]) == (None, "Not sooner than June 1, 2027")       # kept as written; match.py ignores it for Active
+    assert by["claude-preview-model-20260101"][0]["retires"] is None                               # "To be announced" is not a date
     status, history = by["claude-old-sonnet-20250101"]
     assert (status["deprecated"], status["retires"], status["successor"]) == ("September 1, 2026", "March 1, 2027", None)
     assert (history["deprecated"], history["retires"], history["successor"]) == (None, "March 1, 2027", "claude-new-sonnet-20260601")
     assert by["claude-active-model-20260101"][0]["deprecated"] is None and by["claude-active-model-20260101"][0]["retires"] is None
-    assert status["row"] == "| `claude-old-sonnet-20250101` | Deprecated | September 1, 2026 | March 1, 2027 |"
+    assert status["row"] in fixture("deprecations.md").decode().splitlines()                      # verbatim, padding included
+    assert status["row"].startswith("| `claude-old-sonnet-20250101` | Deprecated ")
 
 
 def test_deprecations_rows_with_reordered_columns_and_several_ids():
     rows = rows_of("deprecations_reordered.md")
     assert [r["model_id"] for r in rows] == ["claude-old-sonnet-20250101", "claude-two-ids-a-20240101", "claude-two-ids-b-20240101"]
     assert rows[0] == {"model_id": "claude-old-sonnet-20250101", "deprecated": "September 1, 2026", "retires": "March 1, 2027",
-                       "successor": "claude-new-sonnet-20260601",
+                       "successor": "claude-new-sonnet-20260601", "state": None,
                        "row": "| claude-new-sonnet-20260601 | March 1, 2027 | September 1, 2026 | **claude-old-sonnet-20250101** |"}
     assert (rows[1]["successor"], rows[1]["retires"], rows[1]["deprecated"]) == (None, None, "June 1, 2026")
     assert rows[1]["row"] == rows[2]["row"]

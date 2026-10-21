@@ -19,7 +19,8 @@ from .store import RANK, clean
 
 DAYS, MAX_LEADS, MAX_LINE = 30, 10, 300
 SAFE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{2,79}")
-NONE_WORDS = ("", "n/a", "na", "-", "none", "tbd")
+NONE_WORDS = ("", "n/a", "na", "-", "none", "tbd", "to be announced")
+GONE = ("deprecated", "retired")                                           # a model whose table says Active or Legacy is not retiring
 KEYS = {"id", "created", "class", "elevated", "title", "evidence", "inventory_hits", "change", "verify", "expires", "status"}
 CLASSES = ("model_pin", "version", "docs", "lead")
 PLAIN = r"[\w./~@+:=-]+"
@@ -96,21 +97,23 @@ def _diff(files: dict, rx: re.Pattern, new: str) -> str:
 
 
 def _real(v: object) -> bool:
-    return isinstance(v, str) and v.strip().lower() not in NONE_WORDS
+    """A date or a name, not N/A, not "to be announced" and not the tentative "Not sooner than ..." that an Active model carries."""
+    return isinstance(v, str) and v.strip().lower() not in NONE_WORDS and not v.strip().lower().startswith("not sooner")
 
 
 def model_pin(inv: dict, results: list[dict], now: str) -> list[dict]:
     merged: dict = {}
     for res in (r for r in results if r["kind"] == "deprecations"):
         for row in res["data"]:
-            m = merged.setdefault(row["model_id"], {"res": res, "had": False, **{k: None for k in ("deprecated", "retires", "successor", "row")}})
-            for k in ("deprecated", "retires", "successor"):
-                m[k] = m[k] or row[k]
+            m = merged.setdefault(row["model_id"], {"res": res, "had": False, **{k: None for k in ("deprecated", "retires", "successor", "row", "state")}})
+            for k in ("deprecated", "retires", "successor", "state"):
+                m[k] = m[k] or row.get(k)
             if m["row"] is None or (row["successor"] and not m["had"]):
                 m["row"], m["had"], m["res"] = row["row"], bool(row["successor"]), res
     out = []
     for mid, m in sorted(merged.items()):
-        if not SAFE.fullmatch(mid) or not (_real(m["deprecated"]) or _real(m["retires"])):
+        gone = m["state"] is None or m["state"].lower() in GONE                  # a table with a state column: only Deprecated or Retired count
+        if not SAFE.fullmatch(mid) or not gone or not (_real(m["deprecated"]) or _real(m["retires"]) or (m["state"] or "").lower() in GONE):
             continue
         rx, new = _boundary(mid), m["successor"] if _real(m["successor"]) and SAFE.fullmatch(m["successor"] or "") else None
         ev = {"url": m["res"]["url"], "sha256": m["res"]["sha256"], "quote": m["row"], "tier": m["res"]["tier"]}

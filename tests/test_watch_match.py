@@ -69,6 +69,15 @@ def test_a_retirement_without_a_successor_is_a_lead_with_no_diff():
     assert recs[0]["title"] == f"retirement with no successor named: {OLD} (settings.model)" and recs[0]["inventory_hits"] == ["settings.model"]
 
 
+def test_an_active_model_with_a_tentative_retirement_is_not_retiring_but_a_deprecated_one_without_a_date_is():
+    pinned = {"~/s": {"sha256": "9" * 64, "lines": [[1, "claude-future-model-20260401"], [2, "claude-preview-model-20260101"],
+                                                        [3, "claude-old-haiku-20240101"], [4, "claude-active-model-20260101"]]}}
+    recs = match.candidates(inv(k=pinned), [DEPR()], {}, {}, NOW)
+    assert sorted(r["title"] for r in recs) == [
+        "retirement with no successor named: claude-old-haiku-20240101 (k)", "retirement with no successor named: claude-preview-model-20260101 (k)"]
+    assert all(r["class"] == "lead" and r["change"]["diff"] is None for r in recs)
+
+
 def test_only_deprecated_models_the_inventory_pins_and_with_boundaries():
     active = {"~/s": {"sha256": "3" * 64, "lines": [[1, "claude-active-model-20260101"]]}}
     prefix = {"~/p": {"sha256": "4" * 64, "lines": [[1, f"{OLD}-extra"], [2, f"x{OLD}"], [3, f"{OLD}.1"]]}}
