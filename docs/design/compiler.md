@@ -774,8 +774,13 @@ writer refuses. `v` must be the int 2 or 1 (`2.0`, `"2"`, `True` never verify) a
 prefix verify while no `v: 2` row had been seen, and a later one treated "no key file" as "unkeyed", so a process that never read the key
 could rewrite a chain as plain v1 rows (the second time after moving the key away); the marker above closes both.
 
-*Key file.* `Config.chain_key_path` (default `~/.config/ace-playbook/chain_key`, expanded at load; `null` in the config file switches it off; a
-bare `Config()` has none). `canon.chain_key` reads 64 hex characters (one trailing newline allowed) from a regular file of the current user,
+*Key file.* `Config.chain_key_path` (expanded at load) is the key the config file NAMES; there is no ambient default (it was removed in Order
+3a: a default made a config that never named a key read one), so a config without the line, `null` and a bare `Config()` all have none.
+`Config.source` (set by `load`, made absolute; not a config key) is the file read; an unnamed key makes `key_of` look for `chain_heads.json`
+beside that file, and a shape-valid `v: 2` row in either chain file under `data_dir` (`modes.v2_rows`) also marks the install keyed wherever the
+config sits, so a keyed install whose config names no key (flag, heads file or `v: 2` rows) is `chain_key:missing`, never a silent v1 rule. `compile keygen`
+on a config without the line proposes `chain_key` beside the config file, names it in the prompt and, on y, re-reads the config and writes the line
+(home as `~`, `atomic.write_private`, other keys kept, so an edit made while the prompt was open survives) before it makes the key; `--rehead` and a `null` never write the config. `canon.chain_key` reads 64 hex characters (one trailing newline allowed) from a regular file of the current user,
 opened with `O_NOFOLLOW`, with no group or other permission bits and owner-read (0600 or 0400); a missing file, symlink, directory, FIFO, other
 owner or mode, bad length or non-hex content is `None`, and it never raises.
 

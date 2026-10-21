@@ -71,7 +71,11 @@ state-versus-lesson classifier. In the stage-2 compiler: the arms (randomization
 - `approvals.jsonl` and `demotions.jsonl` are hash-chained and, after `compile keygen`, HMAC-keyed (only `v: 2` rows verify while the key is
   readable) with a signed head file (`chain_heads.json`) that pins each chain's last row, so a process without the key cannot downgrade,
   cut or roll back a chain. The key is readable by the operator's user, hence by the agent: a keyed row proves its writer read, replaced or
-  redirected the key (the key file, its directory, or `chain_key_path` in `config.json`). The deny rules in hooks/INSTALL.md section 7 cover
+  redirected the key (the key file, its directory, or `chain_key_path` in `config.json`; there is no default key path, so deleting that line
+  also drops the key, but the install still fails closed while `ACE_PLAYBOOK_KEYED=1` is set, `chain_heads.json` sits beside the config file
+  or a chain holds a `v: 2` row; deleting the rows and the heads file as well is the stated residual). The `v: 2` marker scan is gated by
+  one regex pass, so junk chain files cost well under a millisecond, but a chain file full of short `{"v": 2}` lines passes the regex and is
+  fully parsed (about 190 ms for two 1 MiB files on this Mac): a slow-hook residual with no bypass, bounded by the hook timeout. The deny rules in hooks/INSTALL.md section 7 cover
   Read, Edit and Write on `~/.config/ace-playbook/**`; they do not cover a shell command (the substring guard does not catch
   `cd ~/.config/ace-playbook; mv chain_key x`), a same-user process outside the permission layer, or deleting both the key file and the heads
   file, which returns the install to the unkeyed v1-only rule unless `ACE_PLAYBOOK_KEYED=1` is set in the hook command (an install counts as
@@ -89,7 +93,9 @@ state-versus-lesson classifier. In the stage-2 compiler: the arms (randomization
   the weak spot: each alternation branch and `\b` needs its own case. Every test runs under a 60 s SIGALRM timer (`tests/conftest.py`) that
   raises a `BaseException` and re-fires every second, so a fail-open `except Exception` cannot swallow it; a swallowed firing fails the test at
   teardown, and pytest's faulthandler aborts the whole run after 125 s with every thread's stack (the per-test alarm is the normal failure
-  path). It needs SIGALRM and the main thread, so it is not active on Windows.
+  path). It needs SIGALRM and the main thread, so it is not active on Windows. The alarm cannot cancel work after a test has already failed:
+  once a timeout has surfaced it is disarmed (so it cannot fire into teardown), so a hang in the teardown that follows, or a thread or child
+  process the test left running, is bounded only by the 125 s faulthandler.
 - A proposal's `provenance.source_sha256` is a per-detector hash by exclusion: the text of `detectors.py` and `catalogue.py`, minus
   the bodies of the other rows' `fire` functions (`catalogue.py` is hashed whole, the `CATALOGUE` registry literal included, because
   an expression inside it runs at import time in every process), plus the row's name, fire name and catalogue fields (the `meta`

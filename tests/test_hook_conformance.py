@@ -96,7 +96,7 @@ def test_stdin_at_the_cap_is_evaluated_and_one_byte_over_is_skipped(w):
     at_cap, over = padded(RM, shadow.MAX_STDIN), padded(RM, shadow.MAX_STDIN + 1)
     assert (len(at_cap), len(over)) == (shadow.MAX_STDIN, shadow.MAX_STDIN + 1)
     p, _ = hook(w, at_cap)
-    assert (p.returncode, p.stdout) == (0, b"") and len(cs.shadow_rows(w.data)) == 1
+    assert (p.returncode, p.stdout, p.stderr) == (0, b"", b"") and len(cs.shadow_rows(w.data)) == 1
     before = cs.tree_state(w.data)
     p, secs = hook(w, over)
     assert (p.returncode, p.stdout, p.stderr) == (0, b"", b"") and secs < FAST
@@ -116,10 +116,10 @@ def test_a_64kib_command_exits_0_and_the_row_records_dur_ms(w, length, cause):
 
 
 def test_a_64kib_command_that_is_cut_is_marked_and_one_that_fits_is_not(w):
-    hook(w, json.dumps(cs.pre_payload("echo " + "a" * (MAX_CMD - 5))).encode())      # exactly MAX_CMD: nothing cut
-    assert cs.shadow_rows(w.data) == []
-    hook(w, json.dumps(cs.pre_payload("echo " + "a" * (MAX_CMD - 4))).encode())      # one over: cut, so `unparseable`
-    assert [r["cause"] for r in cs.shadow_rows(w.data)] == ["truncated"]
+    p, _ = hook(w, json.dumps(cs.pre_payload("echo " + "a" * (MAX_CMD - 5))).encode())      # exactly MAX_CMD: nothing cut
+    assert (p.returncode, p.stdout, p.stderr) == (0, b"", b"") and cs.shadow_rows(w.data) == []
+    p, _ = hook(w, json.dumps(cs.pre_payload("echo " + "a" * (MAX_CMD - 4))).encode())      # one over: cut, so `unparseable`
+    assert (p.returncode, p.stdout, p.stderr) == (0, b"", b"") and [r["cause"] for r in cs.shadow_rows(w.data)] == ["truncated"]
 
 
 # ------------------------------------------------------------------ hostile environment

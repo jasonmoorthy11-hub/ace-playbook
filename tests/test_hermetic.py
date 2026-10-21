@@ -4,6 +4,7 @@ import dataclasses
 import json
 import os
 import signal
+from pathlib import Path
 
 import pytest
 
@@ -11,16 +12,32 @@ from ace_playbook import config as cfgmod
 from ace_playbook.compile import catalogue, events
 from ace_playbook.compile import state as state_mod
 
-from .conftest import PerTestTimeout
+from .conftest import PerTestTimeout, timeout_seconds
 from .test_hooks import env  # noqa: F401  (fixture)
 
 
-def test_a_config_file_without_chain_key_path_never_resolves_to_the_real_key(tmp_path, hermetic_chain_key):
+def test_a_config_file_without_chain_key_path_resolves_to_no_key_at_all(tmp_path):
     conf = tmp_path / "c.json"
     conf.write_text(json.dumps({"data_dir": str(tmp_path / "data")}))
-    cfg = cfgmod.load(conf)
-    assert cfg.chain_key_path == hermetic_chain_key and not cfg.chain_key_path.exists()
-    assert ".config" not in cfg.chain_key_path.parts
+    assert cfgmod.load(conf).chain_key_path is None and not hasattr(cfgmod, "DEFAULT_CHAIN_KEY")
+
+
+def test_the_config_file_is_pinned_to_a_missing_path_so_a_forgetful_test_cannot_read_the_operators(hermetic_config):
+    assert os.environ[cfgmod.ENV_CONFIG] == str(hermetic_config) and not hermetic_config.exists()
+    with pytest.raises(FileNotFoundError):
+        cfgmod.load()
+
+
+def test_the_default_config_location_is_pinned_too_so_a_test_that_unsets_the_variable_cannot_see_the_real_one(hermetic_config, monkeypatch):
+    monkeypatch.delenv(cfgmod.ENV_CONFIG)
+    assert cfgmod.DEFAULT_CONFIG == hermetic_config and cfgmod.config_file() == hermetic_config
+    assert cfgmod.load().chain_key_path is None and cfgmod.load().source == hermetic_config
+
+
+def test_a_bare_config_never_points_at_the_real_data_dir_during_the_suite(hermetic_config):
+    home = Path(os.path.expanduser("~"))
+    for cfg in (cfgmod.Config(), cfgmod.from_dict({})):
+        assert cfg.data_dir == cfgmod.DEFAULT_DATA and not cfg.data_dir.exists() and not cfg.data_dir.is_relative_to(home)
 
 
 def test_child_processes_get_a_throwaway_home(env):  # noqa: F811
@@ -38,6 +55,30 @@ def test_every_test_runs_under_the_default_re_arming_alarm_of_60_seconds():
 @pytest.mark.timeout(1)
 @pytest.mark.xfail(strict=True, raises=PerTestTimeout, reason="proof of conftest.per_test_timeout: an infinite loop fails after 1 s")
 def test_an_infinite_loop_fails_with_the_timeout_instead_of_hanging():
+    while True:
+        pass
+
+
+@pytest.mark.parametrize("arg", [float("inf"), float("-inf"), float("nan"), 0, -1, 0.0, True, "5", None])
+def test_the_timeout_marker_rejects_a_value_that_is_not_a_positive_finite_number(arg):
+    with pytest.raises(ValueError, match="positive finite number"):
+        timeout_seconds(arg)
+
+
+@pytest.mark.parametrize("arg,seconds", [(1, 1.0), (0.25, 0.25), (90, 90.0)])
+def test_the_timeout_marker_takes_a_positive_finite_number(arg, seconds):
+    assert timeout_seconds(arg) == seconds
+
+
+@pytest.fixture
+def timer_disarmed_at_teardown():
+    yield
+    assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0), "the alarm re-fires into teardown after it has surfaced"
+
+
+@pytest.mark.timeout(1)
+@pytest.mark.xfail(strict=True, raises=PerTestTimeout, reason="proof: once the alarm has surfaced the timer is disarmed before teardown runs")
+def test_the_interval_timer_is_disarmed_once_the_alarm_has_surfaced(timer_disarmed_at_teardown):
     while True:
         pass
 
