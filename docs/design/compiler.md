@@ -974,7 +974,8 @@ eligible sessions, no fires AND no hook row at all (a row that is not a scanned 
 disagreement, never silence), and `agreement.awaiting_scan` counts the fires waiting for the offline scan. `measurement.start` is the
 greatest, over proposals whose newest approvals row is not a revocation, of each proposal's newest `observe` approvals row (the ladder
 restart point, section 7.3): a warn or block promotion does not move it, and neither does a demotion to disabled. `seal --dry-run`'s
-`measurement_start` is the newest row of any mode of a proposal that is not revoked, so the two are equal until the first promotion.
+`measurement_start` is the same value: both call `measure.start_of` (`compile/measure.py`, one pure function over the approvals rows), so
+they are equal at all times and a promotion never moves either.
 The queue (`queue`, `queue_total`) lists the fired rows
 that no human `tp`/`fp` covers; the fires of retired proposals are not listed but counted in `queue_retired` (`label --queue --all` offers
 them). `compile digest [--since ISO] [--days N]` (`compile/digest.py`) renders the same dict as six
@@ -1000,8 +1001,8 @@ section in PREREGISTRATION.md still says `(DRAFT until sealed)`. The sealing its
   the registry), `report_sha256` (the bytes of `compile/metrics.py` then `compile/report.py`, joined by a NUL: exactly those two files;
   the detector code is covered by the per-detector hashes), `proposals:` (the newest `approvals.jsonl` row of each proposal id that is
   not revoked, as `id mode proposal_sha256`, sorted; `(none)` when there are none, or a notice line when the chain is unreadable or
-  broken, still exit 0), `shadow_seed_sha256`, `arm_rate`, `measurement_start` (the greatest `ts` over those listed rows, `-` when
-  none is listed) and `sealed_at -`.
+  broken, still exit 0), `shadow_seed_sha256`, `arm_rate`, `measurement_start` (`measure.start_of`, the same value as `status`'s
+  `measurement.start`: the greatest, over the listed proposals, of each one's newest `observe` row `ts`; `-` when none qualifies) and `sealed_at -`.
 - Without `--dry-run` the checks run in this order, and the first failure ends the command with nothing written: (1) no terminal: exit 2;
   (2) the file does not hold exactly one `## Shadow-mode additions` heading (counted loosely: an indented or double-spaced heading also
   counts): exit 2; (3) the heading already says SEALED (later changes go in dated amendments; this wins over every later check): exit 1;

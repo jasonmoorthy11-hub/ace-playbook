@@ -217,7 +217,7 @@ def test_measurement_start_is_the_newest_observe_row_of_the_proposals_still_in_p
     assert build(w)["proposals"][pid_of(w)]["approved_at"] == "2026-10-18T16:10:26Z"
 
 
-def test_a_warn_promotion_does_not_move_the_measurement_start_and_seal_agrees_until_then(tmp_path):
+def test_a_warn_promotion_does_not_move_the_measurement_start_and_seal_agrees(tmp_path):
     w = cs.real_world(tmp_path, detectors=DETS, approve=False)
     approve(w, "rm_rf_nonscratch", "2026-10-18T16:10:26Z")
     approve(w, "rm_rf", "2026-10-19T08:00:00Z")
@@ -227,7 +227,7 @@ def test_a_warn_promotion_does_not_move_the_measurement_start_and_seal_agrees_un
     assert build(w)["measurement"]["start"] == seal_start() == "2026-10-19T21:00:00Z"
     approve(w, "rm_rf_nonscratch", "2026-10-25T00:00:00Z", "warn")                       # the first promotion
     assert build(w)["measurement"]["start"] == "2026-10-19T21:00:00Z"                    # the ladder restart point stays
-    assert seal_start() == "2026-10-25T00:00:00Z"                                        # seal takes the newest row of any mode
+    assert seal_start() == "2026-10-19T21:00:00Z"                                        # seal shares the rule (measure.start_of)
 
 
 def test_a_demotion_disabled_proposal_still_counts_so_a_nightly_demotion_cannot_move_the_start_back(w):
@@ -238,7 +238,7 @@ def test_a_demotion_disabled_proposal_still_counts_so_a_nightly_demotion_cannot_
                               "ref": "0123abcd", "review_required": False, "ts": "2026-10-16T00:00:00Z"})
     s = build(w)
     assert s["proposals"][pid_of(w, "rm_rf")]["mode"] == "disabled" and s["proposals"][pid_of(w, "rm_rf")]["verdict"] == "retired"
-    assert s["measurement"]["start"] == seal._proposals(w.cfg)[1] == "2026-10-15T00:00:00Z"          # equals seal --dry-run until a promotion
+    assert s["measurement"]["start"] == seal._proposals(w.cfg)[1] == "2026-10-15T00:00:00Z"          # equals seal --dry-run (measure.start_of)
     revoke(w, "rm_rf", "2026-10-17T00:00:00Z")                                                       # only a revocation takes it out
     assert build(w)["measurement"]["start"] == seal._proposals(w.cfg)[1] == "2026-10-01T00:00:00Z"
 

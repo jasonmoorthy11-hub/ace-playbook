@@ -146,7 +146,8 @@ this N", never as "no effect".
 Filled by `compile seal`: one line per detector (`name strength sha256`: the strength from the
 catalogue registry and the hash from `catalogue.source_table()`), `report_sha256`, one line per
 approved proposal (`P-id mode proposal_sha256`, from the newest non-revoked row of
-`approvals.jsonl`), `shadow_seed_sha256`, `arm_rate`, `measurement_start` and `sealed_at`.
+`approvals.jsonl`), `shadow_seed_sha256`, `arm_rate`, `measurement_start` (the greatest, over those proposals, of each one's newest
+`observe` row of `approvals.jsonl`: the restart point of the promotion ladder, so a warn promotion does not move it) and `sealed_at`.
 `report_sha256` covers exactly two files, `ace_playbook/compile/metrics.py` and
 `ace_playbook/compile/report.py` (their bytes in that order, joined by a NUL byte); the detector
 code is covered by the per-detector hashes, not by `report_sha256`.
