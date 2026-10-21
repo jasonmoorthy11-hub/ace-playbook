@@ -302,3 +302,10 @@ def test_cli_health_touches_neither_key_nor_store(cfg, monkeypatch, capsys):
     cfg.api_key_path.unlink()
     rc, _ = run_health_cli(monkeypatch, cfg, capsys)
     assert rc == 0 and not cfg.deltas.exists() and not cfg.sqlite.exists() and not cfg.injections.exists()
+
+
+def test_record_creates_a_missing_data_dir_private(cfg):
+    assert not cfg.data_dir.exists()
+    healthmod.record(cfg, True)
+    assert stat.S_IMODE(cfg.data_dir.stat().st_mode) == 0o700
+    assert stat.S_IMODE((cfg.data_dir / "health.json").stat().st_mode) == 0o600

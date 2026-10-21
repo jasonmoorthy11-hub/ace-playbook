@@ -10,10 +10,11 @@ from html import unescape
 import pytest
 
 from ace_playbook.compile import __main__ as cli
-from ace_playbook.compile import dashboard, status
+from ace_playbook.compile import dashboard, measure, status
 
 from . import compile_support as cs
 from .test_compile_status import NOW, ROOT, build, labelled_world, pid_of, w  # noqa: F401 - w is a fixture
+from .test_compile_status import row as status_row
 
 FAMILIES = (          # verdict, mode, precision, tp, fp, unlabelled, eligible
     ("retired", "disabled", [0.0, 0.2281], 0, 13, 0, 17),
@@ -35,7 +36,7 @@ def synth(n: int = 4, queue: int = 3, **over) -> dict:
         props[f"P-a1b2c3{i:02d}"] = {
             "detector": f"det_{i}", "strength": "strong", "mode": mode, "approved_mode": mode, "approved_at": "2026-10-18T16:10:29Z",
             "rows": tp + fp + unlab, "fires": tp + fp + unlab, "tp": tp, "fp": fp, "unlabelled": unlab, "eligible": elig,
-            "fires_per_eligible": 0.5, "precision": prec, "fp_upper_95": None, "warn_earliest": "2026-11-01T16:10:29Z", "verdict": verdict}
+            "fires_per_eligible": 0.5, "precision": prec, "fp_upper_95": None, "next_rung": "warn", "next_earliest": "2026-11-01T16:10:29Z", "verdict": verdict}
     pids = list(props) or ["P-a1b2c300"]
     qs = [{"id": f"{i:08x}", "ts": f"2026-10-20T{i % 12:02d}:00:00Z", "proposal_id": pids[i % len(pids)], "detector": "det_0",
            "session8": "38946dc9", "event": "PreToolUse", "cause": "detector"} for i in range(min(queue, 50))]
@@ -154,6 +155,45 @@ def test_verdict_families_pair_a_colour_class_with_a_glyph(verdict, cls, glyph):
     assert dashboard.family(verdict) == (cls, glyph)
     cell = str(dashboard.badge(verdict))
     assert glyph in cell and verdict in cell and f'class="st {cls}"' in cell
+
+
+OVERRIDES = ({}, {"to_label": 2}, {"eligible": 0}, {"window_start": "2026-10-19T00:00:00Z"}, {"tp_window": 2}, {"tp_window": 5, "fp_window": 6},
+             {"fp_window": 1}, {"strength": "weak"}, {"compilable": "observe"}, {"compilable": "warn"}, {"compilable": "none"}, {"event": "Stop"},
+             {"revoked": True}, {"auto_fp": 2, "auto_fp_oldest": "abcd1234"}, {"cap": "observe"}, {"cap": "warn"},
+             {"approved_mode": "block", "cap": "warn"},
+             {"approved_mode": "warn", "approvals_mode": "observe", "backing": "row"}, {"mode": "-", "approved_mode": "-"},
+             {"backing": "row", "approvals_mode": "none"}, {"backing": "chain"}, {"backing": "proposal"}, {"approved_at": "2026-12-01T00:00:00Z"})
+
+
+def emitted_verdicts():
+    """Every verdict family `status.verdict` can emit: each rung of `measure.NEXT` (and the top rung) against each refusal."""
+    rungs = [*measure.NEXT, "block"]
+    return {status.verdict(status_row(**{"mode": m, **over}), "2026-10-20T12:00:00Z") for m in rungs for over in OVERRIDES}
+
+
+def test_every_verdict_status_can_emit_maps_to_a_known_family():
+    seen = emitted_verdicts()
+    assert {"block eligible", "warn eligible", "block (top rung)", "warn only: block is for PreToolUse", "observe only: weak detector",
+            "warn only: detector allows warn", "demoted:warn (approve --mode observe restarts)", "not backed: no approved copy",
+            "not backed: newest approvals row is observe"} <= seen
+    unknown = sorted(v for v in seen if not any(v.startswith(word) for word, _, _ in dashboard.FAMILIES))
+    assert unknown == []                                               # no verdict falls through to the default family by accident
+
+
+@pytest.mark.parametrize("n", sorted(measure.NEXT.values()))
+def test_a_next_rung_verdict_renders_like_the_warn_one(n):
+    assert dashboard.family(f"{n} eligible") == dashboard.family("warn eligible") == ("good", "✓")
+    assert dashboard.family(f"{n} earliest 2026-11-03") == dashboard.family("warn earliest 2026-11-03")
+
+
+@pytest.mark.parametrize("verdict, cls, glyph", [
+    ("block (top rung)", "neutral", "◦"), ("warn only: detector allows warn", "muted", "⊘"), ("warn only: block is for PreToolUse", "muted", "⊘"),
+    ("warn only: weak detector", "muted", "⊘"), ("observe only: detector allows observe", "muted", "⊘"),
+    ("block eligible; 1 auto FPs (label --tp abcd1234 overturns)", "good", "✓"),
+    ("demoted:warn (approve --mode observe restarts)", "warn", "⚠"), ("not backed: newest approvals row is observe", "warn", "⚠"),
+    ("not backed: no approved copy", "warn", "⚠")])
+def test_the_rung_aware_verdicts_have_a_colour_class_and_glyph(verdict, cls, glyph):
+    assert dashboard.family(verdict) == (cls, glyph)
 
 
 def test_the_table_has_one_row_per_proposal_inside_a_scroll_container():

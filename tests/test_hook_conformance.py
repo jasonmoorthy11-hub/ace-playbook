@@ -191,7 +191,7 @@ ALLOWED_ACE = {"ace_playbook", "ace_playbook.config", "ace_playbook.canon", "ace
                "ace_playbook.compile", *("ace_playbook.compile." + m for m in (
                    "shadow", "state", "evidence", "proposal", "modes", "demotions", "approvals", "chains", "catalogue",
                    "detectors", "events", "shell", "srchash"))}
-ABSENT = ("seal", "dashboard", "dashboard_html", "status", "digest", "queue", "report", "synth", "metrics", "scrub")
+ABSENT = ("seal", "dashboard", "dashboard_html", "status", "digest", "queue", "report", "synth", "metrics", "scrub", "measure")
 HEAVY = {"sqlite3", "subprocess", "socket", "ssl", "http", "urllib.request", "asyncio", "multiprocessing", "threading", "ctypes"}
 
 

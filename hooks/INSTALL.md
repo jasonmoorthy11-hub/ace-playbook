@@ -144,14 +144,17 @@ in a subagent folder, and have no entry in `reflections.jsonl`. Each reflection 
 call; usage is written to the ledger and the log. Remove the job with
 `launchctl bootout "gui/$(id -u)/com.example.ace-playbook-nightly"`.
 
-Each non-dry run writes `health.json` (0600) to the data directory: last run time, `ok`,
-`consecutive_failures` and a scrubbed `last_error`. A night counts as failed on an exception, an
-API error (including a spend or usage cap), a missing key or a delta log that fails verification.
-Check it with `PYTHONPATH="$ACE_PLAYBOOK_HOME" python3 -m ace_playbook.inject --health` (prints
+Each run without `--dry-run`, and each `--dry-run` night whose offline pass is real, writes
+`health.json` (0600) to the data directory: last run time, `ok`, `consecutive_failures` and a
+scrubbed `last_error`. A night counts as failed on an exception, an API error (including a spend
+or usage cap), a missing key or a delta log that fails verification. Under `--dry-run` the record
+reflects the offline pass and the script itself only: a real, clean offline pass records `ok` (the
+nightly ran), a failing pass or a crash records the failure, and reflection-side failures (key,
+cap, API) are not seen; `--dry-run` together with `--offline-dry-run` or `--no-offline` leaves the
+record untouched. Check it with
+`PYTHONPATH="$ACE_PLAYBOOK_HOME" python3 -m ace_playbook.inject --health` (prints
 `no health record` before the first run). After 3 failures in a row the SessionStart block adds
-one line telling you to read the reflect log (`reflect.log`) in the data dir. If the launchd job
-is set up with `--dry-run`, no health record is written (unless the offline pass fails) and `--health` prints `no health record`;
-that is expected and is not a sign of health.
+one line telling you to read the reflect log (`reflect.log`) in the data dir.
 
 ## 5. Optional: git pre-commit scrub
 

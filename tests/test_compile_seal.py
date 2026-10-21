@@ -76,15 +76,16 @@ def break_chain(cfg):
 
 
 def test_the_dry_run_prints_the_block_in_the_documented_format(world, capsys):
-    # proposals: the newest row per id that is not revoked; measurement_start: the greatest ts over those listed rows
+    # proposals: the newest row per id that is not revoked; measurement_start: the greatest newest-observe ts over those ids (measure.start_of)
     cfg, _ = world
+    row(cfg, "P-00000002", "observe", "2026-10-18T00:00:00Z")
     row(cfg, "P-00000002", "warn", "2026-10-20T00:00:00Z")
     row(cfg, "P-00000001", "observe", "2026-10-19T00:00:00Z")
     assert go(cfg)[0] == 0
     assert capsys.readouterr().out == (
         f"detectors:\n  alpha_detector strong {'1' * 64}\n  zeta_detector weak {'2' * 64}\nreport_sha256 {report.source_sha256()}\n"
         f"proposals:\n  P-00000001 observe {'a' * 64}\n  P-00000002 warn {'a' * 64}\nshadow_seed_sha256 -\narm_rate 0.5 (planned)\n"
-        "measurement_start 2026-10-20T00:00:00Z\nsealed_at -\n")
+        "measurement_start 2026-10-19T00:00:00Z\nsealed_at -\n")
 
 
 def test_the_dry_run_writes_nothing(world):
@@ -105,7 +106,7 @@ def test_the_block_lists_every_catalogue_detector_with_its_real_hash(world, monk
     assert all(re.fullmatch(r"  [a-z_0-9]+ (strong|weak) [0-9a-f]{64}", ln) for ln in lines[1:1 + len(names)])
 
 
-def test_measurement_start_is_the_newest_non_revoked_row_and_a_revoked_proposal_is_skipped(world, capsys):
+def test_measurement_start_is_the_newest_observe_row_and_a_revoked_proposal_is_skipped(world, capsys):
     cfg, _ = world
     row(cfg, "P-00000001", "observe", "2026-10-19T00:00:00Z")
     row(cfg, "P-00000002", "observe", "2026-10-20T00:00:00Z")
@@ -113,7 +114,7 @@ def test_measurement_start_is_the_newest_non_revoked_row_and_a_revoked_proposal_
     row(cfg, "P-00000001", "warn", "2026-10-22T00:00:00Z")
     assert go(cfg)[0] == 0
     out = capsys.readouterr().out
-    assert f"  P-00000001 warn {'a' * 64}\n" in out and "P-00000002" not in out and "measurement_start 2026-10-22T00:00:00Z" in out
+    assert f"  P-00000001 warn {'a' * 64}\n" in out and "P-00000002" not in out and "measurement_start 2026-10-19T00:00:00Z" in out
     row(cfg, "P-00000001", "revoked", "2026-10-23T00:00:00Z")
     go(cfg)
     out = capsys.readouterr().out

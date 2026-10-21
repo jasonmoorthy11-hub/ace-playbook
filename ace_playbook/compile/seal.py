@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Callable
 
 from ..canon import now_iso
-from . import approvals, catalogue, chains, report
+from . import approvals, catalogue, chains, measure, report
 
 REPO = Path(__file__).resolve().parents[2]
 PREREG = REPO / "PREREGISTRATION.md"                         # tests point this at a copy
@@ -30,7 +30,7 @@ PLANNED = "arm_rate 0.5 (planned)"
 
 def _proposals(cfg) -> tuple[list[str], str, object]:
     """(lines, measurement_start, broken): the newest row (in chain order) of each proposal id that is not revoked, sorted by id, as
-    `id mode proposal_sha256`, and the greatest ts among those listed rows; `-` when none is listed."""
+    `id mode proposal_sha256`, and `measure.start_of` the rows (the ladder's restart point, shared with `status`); `-` when none qualifies."""
     try:
         rows, broken = approvals.read_chain(cfg.data_dir, chains.key_of(cfg))
     except (ValueError, OSError):
@@ -38,7 +38,7 @@ def _proposals(cfg) -> tuple[list[str], str, object]:
     newest = {pid: approvals.newest(rows, pid) for pid in {r["proposal_id"] for r in rows}}
     listed = {pid: r for pid, r in newest.items() if r["mode"] != "revoked"}
     return ([f"  {pid} {r['mode']} {r['proposal_sha256']}" for pid, r in sorted(listed.items())],
-            max((r["ts"] for r in listed.values()), default="-"), broken)
+            measure.start_of(rows) or "-", broken)
 
 
 def _notice(broken: object) -> list[str]:

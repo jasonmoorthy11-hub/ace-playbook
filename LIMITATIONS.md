@@ -148,6 +148,11 @@ state-versus-lesson classifier. In the stage-2 compiler: the arms (randomization
   and warn mode). The shell-mode rule skips meta records (`isMeta`, compact summary, transcript-only) and
   needs the whole-record `<bash-input>` shape.
 
+The operator surface (`compile status`, `digest`, `dashboard`, `label --queue`, `hooks/statusline.sh`) reads the private data
+dir and writes only `status.json`, `digest.log` and `dashboard.html` there (0600). None of it reaches the model: the status line
+is rendered by Claude Code outside the context window, and nothing is injected. A stale `status.json` shows stale numbers until
+the next `compile status` or nightly; the heartbeat tile reports the staleness rather than hiding it.
+
 ## Security and scrubbing
 
 Secret scanners have measured recall well below 100% (31 to 88% in one comparison, 36.6% for the
