@@ -110,7 +110,7 @@ from the same dict as `compile report --json`, writes `status.json` (0600) and s
 `compile digest [--since ISO]` prints the same data as six short blocks (status, needs you, detectors, health, changes, next); the nightly
 sweep runs it quietly and appends one line to `digest.log`, so a night without a digest shows.
 `compile dashboard [--days N] [--out PATH]` renders the same status as one self-contained HTML page (no script, no network; `dashboard.html`, 0600).
-`hooks/statusline.sh` is an optional Claude Code status-line command: one line from `status.json` (approved, fires in 24 h, unlabelled, chains, heartbeat).
+`hooks/statusline.sh` is an optional Claude Code status-line command: one line from `status.json` (approved, unlabelled fires in the last 24 h, unlabelled total, chains, heartbeat).
 
 ## Run it
 
