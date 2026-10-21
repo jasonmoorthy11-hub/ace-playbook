@@ -12,7 +12,7 @@ from ace_playbook.compile import __main__ as cli
 from ace_playbook.compile import digest, status
 
 from . import compile_support as cs
-from .test_compile_status import NOW, ROOT, build, fire, labelled_world, pid_of, w  # noqa: F401 - w is a fixture
+from .test_compile_status import NOW, ROOT, approve, build, fire, labelled_world, pid_of, w  # noqa: F401 - w is a fixture
 from .test_hooks import HOOKS, env  # noqa: F401 - env is a fixture
 
 HEADINGS = ["status", "needs you", "detectors", "health", "changes", "next"]
@@ -138,6 +138,15 @@ def test_next_has_the_week_one_date_and_each_proposals_earliest_warn_date(w):
     assert lines[0] == "week 1 due 2026-10-22T00:00:00Z"
     assert f"{pid_of(w, 'rm_rf')} rm_rf: warn earliest 2026-10-29" in lines
     assert not any(pid_of(w) in ln for ln in lines)                       # approved 2026-10-01: the 14 days are over
+
+
+def test_next_names_the_next_rung_of_a_warn_mode_proposal_and_nothing_for_a_block_mode_one(w):
+    approve(w, "rm_rf_nonscratch", "2026-10-18T00:00:00Z", "warn")                  # in its warn window: the next rung is block
+    lines = block(digest.render(build(w), None), "next")
+    assert f"{pid_of(w)} rm_rf_nonscratch: block earliest 2026-11-01" in lines
+    assert f"{pid_of(w, 'rm_rf')} rm_rf: warn earliest 2026-10-29" in lines          # an observe-mode proposal still names warn
+    approve(w, "rm_rf_nonscratch", "2026-10-19T00:00:00Z", "block")
+    assert not any(pid_of(w) in ln for ln in block(digest.render(build(w), None), "next"))      # block is the top rung
 
 
 def test_next_says_week_one_has_not_started_before_any_approval(tmp_path):

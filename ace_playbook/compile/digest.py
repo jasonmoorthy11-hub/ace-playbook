@@ -73,8 +73,8 @@ def _changes(s: dict, since: str, rows: list[dict]) -> list[str]:
 def _next(s: dict) -> list[str]:
     due = s["measurement"]["week1_due"]
     return [f"week 1 due {due}" if due else "week 1 not started",
-            *(f"{pid} {p['detector']}: warn earliest {p['warn_earliest'][:10]}" for pid, p in s["proposals"].items()
-              if p["warn_earliest"] and p["warn_earliest"] > s["generated_at"] and p["verdict"] != "retired")]
+            *(f"{pid} {p['detector']}: {p['next_rung']} earliest {p['next_earliest'][:10]}" for pid, p in s["proposals"].items()
+              if p["next_earliest"] and p["next_earliest"] > s["generated_at"] and p["verdict"] != "retired")]
 
 
 def render(s: dict, since: str | None, approvals: list[dict] = ()) -> str:
