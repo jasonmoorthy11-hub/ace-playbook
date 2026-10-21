@@ -31,7 +31,7 @@ try:  # a bool, a string, NaN/inf, a 400-digit int (isfinite overflows) or 1e300
     pct = min(100, max(0, int(round(pct)))) if isinstance(pct, (int, float)) and not isinstance(pct, bool) and math.isfinite(pct) else "?"
 except Exception:
     pct = "?"
-model = "".join(c for c in model if 31 < ord(c) != 127 and not 127 < ord(c) < 160 and unicodedata.category(c) != "Cf") if isinstance(model, str) else ""
+model = "".join(c for c in model if 31 < ord(c) != 127 and not 127 < ord(c) < 160 and unicodedata.category(c) not in ("Cf", "Zl", "Zp")) if isinstance(model, str) else ""
 head = "%s | ctx %s%% |" % (model.encode("utf-8", "ignore").decode("utf-8") or "claude", pct)
 try:
     with open(os.environ.get("ACE_PLAYBOOK_CONFIG") or os.path.join(home, ".config", "ace-playbook", "config.json")) as f:

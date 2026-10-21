@@ -187,5 +187,5 @@ def test_the_segment_is_named_unlab24h_and_documented_that_way():
 
 def test_c1_controls_bidi_overrides_and_lone_surrogates_are_dropped_and_a_huge_percentage_is_clamped(w, tmp_path):
     write_status(w)
-    out = line(tmp_path, {"model": {"display_name": "Fa\x9bble\u202e 5.1\ud800"}, "context_window": {"used_percentage": 1e300}}, w.conf)
+    out = line(tmp_path, {"model": {"display_name": "Fa\x9bble\u202e\u2028 5.1\ud800\u2029"}, "context_window": {"used_percentage": 1e300}}, w.conf)
     assert out.startswith("Fable 5.1 | ctx 100% | ace approved 2")
