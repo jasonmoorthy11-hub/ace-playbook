@@ -13,11 +13,52 @@ from html.parser import HTMLParser
 
 INVISIBLE = dict.fromkeys(map(ord, "​‌‍⁠﻿‪‫‬‭‮⁦⁧⁨⁩"))
 VOID = frozenset("area base br col embed hr img input link meta param source track wbr".split())
-SKIP = frozenset(("script", "style", "template", "noscript"))
+SKIP = frozenset(("script", "style", "template", "noscript", "dialog", "svg", "math", "iframe", "object", "embed", "head", "title", "meta", "link"))
 BLOCK = frozenset("address article aside blockquote dd div dl dt fieldset figcaption figure footer form h1 h2 h3 h4 h5 h6 header "
                   "li main nav ol p pre section table tbody td tfoot th thead tr ul".split())
-STYLE = re.compile(r"display:none|visibility:hidden|font-size:0(?:px|pt|em|rem|%)?(?![\d.])|opacity:0(?:\.0*)?(?![\d.])")
 SPACES = re.compile(r"[ \t\r\f\v\xa0]+")
+CSS_COMMENT, CSS_ESCAPE = re.compile(r"/\*.*?(?:\*/|$)", re.S), re.compile(r"\\([0-9a-fA-F]{1,6})[ \t\r\n\f]?|\\(.)", re.S)
+NUMBER = re.compile(r"([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)([a-z%]*)")
+SCALE0 = re.compile(r"scale(?:3d|x|y)?\((?:0+(?:\.0*)?|\.0+)[,)]")
+CLEAR = re.compile(r"(?:rgba|hsla)\(.*,0*(?:\.0*)?\)|#[0-9a-f]{3}0|#[0-9a-f]{6}00")
+FAR = {"px": 1000, "pt": 1000, "": 1000, "em": 100, "rem": 100, "ch": 100, "vw": 100, "vh": 100, "%": 100}
+
+
+def _unescape(m: re.Match) -> str:
+    if m.group(1):
+        n = int(m.group(1), 16)
+        return chr(n) if 0 < n <= 0x10FFFF and not 0xD800 <= n <= 0xDFFF else ""
+    return m.group(2)
+
+
+def _num(value: str) -> tuple[float, str] | None:
+    m = NUMBER.fullmatch(value)
+    return (float(m.group(1)), m.group(2)) if m else None
+
+
+def _zero(value: str) -> bool:
+    n = _num(value)
+    return n is not None and n[0] == 0
+
+
+def style_hidden(style: str) -> bool:
+    """True when an inline `style` hides its element. The text is normalised first (CSS comments removed, CSS escapes such as `\\3A`
+    decoded, lower-cased, whitespace and `!important` dropped), then each declaration is read: display:none, visibility:hidden or
+    collapse, opacity or font-size zero in any spelling or unit, a zero width or height with overflow hidden, position absolute or
+    fixed far off-screen, text-indent far negative, clip-path:inset(100%), transform:scale(0), a transparent color."""
+    s = CSS_ESCAPE.sub(_unescape, CSS_COMMENT.sub("", style)).lower()
+    decls = [tuple(d.partition(":")[::2]) for d in re.sub(r"\s+|!important", "", s).split(";")]
+    decls = [(k, v) for k, v in decls if k and v]
+    for k, v in decls:
+        if ((k == "display" and v == "none") or (k == "visibility" and v in ("hidden", "collapse")) or (k == "opacity" and _zero(v.rstrip("%")))
+                or (k == "font-size" and _zero(v)) or (k == "clip-path" and v.startswith(("inset(100%", "circle(0")))
+                or (k == "transform" and SCALE0.search(v)) or (k == "color" and (v == "transparent" or CLEAR.fullmatch(v)))
+                or (k == "text-indent" and (_num(v) or (0, ""))[0] <= -1000)):
+            return True
+    clipped = any(k.startswith("overflow") and v in ("hidden", "clip") for k, v in decls)
+    away = any(k == "position" and v in ("absolute", "fixed") for k, v in decls)
+    return (clipped and any(k in ("width", "height", "max-width", "max-height") and _zero(v) for k, v in decls)) or (
+        away and any(k in ("left", "top", "right", "bottom") and (n := _num(v)) is not None and n[0] <= -FAR.get(n[1], 1000) for k, v in decls))
 
 
 def plain(text: str) -> str:
@@ -35,9 +76,10 @@ class _Text(HTMLParser):
         return bool(self.stack) and self.stack[-1][1]
 
     def handle_starttag(self, tag, attrs) -> None:
-        a = {k: v or "" for k, v in attrs}
-        style = re.sub(r"\s+|!important", "", a.get("style", "").lower())
-        hid = self._hidden() or tag in SKIP or "hidden" in a or a.get("aria-hidden", "").strip().lower() == "true" or bool(STYLE.search(style))
+        a = {k for k, _ in attrs}
+        aria = [(v or "").strip().lower() == "true" for k, v in attrs if k == "aria-hidden"]       # a repeated attribute: any copy counts
+        hid = (self._hidden() or tag in SKIP or (tag == "details" and "open" not in a) or "hidden" in a or "inert" in a or any(aria)
+               or any(style_hidden(v or "") for k, v in attrs if k == "style"))
         if tag in VOID:
             self.out.append(" " if not hid and tag in ("br", "hr") else "")
             return
