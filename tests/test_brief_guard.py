@@ -174,3 +174,22 @@ def test_the_guard_accepts_blank_lines_and_indented_full_line_comments(tmp_path)
     f = tmp_path / "a.txt"
     f.write_text("  # indented comment\n\n   \nmcp__y__fine  \n\t# tab comment\n")
     assert guard(call("mcp__y__fine"), allowlist=f) == (0, "", "")
+
+
+BAD_BYTES = [b"\xef\xbb\xbfmcp__x__read\n", b"\xef\xbb\xbf# comment\n", "mcp__x__re ad\n".encode(), " \n".encode(), "mcp__x__é\n".encode(),
+             b"mcp__x__re\rad\n", b"mcp__x__read\x00\n", b"mcp__x__a:b\n", b"\xff\xfe\n"]
+
+
+@pytest.mark.parametrize("raw", BAD_BYTES)
+def test_a_bom_or_any_byte_outside_the_name_alphabet_makes_the_guard_deny_everything(tmp_path, raw):
+    f = tmp_path / "a.txt"
+    f.write_bytes(b"mcp__y__fine\n" + raw)
+    for name in ("mcp__y__fine", "mcp__x__read"):
+        code, out, _ = guard(call(name), allowlist=f)
+        assert code == 0 and json.loads(out) == DENY, name
+
+
+def test_a_crlf_list_and_names_with_dots_and_dashes_are_accepted(tmp_path):
+    f = tmp_path / "a.txt"
+    f.write_bytes(b"# c\r\nmcp__y__fine-1.x\r\n\r\nToolSearch\r\n")
+    assert guard(call("mcp__y__fine-1.x"), allowlist=f) == (0, "", "") and guard(call("ToolSearch"), allowlist=f) == (0, "", "")

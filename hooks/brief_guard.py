@@ -4,13 +4,14 @@ NOT active in hooks/brief.sh, whose settings set disableAllHooks. Stdlib json on
 Deny by default: reads the hook JSON on stdin and allows ONLY a tool whose exact name is listed in hooks/brief_allowed_tools.txt
 (override: $ACE_BRIEF_ALLOWLIST), whether it is an `mcp__*` connector tool or a built-in. Everything else is denied (prints the deny JSON,
 exit 0), as is any input that cannot be parsed and any allowlist that cannot be read, is empty or holds a line that is not blank, a full-line
-`#` comment or exactly one name (a `#` after a name is refused: brief.sh reads the file the same way). `--hard` blocks with exit 2 and the
-reason on stderr instead (Claude Code treats exit 2 as a block). An allowed tool prints nothing. Every error path denies: a failure of
-this script must never let a tool through.
+`#` comment or exactly one name of [A-Za-z0-9_.-] (a `#` after a name, a BOM or any other byte is refused: brief.sh reads the file the same
+way). `--hard` blocks with exit 2 and the reason on stderr instead (Claude Code treats exit 2 as a block). An allowed tool prints nothing.
+Every error path denies: a failure of this script must never let a tool through.
 """
 
 import json
 import os
+import re
 import sys
 
 REASON = "brief is read-only"
@@ -20,10 +21,10 @@ DENY = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecisio
 def allowed_names() -> set:
     path = os.environ.get("ACE_BRIEF_ALLOWLIST") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "brief_allowed_tools.txt")
     out = set()
-    with open(path, encoding="utf-8") as fh:
-        for ln in (raw.strip() for raw in fh):
+    with open(path, encoding="utf-8", newline="\n") as fh:          # only "\n" ends a line, as for awk in hooks/brief_lib.sh
+        for ln in (raw.strip(" \t\r\n\v\f") for raw in fh):         # ASCII blanks only: a BOM or U+2003 is not a blank
             if ln and not ln.startswith("#"):
-                if "#" in ln or len(ln.split()) != 1:        # blank, a full-line comment or ONE name: brief.sh reads the file the same way
+                if not re.fullmatch(r"[A-Za-z0-9_.-]+", ln):        # blank, a full-line comment or ONE name: brief.sh reads the file the same way
                     raise ValueError("list line")
                 out.add(ln)
     return out

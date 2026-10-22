@@ -3,7 +3,8 @@
 
 Reads $ACE_FAKE_DIR: digest.json (the stage 1 answer), brief.json (the stage 2 answer); writes argv_<stage>.json, env_<stage>.json and
 stdin_stage2.txt there so the test can see what the script passed. $ACE_FAKE_FAIL = stage1 | stage2 makes that stage exit 1 with an error
-result; $ACE_FAKE_SLEEP sleeps first (and pid_<stage> records the pid); $ACE_FAKE_FENCE wraps the answer in a ```json fence. Synthetic data only.
+result; $ACE_FAKE_SLEEP sleeps first (and pid_<stage> records the pid; $ACE_FAKE_SLEEP_ONLY limits it to one stage); $ACE_FAKE_INIT_TOOLS
+(comma separated) is the `tools` list of the init event; $ACE_FAKE_FENCE wraps the answer in a ```json fence. Synthetic data only.
 """
 
 import json
@@ -17,7 +18,8 @@ stage = "stage2" if "--tools" in argv and argv[argv.index("--tools") + 1] == "" 
 root = Path(os.environ["ACE_FAKE_DIR"])
 (root / f"argv_{stage}.json").write_text(json.dumps(argv))
 (root / f"pid_{stage}").write_text(str(os.getpid()))
-time.sleep(float(os.environ.get("ACE_FAKE_SLEEP", "0")))
+if os.environ.get("ACE_FAKE_SLEEP_ONLY", stage) == stage:
+    time.sleep(float(os.environ.get("ACE_FAKE_SLEEP", "0")))
 (root / f"env_{stage}.json").write_text(json.dumps({"has_api_key": "ANTHROPIC_API_KEY" in os.environ, "has_claudecode": "CLAUDECODE" in os.environ,
                                                     "repo": os.environ.get("ACE_PLAYBOOK_REPO"), "cwd": os.getcwd()}))
 stdin = sys.stdin.read() if stage == "stage2" else ""
@@ -29,7 +31,8 @@ if os.environ.get("ACE_FAKE_FENCE"):
 window = {"status": "allowed", "unifiedWindows": {"five_hour": {"utilization": 0.08 if stage == "stage1" else 0.09, "resetsAt": 1},
                                                   "seven_day": {"utilization": 0.01, "resetsAt": 2}}}
 failing = os.environ.get("ACE_FAKE_FAIL") == stage
-events = [{"type": "system", "subtype": "init", "model": argv[argv.index("--model") + 1], "tools": [], "mcp_servers": []}]
+events = [{"type": "system", "subtype": "init", "model": argv[argv.index("--model") + 1], "mcp_servers": [],
+           "tools": [t for t in os.environ.get("ACE_FAKE_INIT_TOOLS", "").split(",") if t]}]
 if stage == "stage1":
     events += [{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "mcp__claude_ai_Gmail__search_threads", "input": {}}]}},
                {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": "FAKE-MAIL-BODY-IN-THE-STREAM"}]}}]

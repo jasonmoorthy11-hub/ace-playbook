@@ -60,7 +60,9 @@ def mode(path):
 
 def test_the_script_is_executable_and_its_syntax_parses():
     assert os.access(SCRIPT, os.X_OK) and os.access(FAKE, os.X_OK)
-    assert subprocess.run(["bash", "-n", str(SCRIPT)]).returncode == 0
+    lib = ROOT / "hooks" / "brief_lib.sh"
+    assert all(subprocess.run(["bash", "-n", str(f)]).returncode == 0 for f in (SCRIPT, lib)) and len(SCRIPT.read_text().splitlines()) <= 120
+    assert len(lib.read_text().splitlines()) <= 80 and os.path.exists(LOCKF)
 
 
 def test_a_forced_run_writes_page_json_ledger_and_state_with_private_modes(w):
@@ -165,7 +167,7 @@ def test_stage_one_failure_stops_the_run_and_still_logs_its_cost(w):
     p = w.run("--force", ACE_FAKE_FAIL="stage1")
     assert p.returncode == 1 and p.stderr == "brief: stage 1 failed (exit 1)\n" and p.stdout == ""
     assert [r["stage"] for r in w.ledger()] == ["stage1"] and not (w.dir / "brief.html").exists() and not (w.dir / "brief_state.json").exists()
-    assert not (w.fake / "argv_stage2.json").exists() and not (w.dir / "run.lock").exists()
+    assert not (w.fake / "argv_stage2.json").exists() and free(w)
 
 
 def test_stage_two_failure_leaves_no_page_and_no_state_so_the_next_wake_retries(w):
@@ -205,13 +207,45 @@ def test_a_missing_config_is_a_one_line_failure(w):
     assert (p.returncode, p.stdout, p.stderr.strip().splitlines()[-1]) == (1, "", "brief: config")
 
 
-def test_a_held_lock_exits_quietly_and_a_stale_one_is_cleared(w):
-    (w.dir / "run.lock").mkdir(parents=True)
-    p = w.run("--force")
-    assert (p.returncode, p.stdout, p.stderr) == (0, "", "") and not w.ledger() and (w.dir / "run.lock").exists()
-    old = time.time() - 3600
-    os.utime(w.dir / "run.lock", (old, old))
-    assert w.run("--force").returncode == 0 and len(w.ledger()) == 2 and not (w.dir / "run.lock").exists()
+LOCKF = "/usr/bin/lockf"
+
+
+def free(w):
+    """True when the kernel lock on brief_dir/run.lockf can be taken at once (nobody holds it)."""
+    return subprocess.run([LOCKF, "-s", "-k", "-t", "0", str(w.dir / "run.lockf"), "true"]).returncode == 0
+
+
+def hold(w):
+    """A process that holds the run lock (a live run), in its own session; returns it."""
+    w.dir.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.Popen([LOCKF, "-s", "-k", "-t", "0", str(w.dir / "run.lockf"), "sleep", "60"], start_new_session=True)
+    for _ in range(50):
+        if not free(w):
+            return proc
+        time.sleep(0.1)
+    raise AssertionError("the holder never took the lock")
+
+
+def test_a_held_lock_exits_quietly_and_a_run_proceeds_once_it_is_released(w):
+    holder = hold(w)
+    try:
+        p = w.run("--force")
+        assert (p.returncode, p.stdout, p.stderr) == (0, "", "") and not w.ledger() and not (w.fake / "argv_stage1.json").exists()
+        old = time.time() - 7200
+        os.utime(w.dir / "run.lockf", (old, old))                                         # an old lock file is no reason to take it over
+        assert w.run("--force").stderr == "" and not w.ledger()
+    finally:
+        os.killpg(holder.pid, signal.SIGKILL)
+        holder.wait()
+    assert w.run("--force").returncode == 0 and len(w.ledger()) == 2 and free(w)
+
+
+def test_three_concurrent_runs_make_exactly_one_ledger_pair_and_print_no_path(w):
+    procs = [start(w, ACE_FAKE_SLEEP="2") for _ in range(3)]
+    outs = [p.communicate(timeout=60) for p in procs]
+    assert [p.returncode for p in procs] == [0, 0, 0] and [r["stage"] for r in w.ledger()] == ["stage1", "stage2"]
+    assert sum(1 for o in outs if o[0]) == 1 and all(str(w.tmp) not in o[0] + o[1] for o in outs)           # no brief_dir path on any stream
+    assert sorted(o[1] for o in outs) == ["", "", ""] and free(w)
 
 
 def test_the_notification_fires_only_when_something_needs_you(w):
@@ -251,11 +285,11 @@ def raw_left(w):
 def test_a_signal_kills_the_claude_child_removes_the_raw_files_and_the_lock_and_exits_with_its_own_code(w, sig, code):
     proc = start(w, ACE_FAKE_SLEEP="30")
     pid = int(wait_for(w.fake / "pid_stage1"))
-    assert alive(pid) and (w.dir / "run.lock").exists()
+    assert alive(pid) and not free(w)
     proc.send_signal(sig)
     proc.communicate(timeout=30)
     time.sleep(0.5)
-    assert proc.returncode == code and not alive(pid) and not (w.dir / "run.lock").exists()
+    assert proc.returncode == code and not alive(pid) and free(w)
     assert raw_left(w) == []
 
 
@@ -274,40 +308,98 @@ def slow_py(w, step):
 def test_a_signal_during_a_python_step_is_not_deferred_until_the_step_ends(w, step):
     proc = start(w, ACE_BRIEF_PY=slow_py(w, step))
     pid = int(wait_for(w.tmp / "pystep.pid"))
-    assert alive(pid) and (w.dir / "run.lock").exists() and raw_left(w)             # raw mail is on disk while the step runs
+    assert alive(pid) and not free(w) and raw_left(w)                               # raw mail is on disk while the step runs
     began = time.monotonic()
     proc.send_signal(signal.SIGTERM)
     proc.communicate(timeout=15)
     assert time.monotonic() - began < 8 and proc.returncode == 143                  # bash used to wait out the 30 s step before the trap ran
     time.sleep(0.3)
-    assert not alive(pid) and not (w.dir / "run.lock").exists() and raw_left(w) == []
+    assert not alive(pid) and free(w) and raw_left(w) == []
 
 
-def test_a_lock_left_by_a_sigkilled_run_is_taken_over_and_the_raw_files_it_left_are_purged(w):
-    proc = start(w, ACE_FAKE_SLEEP="30")
-    pid = int(wait_for(w.fake / "pid_stage1"))
-    assert (w.dir / "run.lock" / "pid").read_text().strip() == str(proc.pid)
-    proc.kill()
+def test_a_run_after_a_sigkill_proceeds_at_once_and_purges_the_raw_files_the_killed_run_left(w):
+    proc = subprocess.Popen([str(SCRIPT), "--force"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=w.tmp, start_new_session=True,
+                            env={**w.env, "ACE_FAKE_SLEEP": "30"})
+    wait_for(w.fake / "pid_stage1")
+    assert not free(w)
+    os.killpg(proc.pid, signal.SIGKILL)                                    # script and claude die together: the kernel drops the lock
     proc.communicate(timeout=30)
-    os.kill(pid, signal.SIGKILL)
-    assert (w.dir / "run.lock").exists() and "stage1.jsonl" in raw_left(w)             # what a SIGKILL leaves: the lock and the raw mail
+    assert free(w) and "stage1.jsonl" in raw_left(w)                       # what a SIGKILL leaves: the raw mail, and no lock
     (w.dir / "run" / "digest_raw.json").write_text("RAW-MAIL-FROM-THE-KILLED-RUN")
+    began = time.monotonic()
     p = w.run("--force")
     assert (p.returncode, p.stdout.splitlines()[-1]) == (0, "brief: ok, 1 need you") and (w.dir / "brief.html").exists()
-    assert raw_left(w) == [] and not (w.dir / "run.lock").exists()
+    assert raw_left(w) == [] and free(w) and time.monotonic() - began < 30
 
 
-def test_a_lock_of_a_live_pid_is_respected_and_a_lock_of_a_dead_or_unreadable_pid_is_taken(w):
-    lock = w.dir / "run.lock"
-    lock.mkdir(parents=True)
-    (lock / "pid").write_text(str(os.getpid()))                                          # this test process is alive
-    assert (w.run("--force").returncode, w.ledger()) == (0, []) and lock.exists()
-    (lock / "pid").write_text("not-a-pid")                                               # unreadable and fresh: not provably dead, left alone
-    assert (w.run("--force").returncode, w.ledger()) == (0, []) and lock.exists()
-    dead = subprocess.Popen(["true"])
-    dead.wait()
-    (lock / "pid").write_text(str(dead.pid))
-    assert w.run("--force").returncode == 0 and len(w.ledger()) == 2 and not lock.exists()
+def test_a_live_stage_keeps_the_run_locked_even_if_only_the_script_is_killed(w):
+    proc = subprocess.Popen([str(SCRIPT), "--force"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=w.tmp, env={**w.env, "ACE_FAKE_SLEEP": "30"})
+    pid = int(wait_for(w.fake / "pid_stage1"))
+    proc.kill()
+    proc.wait(timeout=30)
+    try:
+        assert alive(pid) and not free(w)                                  # the orphaned claude holds the inherited lock: a live run is respected
+        assert w.run("--force").returncode == 0 and not w.ledger()
+    finally:
+        os.kill(pid, signal.SIGKILL)
+    time.sleep(0.5)
+    assert free(w)
+
+
+def test_cleanup_ignores_further_signals_and_a_signal_also_stops_every_child_of_the_shell():
+    text = SCRIPT.read_text()
+    cleanup = text[text.index("cleanup() {"):text.index("on_signal() {")]
+    assert cleanup.splitlines()[1].strip().startswith("trap '' TERM INT HUP")              # the first line: a signal cannot cut the purge short
+    handler = text[text.index("on_signal() {"):text.index("trap cleanup EXIT")]
+    assert "pkill -TERM -P $$" in handler                                                  # a child started just before CHILD=$! is stopped too
+
+
+def test_a_stage_that_outlasts_the_watchdog_is_stopped_and_logged_as_a_timeout(w):
+    began = time.monotonic()
+    p = w.run("--force", ACE_FAKE_SLEEP="30", ACE_BRIEF_STAGE_TIMEOUT="2")
+    assert (p.returncode, p.stdout, p.stderr) == (1, "", "brief: stage 1 timed out\n") and time.monotonic() - began < 20
+    assert [(r.get("stage"), r.get("timeout")) for r in w.ledger()] == [("stage1", "stage1")] and not alive(int((w.fake / "pid_stage1").read_text()))
+    assert not (w.fake / "argv_stage2.json").exists() and not (w.dir / "brief.html").exists() and not (w.dir / "brief_state.json").exists()
+    assert raw_left(w) == [] and free(w)
+
+
+def test_a_second_stage_that_outlasts_the_watchdog_leaves_no_page_and_logs_the_timeout(w):
+    p = w.run("--force", ACE_FAKE_SLEEP="30", ACE_FAKE_SLEEP_ONLY="stage2", ACE_BRIEF_STAGE_TIMEOUT="2")
+    assert (p.returncode, p.stdout, p.stderr) == (1, "digest: calendar 1, mail 2 of 4, issues 1\n", "brief: stage 2 timed out\n")
+    assert [(r.get("stage"), r.get("timeout")) for r in w.ledger()] == [("stage1", None), ("stage2", "stage2")]
+    assert not (w.dir / "brief.html").exists() and not (w.dir / "brief_state.json").exists() and raw_left(w) == []
+
+
+def test_a_stage_inside_the_watchdog_is_not_disturbed_and_a_bad_timeout_value_falls_back(w):
+    assert w.run("--force", ACE_BRIEF_STAGE_TIMEOUT="5").returncode == 0 and len(w.ledger()) == 2 and not any("timeout" in r for r in w.ledger())
+    assert w.run("--force", ACE_BRIEF_STAGE_TIMEOUT="soon").returncode == 0 and len(w.ledger()) == 4
+
+
+UNKNOWN = "mcp__claude_ai_Gmail__a_new_write_tool"
+
+
+def test_a_new_connector_tool_in_the_init_list_refuses_the_run_discards_the_digest_and_names_nothing(w):
+    p = w.run("--force", ACE_FAKE_INIT_TOOLS=f"ToolSearch,mcp__claude_ai_Gmail__search_threads,{UNKNOWN}")
+    assert (p.returncode, p.stdout, p.stderr) == (2, "", "brief: tool drift, run refused\n")
+    rows = w.ledger()
+    assert [r["stage"] for r in rows] == ["stage1", "stage1"] and rows[1]["drift"] == [UNKNOWN] and "drift" not in rows[0]
+    assert not (w.fake / "argv_stage2.json").exists() and not (w.dir / "brief.html").exists() and not (w.dir / "brief_state.json").exists()
+    assert not (w.dir / "run" / "digest_clean.json").exists() and raw_left(w) == [] and free(w)
+    assert (w.tmp / "notified").read_text().splitlines() == ["-title", "ACE brief", "-message", "brief: tool drift, run refused"]
+    assert UNKNOWN not in (w.tmp / "notified").read_text() + p.stdout + p.stderr
+
+
+def test_a_clean_init_list_of_allowed_tools_and_built_ins_proceeds(w):
+    p = w.run("--force", ACE_FAKE_INIT_TOOLS="ToolSearch,Bash,Read,mcp__claude_ai_Gmail__search_threads,mcp__claude_ai_Linear__list_issues")
+    assert p.returncode == 0 and (w.dir / "brief.html").exists() and not any("drift" in r for r in w.ledger())
+
+
+def test_the_valid_link_url_a_model_invents_is_dropped_so_the_page_has_no_link(w):
+    item = {"title": "t", "sentence": "s", "source": "in your inbox", "url": "https://mail.google.com/mail/u/0/?q=SECRET-MAIL-TEXT"}
+    w.set_answers(brief=json.dumps(bs.brief(needs_you=[item])))
+    assert w.run("--force").returncode == 0
+    page = (w.dir / "brief.html").read_text()
+    assert "<a " not in page and "SECRET-MAIL-TEXT" not in page and json.loads((w.dir / "brief.json").read_text())["needs_you"][0]["url"] is None
 
 
 def test_raw_files_are_purged_right_after_the_lock_is_taken_even_with_keep(w):
@@ -335,7 +427,26 @@ def test_a_name_line_with_a_comment_or_a_second_token_in_a_list_file_stops_the_r
     env = {"ACE_BRIEF_PY": f"uv run --quiet --project {ROOT} python"}
     p = subprocess.run([str(hooks / "brief.sh"), "--force"], capture_output=True, text=True, env={**w.env, **env}, timeout=60, cwd=w.tmp)
     assert p.returncode == 1 and p.stderr.strip().splitlines()[-1].startswith("brief: ") and p.stdout == ""
-    assert not (w.fake / "argv_stage1.json").exists() and not (w.dir / "run.lock").exists()
+    assert not (w.fake / "argv_stage1.json").exists() and free(w)
+
+
+LIST_BYTES = [b"\xef\xbb\xbfmcp__x__read\n", b"\xef\xbb\xbf# comment\n", "mcp__x__re ad\n".encode(), " \n".encode(), b"mcp__x__re\rad\n",
+              "mcp__x__é\n".encode(), b"mcp__x__read\x00\n", b"mcp__x__a:b\n"]
+
+
+@pytest.mark.parametrize("name", ["brief_allowed_tools.txt", "brief_denied_tools.txt"])
+@pytest.mark.parametrize("raw", LIST_BYTES)
+def test_a_bom_or_any_byte_outside_the_name_alphabet_in_a_list_file_stops_the_run_like_the_guard_denies(w, name, raw):
+    hooks = copy_repo(w)
+    with open(hooks / name, "ab") as fh:
+        fh.write(raw)
+    env = {"ACE_BRIEF_PY": f"uv run --quiet --project {ROOT} python"}
+    p = subprocess.run([str(hooks / "brief.sh"), "--force"], capture_output=True, text=True, env={**w.env, **env}, timeout=60, cwd=w.tmp)
+    assert p.returncode == 1 and p.stderr.strip().splitlines()[-1].startswith("brief: ") and p.stdout == "" and not (w.fake / "argv_stage1.json").exists()
+    if name == "brief_allowed_tools.txt":      # the guard reads the same file the same way
+        g = subprocess.run(["python3", "-I", "-S", str(ROOT / "hooks" / "brief_guard.py")], input=json.dumps({"tool_name": "ToolSearch"}), text=True,
+                           capture_output=True, env={"PATH": os.environ["PATH"], "ACE_BRIEF_ALLOWLIST": str(hooks / name)})
+        assert "deny" in g.stdout
 
 
 def test_a_list_file_of_blank_lines_full_line_comments_and_single_names_runs(w):
