@@ -109,3 +109,48 @@ def test_the_connector_deny_list_names_every_write_tool_of_the_three_servers_and
     assert not [n for n in allowed if n.startswith("mcp__") and any(v in n.rsplit("__", 1)[1] for v in verbs)]
     load = "import json,sys; json.load(open(sys.argv[1]))"
     assert subprocess.run(["python3", "-I", "-S", "-c", load, str(ROOT / "hooks/brief-settings.json")]).returncode == 0
+
+
+# ------------------------------------------------------------------ D-117: the snapshot of the connector tools, every one allowed or denied
+SNAPSHOT = ROOT / "hooks" / "brief_connector_tools.txt"
+DENIED = ROOT / "hooks" / "brief_denied_tools.txt"
+
+
+def rule_lines(path):
+    return [ln.strip() for ln in path.read_text().splitlines() if ln.strip() and ln.lstrip()[0] != "#"]
+
+
+def denied_by(name, rules):
+    return name in rules or "__".join(name.split("__")[:2]) in rules
+
+
+def test_the_connector_snapshot_is_dated_and_holds_the_real_names():
+    head = SNAPSHOT.read_text().splitlines()[0]
+    snap = rule_lines(SNAPSHOT)
+    assert head.startswith("#") and "2026-10-22" in head and len(snap) == len(set(snap)) == 129
+    assert all(n.startswith("mcp__") and n.count("__") == 2 for n in snap)
+    assert {"mcp__claude_ai_Linear__extract_images", "mcp__claude_ai_Gmail__get_message", "mcp__claude_ai_Google_Calendar__suggest_time"} <= set(snap)
+    assert set(names()) - {"ToolSearch"} <= set(snap)                                    # every allowed connector tool really exists
+
+
+def test_every_connector_tool_in_the_snapshot_is_allowed_or_denied_by_name_or_by_whole_server():
+    rules, allowed = set(rule_lines(DENIED)), set(names())
+    assert [n for n in rule_lines(SNAPSHOT) if n not in allowed and not denied_by(n, rules)] == []
+    assert not [n for n in rule_lines(SNAPSHOT) if n in allowed and denied_by(n, rules)]       # nothing allowed is also denied
+
+
+def test_the_three_servers_the_brief_reads_deny_every_unneeded_tool_by_full_name_reads_included():
+    rules, allowed = set(rule_lines(DENIED)), set(names())
+    for server in ("Gmail", "Google_Calendar", "Linear"):
+        every = [n for n in rule_lines(SNAPSHOT) if n.startswith(f"mcp__claude_ai_{server}__")]
+        assert every and set(every) - allowed <= rules, server
+        assert f"mcp__claude_ai_{server}" not in rules                      # a whole-server rule would hide the allowed reads
+    for read in ("get_message", "list_drafts", "get_draft", "list_labels", "get_event", "list_calendars", "suggest_time", "extract_images"):
+        assert any(r.endswith("__" + read) for r in rules), read
+
+
+def test_the_deny_file_and_the_settings_deny_list_stay_equal_with_no_allow_or_default_mode():
+    s = json.loads((ROOT / "hooks" / "brief-settings.json").read_text())
+    builtin = [n for n in s["permissions"]["deny"] if not n.startswith("mcp__")]
+    assert s["permissions"]["deny"] == builtin + rule_lines(DENIED) and "Bash" in builtin
+    assert len(rule_lines(DENIED)) == len(set(rule_lines(DENIED))) and set(s["permissions"]) == {"deny"}

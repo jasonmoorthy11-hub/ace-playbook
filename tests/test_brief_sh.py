@@ -101,6 +101,7 @@ def test_the_two_stages_get_exactly_the_flags_the_design_names(w):
     assert flag(one, "--tools") == "ToolSearch" and "--strict-mcp-config" not in one          # connectors are account-level: strict would drop them
     assert one[-1].startswith("You are the read-only gatherer") and "--bare" not in one + two
     assert one[-3] == "--max-budget-usd" and one[-2] == "1.0"      # the prompt follows a single-value flag, never a variadic tool list
+    assert flag(one, "--permission-mode") == "default" and "--permission-mode" not in two      # D-117: the operator's defaultMode must not apply
     assert flag(two, "--tools") == "" and "--strict-mcp-config" in two and flag(two, "--max-turns") == "1" and flag(two, "--model") == "claude-sonnet-5-5"
     assert flag(two, "--system-prompt").startswith("You write a calm morning brief") and "--allowedTools" not in two
     for stage in ("stage1", "stage2"):

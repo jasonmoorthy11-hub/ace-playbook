@@ -461,9 +461,13 @@ raw mail result under `~/.claude/projects/` where the nightly reflect sweep read
 `~/.claude/projects/<cwd slug>/memory/` directory and no `.jsonl` (the empty directory is harmless).
 
 **Tool scope.** Stage 1 passes `--tools ToolSearch` (no built-in file or shell tool loads), `--allowedTools` from
-`hooks/brief_allowed_tools.txt`, and `--disallowedTools` from `hooks/brief_denied_tools.txt` (the connector write tools by full name and
-the other connectors as whole servers; `hooks/brief-settings.json` repeats the list in `permissions.deny` and a test keeps them equal).
-It cannot use `--strict-mcp-config`, because the claude.ai connectors are account-level and cannot be named in an mcp-config file.
+`hooks/brief_allowed_tools.txt`, `--permission-mode default`, and `--disallowedTools` from `hooks/brief_denied_tools.txt` (every connector
+tool of Gmail, Google Calendar and Linear that the brief does not need, reads included, by full name, and the other connectors as whole servers;
+`hooks/brief-settings.json` repeats the list in `permissions.deny` and a test keeps them equal).
+`-p` denies an unlisted tool, but your user-level `permissions.allow` and `defaultMode` still apply inside the run, which is why
+`--permission-mode default` is passed and every unneeded connector tool is denied by name. `hooks/brief_connector_tools.txt` is a dated
+snapshot of the connector tool names seen on 2026-10-22 and a test checks each is allowed or denied; refresh it by hand when a connector
+adds tools. It cannot use `--strict-mcp-config`, because the claude.ai connectors are account-level and cannot be named in an mcp-config file.
 The prompt is always the last argument, after a single-value flag, because `--tools`, `--allowedTools` and `--disallowedTools` take
 a variadic list that would swallow a positional prompt.
 Links on the page are limited to `mail.google.com`, `calendar.google.com` and `linear.app` (constant `LINK_HOSTS` in

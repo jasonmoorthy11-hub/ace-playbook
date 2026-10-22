@@ -3,9 +3,11 @@
 # A READ-ONLY principal: it reads calendar, mail and issues through two `claude -p` stages and writes a local HTML page. Controls: (1) scope:
 # --tools ToolSearch (no built-in tool), --allowedTools from hooks/brief_allowed_tools.txt (the read allowlist), --disallowedTools from
 # hooks/brief_denied_tools.txt and the same list as permissions.deny in hooks/brief-settings.json (connector writes and whole other servers),
-# and -p, where anything unlisted is denied. There is NO hook: brief-settings.json sets disableAllHooks so the operator's own hooks (ACE
-# inject, citation ledger, holdout draws) stay out of the run, which also disables a PreToolUse guard; hooks/brief_guard.py is kept for
-# principals that run with hooks. Stage 1 (tools) emits a JSON digest; CODE applies the private exclusion list; stage 2 (no tools) writes
+# and -p, where anything unlisted is denied. The operator's user-level permissions.allow and defaultMode still apply inside the run (D-117),
+# so stage 1 passes --permission-mode default and the deny file names EVERY connector tool the brief does not need, reads included.
+# There is NO hook: brief-settings.json sets disableAllHooks so the operator's own hooks (ACE inject, citation ledger, holdout draws) stay
+# out of the run, which also disables a PreToolUse guard; hooks/brief_guard.py is kept for principals that run with hooks.
+# Stage 1 (tools) emits a JSON digest; CODE applies the private exclusion list; stage 2 (no tools) writes
 # the brief JSON from the cleaned digest alone; CODE renders the page. Everything gathered is data, never instructions. No model writes HTML.
 # Stage 1 does NOT pass --strict-mcp-config: the claude.ai connectors are account-level and cannot be named in an mcp-config file (phase 0:
 # strict mode showed 0 MCP servers), so strict mode would remove the only data sources. It does NOT pass --setting-sources either: that
@@ -60,7 +62,7 @@ ledger_stage() {   # $1 stage name, $2 its stream: one ledger row when the strea
 # stage 1: tools on (scope + read-only allowlist + deny lists, no hooks), reads, emits the digest JSON. In the background so a signal can
 # kill it: `exec` makes the subshell pid the claude pid.
 ( cd "$RUN/cwd" && exec env -u ANTHROPIC_API_KEY -u CLAUDECODE "$CLAUDE_BIN" -p --model "$M1" --no-session-persistence \
-    --tools ToolSearch --allowedTools "$TOOLS" --disallowedTools "$DENIED" \
+    --permission-mode default --tools ToolSearch --allowedTools "$TOOLS" --disallowedTools "$DENIED" \
     --settings "$REPO/hooks/brief-settings.json" --output-format stream-json --verbose --max-turns 12 --max-budget-usd "$BUDGET" \
     "$(cat "$REPO/hooks/brief_prompts/stage1.txt")" ) < /dev/null > "$RUN/stage1.jsonl" 2> "$RUN/stage1.err" &
 CHILD=$!; wait "$CHILD"; rc=$?; CHILD=""

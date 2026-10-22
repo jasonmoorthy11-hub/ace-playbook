@@ -47,10 +47,14 @@ outbound channel. Its controls, in order:
 
 1. `--tools ToolSearch`: no built-in file, shell or web tool is loaded at all.
 2. `--allowedTools` from `hooks/brief_allowed_tools.txt`: the read allowlist (a calendar, a mail and an issue read).
-3. `--disallowedTools` from `hooks/brief_denied_tools.txt`, repeated as `permissions.deny` in `hooks/brief-settings.json`: every write tool
-   of Gmail, Google Calendar and Linear by full name, every other connector as a whole server, and the built-in file, shell and web tools.
+3. `--disallowedTools` from `hooks/brief_denied_tools.txt`, repeated as `permissions.deny` in `hooks/brief-settings.json`: every tool of
+   Gmail, Google Calendar and Linear that is not on the allowlist, by full name (`hooks/brief_connector_tools.txt` is a dated snapshot of the
+   real tool list and a test checks each of its names is allowed or denied), every other connector as a whole server, and the built-in file, shell and
+   web tools.
    A denied tool is hidden from the model (probed: it reports the tool as not available). A test keeps the two lists equal.
-4. `-p` is non-interactive, so a tool that is not allowed is denied rather than asked.
+4. `-p` is non-interactive, so a tool that is not allowed is denied rather than asked, with a caveat (D-117): the operator's own user-level
+   `permissions.allow` and `defaultMode` still apply inside the run, so an unlisted tool is not denied by `-p` alone. That is why stage 1
+   passes `--permission-mode default` and the deny file names every connector tool the brief does not need, reads included.
 5. `--no-session-persistence`: no transcript of the raw mail is written where the nightly reflect sweep reads (probed: only an empty
    per-directory folder appears).
 6. `disableAllHooks` in the settings file: the operator's own hooks (inject, citation ledger, holdout draws) do not run inside the brief.

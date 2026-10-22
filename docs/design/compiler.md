@@ -1080,10 +1080,13 @@ metrics, report, status, seal or the detectors changed.
 
 - **Principals and controls.** A read-only principal (it reads calendar, mail and Linear; it has no write tool and no outbound channel).
   Controls, in order: (1) `--tools ToolSearch` (no built-in file, shell or web tool loads); (2) `--allowedTools` built from
-  `hooks/brief_allowed_tools.txt`; (3) `hooks/brief_denied_tools.txt` (every write tool of Gmail, Google Calendar and Linear by full name,
+  `hooks/brief_allowed_tools.txt`; (3) `hooks/brief_denied_tools.txt` (every tool of Gmail, Google Calendar and Linear that is not allowed, by full name,
   every other connector as a whole `mcp__<server>` rule) as `--disallowedTools` and, with the built-in file, shell and web tools, as the
   settings file's `permissions.deny` (a test keeps them equal; a denied tool is hidden from the model); (4) `-p` is non-interactive, so an
-  unlisted tool is denied, not asked; (5) `--no-session-persistence` on both stages (probed: no `.jsonl` transcript is written, only an
+  unlisted tool is denied, not asked, with a caveat (D-117): the operator's user-level `permissions.allow` and `defaultMode` still apply
+  inside the run, which is why stage 1 passes `--permission-mode default` and the deny file names every connector tool the brief does not
+  need, reads included (43 reads were neither allowed nor denied before: Gmail `get_message`, Linear `extract_images`, and so on); (5)
+  `--no-session-persistence` on both stages (probed: no `.jsonl` transcript is written, only an
   empty `~/.claude/projects/<cwd slug>/memory/` directory, so the reflect sweep finds no raw mail); (6) `disableAllHooks` in
   `hooks/brief-settings.json`, which keeps the operator's own hooks out of the run. The PreToolUse guard (`hooks/brief_guard.py`, deny by
   default, fails closed, still tested) is not active in the brief because `disableAllHooks` is required to keep the operator's hooks out;
