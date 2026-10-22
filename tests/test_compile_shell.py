@@ -47,7 +47,7 @@ def test_evaluate_is_fast_on_hostile_commands(name):
     e = ev.event_from_hook(pre(SLOW_INPUTS[name]))
     t0 = time.monotonic()
     catalogue.evaluate(e, state_mod.new_state("s-1"), strict=True)
-    assert time.monotonic() - t0 <= 0.1, name
+    assert time.monotonic() - t0 <= TIME_BUDGET, name
 
 
 def test_segments_are_computed_once_per_tool_use(monkeypatch):
@@ -202,7 +202,7 @@ def test_a_comment_ends_at_its_newline_even_after_a_backslash():
 def test_escape_handling_is_linear(name, cmd):
     t0 = time.monotonic()
     catalogue.evaluate(ev.event_from_hook(pre(cmd)), state_mod.new_state("s-1"), strict=True)
-    assert time.monotonic() - t0 <= 0.1, name
+    assert time.monotonic() - t0 <= TIME_BUDGET, name
 
 
 # ------------------------------------------------------------------ where the opener's command line really ends
