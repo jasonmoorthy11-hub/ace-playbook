@@ -1,9 +1,11 @@
 """The shape of a brief and its page (docs/design/compiler.md 8.x "Brief (as built)", D-110): the model emits JSON, this code writes HTML.
 
-`validate_digest` / `validate_brief` check the two JSON schemas with plain code (strings capped and stripped of control characters, a `url`
-that is not https becomes null). `render` writes one page in the morning skill's layout and tokens (day-date line, serif headline,
-terrain, three acts, Needs attention, Resolved): no script, no button, no external resource (system fonts only), a CSP meta of
-`default-src 'none'; style-src 'unsafe-inline'`, every text field through `esc`, a link only for a `url` that starts with `https://`.
+`validate_digest` / `validate_brief` check the two JSON schemas with plain code (strings capped and stripped of control characters; every
+`url` becomes null, because the digest carries no url and so any url in a brief was invented by a model). `render` writes one page in the
+morning skill's layout and tokens (day-date line, serif headline, terrain, three acts, Needs attention, Resolved): no script, no button, no
+external resource (system fonts only), a CSP meta of `default-src 'none'; style-src 'unsafe-inline'`, every text field through `esc`, a link
+only for a `url` that passes `link_ok` (https on mail.google.com, calendar.google.com or linear.app, at most 500 characters, no control or
+format character): never for the null the validator leaves, and a second line of defence for a brief that did not come through it.
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ from datetime import datetime
 
 CLASSES = ("heavy", "normal", "open")
 URL_MAX = 500
-ITEM = {"title": ("s", 80), "sentence": ("s", 300), "source": ("s", 80), "url": ("u", URL_MAX)}   # kinds: s str, n str|null, u https|null, o enum|null
+ITEM = {"title": ("s", 80), "sentence": ("s", 300), "source": ("s", 80), "url": ("u", URL_MAX)}   # kinds: s str, n str|null, u always null, o enum|null
 DIGEST = {"generated_at": ("s", 40),
           "calendar": ("l", 60, 0, {"start": ("s", 40), "end": ("s", 40), "title": ("s", 200), "organizer_is_me": "b", "optional": "b",
                                     "attendees_n": "i"}),
@@ -26,8 +28,8 @@ DIGEST = {"generated_at": ("s", 40),
 BRIEF = {"generated_at": ("s", 40), "day_class": ("e", CLASSES), "headline": ("s", 140),
          "acts": ("l", 3, 3, {"range": ("s", 60), "sentence": ("s", 200), "load": ("o", CLASSES)}, True),         # True: more than max refuses
          "needs_you": ("l", 25, 0, ITEM, True), "resolved": ("l", 25, 0, ITEM, True)}
-# A link is an outbound channel (a crafted URL can carry mail text to a host), so only these hosts may be linked: https, the exact host,
-# no userinfo, no port; anything else is nulled at validation and never rendered as a link.
+# A link is an outbound channel (a crafted URL can carry mail text to a host), so render writes one only for these hosts: https, the exact
+# host, no userinfo, no port. The validator nulls every url anyway; this allowlist is defence in depth for a brief that bypassed it.
 LINK_HOSTS = ("mail.google.com", "calendar.google.com", "linear.app")
 LINK = re.compile(r"https://(?:%s)(?:[/?#][^\s\x00-\x1f\x7f]*)?" % "|".join(re.escape(h) for h in LINK_HOSTS))
 
@@ -63,7 +65,7 @@ def _val(v, t, path: str):
     if kind == "o":
         return v if text and v in t[1] else None
     if kind == "u":
-        return v if link_ok(v) and len(v) <= t[1] else None
+        return None          # no source of the brief holds a url, so a non-null one is a model's invention (and an outbound channel)
     if kind == "l" and isinstance(v, list) and t[2] <= len(v) <= (t[1] if len(t) > 4 else len(v)):
         return [_obj(x, t[3], f"{path}[{i}]") for i, x in enumerate(v[:t[1]])]
     raise SchemaError(path)

@@ -137,7 +137,8 @@ def test_a_url_off_the_host_allowlist_renders_no_link_even_if_it_reaches_the_ren
         assert "<a " not in R.render(raw), url                                           # render() re-checks, it does not trust the validator
         assert R.validate_brief(raw)["needs_you"][0]["url"] is None, url
     for url in ("https://mail.google.com/mail/u/0/#inbox/x", "https://calendar.google.com/calendar/event?eid=1", "https://linear.app/team/issue/ENG-1"):
-        assert R.validate_brief(sample(needs_you=[item(url=url)]))["needs_you"][0]["url"] == url
+        assert R.validate_brief(sample(needs_you=[item(url=url)]))["needs_you"][0]["url"] is None          # the digest has no url: never kept
+        assert R.link_ok(url) and f'href="{url}"' in R.render(sample(needs_you=[item(url=url)], resolved=[]))          # render's allowlist stays
 
 
 def test_the_csp_meta_comes_right_after_the_charset_and_list_lengths_refuse_instead_of_truncating():

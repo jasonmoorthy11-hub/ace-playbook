@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+from functools import partial
 
 import pytest
 
@@ -58,14 +59,13 @@ def test_strings_are_capped_and_stripped_of_control_characters():
     assert len(b["headline"]) == 140
 
 
-def test_non_https_urls_become_null_and_whitespace_urls_too():
-    bad = ("javascript:alert(1)", "http://x.example", "data:text/html,x", "HTTPS://x.example", "https://linear.app/a b", "https://linear.app\n/x",
-           "https://x.example/a", 7)
-    for url in bad:
+def test_every_url_becomes_null_in_the_brief_because_the_digest_has_no_url_field():
+    urls = ("javascript:alert(1)", "http://x.example", "data:text/html,x", "HTTPS://x.example", "https://linear.app/a b", 7, "https://x.example/a",
+            "https://linear.app/a?b=1", "https://linear.app?@x", "https://mail.google.com/?q=SECRET", "https://mail.google.com/mail/u/0/#inbox/abc")
+    for url in urls:
         item = {**bs.brief()["needs_you"][0], "url": url}
-        assert brief_render.validate_brief(bs.brief(needs_you=[item]))["needs_you"][0]["url"] is None
-    item = {**bs.brief()["needs_you"][0], "url": "https://linear.app/a?b=1"}
-    assert brief_render.validate_brief(bs.brief(needs_you=[item]))["needs_you"][0]["url"] == "https://linear.app/a?b=1"
+        assert brief_render.validate_brief(bs.brief(needs_you=[item], resolved=[item]))["needs_you"][0]["url"] is None, url
+        assert brief_render.validate_brief(bs.brief(needs_you=[item], resolved=[item]))["resolved"][0]["url"] is None, url
 
 
 @pytest.mark.parametrize("bad", [
@@ -172,20 +172,19 @@ def test_the_exclusion_code_has_no_nested_quantifier_heuristic_and_compiles_only
     assert "NESTED" not in src and src.count("re.compile(") == 1 and "re.escape(" in src
 
 
-def slow(pidfile):
-    def hang(lists, mail):
-        pidfile.write_text(str(os.getpid()))
-        time.sleep(60)
-    return hang
+def child_env(env, monkeypatch, worker):
+    """Run the exclusion child with `worker` in place of brief_excl._work, under a config that names an exclusions file."""
+    monkeypatch.setenv("BRIEF_TEST_CHILD_PID", str(env / "child.pid"))
+    monkeypatch.setattr(brief_excl, "_work", worker)
+    monkeypatch.setenv("ACE_PLAYBOOK_CONFIG", str(bs.config(env, brief_exclusions=str(bs.exclusions(env / "ex.json")))))
 
 
 def test_a_hung_exclusion_child_is_killed_and_the_run_refuses(env, capsys, monkeypatch):
-    monkeypatch.setattr(brief_excl, "filter_mail", slow(env / "child.pid"))                    # the child inherits the slow function
-    monkeypatch.setattr(brief_excl, "TIMEOUT", 0.5)
-    os.environ["ACE_PLAYBOOK_CONFIG"] = str(bs.config(env, brief_exclusions=str(bs.exclusions(env / "ex.json"))))
+    child_env(env, monkeypatch, bs.work_hang)
+    monkeypatch.setattr(brief_excl, "TIMEOUT", 4)                                                # a spawned child needs a moment to start
     start = time.monotonic()
     code, out, err = run(capsys, "digest-apply", put(env, "d.json", bs.digest()))
-    assert (code, out) == (2, "") and "schema: exclusions" in err and time.monotonic() - start < 10
+    assert (code, out) == (2, "") and "schema: exclusions" in err and time.monotonic() - start < 15
     assert not (env / "brief" / "digest_clean.json").exists()
     pid = int((env / "child.pid").read_text())
     assert pid != os.getpid()
@@ -193,21 +192,26 @@ def test_a_hung_exclusion_child_is_killed_and_the_run_refuses(env, capsys, monke
         os.kill(pid, 0)
 
 
-def crash(lists, mail):
-    os._exit(7)
-
-
-def boom(lists, mail):
-    raise RuntimeError(bs.MARKER)
-
-
-@pytest.mark.parametrize("fn", [crash, boom, lambda lists, mail: {}, lambda lists, mail: "x", lambda lists, mail: [1],
-                                lambda lists, mail: mail + mail])
-def test_a_failing_or_garbling_exclusion_child_never_lets_the_digest_through(env, capsys, monkeypatch, fn):
-    monkeypatch.setattr(brief_excl, "filter_mail", fn)
-    os.environ["ACE_PLAYBOOK_CONFIG"] = str(bs.config(env, brief_exclusions=str(bs.exclusions(env / "ex.json"))))
+@pytest.mark.parametrize("worker", [bs.work_crash, bs.work_boom, *(partial(bs.work_answer, k) for k in ("dict", "str", "ints", "twice", "alien", "forged"))])
+def test_a_failing_or_garbling_exclusion_child_never_lets_the_digest_through(env, capsys, monkeypatch, worker):
+    child_env(env, monkeypatch, worker)
     code, out, err = run(capsys, "digest-apply", put(env, "d.json", bs.digest()))
     assert code == 2 and "schema: exclusions" in err and bs.MARKER not in out + err and not (env / "brief" / "digest_clean.json").exists()
+
+
+@pytest.mark.parametrize("kind", ["blanked", "same"])
+def test_a_child_answer_made_of_input_threads_or_a_blanked_summary_is_accepted(env, capsys, monkeypatch, kind):
+    child_env(env, monkeypatch, partial(bs.work_answer, kind))
+    code, out, err = run(capsys, "digest-apply", put(env, "d.json", bs.digest()))
+    assert code == 0 and (env / "brief" / "digest_clean.json").exists() and err == ""
+
+
+def test_the_exclusion_child_is_spawned_and_sees_only_its_arguments(env, capsys, monkeypatch):
+    child_env(env, monkeypatch, bs.work_spy)
+    monkeypatch.setattr(brief_excl, "_PARENT_ONLY", "RAW-IN-THE-PARENT", raising=False)
+    assert run(capsys, "digest-apply", put(env, "d.json", bs.digest()))[0] == 0
+    assert json.loads((env / "child.pid").read_text()) == {"leak": None, "mail_arg": 4}        # a forked child would have seen the variable
+    assert brief_excl.START == "spawn"
 
 
 def test_a_configured_but_missing_or_unparseable_exclusions_file_fails_closed(env, capsys):
@@ -342,3 +346,69 @@ def test_the_module_runs_as_a_script_and_never_echoes_content(tmp_path):
     p = subprocess.run([sys.executable, "-m", "ace_playbook.compile.brief"], capture_output=True, text=True, cwd=ROOT, timeout=30,
                        env={**os.environ, "ACE_PLAYBOOK_CONFIG": str(conf)})
     assert p.returncode == 2 and "usage" in p.stderr
+
+
+# ------------------------------------------------------------------ stream splitting and the tool drift audit
+def jsonl(events) -> str:
+    return "\n".join(json.dumps(e, ensure_ascii=False) for e in events) + "\n"
+
+
+@pytest.mark.parametrize("sep", ["\u2028", "\u2029", "\x85", "\x1c", "\x1d", "\x1e", "\x0b", "\x0c"])
+def test_a_line_separator_inside_a_json_string_neither_blocks_the_result_nor_hides_a_tool_call(env, capsys, sep):
+    call = {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "mcp__claude_ai_Gmail__send_message", "input": {"to": f"a{sep}b"}}]}}
+    result = {"type": "result", "subtype": "success", "is_error": False, "result": f"x{sep}y", "total_cost_usd": 0.1}
+    path = put(env, "u.jsonl", jsonl([call, result]))
+    assert run(capsys, "extract", path, "--what", "text") == (0, f"x{sep}y\n", "")
+    assert json.loads(run(capsys, "extract", path, "--what", "result")[1])["_tools_called"] == ["mcp__claude_ai_Gmail__send_message"]
+
+
+ALLOW = ROOT / "hooks" / "brief_allowed_tools.txt"
+EXTRA = "mcp__claude_ai_Gmail__a_new_write_tool"
+
+
+def audit(env, capsys, text):
+    code, out, err = run(capsys, "tools-audit", put(env, "s.jsonl", text), "--allow", str(ALLOW))
+    ledger = env / "brief" / "brief_ledger.jsonl"
+    return code, out, err, [json.loads(ln) for ln in ledger.read_text().splitlines()] if ledger.exists() else []
+
+
+def test_a_clean_stream_passes_the_tool_audit_and_writes_no_row(env, capsys):
+    init = ["ToolSearch", "mcp__claude_ai_Gmail__search_threads", "mcp__claude_ai_Linear__list_issues"]
+    assert audit(env, capsys, bs.stream(init_tools=init)) == (0, "", "", [])
+
+
+@pytest.mark.parametrize("where", ["init", "call", "both"])
+def test_an_mcp_tool_outside_the_allowlist_in_the_init_list_or_a_call_is_drift(env, capsys, where):
+    tools = (EXTRA,) if where in ("call", "both") else ()
+    init = ("ToolSearch", EXTRA, "mcp__claude_ai_Gmail__search_threads") if where in ("init", "both") else ()
+    code, out, err, rows = audit(env, capsys, bs.stream(tools=tools, init_tools=init))
+    assert (code, out, err) == (2, "", "")          # names go to the ledger only; brief.sh prints the one-line reason
+    assert len(rows) == 1 and rows[0]["drift"] == [EXTRA] and rows[0]["stage"] == "stage1" and rows[0]["ts"].endswith("Z")
+
+
+def test_a_non_mcp_tool_is_not_drift_and_a_bad_allow_file_fails(env, capsys, tmp_path):
+    assert audit(env, capsys, bs.stream(tools=("ToolSearch",), init_tools=["Bash", "Read"]))[0] == 0
+    bad = tmp_path / "allow.txt"
+    bad.write_text("mcp__x__read # note\n")
+    code, out, err = run(capsys, "tools-audit", put(env, "s.jsonl", bs.stream()), "--allow", str(bad))
+    assert code == 1 and out == ""
+    assert run(capsys, "tools-audit", str(env / "missing.jsonl"), "--allow", str(ALLOW))[0] == 1
+
+
+@pytest.mark.parametrize("init", [{"type": "assistant", "message": {"content": []}}, {"type": "system", "subtype": "init"},
+                                  {"type": "system", "subtype": "init", "tools": "mcp__x__y"}])
+def test_a_stream_without_a_usable_init_tool_list_is_not_audited_so_it_fails(env, capsys, init):
+    assert audit(env, capsys, jsonl([init]))[0] == 1
+
+
+def test_a_u2028_in_the_init_event_does_not_hide_an_extra_tool(env, capsys):
+    init = {"type": "system", "subtype": "init", "tools": ["x\u2028y", EXTRA], "mcp_servers": []}
+    assert audit(env, capsys, jsonl([init]))[0] == 2
+
+
+def test_timeout_mark_appends_one_row_and_status_ignores_it_for_costs(env, capsys):
+    assert run(capsys, "timeout-mark", "stage1")[0] == 0
+    assert run(capsys, "timeout-mark", "Stage 1; rm")[0] == 2
+    rows = [json.loads(ln) for ln in (env / "brief" / "brief_ledger.jsonl").read_text().splitlines()]
+    assert len(rows) == 1 and rows[0]["timeout"] == "stage1" and rows[0]["ts"].endswith("Z")
+    assert run(capsys, "status")[1].splitlines()[2:] == ["ledger rows: 1", "last stage costs: none"]

@@ -2,19 +2,21 @@
 
 The file is `{"drop_senders": [...], "drop_subjects": [...], "drop_bodies_from": [...]}`; an entry is a string (matched anywhere in the
 field) or a one-key object `{"starts": "text"}` / `{"contains": "text"}`. Every entry is `re.escape`d, so regex syntax in it is plain text
-and no entry can backtrack; matching is case-insensitive. Mail comes from an attacker, so the matching still runs in a forked child
-(multiprocessing) that is killed after TIMEOUT seconds. Any failure (bad file, timeout, crash, odd answer) raises Refused: the digest never
-passes through on failure. Stdlib only.
+and no entry can backtrack; matching is case-insensitive. Mail comes from an attacker, so the matching still runs in a child process that is
+killed after TIMEOUT seconds (a `re` match in C cannot be interrupted in-process). The child is SPAWNED (a fresh interpreter, not forked: a
+fork from a threaded host warns and deadlocks, and the child would carry the parent's memory), so it sees only the lists and the mail it is
+handed. This is the one file of compile/ allowed to import `multiprocessing` (a named exemption in tests/test_compile_events.py, D-116).
+Any failure (bad file, timeout, crash, an answer that is not made of the input threads) raises Refused: the digest never passes through on
+failure. Stdlib only.
 """
 
 from __future__ import annotations
 
 import multiprocessing
 import re
-import warnings
 
 KEYS = ("drop_senders", "drop_subjects", "drop_bodies_from")
-MAX_LEN, MAX_ENTRIES, TIMEOUT = 200, 500, 10
+MAX_LEN, MAX_ENTRIES, TIMEOUT, START = 200, 500, 10, "spawn"
 
 
 class Refused(ValueError):
@@ -64,14 +66,12 @@ def _work(conn, lists, mail) -> None:
 
 
 def apply(raw, mail: list) -> list:
-    """filter_mail in a forked child, killed after TIMEOUT seconds; Refused on a timeout, a crash or an answer that is not a list of mails."""
+    """filter_mail in a spawned child, killed after TIMEOUT seconds; Refused on a timeout, a crash or an answer not made of the input threads."""
     lists = compile_lists(raw)                   # the file is checked here, cheaply: literals cannot backtrack
-    ctx = multiprocessing.get_context("fork")
+    ctx = multiprocessing.get_context(START)
     recv, send = ctx.Pipe(duplex=False)
     child = ctx.Process(target=_work, args=(send, lists, mail), daemon=True)
-    with warnings.catch_warnings():              # the CLI is single-threaded; only a threaded host (a test runner) makes fork() warn
-        warnings.simplefilter("ignore", DeprecationWarning)
-        child.start()
+    child.start()
     send.close()
     try:
         out = recv.recv() if recv.poll(TIMEOUT) else None
@@ -81,6 +81,7 @@ def apply(raw, mail: list) -> list:
         child.kill()
         child.join(5)
         recv.close()
-    if not isinstance(out, list) or len(out) > len(mail) or not all(isinstance(m, dict) for m in out):
+    kept = mail + [{**m, "summary": ""} for m in mail]          # an answer is input threads, a drop_bodies_from one with its summary blanked
+    if not isinstance(out, list) or len(out) > len(mail) or not all(m in kept for m in out):
         raise Refused("child")
     return out

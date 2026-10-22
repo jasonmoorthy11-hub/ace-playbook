@@ -3,9 +3,41 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 from pathlib import Path
 
 MARKER = "UNIQUE-PRIVATE-SUMMARY-TEXT"
+
+
+# Stand-ins for brief_excl._work. The exclusion child is a spawned interpreter (it sees nothing of the parent but its arguments and
+# environment), so a worker must be an importable top-level function; this module imports almost nothing, so the child starts fast.
+def work_hang(conn, lists, mail) -> None:
+    Path(os.environ["BRIEF_TEST_CHILD_PID"]).write_text(str(os.getpid()))
+    time.sleep(60)
+
+
+def work_crash(conn, lists, mail) -> None:
+    os._exit(7)
+
+
+def work_boom(conn, lists, mail) -> None:
+    raise RuntimeError(MARKER)
+
+
+def work_answer(kind: str, conn, lists, mail) -> None:
+    """Send a garbled answer: a dict, a str, a list of ints, the mail twice, a thread that was never an input, or an input with a changed field."""
+    conn.send({"dict": {}, "str": "x", "ints": [1], "twice": mail + mail, "alien": [{"x": 1}], "forged": [{**mail[0], "subject": "forged"}],
+               "blanked": [{**mail[0], "summary": ""}], "same": list(mail)}[kind])
+    conn.close()
+
+
+def work_spy(conn, lists, mail) -> None:
+    """Report what the child can see of the parent: a module variable the parent set at run time, and the raw digest it holds."""
+    from ace_playbook.compile import brief_excl
+    Path(os.environ["BRIEF_TEST_CHILD_PID"]).write_text(json.dumps({"leak": getattr(brief_excl, "_PARENT_ONLY", None), "mail_arg": len(mail)}))
+    conn.send(mail)
+    conn.close()
 
 
 def digest(**kw) -> dict:
@@ -44,10 +76,10 @@ def config(tmp_path: Path, **kw) -> Path:
     return conf
 
 
-def stream(result_text: str = "ok", tools=("mcp__claude_ai_Gmail__search_threads",), five=0.08, seven=0.01, is_error=False) -> str:
+def stream(result_text: str = "ok", tools=("mcp__claude_ai_Gmail__search_threads",), five=0.08, seven=0.01, is_error=False, init_tools=()) -> str:
     """A stream-json file as `claude -p --output-format stream-json --verbose` prints it (the shapes seen in phase 0)."""
     window = {"status": "allowed", "unifiedWindows": {"five_hour": {"utilization": five, "resetsAt": 1}, "seven_day": {"utilization": seven, "resetsAt": 2}}}
-    events = [{"type": "system", "subtype": "init", "tools": [], "mcp_servers": []},
+    events = [{"type": "system", "subtype": "init", "tools": list(init_tools), "mcp_servers": []},
               *({"type": "assistant", "message": {"content": [{"type": "text", "text": "x"}, {"type": "tool_use", "name": t, "input": {}}]}} for t in tools),
               {"type": "rate_limit_event", "rate_limit_info": window},
               {"type": "rate_limit_event", "rate_limit_info": {**window, "unifiedWindows": {"five_hour": {"utilization": five + 0.01},

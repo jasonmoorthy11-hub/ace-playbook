@@ -8,9 +8,7 @@ prints mail content. Exit: 0 ok, 1 error (type name only), 2 refused (schema, ex
 from __future__ import annotations
 
 import argparse
-import fcntl
 import json
-import os
 import re
 import sys
 from datetime import datetime, timedelta, timezone
@@ -18,16 +16,10 @@ from pathlib import Path
 
 from .. import config as cfgmod
 from ..atomic import write_private
-from . import brief_excl, brief_render as br
+from . import brief_audit as ba, brief_excl, brief_render as br
 
 FMT, STATE, LEDGER = "%Y-%m-%dT%H:%M:%SZ", "brief_state.json", "brief_ledger.jsonl"
-
-
-def _jl(text: str):
-    try:
-        return json.loads(text)
-    except (ValueError, RecursionError):
-        return None
+_jl = ba.jl
 
 
 def read_json(path):
@@ -78,7 +70,7 @@ def _util(event, window: str):
 
 def extract(path: str, what: str, last: bool = False):
     """One thing out of a stream-json file: the first (or last) rate_limit_event, the result object (+ `_tools_called`) or its text."""
-    events = [e for e in map(_jl, Path(path).read_bytes()[:50_000_000].decode("utf-8", "replace").splitlines()) if isinstance(e, dict)]
+    events = ba.events(path)
     if what not in ("rate_limit", "result", "text"):
         raise ValueError("what")
     if what == "rate_limit":
@@ -87,9 +79,7 @@ def extract(path: str, what: str, last: bool = False):
     res = next((e for e in reversed(events) if e.get("type") == "result"), None)
     if res is None or what == "text" and (res.get("is_error") or not isinstance(res.get("result"), str)):
         raise ValueError("no usable result")
-    blocks = [b for e in events if e.get("type") == "assistant" and isinstance(e.get("message"), dict)
-              for b in e["message"].get("content") or [] if isinstance(b, dict) and b.get("type") == "tool_use"]
-    return res["result"] if what == "text" else {**res, "_tools_called": sorted({b["name"] for b in blocks if isinstance(b.get("name"), str)})}
+    return res["result"] if what == "text" else {**res, "_tools_called": sorted(ba.tool_uses(events))}
 
 
 def cmd_due(cfg, a) -> int:
@@ -133,11 +123,22 @@ def cmd_ledger(cfg, a) -> int:
            **{f"{w}_{t}": _util(ev, w) for w in ("five_hour", "seven_day") for t, ev in (("before", before), ("after", after))},
            "duration_ms": _num(res.get("duration_ms")), "num_turns": _num(res.get("num_turns")),
            "tools_called": [t[:100] for t in (res.get("_tools_called") or []) if isinstance(t, str)][:50]}
-    fd = os.open(_dir(cfg) / LEDGER, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)       # 0600, O_APPEND, locked
-    with os.fdopen(fd, "ab") as fh:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        os.fchmod(fd, 0o600)
-        fh.write(json.dumps(row, sort_keys=True).encode() + b"\n")
+    ba.append_row(_dir(cfg) / LEDGER, row)
+
+
+def cmd_tools_audit(cfg, a) -> int:
+    """Exit 2 (and one ledger row naming the tools) when stage 1 could see or called an `mcp__` tool outside the allowlist; names go nowhere else."""
+    names = ba.drift(a.stream, a.allow)
+    if not names:
+        return 0
+    ba.append_row(_dir(cfg) / LEDGER, {"ts": _now(), "stage": "stage1", "drift": [n[:100] for n in names][:50]})
+    return 2
+
+
+def cmd_timeout_mark(cfg, a) -> int:
+    if not re.fullmatch(r"[a-z0-9_]{1,20}", a.stage):
+        raise br.SchemaError("stage")
+    ba.append_row(_dir(cfg) / LEDGER, {"ts": _now(), "stage": a.stage, "timeout": a.stage})
 
 
 def cmd_extract(cfg, a) -> int:
@@ -148,8 +149,8 @@ def cmd_extract(cfg, a) -> int:
 def cmd_status(cfg, a) -> int:
     d = _dir(cfg)
     state = read_json(d / STATE) or {}
-    rows = [r for r in map(_jl, (d / LEDGER).read_text(errors="replace").splitlines() if (d / LEDGER).is_file() else []) if isinstance(r, dict)]
-    costs = ", ".join(f"{s} ${c}" for s, c in sorted({r.get("stage"): r.get("cost_usd") for r in rows}.items(), key=str))
+    rows = [r for r in map(_jl, (d / LEDGER).read_text(errors="replace").split("\n") if (d / LEDGER).is_file() else []) if isinstance(r, dict)]
+    costs = ", ".join(f"{s} ${c}" for s, c in sorted({r.get("stage"): r.get("cost_usd") for r in rows if "cost_usd" in r}.items(), key=str))
     print(f"last brief: {state.get('last_brief', 'never')}\nneeds you: {state.get('needs_you_count', 0)}\nledger rows: {len(rows)}")
     print(f"last stage costs: {costs or 'none'}")
 
@@ -161,7 +162,8 @@ def cmd_conf(cfg, a) -> int:
 
 
 VERBS = {"due": ["--force"], "digest-apply": ["src", "--out"], "render": ["src"], "state-mark": [], "status": [],
-         "ledger": ["before", "after", "stage", "result"], "extract": ["stream", "--what", "--last"], "conf": ["key"]}
+         "ledger": ["before", "after", "stage", "result"], "extract": ["stream", "--what", "--last"], "conf": ["key"],
+         "tools-audit": ["stream", "--allow"], "timeout-mark": ["stage"]}
 
 
 def main(argv=None) -> int:
