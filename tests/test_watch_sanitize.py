@@ -507,7 +507,10 @@ def test_a_page_of_unclosed_style_openers_is_scanned_in_linear_time():
     for page in ("<style>" * 150000, "<style>@a{" * 105000, "<style " * 150000, "<style>/*" * 120000):
         for markdown in (False, True):
             t0 = time.monotonic()
-            strip_hidden(page, markdown=markdown)
+            try:
+                strip_hidden(page, markdown=markdown)
+            except ValueError:                                       # wave 12: openers inside another sheet are capped: the page fails closed, fast
+                pass
             assert time.monotonic() - t0 < 2, page[:12]
     assert sanitize.style_text("<style>.a{x}</style> <STYLE type=x >.b{y}</style >") == ".a{x}\n.b{y}"
     assert sanitize.style_text("<style>a<style>b</style>c<style>unclosed") == "a<style>b\nunclosed"       # wave 6: an unclosed one applies too
@@ -517,7 +520,10 @@ def test_a_page_of_unclosed_style_openers_is_scanned_in_linear_time():
 def timed(page: str, **kw) -> None:
     import time
     t0 = time.monotonic()
-    strip_hidden(page, **kw)
+    try:
+        strip_hidden(page, **kw)
+    except ValueError:                                               # TooDeep: a page that fails closed does so in time too
+        pass
     assert time.monotonic() - t0 < 2, page[:24]
 
 

@@ -538,7 +538,7 @@ def test_other_start_tags_leave_the_select_open_so_its_text_stays_hidden(html):
 def test_a_nested_select_keeps_the_text_after_it_hidden_and_the_noscript_context_follows_the_scope():
     assert strip_hidden("<select><select>X") == "" and strip_hidden("<select><option>a<select>X") == ""        # fail closed: the second one stays open
     assert strip_hidden("<select></select><noscript><div hidden></div>X</noscript>VIS") == "VIS"
-    assert strip_hidden("<select><noscript><div hidden></noscript></select>VIS") == "VIS"                   # raw text to its closer, then the select closes
+    assert strip_hidden("<select><noscript><div hidden></noscript></select>VIS") == ""      # wave 12: reading A opens the hidden div (VIS was a leak)
     assert sanitize.style_text("<select><input><noscript><style>.h{display:none}</style></noscript>") == ""
     assert sanitize.style_text("<select><noscript><style>.h{display:none}</style></noscript>") == ""
     assert sanitize.style_text("<select><textarea></textarea><noscript><style>.h{display:none}</style></noscript>") == ""
@@ -623,3 +623,99 @@ def test_the_end_tag_of_an_integration_point_is_ignored_above_any_html_element(n
 @pytest.mark.parametrize("name", sorted(INTEGRATION_FOREIGN_ABOVE))
 def test_the_end_tag_of_an_integration_point_pops_foreign_elements_above_it(name):
     assert strip_hidden(INTEGRATION_FOREIGN_ABOVE[name]) == "VIS", name
+
+
+# ------------------------------------------------------------------ wave 12: select + raw text under both readings, a sheet from every `<style` opener
+POISON_TAGS = ("iframe", "xmp", "noembed", "noframes", "style", "noscript", "title")           # the in-select mode IGNORES these start tags (reading A)
+
+
+def poison_worlds(t: str) -> list:
+    """Reading A: `<t>` is ignored, so the first `</select>` closes the select and what the raw text swallowed is markup (a hidden div opens).
+    Reading B (ours): raw text to `</t>`, which swallows `</select><div hidden>`. After it closes, B must never show what A hides."""
+    return [f"<select><{t}></select><div hidden></{t}><input>LEAK</div>", f"<select><{t}></select><div hidden></{t}></select>LEAK",
+            f"<select><{t}/></select><div hidden></{t}><input>LEAK</div>", f"<select><option>a<{t}></select><div hidden></{t}><keygen>LEAK</div>",
+            f"<SELECT><{t.upper()}></SELECT><DIV HIDDEN></{t.upper()}><INPUT>LEAK</DIV>", f"<select><{t}></select><div hidden></{t}></select><p>LEAK</p>",
+            f"<div hidden><select><{t}></select><div></{t}><input></div>LEAK",
+            f"<select><{t}></select><div hidden></{t}><textarea></textarea>LEAK"]
+
+
+def leak_free(html: str) -> bool:
+    return all("LEAK" not in text for text in (strip_hidden(html), body_of(html), strip_hidden(html, markdown=True)))
+
+
+@pytest.mark.parametrize("tag", POISON_TAGS)
+def test_raw_text_opened_in_a_select_keeps_everything_after_it_hidden_to_the_end_of_the_document(tag):
+    for html in poison_worlds(tag):
+        assert leak_free(html), html
+
+
+def test_the_text_before_the_select_stays_and_a_raw_text_without_markup_changes_nothing():
+    assert strip_hidden("VIS<select><xmp><b></xmp></select>after") == "VIS"               # raw text with a `<`: a browser may have opened anything in it
+    for tag in POISON_TAGS:                                          # no `<` in the raw text: both readings read it as option text, nothing was opened
+        assert strip_hidden(f"<select><{tag}>x</{tag}></select>VIS") == "VIS", tag
+        assert strip_hidden(f"<select><{tag}></{tag}><option>a</select>VIS") == "VIS", tag
+        assert strip_hidden(f"<select><{tag}><b></{tag}></select>VIS") == "", tag               # over-hiding: reading A shows VIS
+    assert strip_hidden("<select><title>a &lt; b</title></select>VIS") == ""                    # a converted entity looks like a `<`: over-hiding
+
+
+def test_a_select_ender_or_a_close_before_the_raw_text_tag_is_not_poisoned_and_script_and_textarea_are_not_ignored_by_a_select():
+    assert strip_hidden("<select><input><xmp><b></xmp>VIS") == "<b>VIS" and strip_hidden("<select></select><xmp><b></xmp>VIS") == "<b>VIS"
+    # spec, in select: `script` and `template` use the in-head rules and `textarea` closes the select first: no reading ignores them
+    assert "LEAK" in strip_hidden("<select><script></select><div hidden></script><input>LEAK</div>")
+    assert "LEAK" in strip_hidden("<select><textarea></select><div hidden></textarea><input>LEAK</div>")
+    assert "VIS" in strip_hidden("<select><textarea><b></textarea></select>VIS") and "VIS" not in strip_hidden("<select><plaintext></select><p>VIS")
+
+
+FAKE_OPENERS = {"textarea": "<textarea><style></textarea>", "title": "<title><style></title>", "script": "<script>x='<style>'</script>",
+                "comment": "<!-- <style> -->", "attribute": "<p title='<style>'>t</p>", "custom": "<style-x>", "select": "<select><style></select>"}
+REAL_SHEET, SHEET_PAGE = "<style>.x{display:none}</style>", "<p class=x>HIDDEN</p><p>OK</p>"
+
+
+@pytest.mark.parametrize("name", sorted(FAKE_OPENERS))
+def test_a_fake_style_opener_before_or_after_a_real_sheet_never_hides_the_real_rules(name):
+    from ace_playbook.compile.watch import stylepass
+    fake = FAKE_OPENERS[name]
+    for page in (fake + REAL_SHEET + SHEET_PAGE, REAL_SHEET + fake + SHEET_PAGE, fake + REAL_SHEET + fake + SHEET_PAGE, fake + fake + REAL_SHEET + SHEET_PAGE,
+                 SHEET_PAGE + fake + REAL_SHEET, SHEET_PAGE + REAL_SHEET + fake):
+        assert "x" in stylepass.style_rules(page)[0], page
+        assert "HIDDEN" not in strip_hidden(page) and "HIDDEN" not in body_of(page), page
+        assert "OK" in strip_hidden(page) or name == "select", page                        # a raw text in a select poisons what follows it (item 1)
+
+
+def test_the_style_pass_reads_a_select_both_ways_so_the_ignored_start_tag_cannot_swallow_a_real_sheet():
+    from ace_playbook.compile.watch import stylepass
+    page = f"{SHEET_PAGE}<select><style></select>{REAL_SHEET}"                                  # reading A: the first <style> is ignored
+    assert ".x{display:none}" in stylepass.scan_sheets(page) and ".x{display:none}" in stylepass.style_sheets(page)
+    assert "HIDDEN" not in strip_hidden(page) and "HIDDEN" not in body_of(page) and "OK" in strip_hidden(page)
+    attr = f'{SHEET_PAGE}<select><style title=">"></select><style title=">">.x{{display:none}}</style>'          # a `>` inside an attribute value
+    assert ".x{display:none}" in stylepass.style_sheets(attr) and "x" in stylepass.style_rules(attr)[0]
+    assert ".x{display:none}" not in stylepass.scan_sheets(attr)                                    # the scan alone misses it: the select pass is needed
+    assert "HIDDEN" not in strip_hidden(attr) and "HIDDEN" not in body_of(attr) and "OK" in strip_hidden(attr)
+    for tag in ("xmp", "iframe", "noembed", "noframes", "noscript", "textarea", "title"):
+        page = f"{SHEET_PAGE}<select><{tag}></select>{REAL_SHEET}"
+        assert "HIDDEN" not in strip_hidden(page) and "OK" in strip_hidden(page), tag
+    assert stylepass.style_sheets("<select><style>.a{x:y}</style></select>") == [".a{x:y}"]     # reading B only: the union keeps it (over-hiding)
+    assert stylepass.style_sheets("<select><input><style>.a{x:y}</style>") == [".a{x:y}"]       # the select ended: a real sheet in both readings
+    assert stylepass.style_sheets("<select><script>x</script><style>.a{x:y}</style>") == [".a{x:y}"]
+
+
+def test_the_scan_starts_a_sheet_at_every_style_opener_including_those_inside_another_sheet():
+    from ace_playbook.compile.watch import stylepass
+    assert stylepass.scan_sheets("<style>a<style>.x{display:none}</style>") == ["a<style>.x{display:none}", ".x{display:none}"]
+    assert stylepass.scan_sheets("<style><style x=1><style/>.y{}") == ["<style x=1><style/>.y{}", "<style/>.y{}", ".y{}"]
+    assert stylepass.scan_sheets("<style>a</style><style>b<STYLE>c</style>d") == ["a", "b<STYLE>c", "c"]
+    assert stylepass.scan_sheets("<style>a<style") == ["a<style"] and stylepass.scan_sheets("<style-x><style>.y{}") == [".y{}"]
+    assert stylepass.scan_text("<style>a<style>b</style>") == "a<style>b\nb"
+
+
+def test_overlapping_style_openers_are_capped_and_the_page_fails_closed():
+    from ace_playbook.compile.watch import stylepass
+    from ace_playbook.compile.watch.htmlrules import TooDeep
+    assert len(stylepass.scan_sheets("<style>" * 1001 + "</style>")) == 1001                    # 1000 openers inside another sheet
+    for page in ("<style>" * 1002 + "</style>", "<style>" * 5 + "x" * 1_000_000):             # too many overlapping openers / too many characters in the sheets
+        with pytest.raises(TooDeep):
+            stylepass.scan_sheets(page)
+        with pytest.raises(TooDeep):
+            strip_hidden(page)
+    assert len(stylepass.scan_sheets("<style>" * 3 + "x" * 1_000_000)) == 3
+    assert len(stylepass.scan_sheets("<style>x</style>" * 5000)) == 5000                           # sheets that do not overlap are not counted

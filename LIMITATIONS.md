@@ -207,7 +207,10 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   off would show it, which is the rarer reader); only in HTML content, though: that holds for EVERY raw-text, RCDATA and noscript name
   (`set_cdata_mode`, both passes): made in foreign content (an open svg or math, outside an integration point) it is an ordinary element.
   Inside an open `<select>` a browser may ignore the start tag, but the mode is entered anyway: the text up to the tag's own end tag is
-  hidden whichever way the browser's select scope differs from ours (`<select><xmp><p>VIS</p></xmp>` loses VIS: over-hiding). `<input>`,
+  hidden whichever way the browser's select scope differs from ours (`<select><xmp><p>VIS</p></xmp>` loses VIS: over-hiding). Raw text opened
+  in a select that holds a `<` poisons the rest of the document: once it closes, nothing after it shows (over-hiding by design, not for
+  `script`; `<select><xmp></select><div hidden></xmp><input>X</div>` shows X in no reading), and the style pass reads a page with a
+  `<select` both ways. `<input>`,
   `<keygen>`, `<textarea>` and `<select>` end an open select, but only when nothing between the top and the select is a `template`, a table
   or integration point, a foreign element or an element hidden by itself (`<div hidden><select><template><input></template></div>X` keeps X
   hidden; a nested `<select>` stays open). The end tag of an integration point made in foreign content (`</desc>`, `</title>`, ...) is
@@ -222,7 +225,9 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   comment, attribute, `<textarea>`, `<title>`): their simple hiding rules apply as well, which only hides MORE (a CSS sample in a
   comment can hide the elements it names). An unclosed `<style>` at the end of the page applies to the elements before it; the legacy
   `<!--` and `-->` tokens in a stylesheet are ignored as CSS does. Every `<style>` is parsed on its own (`stylepass.style_sheets`,
-  `scan_sheets`; the rules are unioned), so an open block, string or comment never carries into the next sheet. The stylesheet is read in
+  `scan_sheets`; the rules are unioned), so an open block, string or comment never carries into the next sheet. The scan starts a sheet at
+  EVERY `<style` opener, those inside another sheet too, so a fake opener never merges with a real sheet; more than 1000 such openers or 4 MiB of
+  overlapping sheet text make the page a `parse` drop. The stylesheet is read in
   one linear pass over its braces (`cssscan.py`):
   braces, semicolons and comment openers inside a CSS
   string (`content:"{"`), after a backslash or in an unquoted `url(...)` (the ident is recognised after escape decoding: `\75rl(`, `u\72l(`,

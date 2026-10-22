@@ -27,7 +27,9 @@ VISIBLE text only, never from the raw markup. The rules of `<style>` come from a
 html.parser and a browser tokenize differently), the visible text from a second parser pass. A comment ends where a browser ends it
 (`<!-->`, `<!--->`, `-->`, `--!>`: `htmlrules.ScriptedParser`); so does `<![CDATA[` in HTML content: a bogus comment that ends at the
 first `>` (a real section to `]]>` only in svg or math), and `<noscript>` is raw text in HTML content, as in a browser with scripting on (an
-ordinary element in svg or math); a slash on any raw-text element (`<xmp/>`, `<iframe/>`, ...) is ignored. Inside `<svg>` and
+ordinary element in svg or math); a slash on any raw-text element (`<xmp/>`, `<iframe/>`, ...) is ignored. A raw-text element opened in an
+open `<select>` (a browser may ignore its start tag there, so the raw text is markup) that holds a `<` hides the REST of the document once
+it closes (over-hiding: `set_cdata_mode`; `script` is exempt, the in-head rules take it in a select). Inside `<svg>` and
 `<math>` no implied end tag happens, except after a breakout tag (`treerules`). A `<table>` closes an open `<p>` only in standards mode, which
 is a FIRST doctype `html` (`<!DOCTYPE html>`, optionally with `SYSTEM "about:legacy-compat"`) before any tag or text; a late, legacy or
 second doctype, or none, is quirks mode (fail closed). The result is plain text, one non-empty line per block.
@@ -64,6 +66,7 @@ class _Text(ScriptedParser):
         self.classes, self.ids, self.tags = rules
         self.dead = False                                         # the document itself is hidden (html/body) or a shadow host: no text at all
         self.standards, self.fresh = False, True                  # standards mode (a leading `<!DOCTYPE html>`, else quirks); nothing but blanks seen yet
+        self.raw_select, self.raw_lt, self.poisoned = False, False, False       # a raw-text element is open in a select; it held a `<`; hide to EOF
 
     def _push(self, tag: str, hid: bool, own: bool) -> None:
         self.stack.append([tag, hid, own, len(self.out), marks(self.stack[-1][4] if self.stack else None, tag, len(self.stack))])
@@ -90,6 +93,14 @@ class _Text(ScriptedParser):
 
     def in_foreign(self) -> bool:
         return len(self.stack) > 1 and self.stack[-2][4][5] >= 0   # the parent of the element just pushed is inside a run of svg / math elements
+
+    def set_cdata_mode(self, elem, **kw) -> None:
+        """A raw-text element (not `script`: a select hands it to the in-head rules, no browser ignores it) opened in an open select is the one
+        place the two browser readings differ: one ignores the start tag, so the raw text is markup there. When it closes with a `<` in its text
+        the rest of the document stays hidden (`poisoned`): the other reading may have opened a hidden element that no later tag here closes."""
+        raw = not self.in_foreign() and elem != "script" and bool(self.open.get("select"))
+        super().set_cdata_mode(elem, **kw)
+        self.raw_select, self.raw_lt = raw, False
 
     def _select_to_end(self) -> int | None:
         """The stack index of the open select that an `<input>`, `<keygen>`, `<textarea>` or `<select>` start tag ends, else None: only when
@@ -141,6 +152,8 @@ class _Text(ScriptedParser):
 
     def handle_endtag(self, tag) -> None:
         self.fresh = False
+        if self.raw_select:                                         # the end tag of the raw-text element opened in a select
+            self.raw_select, self.poisoned = False, self.poisoned or self.raw_lt
         if self.script_stays_open(tag) or not self.open.get(tag):
             return
         i = next(i for i in range(len(self.stack) - 1, -1, -1) if self.stack[i][0] == tag)
@@ -150,7 +163,8 @@ class _Text(ScriptedParser):
     def handle_data(self, data) -> None:
         super().handle_data(data)
         self.fresh = self.fresh and not data.strip(" \t\n\f\r")
-        if not self._hidden():
+        self.raw_lt = self.raw_lt or (self.raw_select and "<" in data)
+        if not self._hidden() and not self.poisoned:
             self.out.append(data)
 
 

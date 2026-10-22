@@ -20,7 +20,8 @@ a hidden element is involved the same rules apply and anything doubtful keeps th
   they tokenize alike: a slash on `<script/>`, `<style/>`, `<noscript/>`, `<xmp/>`, `<iframe/>`, `<noembed/>`, `<noframes/>`, `<textarea/>`,
   `<title/>` or `<plaintext/>` is ignored, `noscript` is raw text (a browser with scripting on), and every raw-text, RCDATA and `noscript`
   name is raw text in HTML content only: made in foreign content (`in_foreign()`) it is an ordinary element; inside an open `<select>` it
-  stays raw text (a browser may ignore the tag there: both readings hide the text, over-hiding); a double-escaped script keeps its next
+  stays raw text (a browser may ignore the tag there: both readings hide the text, and `sanitize` hides the rest of the page once a raw
+  text that held a `<` closes, `stylepass` reads the page both ways); a double-escaped script keeps its next
   `</script` as text, a comment ends at `<!-->`, `<!--->`, `-->` or `--!>`, and `<![CDATA[` is a bogus comment that ends at the first `>` (any `<![` is),
   except in foreign content, where it runs to `]]>`.
 * `MAX_DEPTH`: the open-element stack is capped; a document nested deeper is a parse failure (`TooDeep`), not a quadratic scan.
@@ -54,7 +55,7 @@ SCRIPT_MARKS = re.compile(r"<!--->|<!-->|<!--|-->|<script(?=[\t\n\f\r />])|</scr
 
 
 class TooDeep(ValueError):
-    """More than MAX_DEPTH open elements: `strip_hidden` gives up and `fetch` drops the page as `parse`."""
+    """More than MAX_DEPTH open elements, or too many overlapping `<style` openers: `strip_hidden` gives up and `fetch` drops the page as `parse`."""
 
 
 def end_ignored(stack: list, i: int) -> bool:
