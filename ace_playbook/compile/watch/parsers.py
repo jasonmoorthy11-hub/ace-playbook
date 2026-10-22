@@ -41,14 +41,22 @@ def _kids(el: ET.Element, name: str) -> list[ET.Element]:
 
 def _markup(el: ET.Element) -> str:
     """The content of `el` as markup: text nodes as they are (an escaped `&lt;div hidden&gt;` is HTML a reader would render), child elements
-    as tags with their attributes (so `strip_hidden` sees an XHTML `<span style="display:none">` instead of a flattened string)."""
-    out = [el.text or ""]
-    for child in el:
-        if not isinstance(child.tag, str):                       # a comment or a processing instruction
+    as tags with their attributes (so `strip_hidden` sees an XHTML `<span style="display:none">` instead of a flattened string). The walk keeps
+    its own stack: a document nested thousands of levels deep must not reach the recursion limit."""
+    out, walk, closers = [el.text or ""], [iter(el)], []
+    while walk:
+        child = next(walk[-1], None)
+        if child is None:
+            walk.pop()
+            if closers:
+                out.append(closers.pop())
+        elif not isinstance(child.tag, str):                     # a comment or a processing instruction
             out.append(child.tail or "")
-            continue
-        attrs = "".join(f' {k.rsplit("}", 1)[-1]}="{html.escape(v, quote=True)}"' for k, v in child.attrib.items())
-        out.append(f"<{_ln(child)}{attrs}>{_markup(child)}</{_ln(child)}>{child.tail or ''}")
+        else:
+            attrs = "".join(f' {k.rsplit("}", 1)[-1]}="{html.escape(v, quote=True)}"' for k, v in child.attrib.items())
+            out.append(f"<{_ln(child)}{attrs}>{child.text or ''}")
+            closers.append(f"</{_ln(child)}>{child.tail or ''}")
+            walk.append(iter(child))
     return "".join(out)
 
 

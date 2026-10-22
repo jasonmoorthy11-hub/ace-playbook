@@ -170,8 +170,14 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   `font-size:.001` (and other tiny non-zero sizes), `opacity:.001`, `left` or `top` offsets on an element without `position`, `text-indent`
   variants such as `-99em`, `<font size=0>`, white-on-white or any low-contrast colour pair, `var()` indirection in a style value, the content
   of `<textarea>`, `<plaintext>` and `<xmp>` (kept as text), and the odd comment spellings (`<!->` and similar) that browsers treat differently
-  from the parser. The defence is not the sanitizer alone: web text reaches a record only as a title or a 400-character quote, never as a diff,
-  a target or a command, and every model id must pass a strict pattern first.
+  from the parser. Markdown pages (every Content-Type but `text/html`) are read with the HTML rules, because their site renders raw HTML: a
+  raw-text opener (`<script>`, `<style>`, `<title>`, `<textarea>`, `<xmp>`, `<noembed>`, `<noframes>`, `<iframe>`) is prose only inside an
+  inline code span or a fenced code block, and anywhere else it hides to its closer or to the end of the input. The code-span and fence
+  detection is a small CommonMark subset: inside a raw HTML block (for example after `<p>` with no blank line) a renderer reads backticks
+  as plain text, so a `<script>` between backticks there is read as prose by the sanitizer but as a real tag by the renderer, and the text
+  after it that the renderer hides is kept (an undetected gap). End tags are matched by the name as written, so `</x:div>` does not close
+  `<div>`, as in a browser. The defence is not the sanitizer alone: web text reaches a record only as a title or a 400-character quote,
+  never as a diff, a target or a command, and every model id must pass a strict pattern first.
 
 ## Security and scrubbing
 

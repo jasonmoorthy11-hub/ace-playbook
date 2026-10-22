@@ -112,7 +112,7 @@ def fetch(url: str, *, expect: tuple[str, ...], store: dict, timeout: float = 20
             raise ValueError("no model rows")                                 # a table that stopped parsing is a failed fetch, not "no deprecations"
     except DTDRefused:
         return _drop(url, "xml", now)
-    except (ValueError, TypeError, KeyError, SyntaxError):                    # includes json.JSONDecodeError and ElementTree.ParseError
+    except (ValueError, TypeError, KeyError, SyntaxError, RecursionError):    # includes json.JSONDecodeError and ElementTree.ParseError
         return _drop(url, "parse", now)
     prev = ent.get("sha256")
     known[url] = {"sha256": sha, "fetched_at": now, "etag": etag if isinstance(etag, str) and len(etag) < 200 else ""}

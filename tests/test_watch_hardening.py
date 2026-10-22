@@ -194,10 +194,10 @@ def test_a_deprecations_page_with_no_rows_is_a_failed_fetch_and_is_not_remembere
 
 
 def test_markdown_pages_do_not_lose_the_rest_to_a_prose_mention_of_a_raw_text_tag():
-    body = b"Note: the console no longer loads a <script> tag for this page.\n\n" + fixture("deprecations.md")
+    body = b"Note: the console no longer loads a `<script>` tag for this page.\n\n" + fixture("deprecations.md")
     item = get(body)
     assert "dropped" not in item and {r["model_id"] for r in item["data"]} >= {"claude-old-sonnet-20250101", "claude-old-haiku-20240101"}
-    md = get(b"# Title\n\nuse the <style> element\n\nmore text\n", kind="md")
+    md = get(b"# Title\n\nuse the `<style>` element\n\nmore text\n", kind="md")
     assert "more text" in md["body"]
     hidden = get(b"# Title\n\n<script>var x = 1;</script>\n<div hidden>SECRET</div>\n<!-- SECRET -->\nvisible\n", kind="md")
     assert "SECRET" not in hidden["body"] and "visible" in hidden["body"]
@@ -256,7 +256,7 @@ def test_an_empty_parse_never_closes_through_a_scan(w, capsys):
 
 def test_a_script_mention_in_prose_does_not_close_through_a_scan(w, capsys):
     w.run(capsys, "scan")
-    w.pages[U["depr"]] = (b"Note: the console no longer loads a <script> tag.\n\n" + fixture("deprecations.md"), "text/markdown")
+    w.pages[U["depr"]] = (b"Note: the console no longer loads a `<script>` tag.\n\n" + fixture("deprecations.md"), "text/markdown")
     code, out, _ = w.run(capsys, "scan", "--force")
     assert "closed 0" in out.splitlines()[-1] and store.read_decisions(w.wd) == []
 
@@ -430,3 +430,38 @@ def test_clean_drops_every_invisible_character_and_the_queue_card_cuts_diff_line
     cli.run(cfg, argparse.Namespace(watch_cmd="queue", limit=5), lambda p: next(answers), lambda what: True)
     out = capsys.readouterr().out
     assert "x" * 299 in out and "x" * 301 not in out and "y" * 250 in out
+
+
+# ------------------------------------------------------------------ wave 3: bounded XML depth, markdown openers
+def atom_deep(depth: int) -> bytes:
+    return (b'<feed xmlns="http://www.w3.org/2005/Atom"><entry><id>i</id><title>t</title><content>' + b"<b>" * depth + b"DEEP" + b"</b>" * depth
+            + b"</content></entry></feed>")
+
+
+@pytest.mark.parametrize("depth", [5000, 120_000])
+def test_a_deeply_nested_atom_content_element_never_raises_out_of_fetch(depth):
+    item = get(atom_deep(depth), "application/atom+xml", "atom")
+    assert item.get("dropped") == "parse" or "DEEP" in item["body"]
+
+
+def test_markup_serialises_nested_content_without_recursion():
+    import xml.etree.ElementTree as ET
+    el = ET.fromstring('<c>a<b x="1">b<i>c</i>d<!-- no --></b>e<u/>f</c>')
+    assert parsers._markup(el) == 'a<b x="1">b<i>c</i>d</b>e<u></u>f'
+    assert parsers._markup(ET.fromstring("<c/>")) == "" and parsers._markup(ET.fromstring("<c>t</c>")) == "t"
+
+
+def test_a_recursion_error_while_parsing_is_a_parse_drop(monkeypatch):
+    def boom(text):
+        raise RecursionError
+
+    monkeypatch.setitem(parsers.PARSERS, "atom", boom)
+    assert get(atom_deep(3), "application/atom+xml", "atom")["dropped"] == "parse"
+
+
+def test_markdown_pages_hide_a_bare_raw_text_opener_but_keep_one_in_code():
+    table = fixture("deprecations.md")
+    assert get(b"intro\n\n<script>\n" + table)["dropped"] == "parse"                  # the bare opener hides the table: a failed fetch
+    rows = get(b"intro `<script>` code\n\n" + table)["data"]
+    assert "claude-old-sonnet-20250101" in {r["model_id"] for r in rows}
+    assert "SECRET" not in get(b"# T\n\n<div hidden>SECRET</div>\nvisible\n", kind="md")["body"]

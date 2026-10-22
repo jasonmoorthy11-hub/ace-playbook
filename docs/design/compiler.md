@@ -1063,7 +1063,8 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   `clip-path:inset(100%)`, `scale(0)`, a transparent color; also skipped are a closed `details`, `dialog`, `svg`, `math`, `iframe`,
   `object`, `embed` and `head`. XML with a DTD or an ENTITY declaration is dropped (`xml`).
   Also: a `Content-Encoding` other than identity is dropped (`encoding`); a 304 for a URL with no stored validator is dropped (`etag`);
-  a deprecations page that parses to no rows is a `parse` drop (never an empty table); the `md` kind is read in markdown mode.
+  a deprecations page that parses to no rows is a `parse` drop (never an empty table); the `md` kind is read in markdown mode
+  (the HTML rules, except that a raw-text opener inside a code span or a fenced block is prose).
   Helpers: `chars.py` (invisible and control characters, shared by the sanitizer, the store and the record cleaner), `cssstyle.py` (the
   inline-style normaliser and the simple single-selector `<style>` rules; media queries, descendant or attribute selectors and external
   stylesheets are not handled, see LIMITATIONS.md), `fsio.py` (private atomic write with a unique O_EXCL temporary name, the scan lock).

@@ -7,13 +7,17 @@ style that hides (`cssstyle.style_hidden`), any element matched by a SIMPLE hidi
 `tag`; media queries, descendant selectors and external stylesheets are not handled), and every invisible character (`chars.invisible`: all
 Unicode format characters, tag characters, variation selectors and the blank fillers). An element that is never closed stays hidden to the end
 of the input (fail closed); a formatting element closed implicitly by an outer end tag is re-opened hidden, as a browser's adoption agency would.
-`markdown=True` is for Markdown pages: a raw-text opener such as `<script>` that is never closed is prose, not markup. The result is plain
-text, one non-empty line per block. Stdlib only.
+Tag names are compared as written (`</x:div>` does not close `<div>`: a browser ignores it); the inline-XML children of a feed arrive with
+local names already. `markdown=True` is for Markdown pages: a raw-text opener (`<script>`, `<style>`, `<title>`, `<textarea>`, `<xmp>`,
+`<noembed>`, `<noframes>`, `<iframe>`) is prose ONLY inside an inline code span or a fenced code block; anywhere else the rules above apply
+as in HTML (a bare `<script>` hides to its closer, or to the end of the input). The result is plain text, one non-empty line per block.
+Stdlib only.
 """
 
 from __future__ import annotations
 
 import re
+from bisect import bisect_left, bisect_right
 from html.parser import HTMLParser
 
 from .chars import control, invisible
@@ -27,6 +31,10 @@ BLOCK = frozenset("address article aside blockquote dd div dl dt fieldset figcap
                   "li main nav ol p pre section table tbody td tfoot th thead tr ul".split())
 SPACES = re.compile(r"[ \t\r\f\v\xa0]+")
 STYLE_BLOCK = re.compile(r"<style\b[^>]*>(.*?)</style\s*>", re.I | re.S)
+RAW_TEXT = "script|style|title|textarea|xmp|noembed|noframes|iframe"
+RAW_OPENER = re.compile(rf"<(?=(?:{RAW_TEXT})(?:[\s/>]|$))", re.I)
+FENCE = re.compile(r" {0,3}(`{3,}|~{3,})(.*)$")
+TICKS, BLANK_LINE = re.compile(r"`+"), re.compile(r"\n[ \t]*\n")
 
 
 def plain(text: str) -> str:
@@ -53,7 +61,6 @@ class _Text(HTMLParser):
                     or tag in self.tags or values.get("id") in self.ids or self.classes & set(values.get("class", "").split()))
 
     def handle_starttag(self, tag, attrs) -> None:
-        tag = tag.rsplit(":", 1)[-1]
         own = self._own(tag, attrs)
         hid = self._hidden() or own
         if tag in VOID:
@@ -63,11 +70,10 @@ class _Text(HTMLParser):
         self.out.append("\n" if tag in BLOCK and not hid else "")
 
     def handle_startendtag(self, tag, attrs) -> None:
-        if tag.rsplit(":", 1)[-1] in VOID:
+        if tag in VOID:
             self.handle_starttag(tag, attrs)                        # `<div/>` has no content to hide or show
 
     def handle_endtag(self, tag) -> None:
-        tag = tag.rsplit(":", 1)[-1]
         for i in range(len(self.stack) - 1, -1, -1):
             if self.stack[i][0] == tag:
                 popped = self.stack[i + 1:]
@@ -83,20 +89,60 @@ class _Text(HTMLParser):
             self.out.append(data)
 
 
-def _unclosed_as_text(text: str) -> str:
-    """Markdown mode: an opener of a raw-text element with no closing tag anywhere is prose (`the <script> tag`), so it is escaped."""
-    for name in SKIP:
-        if not re.search(rf"</{name}\s*>", text, re.I):
-            text = re.sub(rf"<(?={name}\b)", "&lt;", text, flags=re.I)
-    return text
+def _prose(code: str) -> str:
+    return RAW_OPENER.sub("&lt;", code)
+
+
+def _spans(text: str) -> str:
+    """`text` with the raw-text openers inside its inline code spans escaped (CommonMark: a backtick run closes at the next run of the same
+    length in the same paragraph; an opener after a backslash is not one). One pass over the runs, so it is not quadratic."""
+    runs = [(m.start(), m.end()) for m in TICKS.finditer(text)]
+    by_len: dict[int, list[int]] = {}
+    for n, (a, b) in enumerate(runs):
+        by_len.setdefault(b - a, []).append(n)
+    blanks, out, last, n = [m.start() for m in BLANK_LINE.finditer(text)], [], 0, 0
+    while n < len(runs):
+        (a, b), same = runs[n], by_len[runs[n][1] - runs[n][0]]
+        k, nxt = bisect_right(same, n), None
+        if k < len(same) and not (a and text[a - 1] == "\\"):
+            nxt = same[k]
+            at = bisect_left(blanks, b)
+            if at < len(blanks) and blanks[at] < runs[nxt][0]:
+                nxt = None                                            # a blank line ends the paragraph first: the opener is literal
+        if nxt is None:
+            n += 1
+            continue
+        out += [text[last:b], _prose(text[b:runs[nxt][0]])]
+        last, n = runs[nxt][0], nxt + 1
+    return "".join(out) + text[last:]
+
+
+def markdown_code_as_text(text: str) -> str:
+    """Markdown mode: the raw-text openers (`script`, `style`, ...) inside a code span or a fenced code block are prose, so they are escaped.
+    Everywhere else an opener stays markup, which the parser hides to its closer or to the end of the input (fail closed)."""
+    out, chunk, fence = [], [], None                                  # fence: (character, length) of the open fenced block
+    for line in text.splitlines(keepends=True):
+        m = FENCE.match(line)
+        if fence:
+            out.append(_prose(line))
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= fence[1] and not m.group(2).strip():
+                fence = None
+        elif m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
+            out.append(_spans("".join(chunk)))
+            chunk, fence = [], (m.group(1)[0], len(m.group(1)))
+            out.append(line)                                          # the info string is not rendered text: it stays markup
+        else:
+            chunk.append(line)
+    return "".join(out) + _spans("".join(chunk))
 
 
 def strip_hidden(html: str, markdown: bool = False) -> str:
     """The visible text of `html` (see the module docstring); "" when the parser gives up."""
-    rules = css_rules("\n".join(STYLE_BLOCK.findall(html)))
+    src = markdown_code_as_text(html) if markdown else html
+    rules = css_rules("\n".join(STYLE_BLOCK.findall(src)))
     parser = _Text(rules)
     try:
-        parser.feed(_unclosed_as_text(html) if markdown else html)
+        parser.feed(src)
         parser.close()
     except Exception:                                               # a parser fault must never let raw markup through
         return ""

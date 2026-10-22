@@ -182,11 +182,61 @@ def test_format_characters_in_general_are_removed():
     assert sanitize.plain("a\u2028b\u2029c") == "a\nb\nc" and sanitize.plain("x\x1b[0m\x07y") == "x[0my"
 
 
-def test_markdown_mode_treats_an_unclosed_raw_text_opener_as_prose():
-    md = "Note: the console no longer loads a <script> tag for this page.\n\n| Model | State |\n|---|---|\n| claude-x-1 | Deprecated |\n"
+def test_markdown_mode_treats_a_raw_text_opener_in_a_code_span_as_prose():
+    md = "Note: the console no longer loads a `<script>` tag for this page.\n\n| Model | State |\n|---|---|\n| claude-x-1 | Deprecated |\n"
     assert "claude-x-1" not in strip_hidden(md) and "claude-x-1" in strip_hidden(md, markdown=True)
-    assert "loads a <script> tag" in strip_hidden(md, markdown=True)
+    assert "loads a `<script>` tag" in strip_hidden(md, markdown=True)
+    bare = md.replace("`<script>`", "<script>")
+    assert "claude-x-1" not in strip_hidden(bare, markdown=True)                  # a bare opener is markup: hidden to the end of input
     closed = f"before <script>{SECRET}</script> after\n| claude-x-1 |"
     assert SECRET not in strip_hidden(closed, markdown=True) and "claude-x-1" in strip_hidden(closed, markdown=True)
     assert SECRET not in strip_hidden(f"<!-- {SECRET} -->\ntext", markdown=True)
     assert SECRET not in strip_hidden(f'<div style="display:none">{SECRET}</div>\ntext', markdown=True)
+
+
+# ------------------------------------------------------------------ wave 3: raw end-tag names, browser-style closers, markdown code
+def test_a_prefixed_end_tag_does_not_close_an_unprefixed_hidden_element():
+    assert strip_hidden("<div hidden>SECRET</x:div>VISIBLE") == ""                      # a browser ignores `</x:div>`: all of it stays hidden
+    assert strip_hidden("<div hidden>SECRET</x:div>VISIBLE", markdown=True) == ""
+    assert strip_hidden("<x:div hidden>A</x:div>B") == "B"                              # an unknown element: `hidden` applies, its end tag closes it
+    assert strip_hidden("<x:div hidden>A</div>B") == ""                                 # `</div>` does not close `x:div`
+    assert strip_hidden("<x:script>kept</x:script>") == "kept"                          # an unknown element, not a script
+
+
+@pytest.mark.parametrize("closer", ["</script foo>", "</script/>", "</SCRIPT >", "</script\n>", "</Script x='y'>"])
+@pytest.mark.parametrize("markdown", [False, True])
+def test_a_script_closer_with_attributes_or_a_slash_still_hides_the_script_text(closer, markdown):
+    text = strip_hidden(f"<script>{SECRET}{closer}VISIBLE", markdown=markdown)
+    assert SECRET not in text and "VISIBLE" in text
+
+
+@pytest.mark.parametrize("markdown", [False, True])
+@pytest.mark.parametrize("tag", ["noscript", "template", "svg", "head", "dialog", "script", "style", "iframe", "title", "noembed"])
+def test_a_bare_unclosed_skip_element_hides_to_the_end(tag, markdown):
+    assert strip_hidden(f"before <{tag}>{SECRET} after", markdown=markdown) == "before"
+
+
+@pytest.mark.parametrize("fence", ["```", "~~~", "````", "   ```"])
+def test_markdown_openers_in_a_fenced_block_are_prose(fence):
+    closer = fence.strip()
+    shown = strip_hidden(f"intro\n{fence}html\n<script>\n{closer}\nvisible text", markdown=True)
+    assert "<script>" in shown and shown.endswith("visible text")
+    assert "visible text" in strip_hidden(f"{fence}\n<style>\nvisible text", markdown=True)       # an unclosed fence runs to the end
+
+
+def test_markdown_openers_are_prose_only_inside_code_spans_and_fences():
+    assert strip_hidden("use `<script>` here\n\nvisible text", markdown=True) == "use `<script>` here\nvisible text"
+    assert "visible text" in strip_hidden("use ``<style>`` and `<title>` here\nvisible text", markdown=True)
+    assert strip_hidden(f"<script>\n{SECRET}\n", markdown=True) == ""                           # a bare opener hides to the end of input
+    assert strip_hidden(f"line one\n<script>var x;\nline {SECRET}", markdown=True) == "line one"
+    assert strip_hidden(f"<div hidden>\n{SECRET}\n</div>\nvisible", markdown=True) == "visible"
+    assert strip_hidden(f"<div hidden>{SECRET}\nvisible", markdown=True) == ""
+    assert SECRET not in strip_hidden(f"`x` <script>{SECRET}", markdown=True)                  # a code span before the opener changes nothing
+    assert SECRET not in strip_hidden(f"a ` b <script>{SECRET}", markdown=True)                # an unmatched backtick is not a code span
+    assert SECRET not in strip_hidden(f"``a <script>{SECRET}` b", markdown=True)               # a backtick run of another length does not close
+    assert SECRET not in strip_hidden(f"~~~\n<style>\n~~~\n<style>{SECRET}", markdown=True)    # the fence closed: the next opener is bare
+    assert SECRET not in strip_hidden(f"```\n<style>\n~~~\n```\n<style>{SECRET}", markdown=True)  # only a fence of the same character closes
+
+
+def test_a_non_raw_text_skip_opener_in_a_code_span_still_hides_to_the_end():
+    assert strip_hidden(f"use `<noscript>` {SECRET}", markdown=True) == "use `"
