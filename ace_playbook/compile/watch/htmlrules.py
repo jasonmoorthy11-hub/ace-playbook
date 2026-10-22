@@ -57,8 +57,8 @@ def special(node) -> bool:
 
 
 def select_in_table(t) -> bool:
-    """Was the open select opened in a table ("in select in table": a table lies below it, no template between)? Above the select there is neither."""
-    return (t.idx.get("table") or [-1])[-1] > (t.idx.get("template") or [-1])[-1]
+    """Was the open select opened in a table? Only if the last table lies BELOW it, no template between (a table above it, opened inside it: no)."""
+    s, tb, tp = ((t.idx.get(k) or [-1])[-1] for k in ("select", "table", "template")); return tp < tb < s
 
 
 class ScriptState:

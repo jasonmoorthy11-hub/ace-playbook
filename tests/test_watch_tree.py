@@ -323,3 +323,28 @@ def test_w17_a_select_closed_by_a_cell_tag_reads_like_the_same_page_without_the_
     ("<table><tr><td><select><tr><td>VIS", "VIS"), ("<table><tr><td><select><th>VIS", "VIS")])
 def test_w17_controls_a_visible_cell_after_a_select_start_tag_shows_its_text(html, expected):
     shows_md(html, expected)
+
+
+# ------------------------------------------------------------------ wave 18: a select is "in a table" only when the table lies BELOW it, nothing above hides
+@pytest.mark.parametrize("html", [
+    "<select><table><td hidden></select>LEAK", "<select><table><tr><td hidden></select>LEAK", "<select><table><caption hidden></select>LEAK",
+    "<p><select><table><td hidden></select></p>LEAK"])
+def test_w18_a_table_inside_a_select_is_not_a_select_in_a_table_so_its_hidden_cell_hides_what_follows(html):
+    hides(html)                                                      # the two readings disagree (the cell hides the rest / the select closes): fail closed
+
+
+@pytest.mark.parametrize("html", [
+    "<i hidden><select><table><td></select>LEAK", "<table><tr><td><select><b hidden><td>VIS", "<table><tr><td><select><b hidden><tr>VIS"])
+def test_w18_guards_a_table_inside_a_select_or_a_hiding_element_above_it_keeps_the_rest_hidden(html):
+    hides(html)                                                      # the cell tag is ignored (b hides itself), the select stays open: over-hide, fail closed
+
+
+@pytest.mark.parametrize("html,expected", [
+    ("<table><tr><td><select><td>VIS", "VIS"), ("<table><tr><td><select><option>a<td>VIS", "VIS"),
+    ("<p><template><select><td></template></p>VIS", "VIS"), ("<table><tr><td><select><b>x<td>VIS", "VIS")])
+def test_w18_controls_a_select_opened_in_a_table_is_still_closed_by_a_cell_tag_when_nothing_above_it_hides(html, expected):
+    shows_md(html, expected)
+
+
+def test_w18_a_cell_tag_in_a_select_with_a_template_between_it_and_the_table_is_ignored():
+    hides("<table><tr><td hidden><template><select><td></select>LEAK")
