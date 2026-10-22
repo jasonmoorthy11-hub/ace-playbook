@@ -10,6 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "hooks" / "swiftbar" / "ace.5m.sh"
 FMT = "%Y-%m-%dT%H:%M:%SZ"
+SUF = " | emojize=false symbolize=false ansi=false"                  # keeps SwiftBar from rendering :emoji: or :sf.symbol: codes
 
 
 def stamp(hours: float = 0) -> str:
@@ -52,16 +53,19 @@ def test_needs_you_for_open_proposals_or_unlabelled_fires_with_up_to_three_title
     out = plugin(tmp_path, status(watch_open=2, watch_leads=1, watch_oldest=stamp(50), watch_titles=titles))
     assert out[0] == "◐ needs you  watch 2  unlabelled 0"
     assert out[3] == "Watch  open 2  leads 1  oldest 2d"
-    assert out[4:7] == ["- one", "- two  with pipe", "- three[2Jnewline"] and out[7] == "---"
+    assert out[4:7] == [f"- one{SUF}", f"- two  with pipe{SUF}", f"- three[2Jnewline{SUF}"] and out[7] == "---"
     out = plugin(tmp_path, status(queue_total=4))
     assert out[0] == "◐ needs you  watch 0  unlabelled 4" and out[2].startswith("ACE  unlabelled 4  chains ok")
 
 
 def test_item_text_is_cut_and_never_carries_a_pipe_or_a_parameter(tmp_path):
     out = plugin(tmp_path, status(watch_open=1, watch_titles=["x" * 200, "evil | href=https://evil.test bash=/bin/sh", "\x1b\x07", 5, None]))
-    assert out[4] == "- " + "x" * 80 and out[5] == "- evil  href=https://evil.test bash=/bin/sh"
+    assert out[4] == "- " + "x" * 80 + SUF
+    assert out[5] == "- evil  href=https://evil.test bash=/bin/sh" + SUF
     items = [ln for ln in out if ln.startswith("- ")]
-    assert len(items) == 2 and not any("|" in ln for ln in out[:out.index("---", 2)])
+    assert len(items) == 2 and all(ln.count("|") == 1 for ln in items)                    # only the one separator before our own parameters
+    hidden = plugin(tmp_path, status(watch_open=1, watch_titles=["a\u200bb\u3164c\u2800d\U000e0041e\u202ef\ufe0fg", ":skull: :sf.heart:"]))
+    assert hidden[4] == f"- abcdefg{SUF}" and hidden[5] == f"- :skull: :sf.heart:{SUF}"
 
 
 def test_broken_chains_show_in_the_ace_line(tmp_path):
@@ -98,18 +102,51 @@ def test_python_that_cannot_run_still_prints_the_fallback_and_exits_zero(tmp_pat
     assert plugin(tmp_path, status(), ACE_PYTHON="/nonexistent/python") == ["○ ACE: no status", "---", "error: python3 unavailable"]
 
 
-def test_review_queue_button_uses_the_repo_of_the_plugin_and_env_overrides(tmp_path):
+def test_review_queue_button_runs_the_plugin_itself_and_never_carries_a_path_but_its_own(tmp_path):
     link_dir = tmp_path / "plugins"
     link_dir.mkdir()
     link = link_dir / "ace.5m.sh"
     link.symlink_to(SCRIPT)                                                                 # SwiftBar runs a symlink in its plugin folder
-    out = plugin(tmp_path, status(), script=link)
-    button = out[-1]
-    assert button.startswith("Review queue | bash=/usr/bin/env param1=uv param2=run param3=--directory param4=")
-    assert f"param4={ROOT} param5=python param6=-m param7=ace_playbook.compile param8=--config param9={tmp_path}/config.json " in button
-    assert button.endswith(" param10=watch param11=queue terminal=true")
-    spaced = plugin(tmp_path, status(), conf=False, ACE_PLAYBOOK_REPO="/opt/my repo")[-1]
-    assert 'param4="/opt/my repo" param5=python param6=-m param7=ace_playbook.compile param8=watch param9=queue terminal=true' in spaced
+    assert plugin(tmp_path, status(), script=link)[-1] == f"Review queue | bash={link} param1=queue terminal=true"
+    spaced = tmp_path / "Application Support" / "Plugins"
+    spaced.mkdir(parents=True)
+    (spaced / "ace.5m.sh").symlink_to(SCRIPT)
+    assert plugin(tmp_path, status(), script=spaced / "ace.5m.sh")[-1] == f'Review queue | bash="{spaced / "ace.5m.sh"}" param1=queue terminal=true'
+    for odd in ('q"uote', "pi|pe"):
+        d = tmp_path / odd
+        d.mkdir()
+        (d / "ace.5m.sh").symlink_to(SCRIPT)
+        out = plugin(tmp_path, status(), script=d / "ace.5m.sh")
+        assert out[-1].startswith("Open panel") and not any(ln.startswith("Review queue") for ln in out)
+
+
+def fake_uv(tmp_path):
+    """A `uv` on PATH that records its arguments and its working directory."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    uv = bin_dir / "uv"
+    uv.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$UV_LOG\"\n")
+    uv.chmod(0o755)
+    return bin_dir
+
+
+def run_queue(tmp_path, script=SCRIPT, **env_over):
+    log = tmp_path / "uv.log"
+    env = {"HOME": str(tmp_path / "home"), "PATH": f"{fake_uv(tmp_path)}:{os.environ['PATH']}", "ACE_PYTHON": sys.executable, "UV_LOG": str(log),
+           **env_over}
+    p = subprocess.run([str(script), "queue"], capture_output=True, text=True, env=env, timeout=20)
+    assert p.returncode == 0 and p.stderr == ""
+    return log.read_text().splitlines()
+
+
+def test_queue_mode_execs_uv_in_the_repo_with_the_config_and_survives_odd_paths(tmp_path):
+    link = tmp_path / "Application Support" / "ace.5m.sh"
+    link.parent.mkdir()
+    link.symlink_to(SCRIPT)
+    assert run_queue(tmp_path, link) == ["run", "--directory", str(ROOT), "python", "-m", "ace_playbook.compile", "watch", "queue"]
+    odd = tmp_path / "my repo \"x\""
+    assert run_queue(tmp_path, ACE_PLAYBOOK_REPO=str(odd), ACE_PLAYBOOK_CONFIG=str(tmp_path / "c c.json")) == [
+        "run", "--directory", str(odd), "python", "-m", "ace_playbook.compile", "--config", str(tmp_path / "c c.json"), "watch", "queue"]
 
 
 def test_the_default_config_file_under_home_is_found(tmp_path):

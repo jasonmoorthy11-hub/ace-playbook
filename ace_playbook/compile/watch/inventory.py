@@ -17,7 +17,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from ...atomic import write_private
+from .fsio import write_private
 from ...canon import now_iso
 from .store import INVENTORY, clean
 
@@ -53,14 +53,17 @@ def _display(path: str) -> str:
 
 
 def _scan(path: str, rx: re.Pattern) -> dict:
+    """The matching lines of one file, numbered like `grep -n` (lines end at b"\\n" only, so a form feed or U+2028 does not shift them; a
+    trailing carriage return stays in the text). `truncated` is true when more than MAX_LINES lines matched."""
     try:
         if os.path.getsize(path) > MAX_BYTES:
             return {"too_large": True}
         data = Path(path).read_bytes()
     except OSError:
         return {"missing": True}
-    lines = [[n, ln[:MAX_LINE]] for n, ln in enumerate(data.decode("utf-8", "replace").splitlines(), 1) if rx.search(ln)][:MAX_LINES]
-    return {"sha256": hashlib.sha256(data).hexdigest(), "lines": lines}
+    hits = [[n, ln.decode("utf-8", "replace")[:MAX_LINE]] for n, ln in enumerate(data.split(b"\n"), 1) if rx.search(ln.decode("utf-8", "replace"))]
+    out = {"sha256": hashlib.sha256(data).hexdigest(), "lines": hits[:MAX_LINES]}
+    return {**out, "truncated": True} if len(hits) > MAX_LINES else out
 
 
 def claude_version(which=shutil.which, run=subprocess.run) -> str | None:

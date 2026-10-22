@@ -1,130 +1,23 @@
 """Per-class rules over the inventory snapshot (design 4.2, 4.3): plain code, no model, and no diff written by anything but a template.
 
 A *result* is one source as `scan` hands it over: `{id, url, kind, tier, sha256, prev_sha256, data, quote, heading}`. `candidates` turns
-results plus the inventory into proposal records of exactly design 4.3: `model_pin` (a deprecated or retiring model id that the inventory
-pins; the diff replaces the id with the named successor, else a `lead` with no diff), `version` (npm `latest` or `stable` newer than the
-installed `claude`), `docs` (a mapped page changed: its sitemap `lastmod` moved or its `.md` hash changed) and `lead` (a tier-1 feed
-entry with a configured keyword). Text from the web reaches a record only as the title and the quote (cut to 120 and 400) and as a model
-id or successor that passed `SAFE`; `verify` comes from a fixed template; tier-1 evidence alone never yields a diff (`check`).
+results plus the inventory into proposal records of exactly design 4.3 (`records.py`): `model_pin` (`pin.py`: a deprecated or retiring model id
+that the inventory pins; the diff replaces the id with the named successor, else a `lead` with no diff), `version` (npm `latest` or `stable`
+newer than the installed `claude`), `docs` (a mapped page changed: its sitemap `lastmod` moved or its `.md` hash changed) and `lead` (a
+tier-1 feed entry with a configured keyword). Text from the web reaches a record only as the title (of a lead), the quote (cut to 120 and 400),
+and as a model id or successor that passed `pin.SAFE` and `pin.MODEL_ID`; `change.target` is an inventory key, a mapped docs URL, a source id
+or `claude_version`; `verify` comes from a fixed template; tier-1 evidence alone never yields a diff (`records.check`).
 """
 
 from __future__ import annotations
 
-import hashlib
 import re
-import shlex
-from datetime import datetime, timedelta
 
-from .store import RANK, clean
+from .pin import model_pin  # noqa: F401 - part of this module's surface
+from .records import check, make_id, record, sh  # noqa: F401
+from .store import RANK
 
-DAYS, MAX_LEADS, MAX_LINE = 30, 10, 300
-SAFE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{2,79}")
-NONE_WORDS = ("", "n/a", "na", "-", "none", "tbd", "to be announced")
-GONE = ("deprecated", "retired")                                           # a model whose table says Active or Legacy is not retiring
-KEYS = {"id", "created", "class", "elevated", "title", "evidence", "inventory_hits", "change", "verify", "expires", "status"}
-CLASSES = ("model_pin", "version", "docs", "lead")
-PLAIN = r"[\w./~@+:=-]+"
-ARG = rf"(?:{PLAIN}|'[^']*')"
-TEMPLATES = (re.compile(rf'grep -n "[A-Za-z0-9._:-]{{3,80}}" {ARG}( {ARG})*'), re.compile(r"claude --version"),
-             re.compile(rf"curl -sI {ARG} \| head -1"))
-
-
-def sh(text: str) -> str:
-    return text if re.fullmatch(PLAIN, text) else shlex.quote(text)
-
-
-def make_id(cls: str, target: str, sha: str, quote: str) -> str:
-    return "W-" + hashlib.sha256("|".join((cls, target, sha, quote)).encode()).hexdigest()[:8]
-
-
-def record(cls: str, title: str, ev: dict, hits: list[str], target: str, diff: str | None, verify: str, now: str) -> dict:
-    ev = {"url": ev["url"], "sha256": ev["sha256"], "quote": clean(ev["quote"], 400), "tier": ev["tier"]}
-    exp = (datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ") + timedelta(days=DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    return {"id": make_id(cls, target, ev["sha256"], ev["quote"]), "created": now, "class": cls, "elevated": False, "title": clean(title),
-            "evidence": [ev], "inventory_hits": hits,
-            "change": {"target": target, "diff": diff, "diff_sha256": hashlib.sha256(diff.encode()).hexdigest() if diff else None},
-            "verify": verify, "expires": exp, "status": "open"}
-
-
-def check(rec: dict) -> str | None:
-    """None when `rec` is a valid W1 record, else the reason it is not (shape, caps, id, diff hash, tier-1 diff, verify template)."""
-    try:
-        ev, ch = rec["evidence"], rec["change"]
-        if set(rec) != KEYS or set(ch) != {"target", "diff", "diff_sha256"} or rec["class"] not in CLASSES or rec["elevated"] is not False:
-            return "shape"
-        if not (isinstance(rec["title"], str) and 0 < len(rec["title"]) <= 120 and rec["title"] == clean(rec["title"])):
-            return "title"
-        if not (ev and all(set(e) == {"url", "sha256", "quote", "tier"} and isinstance(e["quote"], str) and 0 < len(e["quote"]) <= 400
-                           and re.fullmatch(r"[0-9a-f]{64}", str(e["sha256"])) and e["tier"] in (0, 1) for e in ev)):
-            return "evidence"
-        if rec["id"] != make_id(rec["class"], ch["target"], ev[0]["sha256"], ev[0]["quote"]):
-            return "id"
-        if ch["diff"] is not None and (not isinstance(ch["diff"], str) or ch["diff_sha256"] != hashlib.sha256(ch["diff"].encode()).hexdigest()):
-            return "diff hash"
-        if ch["diff"] is None and ch["diff_sha256"] is not None:
-            return "diff hash"
-        if ch["diff"] is not None and all(e["tier"] == 1 for e in ev):
-            return "tier-1 evidence alone cannot carry a diff"
-        if not any(t.fullmatch(rec["verify"]) for t in TEMPLATES):
-            return "verify"
-        return None if rec["expires"] > rec["created"] and rec["status"] in ("open", "queued") else "dates"
-    except (KeyError, TypeError):
-        return "shape"
-
-
-def _boundary(token: str) -> re.Pattern:
-    return re.compile(r"(?<![\w.-])" + re.escape(token) + r"(?![\w-]|\.\d)")
-
-
-def _lines(inv: dict, rx: re.Pattern) -> dict[str, dict[str, list]]:
-    """`{key: {path: [[n, text]]}}` of the inventory lines that contain the token."""
-    out: dict = {}
-    for key, t in inv.get("targets", {}).items():
-        for path, f in t.get("files", {}).items():
-            hit = [ln for ln in f.get("lines", []) if isinstance(ln, list) and len(ln) == 2 and rx.search(str(ln[1]))]
-            if hit:
-                out.setdefault(key, {})[path] = hit
-    return out
-
-
-def _diff(files: dict, rx: re.Pattern, new: str) -> str:
-    out = []
-    for path, lines in sorted(files.items()):
-        out += [f"--- a/{path}", f"+++ b/{path}"]
-        for n, text in lines:
-            out += [f"@@ -{n},1 +{n},1 @@", f"-{text}", f"+{rx.sub(lambda m: new, text)}"]
-    return "\n".join(out) + "\n"
-
-
-def _real(v: object) -> bool:
-    """A date or a name, not N/A, not "to be announced" and not the tentative "Not sooner than ..." that an Active model carries."""
-    return isinstance(v, str) and v.strip().lower() not in NONE_WORDS and not v.strip().lower().startswith("not sooner")
-
-
-def model_pin(inv: dict, results: list[dict], now: str) -> list[dict]:
-    merged: dict = {}
-    for res in (r for r in results if r["kind"] == "deprecations"):
-        for row in res["data"]:
-            m = merged.setdefault(row["model_id"], {"res": res, "had": False, **{k: None for k in ("deprecated", "retires", "successor", "row", "state")}})
-            for k in ("deprecated", "retires", "successor", "state"):
-                m[k] = m[k] or row.get(k)
-            if m["row"] is None or (row["successor"] and not m["had"]):
-                m["row"], m["had"], m["res"] = row["row"], bool(row["successor"]), res
-    out = []
-    for mid, m in sorted(merged.items()):
-        gone = m["state"] is None or m["state"].lower() in GONE                  # a table with a state column: only Deprecated or Retired count
-        if not SAFE.fullmatch(mid) or not gone or not (_real(m["deprecated"]) or _real(m["retires"]) or (m["state"] or "").lower() in GONE):
-            continue
-        rx, new = _boundary(mid), m["successor"] if _real(m["successor"]) and SAFE.fullmatch(m["successor"] or "") else None
-        ev = {"url": m["res"]["url"], "sha256": m["res"]["sha256"], "quote": m["row"], "tier": m["res"]["tier"]}
-        for key, files in sorted(_lines(inv, rx).items()):
-            verify = f'grep -n "{mid}" ' + " ".join(sh(p) for p in sorted(files))
-            whole = new and new != mid and all(len(str(t)) < MAX_LINE for ls in files.values() for _, t in ls)
-            if whole:
-                out.append(record("model_pin", f"Replace {mid} with {new} in {key}", ev, [key], key, _diff(files, rx, new), verify, now))
-            else:
-                out.append(record("lead", f"retirement with no successor named: {mid} ({key})", ev, [key], key, None, verify, now))
-    return out
+MAX_LEADS = 10
 
 
 def _ver(text: object) -> tuple[int, ...] | None:
@@ -149,11 +42,12 @@ def norm(url: str) -> str:
 
 
 def docs(inv: dict, results: list[dict], mapping: dict, prev: dict, now: str) -> list[dict]:
-    mapped = {norm(u): keys for u, keys in mapping.get("docs", {}).items()}
+    mapped = {norm(u): (u, keys) for u, keys in mapping.get("docs", {}).items()}              # normalised URL -> (the URL as mapped, keys)
     out = []
 
-    def add(page: str, ev: dict) -> None:
-        out.append(record("docs", f"docs page changed: {page}", ev, list(mapped[norm(page)]), page, None, f"curl -sI {sh(page)} | head -1", now))
+    def add(seen_url: str, ev: dict) -> None:
+        page, keys = mapped[norm(seen_url)]                  # title, target and command use the operator's mapped URL, not the page's own
+        out.append(record("docs", f"docs page changed: {page}", ev, list(keys), page, None, f"curl -sI {sh(page)} | head -1", now))
 
     for res in results:
         if res["kind"] == "sitemap":
@@ -172,7 +66,7 @@ def leads(results: list[dict], mapping: dict, now: str) -> list[dict]:
             if e["title"] and any(w in f"{e['title']} {e['summary']}".lower() for w in words):
                 url = e["link"] or res["url"]
                 ev = {"url": url, "sha256": res["sha256"], "quote": e["title"], "tier": 1}
-                out.append(record("lead", e["title"], ev, [], (e["id"] or url)[:200], None, f"curl -sI {sh(url)} | head -1", now))
+                out.append(record("lead", e["title"], ev, [], res["id"], None, f"curl -sI {sh(url)} | head -1", now))
     return out[:MAX_LEADS]
 
 

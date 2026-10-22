@@ -84,7 +84,7 @@ def test_everything_written_is_private_and_inside_the_watch_dir(w, capsys):
     assert made and all(w.wd == p or w.wd in p.parents for p in made)
     for p in made:
         assert stat.S_IMODE(p.stat().st_mode) == (0o700 if p.is_dir() else 0o600), p
-    assert sorted(p.name for p in w.wd.iterdir()) == ["inventory.json", "proposals", "seen.json"]
+    assert sorted(p.name for p in w.wd.iterdir()) == ["inventory.json", "proposals", "scan.lock", "seen.json"]
     seen = json.loads((w.wd / "seen.json").read_text())
     assert set(seen["fetched"]) == set(U.values()) and all(len(v["sha256"]) == 64 and v["fetched_at"] for v in seen["fetched"].values())
     inv = json.loads((w.wd / "inventory.json").read_text())

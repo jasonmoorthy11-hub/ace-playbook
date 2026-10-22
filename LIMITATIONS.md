@@ -157,7 +157,21 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   a template over the matched inventory lines (the page's successor id replaces the pinned id, nothing else); a docs proposal says only
   that a mapped page changed (its sitemap `lastmod` moved or its `.md` hash differs), not what changed; version and lead proposals have
   no diff. The first scan of a page or sitemap entry is a baseline and proposes nothing. Docs and feed-lead proposals are events and run
-  to their 30-day expiry; model-pin and version proposals close themselves when their trigger vanishes. Nothing is applied by the watcher.
+  to their 30-day expiry; model-pin and version proposals close themselves when their trigger vanishes, and are reopened (a `reopened`
+  decision row with a new 30-day expiry) if the trigger comes back after they expired or closed. Nothing is applied by the watcher.
+- Watcher, trust boundary: W1 fetches as the operator, in the same process that reads the matched `~/.claude` lines and runs
+  `claude --version`. There is no separate `acewatch` user and no egress allowlist until W2, so a fetch that is fooled (a redirect the guard
+  misjudges, a rebinding answer) runs with the operator's network and file reach. The SSRF guard checks the address before the connection,
+  not on the connected socket, so a DNS-rebinding race remains: a name that resolves to a public address at the check and to a private one at
+  the connect is not caught.
+- Watcher, sanitizer coverage: `strip_hidden` reads inline `style` attributes and simple single-selector `<style>` rules (a tag, `.class` or
+  `#id` rule, no combinators). Media queries, descendant, child and attribute selectors, `@import` and external stylesheets are NOT handled, so
+  text hidden that way is read as visible. These cases are undetectable by this design or are visible by design, and are not removed:
+  `font-size:.001` (and other tiny non-zero sizes), `opacity:.001`, `left` or `top` offsets on an element without `position`, `text-indent`
+  variants such as `-99em`, `<font size=0>`, white-on-white or any low-contrast colour pair, `var()` indirection in a style value, the content
+  of `<textarea>`, `<plaintext>` and `<xmp>` (kept as text), and the odd comment spellings (`<!->` and similar) that browsers treat differently
+  from the parser. The defence is not the sanitizer alone: web text reaches a record only as a title or a 400-character quote, never as a diff,
+  a target or a command, and every model id must pass a strict pattern first.
 
 ## Security and scrubbing
 

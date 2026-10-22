@@ -408,8 +408,11 @@ writes only inside its own directory. It is the one part of ace-playbook that us
    ```
 3. `compile watch scan` fetches the sources that are due (tier 0 daily, tier 1 weekly, by the stamps in `seen.json`; `--force` ignores the
    cadence, `--tier 0|1|all` picks, `--dry-run` fetches and matches but writes nothing), rebuilds `inventory.json` and prints one line per
-   new proposal and a summary line. It exits 0 except for a configuration error (2). Run it by hand or from a scheduler of your own;
-   nothing is installed for you. `compile watch status` prints the open count, leads, oldest, last scan and up to three titles.
+   new proposal and a summary line. It exits 0 except for a configuration error or a store write failure (an `OSError` on `watch_dir`,
+   printed as its type only): both exit 2. A scan holds an exclusive lock on `<watch_dir>/scan.lock`; a second scan that starts meanwhile
+   prints `watch: scan running` and exits 0 without doing anything. Run it by hand or from a scheduler of your own; nothing is installed for
+   you. For the terminal run, set `ACE_PLAYBOOK_CONFIG` in your shell profile (the same file the hooks and the status line read), or the
+   watcher looks at the default config file. `compile watch status` prints the open count, leads, oldest, last scan and up to three titles.
    `compile watch queue [--limit N]` (terminal only) walks the open proposals oldest first: `1` accept, `2` dismiss (a note is required),
    `3` later, `q` quit. A decision is recorded in `decisions.jsonl`; nothing is changed on your machine. At most five proposals are open at
    once (leads excepted); the rest wait as `queued`.
@@ -427,7 +430,9 @@ ln -s "$ACE_PLAYBOOK_HOME/hooks/swiftbar/ace.5m.sh" "$HOME/Library/Application S
 Use the folder SwiftBar shows in its preferences if you chose another. The title is `● ok`, `◐ needs you` (open proposals or unlabelled
 fires) or `○ stale` (`status.json` missing or older than 36 hours); the menu lists the ACE and Watch lines, up to three proposal titles,
 `Open panel` (the `dashboard.html` in your data dir) and `Review queue`, which opens a terminal running
-`uv run --directory <repo> python -m ace_playbook.compile watch queue` (`uv` must be on that terminal's PATH). The plugin finds your checkout
+`uv run --directory <repo> python -m ace_playbook.compile watch queue` (`uv` must be on that terminal's PATH). The button runs the plugin
+itself with the argument `queue` (`ace.5m.sh queue`), which opens that terminal; the menu items are plain text, never interpreted as emoji,
+symbols or ANSI. The plugin finds your checkout
 from its own location (through the symlink), or from `ACE_PLAYBOOK_REPO`; the config is found as for the status line (`ACE_PLAYBOOK_CONFIG`,
 else the default file; `ACE_PYTHON` picks the interpreter). It reads `status.json` only, prints a one-line fallback on any error and exits 0.
 

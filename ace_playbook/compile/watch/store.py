@@ -4,7 +4,7 @@
 `digest.append_log`), `seen.json` and `inventory.json` (0600, atomic) and the kill file `DISABLED`. The current status of a proposal is its
 newest decision row, else the file's own `status`; `expired` once past `expires` while still open or queued. At most CAP proposals are
 open at once, leads excepted; the rest are `queued` and a `promoted` decision row opens them in ranking order when a slot frees.
-Stdlib and `...atomic` only: no network, so `summary.py` (imported by `status.py`) can use it.
+Stdlib, `.chars` and `.fsio` only: no network, so `summary.py` (imported by `status.py`) can use it.
 """
 
 from __future__ import annotations
@@ -14,16 +14,17 @@ import json
 import os
 import re
 import stat
-import unicodedata
 from pathlib import Path
 
-from ...atomic import write_private
 from ...config import Config
+from .chars import control, invisible
+from .fsio import write_private
 
 CAP, KILL, PROPOSALS, DECISIONS, SEEN, INVENTORY = 5, "DISABLED", "proposals", "decisions.jsonl", "seen.json", "inventory.json"
 RANK = {"model_pin": 0, "version": 1, "docs": 2}                            # every other class (leads) ranks after these
 ID = re.compile(r"W-[0-9a-f]{8}")
-WORDS = {"accepted": "accepted", "dismissed": "dismissed", "closed": "auto-closed", "later": "open", "promoted": "open"}
+WORDS = {"accepted": "accepted", "dismissed": "dismissed", "closed": "auto-closed", "later": "open", "promoted": "open", "reopened": "open"}
+STAMP = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ")
 FINAL = ("accepted", "dismissed", "closed")
 NOTE_MAX = 500
 
@@ -31,8 +32,7 @@ NOTE_MAX = 500
 def clean(text: object, limit: int = 120) -> str:
     """`text` without control, format and line-separator characters (so no escape sequence reaches a terminal), at most `limit` long."""
     s = text if isinstance(text, str) else ""
-    return "".join(c for c in s if c >= " " and c != "\x7f" and not "\x80" <= c <= "\x9f"
-                   and unicodedata.category(c) not in ("Cf", "Zl", "Zp"))[:limit]
+    return "".join(c for c in s if c >= " " and not control(c) and not invisible(c) and c not in "\u2028\u2029")[:limit]
 
 
 def watch_dir(cfg: Config) -> Path:
@@ -125,6 +125,8 @@ def status_of(p: dict, decisions: list[dict], now: str) -> str:
         return WORDS[mine[-1]["decision"]]
     base = "open" if mine else p.get("status") if p.get("status") in ("open", "queued") else "open"
     exp = p.get("expires")
+    renewed = [d.get("note") for d in mine if d["decision"] == "reopened" and STAMP.fullmatch(str(d.get("note")))]
+    exp = renewed[-1] if renewed else exp                                    # a `reopened` row carries the new expiry in its note
     return "expired" if isinstance(exp, str) and exp < now else base
 
 

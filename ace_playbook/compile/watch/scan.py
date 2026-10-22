@@ -2,10 +2,9 @@
 reconcile with the store. Network-using (`fetch`, `inventory`); loaded on demand by `cli`, never on the hook path.
 
 Sources are due by their cadence (daily or weekly) against the stamps in `seen.json`; `force` ignores that. The parsed result of every
-source is cached in `seen.json`, so an unchanged page (a 304, or the same sha256) still yields its proposals on the next scan. A stored
-proposal whose trigger no longer holds is closed by a `closed` decision row, but only when its state-based trigger (a model_pin,
-a version, or an inventory lead) is gone while its source was read this scan; docs and feed leads are events and run to their expiry.
-Writes go to `watch_dir` only; `dry_run` writes nothing (the network is still read).
+source is cached in `seen.json`, so an unchanged page (a 304, or the same sha256) still yields its proposals on the next scan. What a scan does
+with the candidates (dedupe, auto-close, reopen, the cap) is `reconcile.py`. A scan holds an exclusive non-blocking lock on `watch_dir/scan.lock`;
+a second one prints `watch: scan running` and exits 0. Writes go to `watch_dir` only; `dry_run` writes nothing (the network is still read).
 """
 
 from __future__ import annotations
@@ -18,7 +17,8 @@ from pathlib import Path
 from ...canon import now_iso
 from ...config import Config
 from . import fetch as fetchmod
-from . import inventory, match, store
+from . import fsio, inventory, match, store
+from .reconcile import reconcile  # noqa: F401 - tests call scan.reconcile
 
 PERIOD = {"daily": 86400, "weekly": 7 * 86400}
 FMT = "%Y-%m-%dT%H:%M:%SZ"
@@ -76,37 +76,6 @@ def collect(sources: list[dict], seen: dict, now: str, force: bool, opener=None)
     return results, notes, counts
 
 
-def _state_based(p: dict) -> bool:
-    return p.get("class") in ("model_pin", "version") or (p.get("class") == "lead" and bool(p.get("inventory_hits")))
-
-
-def _triple(p: dict) -> tuple:
-    return p["class"], p["change"]["target"], p["evidence"][0]["quote"]
-
-
-def reconcile(wd: Path, cands: list[dict], results: list[dict], now: str, dry: bool) -> dict:
-    """Close vanished state-based proposals, promote queued ones, write the new candidates (queued beyond the cap)."""
-    rows, urls = store.statuses(wd, now), {r["url"] for r in results}
-    known, current = {_triple(p) for p, _ in rows}, {_triple(c) for c in cands}
-    gone = [p["id"] for p, s in rows if s in ("open", "queued") and _state_based(p) and _triple(p) not in current and p["evidence"][0]["url"] in urls]
-    for pid in gone:
-        if not dry:
-            store.append_decision(wd, pid, "closed", "trigger vanished", now)
-    promoted = [] if dry else store.rebalance(wd, now)
-    n_open = store.open_count([(p, s) for p, s in (rows if dry else store.statuses(wd, now)) if p["id"] not in gone])
-    new = []
-    for c in cands:
-        if _triple(c) in known or os.path.lexists(wd / store.PROPOSALS / (c["id"] + ".json")):
-            continue
-        if c["class"] != "lead":
-            c = {**c, "status": "queued" if n_open >= store.CAP else "open"}
-            n_open += c["status"] == "open"
-        new.append(c)
-        if not dry:
-            store.write_proposal(wd, c)
-    return {"new": new, "closed": gone, "promoted": promoted}
-
-
 def run(cfg: Config, tier: str = "all", dry_run: bool = False, force: bool = False, now: str | None = None, opener=None) -> list[str]:
     """The output lines of one scan; ConfigError for a missing or malformed sources file or inventory map."""
     now, wd = now or now_iso(), store.watch_dir(cfg)
@@ -118,23 +87,32 @@ def run(cfg: Config, tier: str = "all", dry_run: bool = False, force: bool = Fal
         mapping = inventory.load_map(map_path)
     except ValueError as exc:
         raise ConfigError(str(exc)) from None
+    lock = None
     if not dry_run:
         store.ensure(wd)
-    seen = store.read_seen(wd)
-    before = copy.deepcopy(seen.get("lastmod", {}))
-    results, notes, counts = collect(sources, seen, now, force, opener)
-    inv = inventory.build(mapping, now)
-    out = reconcile(wd, match.candidates(inv, results, mapping, before, now), results, now, dry_run)
-    mapped = {match.norm(u) for u in mapping["docs"]}
-    seen.setdefault("lastmod", {}).update({loc: lm for r in results if r["kind"] == "sitemap" for loc, lm in r["data"].items()
-                                           if match.norm(loc) in mapped and lm})
-    seen["last_scan"] = now
-    if not dry_run:
-        inventory.write(wd, inv)
-        store.save_seen(wd, seen)
-    live = store.statuses(wd, now) if wd.is_dir() else []
+        lock = fsio.lock(wd)                                      # one scan at a time: a second one stops here
+        if lock is None:
+            return ["watch: scan running"]
+    try:
+        seen = store.read_seen(wd)
+        before = copy.deepcopy(seen.get("lastmod", {}))
+        results, notes, counts = collect(sources, seen, now, force, opener)
+        inv = inventory.build(mapping, now)
+        out = reconcile(wd, match.candidates(inv, results, mapping, before, now), results, now, dry_run, inv)
+        mapped = {match.norm(u) for u in mapping["docs"]}
+        seen.setdefault("lastmod", {}).update({loc: lm for r in results if r["kind"] == "sitemap" for loc, lm in r["data"].items()
+                                               if match.norm(loc) in mapped and lm})
+        seen["last_scan"] = now
+        if not dry_run:
+            inventory.write(wd, inv)
+            store.save_seen(wd, seen)
+        live = store.statuses(wd, now) if wd.is_dir() else []
+    finally:
+        if lock is not None:
+            os.close(lock)
     lines = [*notes, *(f"new {c['id']} {c['class']} {c['status']}: {c['title']}" for c in out["new"])]
     lines.append(f"watch{' (dry run, nothing written)' if dry_run else ''}: fetched {counts['fetched']}, unchanged {counts['unchanged']}, "
                  f"dropped {counts['dropped']}; new {len(out['new'])}, closed {len(out['closed'])}, promoted {len(out['promoted'])}; "
-                 f"open {store.open_count(live)}, leads {sum(1 for p, s in live if s == 'open' and p['class'] == 'lead')}")
+                 f"open {store.open_count(live)}, leads {sum(1 for p, s in live if s == 'open' and p['class'] == 'lead')}"
+                 + (f"; reopened {len(out['reopened'])}" if out["reopened"] else ""))
     return lines
