@@ -27,7 +27,7 @@ VISIBLE text only, never from the raw markup. The rules of `<style>` come from a
 html.parser and a browser tokenize differently), the visible text from a second parser pass. A comment ends where a browser ends it
 (`<!-->`, `<!--->`, `-->`, `--!>`: `htmlrules.ScriptedParser`); so does `<![CDATA[` in HTML content: a bogus comment that ends at the
 first `>` (a real section to `]]>` only in svg or math), and `<noscript>` is raw text in HTML content, as in a browser with scripting on (an
-ordinary element in svg, math or an open select); a slash on any raw-text element (`<xmp/>`, `<iframe/>`, ...) is ignored. Inside `<svg>` and
+ordinary element in svg or math); a slash on any raw-text element (`<xmp/>`, `<iframe/>`, ...) is ignored. Inside `<svg>` and
 `<math>` no implied end tag happens, except after a breakout tag (`treerules`). A `<table>` closes an open `<p>` only in standards mode, which
 is a FIRST doctype `html` (`<!DOCTYPE html>`, optionally with `SYSTEM "about:legacy-compat"`) before any tag or text; a late, legacy or
 second doctype, or none, is quirks mode (fail closed). The result is plain text, one non-empty line per block.
@@ -40,7 +40,7 @@ import re
 
 from .chars import control, invisible
 from .cssstyle import style_hidden  # noqa: F401 - style_hidden is part of this module's surface
-from .htmlrules import BLOCK, FORMATTING, MAX_DEPTH, SELECT_ENDERS, SKIP, VOID, ScriptedParser, ScriptState, TooDeep, end_ignored
+from .htmlrules import BARRIERS, BLOCK, FORMATTING, MAX_DEPTH, SELECT_ENDERS, SKIP, VOID, ScriptedParser, ScriptState, TooDeep, end_ignored
 from .mdrules import drop_definitions, markdown_code_as_text
 from .stylepass import style_rules, style_text  # noqa: F401 - style_text is part of this module's surface
 from .treerules import implied, marks
@@ -91,8 +91,14 @@ class _Text(ScriptedParser):
     def in_foreign(self) -> bool:
         return len(self.stack) > 1 and self.stack[-2][4][5] >= 0   # the parent of the element just pushed is inside a run of svg / math elements
 
-    def in_select(self) -> bool:
-        return bool(self.open.get("select"))
+    def _select_to_end(self) -> int | None:
+        """The stack index of the open select that an `<input>`, `<keygen>`, `<textarea>` or `<select>` start tag ends, else None: only when
+        the select is the current insertion context, i.e. nothing above it is a scope marker (`template`, a table, an integration point), a
+        foreign element or hidden by itself (the browser does not reach the select from there; popping a hidden ancestor would be a leak)."""
+        if not self.open.get("select"):
+            return None
+        i = next(i for i in range(len(self.stack) - 1, -1, -1) if self.stack[i][0] == "select")
+        return i if all(e[0] not in BARRIERS and e[4][5] < 0 and not e[2] for e in self.stack[i + 1:]) else None
 
     def handle_decl(self, decl) -> None:
         """Only the FIRST doctype, before any tag or text, and only `html` (with an optional legacy-compat SYSTEM id) is standards mode; a
@@ -110,8 +116,8 @@ class _Text(ScriptedParser):
 
     def handle_starttag(self, tag, attrs) -> None:
         self.fresh = False
-        if tag in SELECT_ENDERS and self.open.get("select"):        # these end the select first (a nested select stays open: fail closed)
-            self._pop(next(i for i in range(len(self.stack) - 1, -1, -1) if self.stack[i][0] == "select"))
+        if tag in SELECT_ENDERS and (i := self._select_to_end()) is not None:       # these end the select first (a nested select stays open)
+            self._pop(i)
         while not self.open.get("select") and (i := implied(self.stack[-1][4] if self.stack else None, tag, attrs, self.standards)) is not None:
             self._pop(i)                                            # a select drops start tags: nothing is implied inside one
         own = self._own(tag, attrs)

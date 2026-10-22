@@ -1103,8 +1103,10 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   (`ScriptedParser.parse_html_declaration` and `foreign()`; `_support_cdata` is off so the EOF path agrees);
   `noscript` is raw text in both passes (`CDATA_CONTENT_ELEMENTS`, also for `<noscript/>`) and stays in the skipped set, but only in HTML content:
   `ScriptedParser.set_cdata_mode` skips EVERY raw-text, RCDATA and noscript name when `in_foreign()` holds (the parent is a foreign
-  element) and, inside an open select, every name but `script` (`in_select()`; `input`, `keygen`, `textarea` and `select` pop the select
-  first: `SELECT_ENDERS`); `_Text` answers from its stack, `_Styles` from `depth` counters.
+  element); inside an open select the mode is entered too (over-hiding, no `in_select` hook). `input`, `keygen`, `textarea` and `select`
+  pop the select (`SELECT_ENDERS`, `_Text._select_to_end`) only when no template, table, integration point, foreign or self-hidden element
+  is above it. `_Text` answers `in_foreign()` from its stack, `_Styles` from `depth` counters. `stylepass` parses each `<style>` sheet
+  alone (`style_sheets`, `scan_sheets`). `end_ignored` ignores the end tag of a foreign integration point with any HTML element above it.
   `handle_startendtag` enters raw-text mode for every `CDATA_CONTENT_ELEMENTS` name (`<xmp/>`, `<iframe/>`, `<noembed/>`,
   `<noframes/>`), for the RCDATA ones (`<textarea/>`, `<title/>`) and `<plaintext/>`: a browser ignores the slash.
   `treerules.implied(..., standards)` lets a `<table>` close an open `<p>` only in standards mode: `_Text.handle_decl` takes it from a FIRST

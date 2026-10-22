@@ -8,7 +8,9 @@ a hidden element is involved the same rules apply and anything doubtful keeps th
   by `button`, `</li>` also by `ol` and `ul`; a table end tag by a nested `table` or `template`; every other end tag (`</span>`, `</b>`, ...)
   by any "special" element in between. An open `select` stops every end tag but its own (the in-select insertion mode drops them).
   `INTEGRATION` (`foreignObject`, `desc`, `title`, `mi`, `mo`, `mn`, `ms`, `mtext`, `annotation-xml`) are scope barriers too, but their OWN
-  end tag is an "any other end tag": any special element above it stops it (`<svg><desc><div hidden></desc></svg>X` keeps X hidden).
+  end tag is an "any other end tag": made in foreign content it is ignored when ANY HTML element is above it (the HTML walk reaches the
+  integration point, which is special and never an HTML element with that name), `<svg><desc><span hidden><b></desc></svg>X` keeps X hidden;
+  foreign elements above it do not stop it. Made in HTML content, any special element above it stops it.
 * `SKIP` holds the elements whose content a browser does not render as text, `select` (all its option text), `progress` and `meter`
   (fallback text) among them.
 * `ScriptState`: html.parser has no "script data double escaped" state, so `<script><!--<script></script>X</script>` would show X.
@@ -17,9 +19,9 @@ a hidden element is involved the same rules apply and anything doubtful keeps th
 * `ScriptedParser`: the html.parser subclass that both passes of `sanitize` (the style text of `stylepass`, the visible text) share, so
   they tokenize alike: a slash on `<script/>`, `<style/>`, `<noscript/>`, `<xmp/>`, `<iframe/>`, `<noembed/>`, `<noframes/>`, `<textarea/>`,
   `<title/>` or `<plaintext/>` is ignored, `noscript` is raw text (a browser with scripting on), and every raw-text, RCDATA and `noscript`
-  name is raw text in HTML content only: made in foreign content (`in_foreign()`) it is an ordinary element, and inside an open `<select>`
-  (`in_select()`) every start tag but `<script>` is ignored, so its content is markup; a double-escaped script keeps its next `</script` as
-  text, a comment ends at `<!-->`, `<!--->`, `-->` or `--!>`, and `<![CDATA[` is a bogus comment that ends at the first `>` (any `<![` is),
+  name is raw text in HTML content only: made in foreign content (`in_foreign()`) it is an ordinary element; inside an open `<select>` it
+  stays raw text (a browser may ignore the tag there: both readings hide the text, over-hiding); a double-escaped script keeps its next
+  `</script` as text, a comment ends at `<!-->`, `<!--->`, `-->` or `--!>`, and `<![CDATA[` is a bogus comment that ends at the first `>` (any `<![` is),
   except in foreign content, where it runs to `]]>`.
 * `MAX_DEPTH`: the open-element stack is capped; a document nested deeper is a parse failure (`TooDeep`), not a quadratic scan.
 """
@@ -65,6 +67,8 @@ def end_ignored(stack: list, i: int) -> bool:
     tag = stack[i][0]
     if "select" in names:
         return True
+    if tag in INTEGRATION and i and stack[i - 1][4][5] >= 0 and any(e[4][5] < 0 for e in above):
+        return True                         # a foreign integration point with an HTML element above it: the HTML walk meets a special element
     if tag in TABLES:
         return bool(names & {"table", "template"})
     scoped = tag in SPECIAL and tag not in INTEGRATION                  # the end tag of an integration point is an "any other end tag"
@@ -143,11 +147,6 @@ class ScriptedParser(HTMLParser):
         self.handle_comment(raw[i + 2:end])
         return end + (3 if real else 1)
 
-    def in_select(self) -> bool:
-        """True when a `<select>` is open: a browser ignores a raw-text start tag there, so its content is markup. A subclass that tracks the
-        open elements overrides this (the default, False, keeps raw text)."""
-        return False
-
     def in_foreign(self) -> bool:
         """True when the start tag just handled made a FOREIGN element (its parent is a foreign one, not an integration point): a browser
         enters raw text only for HTML elements. A subclass that tracks the open elements overrides this (the default, False, keeps raw text)."""
@@ -155,9 +154,9 @@ class ScriptedParser(HTMLParser):
 
     def set_cdata_mode(self, elem, **kw) -> None:
         """Raw text and RCDATA (and `<noscript>`, a browser with scripting on) only for an HTML element: in foreign content every such name is an
-        ordinary element. An open `<select>` ignores every start tag but `<script>` (its text is then read as markup), and `<input>`, `<keygen>`,
-        `<textarea>` and `<select>` end the select first (the subclass pops it before this runs)."""
-        if self.in_foreign() or (self.in_select() and elem != "script"):
+        ordinary element. Inside an open `<select>` the mode is entered too, though a browser may ignore the start tag there: the text up to
+        the tag's own end tag is hidden either way (fail closed), whichever way the browser's select scope differs from ours (over-hiding)."""
+        if self.in_foreign():
             return
         super().set_cdata_mode(elem, **kw)
 

@@ -5,8 +5,11 @@ text is read. A scan for the string `<style` is fooled by every `<style` that is
 attribute value, a `<textarea>` or `<title>`, a custom element `<style-x>`): a fake one hides the real rules. Here the tokenizer decides:
 html.parser reads the page once with the same script rules as the second pass (`htmlrules.ScriptedParser`) and collects the character data
 of each `<style>` element, an unclosed one at the end of the page included (a browser applies it). Linear in the size of the page. It counts
-the open `svg`, `math`, `select` and integration-point elements only, to know whether a `<noscript>` is raw text (HTML content) or an
-element (foreign content, a select) and whether a `<![CDATA[` is a section (foreign content): the answers of the second pass, approximated.
+the open `svg`, `math` and integration-point elements only, to know whether a raw-text name is raw text (HTML content) or an element
+(foreign content) and whether a `<![CDATA[` is a section (foreign content): the answers of the second pass, approximated.
+
+Every sheet is parsed ON ITS OWN (`style_sheets`, `scan_sheets`; `style_rules` unions the rules of the sheets): an open block, string or
+comment at the end of one `<style>` never carries into the next, as in a browser. `style_text` and `scan_text` join the sheets with newlines.
 
 The tokenizer is not the browser in every corner (a CDATA section in foreign content, a bogus comment and the like may still end at
 different places), so `style_rules` also applies the rules of a plain scan for `<style ... </style` (`scan_text`): a rule found by EITHER
@@ -18,9 +21,9 @@ from __future__ import annotations
 import re
 
 from .cssstyle import css_rules
-from .htmlrules import INTEGRATION, SELECT_ENDERS, ScriptedParser, ScriptState
+from .htmlrules import INTEGRATION, ScriptedParser, ScriptState
 
-WATCHED = frozenset(("svg", "math", "select")) | INTEGRATION
+WATCHED = frozenset(("svg", "math")) | INTEGRATION
 STYLE_MARK = re.compile(r"<style", re.I)
 STYLE_OPEN, STYLE_CLOSE = re.compile(r"<style(?=[\s/>])", re.I), re.compile(r"</style(?=[\s/>])", re.I)
 
@@ -30,7 +33,7 @@ class _Styles(ScriptedParser):
         super().__init__()
         self.sheets: list[list[str]] = []
         self.inside = False
-        self.depth: dict[str, int] = {}                             # how many svg / math / select / integration-point elements are open
+        self.depth: dict[str, int] = {}                             # how many svg / math / integration-point elements are open
         self.born_foreign = False                                   # the last start tag was made in foreign content
 
     def foreign(self) -> bool:
@@ -40,13 +43,8 @@ class _Styles(ScriptedParser):
     def in_foreign(self) -> bool:
         return self.born_foreign
 
-    def in_select(self) -> bool:
-        return bool(self.depth.get("select"))
-
     def handle_starttag(self, tag, attrs) -> None:
         self.born_foreign = self.foreign()                          # asked before the tag is counted: an integration point is foreign itself
-        if tag in SELECT_ENDERS and self.depth.get("select"):
-            self.depth["select"] = 1 if tag == "select" else 0      # these end the select (a nested select stays open, as in the second pass)
         if tag in WATCHED:
             self.depth[tag] = self.depth.get(tag, 0) + 1
         if tag == "script":
@@ -71,9 +69,9 @@ class _Styles(ScriptedParser):
             self.sheets[-1].append(data)
 
 
-def scan_text(src: str) -> str:
+def scan_sheets(src: str) -> list[str]:
     """The text between every `<style` start tag and the next `</style`, found by a plain scan (an unclosed one runs to the end of the
-    page), one per line. It reads fake `<style`s too, so it can only add rules: `style_rules` unions it with the tokenizer's, which
+    page), one string per sheet. It reads fake `<style`s too, so it can only add rules: `style_rules` unions it with the tokenizer's, which
     covers every page whose style html.parser and a browser tokenize differently (a CDATA section in svg, a bogus comment, ...). Linear: the
     scan resumes after each closer, and ends at the first opener with no `>` or no closer."""
     parts: list[str] = []
@@ -84,22 +82,38 @@ def scan_text(src: str) -> str:
         if not close:
             break
         pos = close.end()
-    return "\n".join(parts)
+    return parts
+
+
+def style_sheets(src: str) -> list[str]:
+    """The text of every `<style>` element of `src`, one string per element, in document order."""
+    if not STYLE_MARK.search(src):
+        return []                                                   # no start tag can be there without these six characters: no first pass
+    parser = _Styles()
+    parser.feed(src)
+    parser.close()
+    return ["".join(parts) for parts in parser.sheets]
 
 
 def style_rules(src: str) -> tuple[frozenset, frozenset, frozenset]:
-    """(classes, ids, tags) hidden by the simple rules of the real style elements (`style_text`) or of any `<style` text (`scan_text`)."""
-    if not STYLE_MARK.search(src):
-        return css_rules("")
-    t, s = css_rules(style_text(src)), css_rules(scan_text(src))
-    return t[0] | s[0], t[1] | s[1], t[2] | s[2]
+    """(classes, ids, tags) hidden by the simple rules of the real style elements or of any `<style` text, each sheet parsed on its own."""
+    classes: set[str] = set()
+    ids: set[str] = set()
+    tags: set[str] = set()
+    if STYLE_MARK.search(src):
+        for sheet in (*style_sheets(src), *scan_sheets(src)):
+            c, i, t = css_rules(sheet)
+            classes |= c
+            ids |= i
+            tags |= t
+    return frozenset(classes), frozenset(ids), frozenset(tags)
 
 
 def style_text(src: str) -> str:
     """The text of every `<style>` element of `src`, one per line, in document order."""
-    if not STYLE_MARK.search(src):
-        return ""                                                   # no start tag can be there without these six characters: no first pass
-    parser = _Styles()
-    parser.feed(src)
-    parser.close()
-    return "\n".join("".join(parts) for parts in parser.sheets)
+    return "\n".join(style_sheets(src))
+
+
+def scan_text(src: str) -> str:
+    """The text of every `<style` found by the plain scan, one per line."""
+    return "\n".join(scan_sheets(src))

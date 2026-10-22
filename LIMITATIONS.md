@@ -205,11 +205,13 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   (`htmlrules.ScriptedParser.parse_html_declaration`, `foreign()`). `<noscript>` is raw text, as in a browser with scripting on, so
   `<div hidden><noscript></div>X</noscript>` keeps X hidden (it stays in the skipped set: its text is never shown; a browser with scripting
   off would show it, which is the rarer reader); only in HTML content, though: that holds for EVERY raw-text, RCDATA and noscript name
-  (`set_cdata_mode`, both passes): made in foreign content (an open svg or math, outside an integration point) it is an ordinary element, and
-  inside an open `<select>` every start tag but `<script>` is ignored and its content is tokenized as markup (`<select><title>` still hides
-  to its closer: over-hiding). `<input>`, `<keygen>`, `<textarea>` and `<select>` end an open select (a nested `<select>` stays open: fail
-  closed), so the scope of `in_select()` ends there. The end tag of an integration point (`</desc>`, `</title>`, ...) is stopped by any
-  special element above it, as in a browser. A
+  (`set_cdata_mode`, both passes): made in foreign content (an open svg or math, outside an integration point) it is an ordinary element.
+  Inside an open `<select>` a browser may ignore the start tag, but the mode is entered anyway: the text up to the tag's own end tag is
+  hidden whichever way the browser's select scope differs from ours (`<select><xmp><p>VIS</p></xmp>` loses VIS: over-hiding). `<input>`,
+  `<keygen>`, `<textarea>` and `<select>` end an open select, but only when nothing between the top and the select is a `template`, a table
+  or integration point, a foreign element or an element hidden by itself (`<div hidden><select><template><input></template></div>X` keeps X
+  hidden; a nested `<select>` stays open). The end tag of an integration point made in foreign content (`</desc>`, `</title>`, ...) is
+  ignored when ANY HTML element is above it (`<svg><desc><span hidden><b></desc></svg>X` keeps X hidden), as in a browser. A
   slash on a raw-text element (`<xmp/>`, `<iframe/>`, `<noembed/>`, `<noframes/>`, `<textarea/>`, `<title/>`, `<plaintext/>`) is ignored, as on
   `<script/>`. A comment ends where a browser ends it, on every patch release of html.parser
   (`<!-->`, `<!--->`, `-->`, `--!>`; the stdlib pairs an abrupt `<!-->` with a LATER `-->` and older releases ignore `--!>`):
@@ -219,7 +221,9 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   an odd bogus comment) cannot hide a style. The scan reads fake `<style`s too (inside a script string,
   comment, attribute, `<textarea>`, `<title>`): their simple hiding rules apply as well, which only hides MORE (a CSS sample in a
   comment can hide the elements it names). An unclosed `<style>` at the end of the page applies to the elements before it; the legacy
-  `<!--` and `-->` tokens in a stylesheet are ignored as CSS does. The stylesheet is read in one linear pass over its braces (`cssscan.py`):
+  `<!--` and `-->` tokens in a stylesheet are ignored as CSS does. Every `<style>` is parsed on its own (`stylepass.style_sheets`,
+  `scan_sheets`; the rules are unioned), so an open block, string or comment never carries into the next sheet. The stylesheet is read in
+  one linear pass over its braces (`cssscan.py`):
   braces, semicolons and comment openers inside a CSS
   string (`content:"{"`), after a backslash or in an unquoted `url(...)` (the ident is recognised after escape decoding: `\75rl(`, `u\72l(`,
   `\55RL(`) do not count; nor do braces and semicolons inside a `(` or `[` simple block (`foo(})`; nested blocks close in order, an unclosed

@@ -300,8 +300,7 @@ NOSCRIPT_ELEMENT_X = {                                       # the browser hides
 }
 NOSCRIPT_ELEMENT_SHOWN = {                                   # a browser shows VIS: raw text would swallow it
     "svg-p": "<svg><noscript><p>VIS</p></noscript>", "math-p": "<math><noscript><p>VIS</p></noscript>", "svg-slash-p": "<svg><noscript/><p>VIS</p>",
-    "select-closer": "<select><noscript></select><p>VIS</p></noscript>", "select-slash": "<select><noscript/></select>VIS",
-    "select-b": "<select><noscript></select><b>VIS</b>", "svg-g-p": "<svg><g><noscript><p>VIS</p>",
+    "svg-g-p": "<svg><g><noscript><p>VIS</p>",
 }
 NOSCRIPT_RAW_HIDDEN = {                                      # HTML content again: raw text, whose closers end nothing
     "integration-point": "<svg><foreignObject><div hidden><noscript></div>LEAK</noscript>AFTER",
@@ -326,7 +325,7 @@ def test_the_hidden_markup_inside_a_noscript_in_foreign_content_or_a_select_neve
 
 
 @pytest.mark.parametrize("name", sorted(NOSCRIPT_ELEMENT_SHOWN))
-def test_noscript_in_foreign_content_or_a_select_is_not_raw_text_so_the_markup_after_it_shows(name):
+def test_noscript_in_foreign_content_is_not_raw_text_so_the_markup_after_it_shows(name):
     assert strip_hidden(NOSCRIPT_ELEMENT_SHOWN[name]) == "VIS", name
     assert body_of(NOSCRIPT_ELEMENT_SHOWN[name]) == "VIS", name
 
@@ -339,7 +338,7 @@ def test_noscript_in_html_content_stays_raw_text_after_a_closed_select_or_svg_an
 
 def test_the_style_pass_reads_noscript_the_same_way():
     assert sanitize.style_text("<svg><noscript><style>.h{display:none}</style></noscript></svg>") == ".h{display:none}"
-    assert sanitize.style_text("<select><noscript><style>.h{display:none}</style></noscript></select>") == ".h{display:none}"
+    assert sanitize.style_text("<select><noscript><style>.h{display:none}</style></noscript></select>") == ""              # raw text in a select too
     assert sanitize.style_text("<svg></svg><noscript><style>.h{display:none}</style></noscript>") == ""
     assert sanitize.style_text("<svg><foreignObject><noscript><style>.h{display:none}</style></noscript>") == ""
     assert sanitize.style_text("<select></select><noscript><style>.h{display:none}</style></noscript>") == ""
@@ -490,13 +489,23 @@ def test_a_raw_text_name_in_foreign_content_does_not_swallow_the_breakout_tag_af
         assert strip_hidden(html) == "VIS" and body_of(html) == "VIS", html
 
 
-SELECT_IGNORES = ("iframe", "xmp", "noembed", "noframes", "style")                         # (`title` stays an element that hides to its closer: over-hiding)
+SELECT_RAW = ("iframe", "xmp", "noembed", "noframes", "style", "noscript", "title")                    # (textarea ends the select: see SELECT_ENDERS_SHOWN)
 
 
-@pytest.mark.parametrize("tag", SELECT_IGNORES)
-def test_a_select_ignores_a_raw_text_start_tag_so_the_closer_after_it_ends_the_select(tag):
-    for html in (f"<select><{tag}></select>VIS", f"<select><{tag}/></select>VIS", f"<select><{tag}><p hidden>X</p></{tag}></select>VIS"):
-        assert strip_hidden(html) == "VIS" and body_of(html) == "VIS", html
+@pytest.mark.parametrize("tag", SELECT_RAW)
+def test_a_raw_text_tag_in_a_select_hides_the_text_to_its_own_end_tag_whichever_way_the_browser_reads_it(tag):
+    # a browser may ignore the start tag in a select and end the select at `</select>`; the text up to the tag's own end tag is hidden by both readings
+    for html in (f"<select><{tag}></select>VIS", f"<select><{tag}/></select>VIS", f"<select><{tag}><p>VIS</p></{tag}>"):
+        assert "VIS" not in strip_hidden(html) and "VIS" not in body_of(html), html          # over-hiding where the browser shows VIS
+    for html in (f"<select><{tag}><p hidden>X</p></{tag}></select>VIS", f"<select><{tag}></{tag}></select>VIS"):
+        assert "X" not in strip_hidden(html) and strip_hidden(html) in ("", "VIS"), html
+
+
+def test_a_select_ender_before_a_raw_text_tag_reaches_html_content_so_the_text_after_its_closer_shows():
+    assert strip_hidden("<select><input><iframe><div hidden>X</div></iframe>LEAK") == "LEAK"             # the select ended: iframe is raw text, hidden
+    assert strip_hidden("<select><input><xmp><div hidden>X</div></xmp>LEAK") == "<div hidden>X</div>LEAK"         # xmp renders its raw text
+    assert strip_hidden("<select><input><noscript><div hidden>X</div></noscript>LEAK") == "LEAK"
+    assert "X" not in strip_hidden("<select><xmp><div hidden>X</div></xmp>LEAK") and "LEAK" not in strip_hidden("<select><xmp><div hidden>X</div></xmp>LEAK")
 
 
 def test_a_script_in_a_select_is_still_raw_text_and_an_open_select_hides_what_follows():
@@ -529,9 +538,9 @@ def test_other_start_tags_leave_the_select_open_so_its_text_stays_hidden(html):
 def test_a_nested_select_keeps_the_text_after_it_hidden_and_the_noscript_context_follows_the_scope():
     assert strip_hidden("<select><select>X") == "" and strip_hidden("<select><option>a<select>X") == ""        # fail closed: the second one stays open
     assert strip_hidden("<select></select><noscript><div hidden></div>X</noscript>VIS") == "VIS"
-    assert strip_hidden("<select><noscript><div hidden></noscript></select>VIS") == "VIS"                   # still in the select: an element, then closed
+    assert strip_hidden("<select><noscript><div hidden></noscript></select>VIS") == "VIS"                   # raw text to its closer, then the select closes
     assert sanitize.style_text("<select><input><noscript><style>.h{display:none}</style></noscript>") == ""
-    assert sanitize.style_text("<select><noscript><style>.h{display:none}</style></noscript>") == ".h{display:none}"
+    assert sanitize.style_text("<select><noscript><style>.h{display:none}</style></noscript>") == ""
     assert sanitize.style_text("<select><textarea></textarea><noscript><style>.h{display:none}</style></noscript>") == ""
 
 
@@ -542,3 +551,75 @@ def test_the_end_tag_of_an_integration_point_is_stopped_by_a_hidden_element_abov
     html = f"<{root}><{tag}>{child}</{tag}></{root}>LEAK"
     assert "LEAK" not in strip_hidden(html) and "LEAK" not in body_of(html), html
     assert strip_hidden(f"<{root}><{tag}><b>t</b></{tag}></{root}>VIS") == "VIS"                          # nothing hidden above: the end tag pops
+
+
+# ------------------------------------------------------------------ wave 11: per-sheet CSS, select enders and scope, integration end tags
+SHEET_OPENERS = ["{", ".x{", ".x{y:{", ".x{y:[", ".x{y:(", '.x{y:"', ".x{y:'", "/*", "@media x{", ".x{y:url(", ".x{y:\\", "@media x{.z{", '.x{y:foo("',
+                 ".x{y:foo(/*", "[", "(", '"', "'", "\\"]
+
+
+@pytest.mark.parametrize("opener", SHEET_OPENERS)
+def test_an_open_block_string_or_comment_never_carries_over_to_the_next_style_element(opener):
+    from ace_playbook.compile.watch import stylepass
+    for page in (f"<style>{opener}</style><style>.h{{display:none}}</style><p class=h>LEAK</p><p>OK</p>",
+                 f"<style>{opener}</style><p>t</p><style>{opener}</style><style>.h{{display:none}}</style><p class=h>LEAK</p><p>OK</p>"):
+        assert "h" in stylepass.style_rules(page)[0] and "h" in cssstyle.css_rules(".h{display:none}")[0], opener
+        assert "LEAK" not in strip_hidden(page) and "LEAK" not in body_of(page) and "OK" in strip_hidden(page), opener
+        assert stylepass.scan_sheets(page)[-1] == ".h{display:none}" and stylepass.style_sheets(page)[-1] == ".h{display:none}", opener
+
+
+def test_the_sheets_are_listed_one_by_one_and_the_text_helpers_still_join_them():
+    from ace_playbook.compile.watch import stylepass
+    page = "<style>.a{x:y}</style><p>t</p><style>.b{x:y}</style>"
+    assert stylepass.style_sheets(page) == [".a{x:y}", ".b{x:y}"] and stylepass.scan_sheets(page) == [".a{x:y}", ".b{x:y}"]
+    assert stylepass.style_text(page) == ".a{x:y}\n.b{x:y}" and stylepass.scan_text(page) == ".a{x:y}\n.b{x:y}" and stylepass.style_sheets("<p>") == []
+
+
+def test_many_style_elements_are_still_linear():
+    timed("<style>.a{x:y}</style>" * 60000 + "<p>ok", markdown=False)
+    timed("<style>(</style>" * 60000 + "<p>ok", markdown=False)
+
+
+SELECT_KEPT_OPEN = {                                         # the browser does not reach the select from inside a template or an svg: X stays hidden
+    "template": "<div hidden><select><template><input></template></div>X", "svg": "<div hidden><select><svg><input></svg></div>X",
+    "math": "<div hidden><select><math><textarea></textarea></math></div>X", "template-textarea": "<div hidden><select><template><textarea></div>X",
+    "keygen": "<div hidden><select><template><keygen></template></div>X", "select": "<div hidden><select><template><select></template></div>X",
+    "table": "<div hidden><select><table><input></table></div>X", "own-hidden": "<div hidden><select><option hidden><input></div>X",
+    "upper": "<DIV HIDDEN><SELECT><TEMPLATE><INPUT></TEMPLATE></DIV>X",
+}
+
+
+@pytest.mark.parametrize("name", sorted(SELECT_KEPT_OPEN))
+def test_an_input_keygen_textarea_or_select_does_not_end_a_select_it_cannot_reach(name):
+    assert "X" not in strip_hidden(SELECT_KEPT_OPEN[name]) and "X" not in body_of(SELECT_KEPT_OPEN[name]), name
+    assert "X" not in strip_hidden(SELECT_KEPT_OPEN[name], markdown=True), name
+
+
+def test_a_plain_select_ender_still_ends_the_select_and_a_nested_one_is_reached_through_options():
+    assert strip_hidden("<div hidden><select><input></div>VIS") == "VIS" and strip_hidden("<div hidden><select><option>a<input></div>VIS") == "VIS"
+    assert strip_hidden("<div hidden><select><optgroup><option>a<textarea></textarea></div>VIS") == "VIS"
+    assert strip_hidden("<select><template></template><input>VIS") == "VIS" and strip_hidden("<select><svg></svg><input>VIS") == "VIS"
+
+
+INTEGRATION_ABOVE = {                                        # an HTML element above a foreign integration point: its end tag does nothing
+    "desc-span-b": "<svg><desc><span hidden><b></desc></svg>LEAK", "desc-i": "<svg><desc><i hidden></desc></svg>LEAK",
+    "fo-em": "<svg><foreignObject><em hidden></foreignObject></svg>LEAK", "title-a": "<svg><title><a hidden></title></svg>LEAK",
+    "mi-b": "<math><mi><b hidden></mi></math>LEAK", "mtext-span": "<math><mtext><span hidden></mtext></math>LEAK",
+    "nested": "<svg><desc><span hidden><i><u></desc></svg>LEAK", "upper": "<SVG><DESC><SPAN HIDDEN></DESC></SVG>LEAK",
+    "g-above": "<svg><desc><span hidden><svg><g></desc></svg>LEAK",
+}
+INTEGRATION_FOREIGN_ABOVE = {                                # only foreign elements above: the foreign end-tag walk finds the integration point and pops it
+    "svg": "<svg><desc><svg></desc></svg>VIS", "math": "<svg><desc><math></desc></svg>VIS", "text": "<svg><desc>t</desc></svg>VIS",
+    "html-ns-desc": "<desc><span hidden>t</desc>VIS",
+}
+
+
+@pytest.mark.parametrize("name", sorted(INTEGRATION_ABOVE))
+def test_the_end_tag_of_an_integration_point_is_ignored_above_any_html_element(name):
+    html = INTEGRATION_ABOVE[name]
+    assert "LEAK" not in strip_hidden(html) and "LEAK" not in body_of(html) and "LEAK" not in strip_hidden(html, markdown=True), name
+
+
+@pytest.mark.parametrize("name", sorted(INTEGRATION_FOREIGN_ABOVE))
+def test_the_end_tag_of_an_integration_point_pops_foreign_elements_above_it(name):
+    assert strip_hidden(INTEGRATION_FOREIGN_ABOVE[name]) == "VIS", name
