@@ -1161,7 +1161,10 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   single clear and left the template's own, so a hidden formatting element opened before the template leaked:
   `<p><i hidden></p><template><col><td></template>LEAK`). A select opened in a template whose mode is table, tbody or row counts as in a table
   (wave 23, `htmlrules.select_in_table`): its cell tag ends the select and pushes the marker, so `<template><tr></tr><i hidden><select><td></template>LEAK`
-  hides. The cases the tree decides that the rule stack got wrong are the six Opus
+  hides. A template closed inside such a select puts the older reading back in "in select" (wave 24, `Node.via_template`): it ignores the next cell tag
+  while the newer reading (Chrome) ends the select, so that tag poisons the rest (the two-reading rule, D-128):
+  `…<select><template><td></template><td></template>LEAK` is shown by Chrome and hidden here, an over-hide kept on purpose; `</select>` before the cell
+  tag keeps it shown. The cases the tree decides that the rule stack got wrong are the six Opus
   wave-7 worlds (BOM before the doctype, svg CDATA style, nearest-name end tag, `annotation-xml` encoding, self-closed integration
   points, frameset) and the older foster-parenting gap. In Markdown a `===`, `=` or `--` line with no paragraph open is paragraph text (the paragraph flag of
   `mdrules.scan` stays set); only a heading, a thematic break or a setext underline under an open paragraph ends it, and such a line inside

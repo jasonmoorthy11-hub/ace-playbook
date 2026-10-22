@@ -35,11 +35,12 @@ def own_attrs(name: str, attrs) -> bool:
 
 
 class Node:
-    __slots__ = ("name", "ns", "attrs", "parent", "kids", "ip", "own", "syn", "mask", "open", "pos", "tm")
+    __slots__ = ("name", "ns", "attrs", "parent", "kids", "ip", "own", "syn", "mask", "open", "pos", "tm", "tq")
 
     def __init__(self, name: str, ns: int = 0, attrs=(), syn: bool = False) -> None:
         self.name, self.ns, self.attrs, self.syn, self.parent, self.kids, self.open, self.pos = name, ns, attrs, syn, None, [], False, -1
         self.mask, self.own, self.ip, self.tm = MARK.get((ns, name), ()), own_attrs(name, attrs), 0, None
+        self.tq = False
         if ns == 1:
             self.ip = 1 if name in ("foreignobject", "desc", "title") else 0
         elif ns == 2:
@@ -59,6 +60,13 @@ class Node:
     def keeps(self, n: str) -> bool:
         """Does the template's mode build this table-structure tag? Else a browser ignores it: no tbody, tr or table lies in scope inside the template."""
         return n in KEEP.get(self.tm, ())
+
+    def via_template(self, t) -> None:
+        """Called on the open select after a `</template>` reset the mode to "select". If its "in a table" status (`select_in_table`) comes only from a
+        table-mode template (a table below that template, none between), the older reading has fallen back to "in select" (its reset walk meets the template
+        before any table) and ignores a cell tag, while the newer one (Chrome) ends the select: the readings split, so `tq` makes that tag poison the rest."""
+        tb, tp = ((t.idx.get(k) or [-1])[-1] for k in ("table", "template"))
+        self.tq = self.tq or (tb < tp and t.stack[tp].tm in ("table", "tbody", "row"))
 
 
 def hidden(name: str, own: bool, attrs, rules: tuple) -> bool:

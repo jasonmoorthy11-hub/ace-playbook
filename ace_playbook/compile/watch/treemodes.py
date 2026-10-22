@@ -1,9 +1,8 @@
-"""The insertion modes of the sanitizer's HTML tree builder (HTML Standard, tree construction) as functions `mode(t, k, n, a, sc)`: `t` the `Tree`, `k` the
-token kind ("c" characters, "s" start tag, "e" end tag, "d" doctype), `n` its name (the data of "c"), `a` its attributes, `sc` its self-closing flag. Stdlib
-only. Simpler than a browser, towards hiding MORE: no start-tag rules for `a`, `nobr`, `button`, headings, `option`, `form`, `ruby`, an open select (end tags
-ignored but its own, nested selects stay open, a raw text `<` hides the rest of the page, a `</template>` that closes a select holding a barrier hides it too,
-a cell tag ends it only past `reach`, a table in it is no select in a table, `</select>` needs scope), `Tree.adopt`. One function for the table modes (by
-`Tree.reset_mode`); a template keeps its own (`Node.tm`). Foreign: a breakout start tag, `</p>`, `</br>` pop the foreign run and are read again."""
+"""The insertion modes of the sanitizer's tree builder (HTML Standard) as functions `mode(t, k, n, a, sc)`: `t` the `Tree`, `k` the kind ("c" characters, "s"
+start tag, "e" end tag, "d" doctype), `n` its name (the data of "c"), `a` its attributes, `sc` self-closing. Stdlib only. Simpler than a browser, towards hiding
+MORE: no start-tag rules for `a`, `nobr`, `button`, headings, `option`, `form`, `ruby`, an open select (end tags ignored but its own, nested selects stay open,
+a raw text `<` hides the rest, a `</template>` that closes a select holding a barrier hides it too, a cell tag ends it only past `reach`, a table in it is no
+select in a table, `</select>` needs scope), `Tree.adopt`. One function for the table modes (by `Tree.reset_mode`); a template keeps its own (`Node.tm`)."""
 
 from __future__ import annotations
 
@@ -38,6 +37,7 @@ def before(t, k, n, a, sc):
 def template_end(t):          # closing a select that holds a barrier: the readings' formatting lists differ from here, so the rest hides (fail closed)
     t.poisoned |= bool(t.relaxed and (m := t.idx.get("template")) and (s := t.idx.get("select")) and s[-1] > m[-1] and not reach(t, m[-1]))
     if t.idx.get("template"): t.implied(thorough=True); t.pop_to("template"); t.reset_mode()      # no scope check: pops to the template whatever lies between
+    s = t.relaxed and t.mode == "select" and t.idx.get("select"); s and t.stack[s[-1]].via_template(t)      # the older reading fell back to "in select"?
 
 def head(t, k, n, a, sc):
     """in head and after head (an after-head head tag is inserted into the html element: all of them hide themselves)."""
@@ -161,7 +161,7 @@ def inselect(t, k, n, a, sc):
             (t.void if n == "hr" else t.insert)(n, a)
         elif n in ("script", "template"): head(t, k, n, a, sc)
         elif (n in ("input", "keygen", "textarea") or (n == "select" and not t.relaxed) or (n in STRUCT and select_in_table(t))) and reach(t):
-            t.popto(t.idx["select"][-1]); t.reset_mode()             # a table tag closes a select opened in a table if nothing above hides; else ignored
+            t.poisoned |= (n in STRUCT) & t.stack[i := t.idx["select"][-1]].tq; t.popto(i); t.reset_mode()      # a table tag ends a select in a table (`tq`)
             n != "select" and t.process(k, n, a, sc)
         elif t.relaxed and n not in STRUCT:                          # any other start tag is inserted as it is (strict: ignored; STRUCT: as in body)
             if n in RAW_ANY: t.rawtext(n, a)
@@ -181,7 +181,7 @@ def foreign_dispatch(cur, k, n) -> bool:
     ip = cur.ip
     return k == "e" if ip == 1 else not (k == "c" or (k == "s" and n not in ("mglyph", "malignmark"))) if ip == 2 else not (ip == 3 and k == "s" and n == "svg")
 
-def m_foreign(t, k, n, a, sc):
+def m_foreign(t, k, n, a, sc):      # a breakout start tag, `</p>`, `</br>` pop the foreign run and are read again
     st = t.stack
     if k == "c": t.text(n); t.ok = t.ok and not n.strip(WS + "\x00")                        # foreign NUL: U+FFFD, frameset-ok untouched
     elif k == "s" and not (n in BREAKOUT or (n == "font" and any(x in ("color", "face", "size") for x, _ in a))):

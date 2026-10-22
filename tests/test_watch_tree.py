@@ -515,3 +515,27 @@ def test_w23_controls_a_select_in_a_colgroup_or_body_mode_template_is_no_select_
 def test_w23_over_hide_cured_the_cell_marker_of_the_ended_select_stops_the_reconstruction_of_a_hidden_element_opened_before_the_template(html, expected):
     # browser: the pop clears only M_td, the list stays [i, M_t] and the marker M_t stops the reconstruction (Chrome shows both)
     shows_md(html, expected)
+
+
+# ------------------------------------------------------------------ wave 24 (Opus wave-14 N1): a template closed in a select in a table via its template
+T24 = "<template><tr></tr><i hidden><select>"
+
+
+@pytest.mark.parametrize("html", [
+    T24 + "<template><td></template><td></template>LEAK", T24 + "<template><th></template><td></template>LEAK",
+    T24 + "<template><caption></template><td></template>LEAK", "<template><caption></caption><i hidden><select><template><td></template><td></template>LEAK",
+    "<head><template><tr></tr><i hidden><select><template><td></template><td></template></head>LEAK",
+    "<table><tr><td><template><tr></tr><i hidden><select><template><td></template><td></template>LEAK</td></tr></table>",
+    T24 + "<template><tr><td></template><th></template>LEAK"])
+def test_w24_the_inner_template_pop_puts_the_older_reading_back_in_select_so_the_next_cell_tag_splits_the_readings_and_the_rest_hides(html):
+    # older reading: the reset after `</template>` meets the outer template before any table, so the mode is "in select" and the cell tag is ignored
+    # ([M_t, i] stays and the reconstruction rebuilds `<i hidden>`); newer reading (Chrome 152 shows LEAK): "in table body", the cell ends the select
+    hides(html)
+
+
+@pytest.mark.parametrize("html,expected", [
+    (T24 + "<template><td></template></select><td></template>LEAK", "LEAK"), (T24 + "<template><td></template><tr></template>LEAK", ""),
+    ("<template><tr></tr><i hidden><template><td></template><td></template>LEAK", "LEAK"), (T24 + "<template></template><td></template>LEAK", "")])
+def test_w24_controls_a_select_end_tag_first_shows_both_readings_agree_and_the_other_worlds_keep_their_results(html, expected):
+    # `</select>` resets to the template mode first (both readings show); a tr after the inner template hid already; no select: both readings agree
+    shows_md(html, expected)
