@@ -15,7 +15,8 @@ import unicodedata
 from datetime import datetime
 
 CLASSES = ("heavy", "normal", "open")
-ITEM = {"title": ("s", 80), "sentence": ("s", 300), "source": ("s", 80), "url": ("u", 500)}   # kinds: s str, n str|null, u https|null, o enum|null
+URL_MAX = 500
+ITEM = {"title": ("s", 80), "sentence": ("s", 300), "source": ("s", 80), "url": ("u", URL_MAX)}   # kinds: s str, n str|null, u https|null, o enum|null
 DIGEST = {"generated_at": ("s", 40),
           "calendar": ("l", 60, 0, {"start": ("s", 40), "end": ("s", 40), "title": ("s", 200), "organizer_is_me": "b", "optional": "b",
                                     "attendees_n": "i"}),
@@ -36,7 +37,9 @@ class SchemaError(ValueError):
 
 
 def link_ok(url) -> bool:
-    return isinstance(url, str) and LINK.fullmatch(url) is not None
+    """True for a link render may write: on the host allowlist, at most URL_MAX characters, no format (Cf, bidi) or control character."""
+    return (isinstance(url, str) and len(url) <= URL_MAX and LINK.fullmatch(url) is not None
+            and not any(unicodedata.category(ch) in ("Cc", "Cf") for ch in url))
 
 
 def _clean(text: str, cap: int) -> str:

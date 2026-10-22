@@ -154,3 +154,23 @@ def test_the_deny_file_and_the_settings_deny_list_stay_equal_with_no_allow_or_de
     builtin = [n for n in s["permissions"]["deny"] if not n.startswith("mcp__")]
     assert s["permissions"]["deny"] == builtin + rule_lines(DENIED) and "Bash" in builtin
     assert len(rule_lines(DENIED)) == len(set(rule_lines(DENIED))) and set(s["permissions"]) == {"deny"}
+
+
+# ------------------------------------------------------------------ a list line is blank, a full-line comment, or exactly one name
+INLINE = ["mcp__x__read # a note", "mcp__x__read#note", "mcp__x__read\t# note", "mcp__x__read mcp__x__other", "mcp__x__re#ad"]
+
+
+@pytest.mark.parametrize("line", INLINE)
+def test_the_guard_rejects_the_whole_allowlist_when_a_name_line_carries_a_comment_or_a_second_token(tmp_path, line):
+    f = tmp_path / "a.txt"
+    f.write_text(f"# header\nmcp__y__fine\n{line}\n")
+    for name in ("mcp__y__fine", "mcp__x__read", "mcp__x__other"):
+        code, out, _ = guard(call(name), allowlist=f)
+        assert code == 0 and json.loads(out) == DENY, name                  # fail closed: a dead rule here would be a live rule there
+    assert guard(call("mcp__y__fine"), "--hard", allowlist=f) == (2, "", "brief is read-only\n")
+
+
+def test_the_guard_accepts_blank_lines_and_indented_full_line_comments(tmp_path):
+    f = tmp_path / "a.txt"
+    f.write_text("  # indented comment\n\n   \nmcp__y__fine  \n\t# tab comment\n")
+    assert guard(call("mcp__y__fine"), allowlist=f) == (0, "", "")

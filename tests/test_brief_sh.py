@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import signal
 import stat
 import subprocess
@@ -317,3 +318,30 @@ def test_raw_files_are_purged_right_after_the_lock_is_taken_even_with_keep(w):
     assert w.run("--force", ACE_BRIEF_KEEP="1").returncode == 0
     assert not (run / "res_old.json").exists() and not (run / "rl_old.json").exists() and not (run / "stage1.old").exists()
     assert (run / "res_stage1.json").exists() and (run / "digest_raw.json").read_text() != "OLD-RAW"
+
+
+def copy_repo(w):
+    """A copy of hooks/ under tmp/repo so a test can break a list file; the python steps still run from the real checkout."""
+    shutil.copytree(ROOT / "hooks", w.tmp / "repo" / "hooks")
+    return w.tmp / "repo" / "hooks"
+
+
+@pytest.mark.parametrize("name", ["brief_allowed_tools.txt", "brief_denied_tools.txt"])
+@pytest.mark.parametrize("line", ["mcp__claude_ai_Gmail__reply  # a note", "mcp__x__read#note", "mcp__x__read mcp__x__other"])
+def test_a_name_line_with_a_comment_or_a_second_token_in_a_list_file_stops_the_run_before_claude_starts(w, name, line):
+    hooks = copy_repo(w)
+    with open(hooks / name, "a") as fh:
+        fh.write(line + "\n")
+    env = {"ACE_BRIEF_PY": f"uv run --quiet --project {ROOT} python"}
+    p = subprocess.run([str(hooks / "brief.sh"), "--force"], capture_output=True, text=True, env={**w.env, **env}, timeout=60, cwd=w.tmp)
+    assert p.returncode == 1 and p.stderr.strip().splitlines()[-1].startswith("brief: ") and p.stdout == ""
+    assert not (w.fake / "argv_stage1.json").exists() and not (w.dir / "run.lock").exists()
+
+
+def test_a_list_file_of_blank_lines_full_line_comments_and_single_names_runs(w):
+    hooks = copy_repo(w)
+    with open(hooks / "brief_allowed_tools.txt", "a") as fh:
+        fh.write("\n   \n  # an indented full-line comment\n")
+    env = {"ACE_BRIEF_PY": f"uv run --quiet --project {ROOT} python"}
+    p = subprocess.run([str(hooks / "brief.sh"), "--force"], capture_output=True, text=True, env={**w.env, **env}, timeout=60, cwd=w.tmp)
+    assert p.returncode == 0 and w.seen("argv_stage1.json")[w.seen("argv_stage1.json").index("--allowedTools") + 1].count(",") == 6

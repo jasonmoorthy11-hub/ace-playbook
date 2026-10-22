@@ -471,7 +471,10 @@ adds tools. It cannot use `--strict-mcp-config`, because the claude.ai connector
 The prompt is always the last argument, after a single-value flag, because `--tools`, `--allowedTools` and `--disallowedTools` take
 a variadic list that would swallow a positional prompt.
 Links on the page are limited to `mail.google.com`, `calendar.google.com` and `linear.app` (constant `LINK_HOSTS` in
-`compile/brief_render.py`): a link is an outbound channel, so any other URL in the brief is dropped.
+`compile/brief_render.py`), at most 500 characters and without control or format characters (Unicode Cc, Cf): a link is an outbound
+channel, so any other URL in the brief is dropped. In `brief_allowed_tools.txt` and `brief_denied_tools.txt` a line is blank, a full-line
+`#` comment or exactly one name: a `#` after a name makes `brief.sh` stop (and the guard deny everything), because the same line would
+otherwise be a dead rule in `--disallowedTools` and a live one in the guard.
 
 **Ledger.** Each stage appends one line to `brief_ledger.jsonl` (0600): `ts`, `stage`, `model`, `cost_usd` (list-price equivalent; the
 subscription is not billed per run), the four token counts, `duration_ms`, `num_turns`, `tools_called`, and the plan windows read from

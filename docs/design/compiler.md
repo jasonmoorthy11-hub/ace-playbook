@@ -1113,7 +1113,8 @@ metrics, report, status, seal or the detectors changed.
   serif`, system stack, no embedded font), a terrain polyline whose elevation comes from each act's load (an open day is still water; one clay
   dot on the highest act), three acts, then "Needs attention" and "Resolved" with grey numerals, or "Nothing needs you this morning.". Every text
   field goes through `html.escape(..., quote=True)`; a link is written only for a `url` on `LINK_HOSTS` (`mail.google.com`,
-  `calendar.google.com`, `linear.app`; https, exact host, no userinfo, no port: a link is an outbound channel; anything else is nulled at
+  `calendar.google.com`, `linear.app`; https, exact host, no userinfo, no port, at most 500 characters, no control or format
+  character (Unicode Cc, Cf: bidi and zero-width marks): a link is an outbound channel; anything else is nulled at
   validation and again at render); the page has a CSP meta of `default-src 'none'; style-src 'unsafe-inline'`, no script, no button and no
   external resource. Light tokens and a `prefers-color-scheme: dark` set are CSS custom properties on `:root`. Deviations from the skill:
   each act has an optional `load` (default: the day class) because the terrain needs a per-act elevation; the source phrase is the item's one

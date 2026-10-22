@@ -32,13 +32,17 @@ run_bg() {   # every long step runs in the background and is waited for: a foreg
   CHILD=$!; wait "$CHILD"; local rc=$?; CHILD=""; return "$rc"
 }
 py() { run_bg "${PYB[@]}" -m ace_playbook.compile.brief "$@"; }
-names() { grep -v '^[[:space:]]*#' "$1" | tr -d ' \t\r' | grep -v '^$' | paste -sd, -; }
+names() {   # a line is blank, a full-line `#` comment or exactly one name; anything else (a `#` after a name) fails
+  awk '/^[[:space:]]*(#|$)/ {next}
+       {gsub(/\r/, ""); gsub(/^[[:space:]]+|[[:space:]]+$/, ""); if ($0 ~ /[[:space:]#]/) bad = 1; printf "%s%s", sep, $0; sep = ","}
+       END {print ""; exit bad}' "$1"
+}
 
 BRIEF_DIR=$(b conf brief_dir) && M1=$(b conf brief_model) && M2=$(b conf brief_model_stage2) && BUDGET=$(b conf brief_max_budget_usd) || fail "config"
 RUN="$BRIEF_DIR/run"
 mkdir -p -m 700 "$RUN/cwd" || fail "cannot create the run directory"      # cwd: empty, no CLAUDE.md, the only directory claude sees
-TOOLS=$(names "$REPO/hooks/brief_allowed_tools.txt"); DENIED=$(names "$REPO/hooks/brief_denied_tools.txt")
-[ -n "$TOOLS" ] && [ -n "$DENIED" ] || fail "empty tool allowlist or deny list"
+TOOLS=$(names "$REPO/hooks/brief_allowed_tools.txt") && DENIED=$(names "$REPO/hooks/brief_denied_tools.txt") &&
+  [ -n "$TOOLS" ] && [ -n "$DENIED" ] || fail "empty or malformed tool allowlist or deny list"
 
 # one run at a time (wake and unlock fire together). A lock is stale when it is older than 30 minutes or the pid written in it is dead (a
 # SIGKILL leaves the lock and the raw mail behind); the next run takes it over.

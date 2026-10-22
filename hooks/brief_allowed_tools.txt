@@ -1,4 +1,5 @@
-# The brief's read-only tool allowlist: one tool name per line, `#` starts a comment.
+# The brief's read-only tool allowlist. A line is blank, a full-line `#` comment, or exactly ONE name; a `#` after a name is refused by
+# both readers (brief.sh stops the run, the guard denies everything), so the two never disagree about a rule.
 # Two readers: hooks/brief.sh builds --allowedTools from it, and hooks/brief_guard.py (PreToolUse; kept for principals that run with
 # hooks, not active in the brief) denies EVERY tool that is not listed here, connector or built-in alike. Add a tool only if it can neither write nor send.
 mcp__claude_ai_Google_Calendar__list_events

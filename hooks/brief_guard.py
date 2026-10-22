@@ -3,7 +3,8 @@ NOT active in hooks/brief.sh, whose settings set disableAllHooks. Stdlib json on
 
 Deny by default: reads the hook JSON on stdin and allows ONLY a tool whose exact name is listed in hooks/brief_allowed_tools.txt
 (override: $ACE_BRIEF_ALLOWLIST), whether it is an `mcp__*` connector tool or a built-in. Everything else is denied (prints the deny JSON,
-exit 0), as is any input that cannot be parsed and any allowlist that cannot be read or is empty. `--hard` blocks with exit 2 and the
+exit 0), as is any input that cannot be parsed and any allowlist that cannot be read, is empty or holds a line that is not blank, a full-line
+`#` comment or exactly one name (a `#` after a name is refused: brief.sh reads the file the same way). `--hard` blocks with exit 2 and the
 reason on stderr instead (Claude Code treats exit 2 as a block). An allowed tool prints nothing. Every error path denies: a failure of
 this script must never let a tool through.
 """
@@ -18,8 +19,14 @@ DENY = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecisio
 
 def allowed_names() -> set:
     path = os.environ.get("ACE_BRIEF_ALLOWLIST") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "brief_allowed_tools.txt")
+    out = set()
     with open(path, encoding="utf-8") as fh:
-        return {ln.strip() for ln in fh if ln.strip() and not ln.lstrip().startswith("#")}
+        for ln in (raw.strip() for raw in fh):
+            if ln and not ln.startswith("#"):
+                if "#" in ln or len(ln.split()) != 1:        # blank, a full-line comment or ONE name: brief.sh reads the file the same way
+                    raise ValueError("list line")
+                out.add(ln)
+    return out
 
 
 def verdict(raw: str) -> bool:

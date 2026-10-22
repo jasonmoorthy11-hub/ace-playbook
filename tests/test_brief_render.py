@@ -147,3 +147,21 @@ def test_the_csp_meta_comes_right_after_the_charset_and_list_lengths_refuse_inst
     for bad in (sample(needs_you=[item()] * 26), sample(resolved=[item()] * 26), sample(acts=sample()["acts"] * 2)):
         with pytest.raises(R.SchemaError):
             R.validate_brief(bad)
+
+
+def test_the_link_is_capped_at_500_characters_in_render_even_for_an_unvalidated_brief():
+    base = "https://linear.app/"
+    ok, long = base + "a" * (500 - len(base)), base + "a" * (501 - len(base))
+    assert (len(ok), len(long)) == (500, 501)
+    assert f'href="{ok}"' in R.render(sample(needs_you=[item(url=ok)], resolved=[]))                  # exactly 500 is still a link
+    assert "<a " not in R.render(sample(needs_you=[item(url=long)], resolved=[])) and R.link_ok(ok) and not R.link_ok(long)
+    assert R.validate_brief(sample(needs_you=[item(url=long)]))["needs_you"][0]["url"] is None
+
+
+@pytest.mark.parametrize("cf", ["​", "‮", "⁦", "⁩", "﻿", "­", "‍", "⁠"])
+def test_a_format_or_bidi_character_anywhere_in_a_link_makes_it_no_link(cf):
+    for url in (f"https://linear.app/team/{cf}issue/ENG-1", f"https://linear.app/{cf}", f"https://mail.google.com/mail/u/0/#inbox/a{cf}b"):
+        assert not R.link_ok(url), repr(url)
+        assert "<a " not in R.render(sample(needs_you=[item(url=url)], resolved=[])), repr(url)
+        assert R.validate_brief(sample(needs_you=[item(url=url)]))["needs_you"][0]["url"] is None
+    assert R.link_ok("https://linear.app/team/issue/ENG-1")

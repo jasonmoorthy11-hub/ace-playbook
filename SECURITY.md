@@ -67,7 +67,8 @@ named in an mcp-config file; stage 2 (no tools) does. Stage 1 emits a JSON diges
 (`--tools "" --strict-mcp-config`) sees only the cleaned digest. Everything gathered is treated as data, never instructions. No model
 writes HTML that is served: the model emits JSON, validated and capped by code, and code renders the page with every field escaped, a
 `default-src 'none'` CSP, no script and no external resource (D-110). A link is an outbound channel, so a `url` survives validation only
-on `mail.google.com`, `calendar.google.com` or `linear.app` (https, exact host, no userinfo, no port). Every call passes an explicit model and
+on `mail.google.com`, `calendar.google.com` or `linear.app` (https, exact host, no userinfo, no port, at most 500 characters, no control or format
+character such as a bidi mark). Every call passes an explicit model and
 runs without `ANTHROPIC_API_KEY`. None of this is on the hook path; the brief runs `claude -p`, which is the one network use, and only on
 your login.
 
