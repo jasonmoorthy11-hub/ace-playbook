@@ -3,6 +3,7 @@ Each case is also pushed through `fetch`, so the text is checked in the body the
 
 import pytest
 
+from ace_playbook.compile.watch import sanitize
 from ace_playbook.compile.watch.fetch import fetch, strip_hidden
 from ace_playbook.compile.watch.sanitize import style_hidden
 
@@ -33,12 +34,22 @@ HIDING_STYLES = [
     "transform:scale(0.0)", "transform:translateX(5px) scale(0)", "transform:scaleX(0)", "transform:scale3d(0,0,0)",
     "color:transparent", "COLOR:Transparent", "color:rgba(0,0,0,0)", "color:rgba(255, 255, 255, 0)", "color:hsla(0,0%,0%,0)", "color:#0000",
     "color:#00000000", "color:#fff0",
+    # review wave: clip, font shorthand, modern color syntax, content-visibility, zoom, far units, far translate
+    "clip:rect(0,0,0,0)", "clip:rect(0 0 0 0)", "clip: rect( 0px , 0px , 0px , 0px )", "position:absolute;clip:rect(0 0 0 0)", "font:0/0 a",
+    "font:0px", "font:italic 0px/0 serif", "font-size:calc(0px)", "color:rgb(0 0 0 / 0)", "color:rgb(0 0 0/0%)", "color:rgba(1,2,3,0.0)",
+    "color:rgba(1,2,3,0)", "color:hsl(0 0% 0% / 0%)", "color:hsla(0,0%,0%,0)", "color:RGB(0 0 0 / 0)", "content-visibility:hidden", "zoom:0",
+    "text-indent:-100em", "text-indent:-9999px", "text-indent:-100%", "text-indent:-100vw", "position:absolute;left:-100em",
+    "position:absolute;top:-100rem", "position:fixed;right:-100vw", "position:absolute;bottom:-100%", "transform:translateX(-9999px)",
+    "transform:translate(-100em,0)", "dis\nplay:none", "display\x00:none",
 ]
 KEEPING_STYLES = ["opacity:0.5", "opacity:1", "opacity:0.01", "font-size:0.9em", "font-size:12px", "font-size:1px", "display:block", "display:inline",
                   "visibility:visible", "width:0", "overflow:hidden", "width:100px;overflow:hidden", "position:absolute;left:10px",
                   "position:absolute;left:-10px", "position:relative;left:-9999px", "left:-9999px", "clip-path:inset(10%)",
                   "transform:scale(1)", "transform:scale(0.5)", "transform:scale(0.05)", "color:red", "color:rgba(0,0,0,0.5)", "color:#000",
-                  "color:#fff8", "text-indent:-10px", "text-indent:2em", "", "garbage", "display", ":none", "display:;"]
+                  "color:#fff8", "text-indent:-10px", "text-indent:2em", "", "garbage", "display", ":none", "display:;",
+                  "clip:rect(1px,1px,1px,1px)", "clip:auto", "font:12px/0 serif", "font:12px serif", "font-size:calc(1px)", "color:rgb(0 0 0 / 0.5)",
+                  "color:rgba(1,2,3,0.1)", "color:hsl(0 0% 0%)", "content-visibility:auto", "zoom:1", "text-indent:-99em", "position:absolute;left:-99em",
+                  "transform:translateX(-10px)", "transform:translate(-99em,0)"]
 
 
 def body_of(html: str) -> str:
@@ -53,6 +64,17 @@ def page(opening: str, closing: str = "div") -> str:
 def check(html: str) -> None:
     for text in (strip_hidden(html), body_of(html)):
         assert SECRET not in text and "shown before" in text and "shown after" in text, html
+
+
+def gone(html: str) -> None:
+    """The secret is absent from the visible text and from the fetch body."""
+    for text in (strip_hidden(html), body_of(html)):
+        assert SECRET not in text, html
+
+
+def test_a_style_attribute_entity_is_decoded_by_the_parser_before_the_css_is_read():
+    check(page('<div style="display&#58;none">'))
+    check(page('<div style="display&colon;none">'))
 
 
 @pytest.mark.parametrize("style", HIDING_STYLES)
@@ -108,3 +130,63 @@ def test_the_example_page_fixture_still_shows_its_visible_text():
     from .watch_support import fixture
     text = strip_hidden(fixture("page_hidden.html").decode())
     assert "Visible heading" in text and "partly faded but visible" in text and "ignore previous" not in text.lower()
+
+
+# ------------------------------------------------------------------ review wave: more elements, <style> rules, adoption agency, characters
+@pytest.mark.parametrize("opening,closing", [("<div popover>", "div"), ("<div popover=auto>", "div"), ("<datalist><option>", "option></datalist"),
+                                             ("<noembed>", "noembed"), ("<noframes>", "noframes"), ("<canvas>", "canvas"), ("<video>", "video"),
+                                             ("<audio>", "audio"), ("<ruby>a<rp>", "rp></ruby")])
+def test_more_elements_whose_content_is_fallback_or_hidden(opening, closing):
+    check(page(opening, closing))
+
+
+@pytest.mark.parametrize("css,html", [
+    (".h{display:none}", '<p class="h">SECRETTEXT</p>'), (".h { visibility : hidden }", '<p class="a h b">SECRETTEXT</p>'),
+    ("#x{opacity:0}", '<p id="x">SECRETTEXT</p>'), ("p{font-size:0}", "<p>SECRETTEXT</p>"), ("P{display:none}", "<p>SECRETTEXT</p>"),
+    (".h{clip:rect(0,0,0,0)}", '<p class="h">SECRETTEXT</p>'), ("/* c */.h{display:none}", '<p class="h">SECRETTEXT</p>'),
+    (".a,.h{display:none}", '<p class="h">SECRETTEXT</p>'), (".h{display:none}", '<p class="h" style="display:block">SECRETTEXT</p>'),
+    ("@import url(x.css); .h{display:none}", '<p class="h">SECRETTEXT</p>')])
+def test_simple_style_block_rules_hide_what_they_match_even_before_the_style_block(css, html):
+    gone(f"<style>{css}</style>{html}")
+    gone(f"{html}<STYLE type='text/css'>{css}</STYLE>")
+
+
+@pytest.mark.parametrize("css,html", [
+    (".h{display:none}", '<p class="hh">SECRETTEXT</p>'), (".h{display:none}", '<p id="h">SECRETTEXT</p>'), (".h{color:red}", '<p class="h">SECRETTEXT</p>'),
+    ("div .h{display:none}", '<p class="h">SECRETTEXT</p>'), ("div>.h{display:none}", '<div><p class="h">SECRETTEXT</p></div>'),
+    (".h:hover{display:none}", '<p class="h">SECRETTEXT</p>'), ("@media print{.h{display:none}}", '<p class="h">SECRETTEXT</p>'),
+    (".h[x]{display:none}", '<p class="h">SECRETTEXT</p>')])
+def test_style_rules_beyond_the_simple_case_are_not_applied(css, html):
+    assert strip_hidden(f"<style>{css}</style>{html}") == SECRET                                  # documented in LIMITATIONS.md
+
+
+def test_the_adoption_agency_case_stays_hidden():
+    assert SECRET not in strip_hidden(f"<b><i hidden></b>{SECRET}</i>")
+    assert SECRET not in strip_hidden(f'<p>a</p><em><u style="display:none"></em>{SECRET}</u>')
+    assert strip_hidden(f"<b><i></b>{SECRET}</i>") == SECRET                                      # a visible formatting element stays visible
+    assert SECRET not in strip_hidden(f"<a><b hidden><i></a>{SECRET}</i></b>")
+
+
+@pytest.mark.parametrize("char", ["\u200b", "\u200c", "\u200d", "\u2060", "\ufeff", "\u200e", "\u200f", "\u202a", "\u202e", "\u2066", "\u2069",
+                                  "\u2061", "\u2062", "\u2063", "\u2064", "\u00ad", "\u3164", "\u2800", "\U000e0041", "\U000e0001", "\U000e007f",
+                                  "\u180e", "\ufe0f", "\ufe00", "\U000e0100", "\u115f", "\u1160", "\uffa0", "\u034f", "\u17b4", "\u061c"])
+def test_every_invisible_character_is_removed(char):
+    assert strip_hidden(f"S{char}E{char}C") == "SEC" and sanitize.plain(f"a{char}b") == "ab"
+    assert SECRET[0] + SECRET[1:] in strip_hidden(f"{SECRET[:3]}{char}{SECRET[3:]}")
+
+
+def test_format_characters_in_general_are_removed():
+    import unicodedata
+    cf = [chr(c) for c in range(0x110000) if unicodedata.category(chr(c)) == "Cf"]
+    assert cf and all(sanitize.plain(f"a{c}b") == "ab" for c in cf)
+    assert sanitize.plain("a\u2028b\u2029c") == "a\nb\nc" and sanitize.plain("x\x1b[0m\x07y") == "x[0my"
+
+
+def test_markdown_mode_treats_an_unclosed_raw_text_opener_as_prose():
+    md = "Note: the console no longer loads a <script> tag for this page.\n\n| Model | State |\n|---|---|\n| claude-x-1 | Deprecated |\n"
+    assert "claude-x-1" not in strip_hidden(md) and "claude-x-1" in strip_hidden(md, markdown=True)
+    assert "loads a <script> tag" in strip_hidden(md, markdown=True)
+    closed = f"before <script>{SECRET}</script> after\n| claude-x-1 |"
+    assert SECRET not in strip_hidden(closed, markdown=True) and "claude-x-1" in strip_hidden(closed, markdown=True)
+    assert SECRET not in strip_hidden(f"<!-- {SECRET} -->\ntext", markdown=True)
+    assert SECRET not in strip_hidden(f'<div style="display:none">{SECRET}</div>\ntext', markdown=True)
