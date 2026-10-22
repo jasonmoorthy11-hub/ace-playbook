@@ -4,7 +4,9 @@ The rules of a stylesheet apply to the whole page, to elements that come before 
 text is read. A scan for the string `<style` is fooled by every `<style` that is not a start tag (inside a script string, a comment, an
 attribute value, a `<textarea>` or `<title>`, a custom element `<style-x>`): a fake one hides the real rules. Here the tokenizer decides:
 html.parser reads the page once with the same script rules as the second pass (`htmlrules.ScriptedParser`) and collects the character data
-of each `<style>` element, an unclosed one at the end of the page included (a browser applies it). Linear in the size of the page.
+of each `<style>` element, an unclosed one at the end of the page included (a browser applies it). Linear in the size of the page. It counts
+the open `svg`, `math`, `select` and integration-point elements only, to know whether a `<noscript>` is raw text (HTML content) or an
+element (foreign content, a select) and whether a `<![CDATA[` is a section (foreign content): the answers of the second pass, approximated.
 
 The tokenizer is not the browser in every corner (a CDATA section in foreign content, a bogus comment and the like may still end at
 different places), so `style_rules` also applies the rules of a plain scan for `<style ... </style` (`scan_text`): a rule found by EITHER
@@ -16,8 +18,9 @@ from __future__ import annotations
 import re
 
 from .cssstyle import css_rules
-from .htmlrules import ScriptedParser, ScriptState
+from .htmlrules import INTEGRATION, ScriptedParser, ScriptState
 
+WATCHED = frozenset(("svg", "math", "select")) | INTEGRATION
 STYLE_MARK = re.compile(r"<style", re.I)
 STYLE_OPEN, STYLE_CLOSE = re.compile(r"<style(?=[\s/>])", re.I), re.compile(r"</style(?=[\s/>])", re.I)
 
@@ -27,8 +30,18 @@ class _Styles(ScriptedParser):
         super().__init__()
         self.sheets: list[list[str]] = []
         self.inside = False
+        self.depth: dict[str, int] = {}                             # how many svg / math / select / integration-point elements are open
+
+    def foreign(self) -> bool:
+        """Inside svg or math and in no integration point (an approximation of the tree of the second pass: the plain scan covers the rest)."""
+        return bool(self.depth.get("svg") or self.depth.get("math")) and not any(self.depth.get(t) for t in INTEGRATION)
+
+    def in_select(self) -> bool:
+        return bool(self.depth.get("select"))
 
     def handle_starttag(self, tag, attrs) -> None:
+        if tag in WATCHED:
+            self.depth[tag] = self.depth.get(tag, 0) + 1
         if tag == "script":
             self.script = ScriptState()
         elif tag == "style":
@@ -38,6 +51,8 @@ class _Styles(ScriptedParser):
     def handle_endtag(self, tag) -> None:
         if self.script_stays_open(tag):
             return
+        if self.depth.get(tag):
+            self.depth[tag] -= 1
         if tag == "script":
             self.script = None
         elif tag == "style":

@@ -26,7 +26,8 @@ VISIBLE text only, never from the raw markup. The rules of `<style>` come from a
 (`stylepass.style_text`) UNIONED with a plain scan for `<style ... </style` (`stylepass.style_rules`: over-hiding, for pages that
 html.parser and a browser tokenize differently), the visible text from a second parser pass. A comment ends where a browser ends it
 (`<!-->`, `<!--->`, `-->`, `--!>`: `htmlrules.ScriptedParser`); so does `<![CDATA[` in HTML content: a bogus comment that ends at the
-first `>` (a real section to `]]>` only in svg or math), and `<noscript>` is raw text, as in a browser with scripting on. Inside `<svg>` and
+first `>` (a real section to `]]>` only in svg or math), and `<noscript>` is raw text in HTML content, as in a browser with scripting on (an
+ordinary element in svg, math or an open select); a slash on any raw-text element (`<xmp/>`, `<iframe/>`, ...) is ignored. Inside `<svg>` and
 `<math>` no implied end tag happens, except after a breakout tag (`treerules`). A `<table>` closes an open `<p>` only in standards mode, which
 is a FIRST doctype `html` (`<!DOCTYPE html>`, optionally with `SYSTEM "about:legacy-compat"`) before any tag or text; a late, legacy or
 second doctype, or none, is quirks mode (fail closed). The result is plain text, one non-empty line per block.
@@ -86,6 +87,9 @@ class _Text(ScriptedParser):
 
     def foreign(self) -> bool:
         return bool(self.stack) and self.stack[-1][4][5] >= 0       # the top element is inside a run of svg / math elements
+
+    def in_select(self) -> bool:
+        return bool(self.open.get("select"))
 
     def handle_decl(self, decl) -> None:
         """Only the FIRST doctype, before any tag or text, and only `html` (with an optional legacy-compat SYSTEM id) is standards mode; a

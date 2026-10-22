@@ -14,9 +14,11 @@ a hidden element is involved the same rules apply and anything doubtful keeps th
   The state machine of the HTML tokenizer is run over the script text instead: a `</script` seen in the double-escaped state does not
   close the element.
 * `ScriptedParser`: the html.parser subclass that both passes of `sanitize` (the style text of `stylepass`, the visible text) share, so
-  they tokenize alike: a slash on `<script/>`, `<style/>` or `<noscript/>` is ignored, `noscript` is raw text (a browser with scripting on),
-  a double-escaped script keeps its next `</script` as text, a comment ends at `<!-->`, `<!--->`, `-->` or `--!>`, and `<![CDATA[` is a
-  bogus comment that ends at the first `>` (any `<![` is), except in foreign content (`foreign()`), where it runs to `]]>`.
+  they tokenize alike: a slash on `<script/>`, `<style/>`, `<noscript/>`, `<xmp/>`, `<iframe/>`, `<noembed/>`, `<noframes/>`, `<textarea/>`,
+  `<title/>` or `<plaintext/>` is ignored, `noscript` is raw text (a browser with scripting on) in HTML content only: in foreign content
+  (`foreign()`) or inside an open `<select>` (`in_select()`) it is an ordinary element, a double-escaped script keeps its next `</script` as
+  text, a comment ends at `<!-->`, `<!--->`, `-->` or `--!>`, and `<![CDATA[` is a bogus comment that ends at the first `>` (any `<![` is),
+  except in foreign content, where it runs to `]]>`.
 * `MAX_DEPTH`: the open-element stack is capped; a document nested deeper is a parse failure (`TooDeep`), not a quadratic scan.
 """
 
@@ -41,6 +43,7 @@ SPECIAL = frozenset(("address applet area article aside base basefont bgsound bl
                      "p param plaintext pre script search section select source style summary table tbody td template textarea tfoot th "
                      "thead title tr track ul wbr xmp mi mo mn ms mtext foreignobject desc").split())
 EXTRA = {"p": frozenset(("button",)), "li": frozenset(("ol", "ul"))}                      # per-tag scope barriers beyond BARRIERS
+RCDATA = getattr(HTMLParser, "RCDATA_CONTENT_ELEMENTS", ())                                 # textarea, title (and plaintext): a newer html.parser
 COMMENT_ABRUPT, COMMENT_END = re.compile(r"-?>"), re.compile(r"--!?>")
 SCRIPT_MARKS = re.compile(r"<!--->|<!-->|<!--|-->|<script(?=[\t\n\f\r />])|</script(?=[\t\n\f\r />])", re.I | re.A)
 
@@ -136,9 +139,25 @@ class ScriptedParser(HTMLParser):
         self.handle_comment(raw[i + 2:end])
         return end + (3 if real else 1)
 
+    def in_select(self) -> bool:
+        """True when a `<select>` is open: a browser ignores a `<noscript>` start tag there, so its content is not raw text. A subclass that
+        tracks the open elements overrides this; the default (False) only matters for a `<noscript>` inside a select."""
+        return False
+
+    def set_cdata_mode(self, elem, **kw) -> None:
+        """`<noscript>` is raw text only in HTML content (a browser with scripting on); in foreign content or a select it is an element."""
+        if elem == "noscript" and (self.foreign() or self.in_select()):
+            return
+        super().set_cdata_mode(elem, **kw)
+
     def handle_startendtag(self, tag, attrs) -> None:
-        self.handle_starttag(tag, attrs)                            # a browser ignores the slash on a non-void element
-        if tag in ("script", "style", "noscript"):
+        """A browser ignores the slash on a non-void element: every raw-text element enters its mode, as `parse_starttag` does for `<x>`."""
+        self.handle_starttag(tag, attrs)
+        if tag in self.CDATA_CONTENT_ELEMENTS:
+            self.set_cdata_mode(tag)
+        elif tag in RCDATA:
+            self.set_cdata_mode(tag, escapable=True)
+        elif tag == "plaintext" and RCDATA:
             self.set_cdata_mode(tag)
 
     def clear_cdata_mode(self) -> None:

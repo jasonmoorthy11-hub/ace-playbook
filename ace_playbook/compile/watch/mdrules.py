@@ -27,7 +27,8 @@ thematic break, a `<` at all) makes it no definition. A definition cannot start 
 stays. That paragraph is tracked as a renderer does: a heading, a thematic break (`---`, `***`) or a setext underline that has a paragraph
 above it ends it, but a `===`, `=` or `--` line with NO paragraph open is itself paragraph text and a definition after it is not one
 (fail closed: its tags keep their HTML meaning). The same holds for such a line INSIDE a quote or a list item (`cont`: set by a `>` or a list
-marker line, kept over blank and indented lines, cleared by an unindented line that is no marker after a blank line or that is a heading
+marker line, a BARE marker (`-`, `1.`) too, which opens an empty item, unless a lone `-` is the underline of the paragraph above it; kept
+over blank and indented lines, cleared by an unindented line that is no marker after a blank line or that is a heading
 or a thematic break): there it is a lazy continuation of the paragraph, never a setext underline (`> foo` then `===`).
 Whatever fails the rule is not dropped and keeps its HTML meaning: `[x]: /u <script>` hides to the closer, as a renderer
 passes the tag through. Never "a definition and whatever goes on with it": a definition is at most a label, a destination and a
@@ -67,7 +68,8 @@ DEFINITION = re.compile(rf" {{0,3}}\[(?![ \t]*\])(?:[^\[\]\\\n]|\\[^\n]){{1,999}
 INTERRUPT = re.compile(r" {0,3}(?:<|>|#{1,6}(?:[ \t\r]|$)|`{3}|~{3}|[-*+_](?:[ \t\r]|$)|\d{1,9}[.)](?:[ \t\r]|$)|[-*_=]{2,}[ \t\r]*$)")
 ENDS_PARAGRAPH = re.compile(r" {0,3}(?:#{1,6}(?:[ \t\r]|$)|([-*_])(?:[ \t]*\1){2,}[ \t\r]*$)")        # an ATX heading or a thematic break, whatever is above
 SETEXT = re.compile(r" {0,3}[=-]+[ \t\r]*$")                      # an underline ends a paragraph ONLY when one is open; else it is text (`===`, `--`)
-CONTAINER = re.compile(r"[ \t]*(?:>|(?:[-*+]|\d{1,9}[.)])[ \t]+[^ \t\r\n])")                  # a line that opens or continues a quote or a list item
+CONTAINER = re.compile(r"[ \t]*(?:>|(?:[-*+]|\d{1,9}[.)])(?:[ \t]+[^ \t\r\n]|[ \t\r]*$))")     # a line that opens or continues a quote or list item
+# (a BARE marker line opens an empty item; under a paragraph a lone `-` is a setext underline instead, see `scan`)
 
 
 def _definition(text: str, start: int) -> int:
@@ -149,7 +151,8 @@ def scan(text: str) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
         else:
             ranges.extend(_spans(line, start))
             ends = ENDS_PARAGRAPH.match(line)
-            cont = bool(CONTAINER.match(line)) or (cont and not (line[0] not in " \t" and (ends or (gap and line.strip()))))
+            opens = CONTAINER.match(line) and not (para and SETEXT.match(line))        # a lone `-` under a paragraph is its underline
+            cont = bool(opens) or (cont and not (line[0] not in " \t" and (ends or (gap and line.strip()))))
             gap = not line.strip()
             para = bool(line.strip()) and not ends and not (para and not cont and SETEXT.match(line))
     return ranges, drops

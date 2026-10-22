@@ -1095,11 +1095,15 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   the page has no `<style`). `stylepass.style_rules` unions those rules with the ones of a plain linear scan for `<style ... </style`
   (`scan_text`, fake openers included, so it can only add rules), because html.parser and a browser tokenize some pages differently (a
   CDATA section in svg, a bogus comment); `cssstyle.css_rules` reads the braces in one linear pass (`cssscan.py`: braces, semicolons and
-  comment openers inside CSS strings, escapes and unquoted `url(...)` do not count; a rule with nested blocks is read with them cut out and the
+  comment openers inside CSS strings, escapes and unquoted `url(...)` (the ident matched after escape decoding: `\75rl(`, `u\72l(`) do not
+  count; a rule with nested blocks is read with them cut out and the
   nested rules on their own; a rule open at the end applies; CSS escapes in a selector are decoded and the list splits on unescaped commas
   only). `<![CDATA[` (any `<![`) is a bogus comment that ends at the first `>` in HTML content, a real section to `]]>` only when the top
   open element is inside a run of svg / math elements (`ScriptedParser.parse_html_declaration` and `foreign()`; `_support_cdata` is off so the
-  EOF path agrees); `noscript` is raw text in both passes (`CDATA_CONTENT_ELEMENTS`, also for `<noscript/>`) and stays in the skipped set.
+  EOF path agrees); `noscript` is raw text in both passes (`CDATA_CONTENT_ELEMENTS`, also for `<noscript/>`) and stays in the skipped set,
+  but only in HTML content: `ScriptedParser.set_cdata_mode` skips it when `foreign()` or `in_select()` holds (`_Text` from its stack,
+  `_Styles` from `depth` counters). `handle_startendtag` enters raw-text mode for every `CDATA_CONTENT_ELEMENTS` name (`<xmp/>`,
+  `<iframe/>`, `<noembed/>`, `<noframes/>`), for the RCDATA ones (`<textarea/>`, `<title/>`) and `<plaintext/>`: a browser ignores the slash.
   `treerules.implied(..., standards)` lets a `<table>` close an open `<p>` only in standards mode: `_Text.handle_decl` takes it from a FIRST
   `<!DOCTYPE html>` (optionally `SYSTEM "about:legacy-compat"`) before any tag or non-blank text; none, a late, legacy or second doctype is
   quirks (fail closed). Comments end where a browser ends them
@@ -1107,7 +1111,8 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   an abrupt `<!-->` with a later `-->`) for both passes; the page is not rewritten, because `--!>` ends nothing in script data, an
   attribute value or RCDATA. In Markdown a `===`, `=` or `--` line with no paragraph open is paragraph text (the paragraph flag of
   `mdrules.scan` stays set); only a heading, a thematic break or a setext underline under an open paragraph ends it, and such a line inside
-  a quote or a list item is a lazy continuation, not an underline (the `cont` flag: set by a `>` or list-marker line, kept over blank and
+  a quote or a list item is a lazy continuation, not an underline (the `cont` flag: set by a `>` or list-marker line, a bare marker (`-`,
+  `1.`) included unless a lone `-` underlines the paragraph above it, kept over blank and
   indented lines, cleared by an unindented non-marker line after a blank line or by an unindented heading or thematic break). The text and tails inside
   a child element of an XHTML feed field are HTML-escaped before the sanitizer sees them (only the field's own text stays raw), so an
   escaped closer there cannot close a hidden ancestor. The npm `latest` must be an ASCII version (`[0-9]+.[0-9]+.[0-9]+` with an optional

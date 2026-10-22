@@ -204,7 +204,10 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   only when the current node is an `svg` or `math` element (not under an integration point) is it a real section that runs to `]]>`
   (`htmlrules.ScriptedParser.parse_html_declaration`, `foreign()`). `<noscript>` is raw text, as in a browser with scripting on, so
   `<div hidden><noscript></div>X</noscript>` keeps X hidden (it stays in the skipped set: its text is never shown; a browser with scripting
-  off would show it, which is the rarer reader). A comment ends where a browser ends it, on every patch release of html.parser
+  off would show it, which is the rarer reader); only in HTML content, though: in foreign content (an open svg or math, outside an integration
+  point) and inside an open `<select>` it is an ordinary element and its content is tokenized as markup (`set_cdata_mode`, both passes). A
+  slash on a raw-text element (`<xmp/>`, `<iframe/>`, `<noembed/>`, `<noframes/>`, `<textarea/>`, `<title/>`, `<plaintext/>`) is ignored, as on
+  `<script/>`. A comment ends where a browser ends it, on every patch release of html.parser
   (`<!-->`, `<!--->`, `-->`, `--!>`; the stdlib pairs an abrupt `<!-->` with a LATER `-->` and older releases ignore `--!>`):
   `htmlrules.ScriptedParser.parse_comment`, so a `<style>` behind such a comment is found. The rules of `<style>` come from a first
   parser pass over the REAL style elements (html.parser with the same script rules as the second pass) UNIONED with a plain scan for
@@ -214,7 +217,9 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   comment can hide the elements it names). An unclosed `<style>` at the end of the page applies to the elements before it; the legacy
   `<!--` and `-->` tokens in a stylesheet are ignored as CSS does. The stylesheet is read in one linear pass over its braces (`cssscan.py`):
   braces, semicolons and comment openers inside a CSS
-  string (`content:"{"`), after a backslash or in an unquoted `url(...)` do not count; a rule with nested blocks is read with the
+  string (`content:"{"`), after a backslash or in an unquoted `url(...)` (the ident is recognised after escape decoding: `\75rl(`, `u\72l(`,
+  `\55RL(`) do not count; braces, semicolons and `/*` inside any OTHER parenthesis or bracket block (`foo(})`) still count here and a
+  browser keeps them inside the block (unhandled: a rule after such a token can be missed); a rule with nested blocks is read with the
   nested blocks cut out of its body and the nested rules are read on their own as well (over-hiding: a browser matches them only inside the
   parent); a rule or block still open at the end is closed there, as a browser does (`.h{display:none` applies); CSS escapes in a selector are
   decoded (`.\68` is `.h`, `#\69 ` is `#i`) and a selector list is split on unescaped commas only (`.a\,b` is the one class `a,b`).
@@ -244,7 +249,9 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   `===`, `=` or `--` line with NO paragraph open is itself paragraph text, so a definition after it stays too (its tags keep their HTML
   meaning; a lone `-` is also read as text: over-hiding). The same holds INSIDE a quote or a list item: there such a line is a lazy
   continuation of the paragraph, never a setext underline (`> foo` then `===`), so the definition after it stays. The container flag is set
-  by a `>` or a list-marker line, kept over blank and indented lines and cleared by an unindented non-marker line after a blank line, or by an
+  by a `>` or a list-marker line (a bare marker such as `-` or `1.` too: it opens an empty item, so `-` then an indented line then `===` is lazy
+  text; a lone `-` right under a paragraph is still its underline), kept over blank and indented lines and cleared by an unindented
+  non-marker line after a blank line, or by an
   unindented heading or thematic break (a thematic break such as `> foo` then `---` still ends the paragraph); it is not a full CommonMark
   container parse and errs towards "still inside" (fail closed).
   Whatever fails the rule is left alone and read as HTML (`[x]: /u <script>` hides to its closer; so does

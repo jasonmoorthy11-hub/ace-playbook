@@ -1,7 +1,8 @@
 """The CSS scanner behind `cssstyle`: comments, strings, escapes, nested blocks and selectors, read the way a browser tokenizes. Stdlib only.
 
 One regex (`PUNCT`) finds the punctuation `{`, `}` and `;` and steps OVER everything that hides it: a string (`"{"`, `'}'`; it ends at its quote,
-at an unescaped newline or at the end of the text), a backslash escape (`\\{`) and an unquoted `url(...)`. All of it is linear.
+at an unescaped newline or at the end of the text), a backslash escape (`\\{`) and an unquoted `url(...)`, whose ident is recognised AFTER escape
+decoding, as a browser does (`\\75rl(`, `u\\72l(`, `\\55RL(`, `URL(`; a quote after the `(` makes it a function with a string). All of it is linear.
 
 * `strip_comments(css)`: `/* ... */` removed (an unclosed one runs to the end) except inside a string, an escape or an unquoted url, so
   `content:"/*";display:none` keeps its declaration. The comment is removed, not replaced by a space (`di/**/splay`: fail closed).
@@ -20,8 +21,16 @@ import re
 
 MAX_NESTING = 512
 STRING = r"\"[^\"\\\n]*(?:\\.[^\"\\\n]*)*\"?|'[^'\\\n]*(?:\\.[^'\\\n]*)*'?"
-URL = r"url\((?![ \t\r\n\f]*[\"'])[^)\\]*(?:\\.[^)\\]*)*\)?"
-SKIP = rf"{STRING}|\\.|{URL}"
+
+
+def _letter(c: str) -> str:
+    """The ident spellings of the letter `c` (no hex digit: u, r, l), as a regex: the letter in either case, `\\c`, or a hex escape of it
+    (up to six digits, leading zeros allowed, one optional white space after it). The negative look-ahead keeps `\\750` from being a `u`."""
+    return rf"(?:{c}|\\{c}|\\0{{0,4}}(?:{ord(c):x}|{ord(c.upper()):x})(?![0-9a-f])(?:\r\n|[ \t\r\n\f])?)"
+
+
+URL = _letter("u") + _letter("r") + _letter("l") + r"\((?![ \t\r\n\f]*[\"'])[^)\\]*(?:\\.[^)\\]*)*\)?"            # `url(` as the DECODED ident spells it
+SKIP = rf"{STRING}|{URL}|\\."                                       # URL before the escape: `\75rl(` starts with a backslash
 COMMENT, PUNCT = re.compile(rf"({SKIP})|/\*.*?(?:\*/|$)", re.S | re.I), re.compile(rf"(?:{SKIP})|([{{}};])", re.S | re.I)
 ESCAPE = re.compile(r"\\([0-9a-fA-F]{1,6})(?:\r\n|[ \t\r\n\f])?|\\(.)", re.S)
 HEX = r"(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{1,5}(?![0-9a-fA-F]))"                                  # one way to read a run of hex digits: no backtracking
