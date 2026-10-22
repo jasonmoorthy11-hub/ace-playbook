@@ -40,7 +40,7 @@ class Node:
         if ns == 1:
             self.ip = 1 if name in ("foreignobject", "desc", "title") else 0
         elif ns == 2:
-            enc = next((v or "" for k, v in attrs if k == "encoding"), "").strip().lower()
+            enc = next((v or "" for k, v in attrs if k == "encoding"), "").lower()
             tx = name in ("mi", "mo", "mn", "ms", "mtext")
             self.ip = (1 if enc in ("text/html", "application/xhtml+xml") else 3) if name == "annotation-xml" else 2 if tx else 0
 

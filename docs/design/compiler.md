@@ -1102,8 +1102,8 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   `annotation-xml`); a breakout start tag (the spec's list, `font` with `color`, `face` or `size`), `</p>` and `</br>` pop the foreign run
   and are read again by the mode (not by `process`, which would loop); any other foreign end tag walks down the stack by name; a foreign
   element written self-closed is popped at once, an integration point too. Every node carries its NAMESPACE (0 html, 1 svg, 2 math) and its
-  integration kind `ip` (0 none, 1 HTML: svg `foreignObject`, `desc`, `title` and `annotation-xml` whose `encoding`, trimmed and lower
-  cased, is `text/html` or `application/xhtml+xml`; 2 MathML text: `mi`, `mo`, `mn`, `ms`, `mtext`; 3 `annotation-xml` without an HTML
+  integration kind `ip` (0 none, 1 HTML: svg `foreignObject`, `desc`, `title` and `annotation-xml` whose `encoding`, lower cased and NOT
+  trimmed, is `text/html` or `application/xhtml+xml`; 2 MathML text: `mi`, `mo`, `mn`, `ms`, `mtext`; 3 `annotation-xml` without an HTML
   encoding); `htmlrules.special(node)` asks the special category by namespace. An open select is built in two readings (`Tree.relaxed`):
   A, the older, ignores start tags and keeps the tokenizer out of raw text; B, the newer and the one the visible text uses, inserts them
   and ignores every end tag but `option`, `optgroup`, `select` and `template`, keeps a nested `select` open, lets `input`, `keygen` and

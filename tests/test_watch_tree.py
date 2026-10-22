@@ -188,3 +188,91 @@ def test_html_and_body_tokens_after_the_end_of_the_body_still_merge_their_attrib
     assert strip_hidden("<body>LEAK</body><body hidden>") == "" and strip_hidden("<p>LEAK</p></html><html hidden>") == ""
     shows("<body>VIS</body></html>VIS2", "VISVIS2")
     shows("<body>VIS</body><p>VIS2</p>", "VIS\nVIS2")                                               # text after </body> goes to the body
+
+
+# ------------------------------------------------------------------ wave 15 (Opus wave-8 I1-I6): html and markdown, each with a visible control
+def hides(*worlds: str) -> None:
+    for html in worlds:
+        assert strip_hidden(html) == "" and body_of(html) == "" and strip_hidden(html, markdown=True) == "", html
+
+
+def shows_md(html: str, expected: str) -> None:
+    shows(html, expected)
+    assert strip_hidden(html, markdown=True) == expected, html
+
+
+@pytest.mark.parametrize("html", [
+    "<table><tr><td hidden><table></table>LEAK</td></tr></table>", "<table><tr><td hidden><table><tr><td>LEAK",
+    "<table><tr><td><span hidden><table></table>LEAK", "<table><tr><td><span hidden><table><tr><td>LEAK",
+    "<table><caption hidden><table></table>LEAK</caption></table>", "<table><caption hidden><table><tr><td>LEAK"])
+def test_i1_a_table_start_tag_in_a_cell_or_caption_nests_and_does_not_close_the_outer_table(html):
+    hides(html)
+
+
+def test_i1_controls_a_visible_cell_and_the_table_end_tag_in_a_cell():
+    shows_md("<table><tr><td><table></table>VIS</td></tr></table>", "VIS")
+    shows_md("<table><caption><table></table>VIS</caption></table>", "VIS")
+    shows_md("<table><tr><td hidden>x</table>VIS", "VIS")                                    # an end tag still closes the cell and the table
+    shows_md("<table><tr>table</tr></table>VIS", "table\nVIS")                               # the characters "table" are text, not a table tag
+
+
+@pytest.mark.parametrize("html", [
+    "<table><object><b hidden></table>LEAK", "<table><marquee><i hidden></table>LEAK", "<table><tbody><applet><u hidden></tbody></table>LEAK",
+    "<table><object><b hidden>x<tr><td>y</td></tr></table>LEAK"])
+def test_i2_a_marker_that_leaves_the_stack_without_its_own_end_tag_keeps_the_formatting_list(html):
+    assert leak_free(html), html                                    # the `y` of the last world is a table cell, visible in a browser too
+    assert strip_hidden(html) == ("y" if "<td>y" in html else "")
+
+
+def test_i2_controls_the_own_end_tag_clears_the_list_to_the_marker():
+    shows_md("<table><object><b></table>VIS", "VIS")
+    shows_md("<object><b hidden></object>VIS", "VIS")
+    shows_md("<marquee><i hidden></marquee>VIS", "VIS")
+    shows_md("<b hidden></b><table><tr><td><i hidden></i></td></tr></table>VIS", "VIS")     # the cell still clears its part of the list
+
+
+@pytest.mark.parametrize("html", [
+    '<math><annotation-xml encoding="text/html "><xmp><span hidden></xmp></annotation-xml></math>LEAK',
+    '<math><annotation-xml encoding=" text/html"><xmp><span hidden></xmp></annotation-xml></math>LEAK',
+    '<math><annotation-xml encoding="application/xhtml+xml\n"><xmp><span hidden></xmp></annotation-xml></math>LEAK'])
+def test_i3_the_annotation_xml_encoding_is_compared_untrimmed(html):
+    hides(html)
+
+
+def test_i3_controls_an_exact_encoding_is_an_integration_point_in_any_case():
+    for enc in ("text/html", "TEXT/HTML", "Application/XHTML+xml"):
+        shows_md(f'<math><annotation-xml encoding="{enc}"><xmp><span hidden></xmp></annotation-xml></math>VIS', "VIS")
+
+
+@pytest.mark.parametrize("html", [
+    "<select><object></select>LEAK", "<select><table></select>LEAK", "<select><marquee></select>LEAK", "<select><math><mi></select>LEAK",
+    "<select><svg><desc></select>LEAK"])
+def test_i4_an_end_select_needs_the_select_in_scope_in_the_newer_reading(html):
+    hides(html)
+
+
+def test_i4_controls_a_plain_close_and_the_kept_over_hide_of_ignored_end_tags():
+    shows_md("<select><option>x</select>VIS", "VIS")
+    shows_md("<select><optgroup><option>x</optgroup></select>VIS", "VIS")
+    hides("<select><object></object></select>VIS", "<select><table></table></select>VIS")       # kept over-hide: an open select ignores end tags
+
+
+@pytest.mark.parametrize("html", ["<select><b hidden></select>LEAK", "<select><option><i hidden></select>LEAK", "<select><a hidden></select>LEAK"])
+def test_i5_a_formatting_tag_in_the_newer_select_reading_is_pushed_and_reconstructed(html):
+    hides(html)
+
+
+def test_i5_controls_a_visible_formatting_tag_in_the_select():
+    shows_md("<select><b></select>VIS", "VIS")
+    shows_md("<select><option><i>x</select>VIS", "VIS")
+
+
+@pytest.mark.parametrize("html", ["<div>\x00</div><frameset></frameset>LEAK", "\x00<frameset>LEAK", "<svg>\x00</svg><frameset>LEAK"])
+def test_i6_a_nul_character_leaves_frameset_ok_so_the_frameset_replaces_the_body(html):
+    hides(html)
+
+
+def test_i6_controls_text_after_the_nul_turns_frameset_ok_off():
+    shows_md("<div>\x00</div>x<frameset>VIS", "xVIS")
+    shows_md("<div>\x00 </div>x<frameset>VIS", "xVIS")
+    shows_md("<svg>\x00x</svg><frameset>VIS", "VIS")

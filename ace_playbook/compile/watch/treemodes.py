@@ -83,7 +83,7 @@ def body_end(t, n):
         if t.in_scope("form"): t.implied(); t.stack[-1].name == "form" and t.pop()
     elif n == "br": run(t, "rvf", n, ())
     elif n in ("applet", "marquee", "object"):
-        if t.in_scope(n): t.implied(); t.pop_to(n)
+        if t.in_scope(n): t.implied(); t.pop_to(n); t.clear_fmt()
     elif n == "template": template_end(t)
     else: any_other(t, n)
 
@@ -105,7 +105,7 @@ def body_start(t, n, a, sc):
     elif n not in IGNORED: run(t, OPS.get(n, "r"), n, a)
 
 def body(t, k, n, a, sc):
-    if k == "c": t.reconstruct(); t.text(n); t.ok = t.ok and not n.strip(WS)
+    if k == "c": t.reconstruct(); t.text(n); t.ok = t.ok and not n.strip(WS + "\x00")          # a NUL is ignored: frameset-ok stays
     elif k == "s": body_start(t, n, a, sc)
     elif k == "e": body_end(t, n)
 
@@ -131,7 +131,7 @@ def intable(t, k, n, a, sc):
         if n in ("td", "th") and st[-1].name in SECTIONS: t.insert("tr", (), syn=True)
         (t.void if n == "col" else t.insert)(n, a)
         t.reset_mode()
-    elif n == "table" and k in "se":
+    elif n == "table" and (k == "e" or (k == "s" and t.mode not in ("caption", "cell"))):      # a start tag in a cell or caption is read as body (nests)
         if t.in_scope("table", 3): t.pop_to("table"); t.reset_mode(); k == "s" and t.process(k, n, a, sc)
     elif k == "e" and n in ("caption", "colgroup", "tr", "td", "th", *SECTIONS):
         if t.in_scope(n, 3): t.pop_to(n); t.reset_mode()
@@ -165,9 +165,9 @@ def inselect(t, k, n, a, sc):
         elif t.relaxed:                                              # any other start tag is inserted as it is (strict: ignored)
             if n in RAW_ANY: t.rawtext(n, a)
             elif n in ("svg", "math"): t.insert(n, a, 1 if n == "svg" else 2); sc and t.pop()
-            else: t.void(n, a) if n in VOID else t.insert(n, a)
+            else: run(t, "rF", n, a) if n in FORMAT else t.void(n, a) if n in VOID else t.insert(n, a)       # a formatting tag as in body
     elif k == "e":
-        if n == "select" and t.idx.get("select") and (t.relaxed or reach(t)): t.popto(t.idx["select"][-1]); t.reset_mode()
+        if n == "select" and (t.in_scope(n) if t.relaxed else reach(t)): t.popto(t.idx["select"][-1]); t.reset_mode()
         elif n in ("option", "optgroup"): st[-1].name == "option" and t.pop(); n == "optgroup" and st[-1].name == "optgroup" and t.pop()
         elif n == "template": head(t, k, n, a, sc)
 
@@ -182,7 +182,7 @@ def foreign_dispatch(cur, k, n) -> bool:
 
 def m_foreign(t, k, n, a, sc):
     st = t.stack
-    if k == "c": t.text(n); t.ok = t.ok and not n.strip(WS)
+    if k == "c": t.text(n); t.ok = t.ok and not n.strip(WS + "\x00")                        # foreign NUL: U+FFFD, frameset-ok untouched
     elif k == "s" and not (n in BREAKOUT or (n == "font" and any(x in ("color", "face", "size") for x, _ in a))):
         t.insert(n, a, st[-1].ns)
         sc and t.pop()                                               # a self-closed foreign element is popped at once

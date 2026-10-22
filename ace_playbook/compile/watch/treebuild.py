@@ -2,7 +2,7 @@
 read by the style pass (`treestyle`) and the visible-text walk (`treewalk`); the insertion modes are in `treemodes`. Stdlib only. `Tree` keeps the stack of
 open elements with indexes (`idx` HTML positions by name, `fcnt` foreign names, `mk` scope-marker positions per scope variant) so a scope check or an end
 tag that names nothing open costs O(1); inserts at the appropriate place (FOSTER PARENTING: what a table cannot hold goes before it); keeps the active
-formatting list (markers pushed on insert and cleared on pop of td, th, caption, applet, marquee, object, template; Noah's Ark; `reconstruct`; a simplified
+formatting list (markers pushed on insert, cleared on pop of td, th, caption, template and at `</applet|marquee|object>`; Noah's Ark; `reconstruct`; simplified
 `adopt`). `relaxed`: an open select is read two ways, the older in-select mode ignores start tags (strict), the newer inserts them (relaxed, the visible
 text: a raw-text element a select holds that has a `<` hides the REST of the page, `selraw` `rawlt` `poisoned`); the style pass builds both. A stack past
 `MAX_DEPTH` is `TooDeep`."""
@@ -51,12 +51,13 @@ class Tree:
             self.fcnt[n.name] -= 1
         else:
             self.idx[n.name].pop()
-            if n.name in MARKERS:                                   # clear the list of active formatting elements up to the last marker
-                while self.fmt and self.fmt.pop() is not None:
-                    pass
+            if n.name in ("td", "th", "caption", "template"): self.clear_fmt()    # applet, marquee, object: only at their own end tag
         for v in n.mask:
             self.mk[v].pop()
         return n
+
+    def clear_fmt(self) -> None:
+        while self.fmt and self.fmt.pop() is not None: pass         # clear the list of active formatting elements up to the last marker
 
     def popto(self, i: int) -> None:
         while len(self.stack) > i:                                  # pop down to position i, the element there included

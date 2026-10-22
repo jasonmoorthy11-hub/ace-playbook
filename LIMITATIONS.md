@@ -204,7 +204,7 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   `color`, `face` or `size`) pops the foreign elements first, up to the nearest HTML element or integration point, and then the HTML rules
   apply; so do the end tags `</p>` and `</br>` (`<svg></p><q hidden></svg>X` keeps X hidden: the `</svg>` is then ignored). Every element
   has a NAMESPACE (html, svg, math) and the integration points are decided by it: in svg `foreignObject`, `desc`, `title`; in math `mi`,
-  `mo`, `mn`, `ms`, `mtext`, and `annotation-xml` whose `encoding` (trimmed, ASCII case folded) is `text/html` or `application/xhtml+xml`
+  `mo`, `mn`, `ms`, `mtext`, and `annotation-xml` whose `encoding` (ASCII case folded, NOT trimmed) is `text/html` or `application/xhtml+xml`
   (any other `annotation-xml` is an ordinary math element, but its `<svg>` child is svg). Their children are HTML again (`mglyph` and
   `malignmark` under a math text point stay math). The same names in the OTHER namespace (svg `mi`, math `title`, ...) are ordinary foreign
   elements: a raw-text tag there is an element, and `<p` breaks out. Nothing implied, and no end tag, reaches past an integration point
