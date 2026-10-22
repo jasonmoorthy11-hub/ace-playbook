@@ -95,10 +95,12 @@ def test_the_two_stages_get_exactly_the_flags_the_design_names(w):
     assert "--verbose" in one and flag(one, "--max-turns") == "12" and flag(one, "--max-budget-usd") == "1.0"
     denied = [ln for ln in (ROOT / "hooks" / "brief_denied_tools.txt").read_text().splitlines() if ln and not ln.startswith("#")]
     assert flag(one, "--disallowedTools") == ",".join(denied) and "mcp__claude_ai_Gmail__send_message" in flag(one, "--disallowedTools")
-    for argv in (one, two):          # no transcript of the raw mail on disk; the operator's user hooks stay out of the run
-        assert "--no-session-persistence" in argv and flag(argv, "--setting-sources") == "project,local"
+    for argv in (one, two):          # no transcript of the raw mail on disk; --setting-sources would drop the claude.ai connectors
+        assert "--no-session-persistence" in argv and "--setting-sources" not in argv
+        assert flag(argv, "--settings") == str(ROOT / "hooks" / "brief-settings.json")      # disableAllHooks and the deny list
     assert flag(one, "--tools") == "ToolSearch" and "--strict-mcp-config" not in one          # connectors are account-level: strict would drop them
     assert one[-1].startswith("You are the read-only gatherer") and "--bare" not in one + two
+    assert one[-3] == "--max-budget-usd" and one[-2] == "1.0"      # the prompt follows a single-value flag, never a variadic tool list
     assert flag(two, "--tools") == "" and "--strict-mcp-config" in two and flag(two, "--max-turns") == "1" and flag(two, "--model") == "claude-sonnet-5-5"
     assert flag(two, "--system-prompt").startswith("You write a calm morning brief") and "--allowedTools" not in two
     for stage in ("stage1", "stage2"):

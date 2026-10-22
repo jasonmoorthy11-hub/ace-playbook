@@ -1,4 +1,4 @@
-"""`hooks/brief_guard.py`: the brief's PreToolUse deny hook (second of three read-only controls; docs/design/compiler.md 8.x)."""
+"""`hooks/brief_guard.py`: a deny-by-default PreToolUse hook, tested but NOT run by the brief (disableAllHooks; docs/design/compiler.md 8.x)."""
 
 import json
 import os
@@ -85,12 +85,9 @@ def test_hard_mode_exits_2_with_the_reason_on_stderr_and_nothing_on_stdout():
     assert guard(call("mcp__claude_ai_Gmail__get_thread"), "--hard") == (0, "", "")
 
 
-def test_the_settings_file_parses_wires_the_guard_to_every_tool_and_denies_writes():
+def test_the_settings_file_disables_all_hooks_has_no_hooks_block_and_denies_writes():
     s = json.loads((ROOT / "hooks" / "brief-settings.json").read_text())
-    (entry,) = s["hooks"]["PreToolUse"]
-    assert entry["matcher"] == "" and entry["hooks"][0]["type"] == "command" and entry["hooks"][0]["timeout"] == 30   # cold python3
-    cmd = entry["hooks"][0]["command"]
-    assert cmd.startswith('python3 -I -S "$ACE_PLAYBOOK_REPO/hooks/brief_guard.py"') and cmd.endswith("|| exit 2")   # a crash blocks too
+    assert s["disableAllHooks"] is True and "hooks" not in s and set(s) == {"disableAllHooks", "permissions"}   # the guard does not run here
     builtin = ["Bash", "Edit", "Write", "WebFetch", "WebSearch", "Agent", "Read", "Glob", "Grep", "LS", "NotebookRead", "MultiEdit",
                "NotebookEdit", "Task"]
     denied = [ln.strip() for ln in (ROOT / "hooks" / "brief_denied_tools.txt").read_text().splitlines() if ln.strip() and ln[0] != "#"]

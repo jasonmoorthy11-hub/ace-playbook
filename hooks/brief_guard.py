@@ -1,4 +1,5 @@
-"""PreToolUse deny hook of the brief (read-only principal). Stdlib json only; run as `python3 -I -S brief_guard.py [--hard]`.
+"""PreToolUse deny hook for a read-only principal that runs with hooks.
+NOT active in hooks/brief.sh, whose settings set disableAllHooks. Stdlib json only; run as `python3 -I -S brief_guard.py [--hard]`.
 
 Deny by default: reads the hook JSON on stdin and allows ONLY a tool whose exact name is listed in hooks/brief_allowed_tools.txt
 (override: $ACE_BRIEF_ALLOWLIST), whether it is an `mcp__*` connector tool or a built-in. Everything else is denied (prints the deny JSON,

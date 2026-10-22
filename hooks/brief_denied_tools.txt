@@ -1,7 +1,8 @@
-# Connector tools the brief must never reach: one rule per line, `#` starts a comment. Third control (the backstop): hooks/brief.sh passes this
+# Connector tools the brief must never reach: one rule per line, `#` starts a comment. The brief's deny control: hooks/brief.sh passes this
 # list to stage 1 as --disallowedTools and hooks/brief-settings.json repeats it in permissions.deny (a test keeps the two equal). A
 # `mcp__<server>` line is Claude Code's whole-server rule; the three servers the brief reads need explicit write tools because the read
-# tools of the same server are allowed. A new connector write tool is still stopped by the allowlist and the deny-by-default guard.
+# tools of the same server are allowed. A new connector write tool is still stopped by --tools/--allowedTools
+# and the non-interactive -p denial of anything unlisted.
 mcp__claude_ai_Gmail__apply_sensitive_message_label
 mcp__claude_ai_Gmail__apply_sensitive_thread_label
 mcp__claude_ai_Gmail__create_draft

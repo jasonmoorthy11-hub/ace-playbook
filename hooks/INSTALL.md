@@ -445,11 +445,13 @@ launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.example.ace-b
 
 Remove it with `launchctl bootout "gui/$(id -u)/com.example.ace-brief"`, delete the `dofile` line and `brew uninstall` what you added.
 
-**What phase 0 measured.** Your own `~/.claude` hooks fire inside every plain `claude -p` run (six SessionStart events per probe), so
-`brief.sh` passes `--setting-sources project,local`: the claude.ai connectors still load (probed: 9 MCP servers, 328 tools) and no user
-hook fires; `--settings` still adds the brief's own guard. `--allowedTools` does not shrink the prompt: all connector tool definitions
-still load, about 140k cached input tokens per stage-1 run (about 52k created plus 91k read in the measured run); stage 2 loads none.
-The model was seen calling only the allowed tools.
+**What phase 0 measured.** Your own `~/.claude` hooks fire inside every plain `claude -p` run (six SessionStart events per probe).
+`brief-settings.json` therefore sets `disableAllHooks` (probed: the connectors still load, no hook starts). `--setting-sources` cannot do
+this job: it drops the claude.ai connectors too (probed 2026-10-22). A side effect is that a PreToolUse guard cannot run in the brief:
+`hooks/brief_guard.py` is not active there (it is kept for principals that run with hooks); the brief relies on tool scoping and deny
+lists, not on a hook. `--allowedTools` does not shrink the prompt: all connector tool definitions still load, about 140k cached input
+tokens per stage-1 run (about 52k created plus 91k read in the measured run); stage 2 loads none. The model was seen calling only the
+allowed tools, and asking for a denied one (a mail send) got "not available".
 
 **Sessions.** Both stages pass `--no-session-persistence`, so no session transcript is written: without it Claude Code would store every
 raw mail result under `~/.claude/projects/` where the nightly reflect sweep reads transcripts. Probed: a run creates only an empty
@@ -459,6 +461,8 @@ raw mail result under `~/.claude/projects/` where the nightly reflect sweep read
 `hooks/brief_allowed_tools.txt`, and `--disallowedTools` from `hooks/brief_denied_tools.txt` (the connector write tools by full name and
 the other connectors as whole servers; `hooks/brief-settings.json` repeats the list in `permissions.deny` and a test keeps them equal).
 It cannot use `--strict-mcp-config`, because the claude.ai connectors are account-level and cannot be named in an mcp-config file.
+The prompt is always the last argument, after a single-value flag, because `--tools`, `--allowedTools` and `--disallowedTools` take
+a variadic list that would swallow a positional prompt.
 Links on the page are limited to `mail.google.com`, `calendar.google.com` and `linear.app` (constant `LINK_HOSTS` in
 `compile/brief_render.py`): a link is an outbound channel, so any other URL in the brief is dropped.
 

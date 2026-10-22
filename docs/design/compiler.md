@@ -1079,19 +1079,20 @@ ABSENT tuple, `__main__.py` is untouched (the brief has its own entry point, `py
 metrics, report, status, seal or the detectors changed.
 
 - **Principals and controls.** A read-only principal (it reads calendar, mail and Linear; it has no write tool and no outbound channel).
-  Three controls with different jobs: (1) scope: stage 1 passes `--tools ToolSearch` (no built-in file or shell tool loads) and
-  `--allowedTools` built from `hooks/brief_allowed_tools.txt`; (2) the hard control, a PreToolUse hook, `hooks/brief_guard.py`
-  (`python3 -I -S`, stdlib json), deny-by-default (any tool, connector or built-in, not named on that file is denied) and denying on any
-  parse or read error; the `--settings` file runs it as `... || exit 2` so a crashed guard blocks too, with a 30 s timeout (cold python3),
-  because Claude Code treats a hook TIMEOUT as non-blocking; `--hard` mode exits 2 instead of printing the deny JSON; (3) the backstop for
-  connector writes: `hooks/brief_denied_tools.txt` (every write tool of Gmail, Google Calendar and Linear by full name, every other connector as
-  a whole `mcp__<server>` rule) as `--disallowedTools` and, with the built-in file, shell and web tools, as the settings file's
-  `permissions.deny` (a test keeps them equal). Stage 1 does not pass `--strict-mcp-config`: the claude.ai connectors are account-level and
-  cannot be named in an mcp-config file, so strict mode would remove them. Both stages pass `--no-session-persistence` (probed: no `.jsonl`
-  transcript is written, only an empty `~/.claude/projects/<cwd slug>/memory/` directory, so the reflect sweep finds no raw mail) and
-  `--setting-sources project,local` (probed: the connectors still load, no user hook fires). Every `claude -p` call passes an explicit
-  model (`brief_model`, `brief_model_stage2`, default `claude-sonnet-5-5`), runs as `env -u ANTHROPIC_API_KEY -u CLAUDECODE`, from an empty
-  private directory (`brief_dir/run/cwd`), and never passes `--bare`.
+  Controls, in order: (1) `--tools ToolSearch` (no built-in file, shell or web tool loads); (2) `--allowedTools` built from
+  `hooks/brief_allowed_tools.txt`; (3) `hooks/brief_denied_tools.txt` (every write tool of Gmail, Google Calendar and Linear by full name,
+  every other connector as a whole `mcp__<server>` rule) as `--disallowedTools` and, with the built-in file, shell and web tools, as the
+  settings file's `permissions.deny` (a test keeps them equal; a denied tool is hidden from the model); (4) `-p` is non-interactive, so an
+  unlisted tool is denied, not asked; (5) `--no-session-persistence` on both stages (probed: no `.jsonl` transcript is written, only an
+  empty `~/.claude/projects/<cwd slug>/memory/` directory, so the reflect sweep finds no raw mail); (6) `disableAllHooks` in
+  `hooks/brief-settings.json`, which keeps the operator's own hooks out of the run. The PreToolUse guard (`hooks/brief_guard.py`, deny by
+  default, fails closed, still tested) is not active in the brief because `disableAllHooks` is required to keep the operator's hooks out;
+  it is kept for principals that run with hooks. So the brief relies on tool scoping and deny lists, not on a hook, and cannot use
+  `--setting-sources` (it drops the claude.ai connectors, probed 2026-10-22) or, in stage 1, `--strict-mcp-config` (the connectors are
+  account-level and cannot be named in an mcp-config file). `--tools`, `--allowedTools` and `--disallowedTools` are variadic, so the prompt
+  is always the last argument after `--max-budget-usd <n>`. Every `claude -p` call passes an explicit model (`brief_model`,
+  `brief_model_stage2`, default `claude-sonnet-5-5`), runs as `env -u ANTHROPIC_API_KEY -u CLAUDECODE`, from an empty private directory
+  (`brief_dir/run/cwd`), and never passes `--bare`.
 - **Two stages.** Stage 1 (tools) reads and answers with one JSON digest (`calendar`, `mail`, `issues`). `digest-apply` validates the schema
   (strings capped, control and format characters stripped, unknown keys dropped; a brief with other than 3 acts or more than 25
   items in a list is refused, not truncated) and applies the private exclusion list by code; the result is

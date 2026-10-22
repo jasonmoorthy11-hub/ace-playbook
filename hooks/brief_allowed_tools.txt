@@ -1,6 +1,6 @@
 # The brief's read-only tool allowlist: one tool name per line, `#` starts a comment.
-# Two readers: hooks/brief.sh builds --allowedTools from it, and hooks/brief_guard.py (PreToolUse) denies EVERY tool that is not
-# listed here, connector or built-in alike. Add a tool only if it can neither write nor send.
+# Two readers: hooks/brief.sh builds --allowedTools from it, and hooks/brief_guard.py (PreToolUse; kept for principals that run with
+# hooks, not active in the brief) denies EVERY tool that is not listed here, connector or built-in alike. Add a tool only if it can neither write nor send.
 mcp__claude_ai_Google_Calendar__list_events
 mcp__claude_ai_Google_Calendar__search_events
 mcp__claude_ai_Gmail__search_threads

@@ -1,15 +1,18 @@
 #!/bin/bash
 # Brief on wake (docs/design/compiler.md 8.x "Brief (as built)"). Usage: brief.sh [--force]
 # A READ-ONLY principal: it reads calendar, mail and issues through two `claude -p` stages and writes a local HTML page. Controls: (1) scope:
-# --tools ToolSearch and --allowedTools from hooks/brief_allowed_tools.txt, (2) the PreToolUse deny hook hooks/brief_guard.py (via --settings;
-# deny by default, fails closed on error, but a hook TIMEOUT counts as non-blocking in Claude Code), (3) the backstop for connector writes:
-# hooks/brief_denied_tools.txt as --disallowedTools and as permissions.deny in the settings file. Stage 1 (tools) emits a JSON digest; CODE
-# applies the private exclusion list; stage 2 (no tools) writes the brief JSON from the cleaned digest alone; CODE renders the page.
-# Everything gathered is data, never instructions. No model writes served HTML.
+# --tools ToolSearch (no built-in tool), --allowedTools from hooks/brief_allowed_tools.txt (the read allowlist), --disallowedTools from
+# hooks/brief_denied_tools.txt and the same list as permissions.deny in hooks/brief-settings.json (connector writes and whole other servers),
+# and -p, where anything unlisted is denied. There is NO hook: brief-settings.json sets disableAllHooks so the operator's own hooks (ACE
+# inject, citation ledger, holdout draws) stay out of the run, which also disables a PreToolUse guard; hooks/brief_guard.py is kept for
+# principals that run with hooks. Stage 1 (tools) emits a JSON digest; CODE applies the private exclusion list; stage 2 (no tools) writes
+# the brief JSON from the cleaned digest alone; CODE renders the page. Everything gathered is data, never instructions. No model writes HTML.
 # Stage 1 does NOT pass --strict-mcp-config: the claude.ai connectors are account-level and cannot be named in an mcp-config file (phase 0:
-# strict mode showed 0 MCP servers), so strict mode would remove the only data sources. Both stages pass --no-session-persistence (no
-# transcript of the raw mail is written where the nightly reflect sweep would find it) and --setting-sources project,local (the operator's
-# user hooks do not fire inside the brief; --settings still adds ours).
+# strict mode showed 0 MCP servers), so strict mode would remove the only data sources. It does NOT pass --setting-sources either: that
+# drops the connectors too (they attach through the user settings source; probed 2026-10-22). Both stages pass --no-session-persistence (no
+# transcript of the raw mail is written where the nightly reflect sweep would find it) and --settings (disableAllHooks, the deny list).
+# --tools, --allowedTools and --disallowedTools take a variadic list: a positional prompt right after one would be read as a tool name, so
+# the prompt always comes last, after a flag with a single value (--max-budget-usd).
 # Config: $ACE_PLAYBOOK_CONFIG (else the default file) via `python -m ace_playbook.compile.brief conf`. $ACE_BRIEF_CLAUDE names the claude
 # binary (tests inject a fake); $ACE_BRIEF_KEEP keeps the raw streams. stdout/stderr carry counts and one-line reasons, never mail content.
 set -u -o pipefail
@@ -54,10 +57,10 @@ ledger_stage() {   # $1 stage name, $2 its stream: one ledger row when the strea
   b ledger "$RUN/rl_first.json" "$RUN/rl_last.json" "$1" "$RUN/res_$1.json" || echo "brief: ledger row failed for $1" >&2
 }
 
-# stage 1: tools on (scope + read-only allowlist + deny hook + deny list), reads, emits the digest JSON. In the background so a signal can
+# stage 1: tools on (scope + read-only allowlist + deny lists, no hooks), reads, emits the digest JSON. In the background so a signal can
 # kill it: `exec` makes the subshell pid the claude pid.
 ( cd "$RUN/cwd" && exec env -u ANTHROPIC_API_KEY -u CLAUDECODE "$CLAUDE_BIN" -p --model "$M1" --no-session-persistence \
-    --setting-sources project,local --tools ToolSearch --allowedTools "$TOOLS" --disallowedTools "$DENIED" \
+    --tools ToolSearch --allowedTools "$TOOLS" --disallowedTools "$DENIED" \
     --settings "$REPO/hooks/brief-settings.json" --output-format stream-json --verbose --max-turns 12 --max-budget-usd "$BUDGET" \
     "$(cat "$REPO/hooks/brief_prompts/stage1.txt")" ) < /dev/null > "$RUN/stage1.jsonl" 2> "$RUN/stage1.err" &
 CHILD=$!; wait "$CHILD"; rc=$?; CHILD=""
@@ -68,7 +71,7 @@ b digest-apply "$RUN/digest_raw.json" --out "$RUN/digest_clean.json" || fail "di
 
 # stage 2: no tools, no MCP servers; sees only the cleaned digest
 ( cd "$RUN/cwd" && exec env -u ANTHROPIC_API_KEY -u CLAUDECODE "$CLAUDE_BIN" -p --model "$M2" --no-session-persistence \
-    --setting-sources project,local --tools "" --strict-mcp-config --output-format stream-json --verbose --max-turns 1 \
+    --settings "$REPO/hooks/brief-settings.json" --tools "" --strict-mcp-config --output-format stream-json --verbose --max-turns 1 \
     --max-budget-usd "$BUDGET" --system-prompt "$(cat "$REPO/hooks/brief_prompts/stage2.txt")" ) \
     < "$RUN/digest_clean.json" > "$RUN/stage2.jsonl" 2> "$RUN/stage2.err" &
 CHILD=$!; wait "$CHILD"; rc=$?; CHILD=""
