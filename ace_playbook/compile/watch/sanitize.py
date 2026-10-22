@@ -25,8 +25,11 @@ from the source (`mdrules`); `definitions=True` on an HTML page (`fetch` sets it
 VISIBLE text only, never from the raw markup. The rules of `<style>` come from a first parser pass over the real style elements
 (`stylepass.style_text`) UNIONED with a plain scan for `<style ... </style` (`stylepass.style_rules`: over-hiding, for pages that
 html.parser and a browser tokenize differently), the visible text from a second parser pass. A comment ends where a browser ends it
-(`<!-->`, `<!--->`, `-->`, `--!>`: `htmlrules.ScriptedParser`). Inside `<svg>` and `<math>` no implied end tag happens, except after a
-breakout tag (`treerules`). The result is plain text, one non-empty line per block.
+(`<!-->`, `<!--->`, `-->`, `--!>`: `htmlrules.ScriptedParser`); so does `<![CDATA[` in HTML content: a bogus comment that ends at the
+first `>` (a real section to `]]>` only in svg or math), and `<noscript>` is raw text, as in a browser with scripting on. Inside `<svg>` and
+`<math>` no implied end tag happens, except after a breakout tag (`treerules`). A `<table>` closes an open `<p>` only in standards mode, which
+is a FIRST doctype `html` (`<!DOCTYPE html>`, optionally with `SYSTEM "about:legacy-compat"`) before any tag or text; a late, legacy or
+second doctype, or none, is quirks mode (fail closed). The result is plain text, one non-empty line per block.
 Stdlib only.
 """
 
@@ -42,6 +45,7 @@ from .stylepass import style_rules, style_text  # noqa: F401 - style_text is par
 from .treerules import implied, marks
 
 SPACES = re.compile(r"[ \t\r\f\v\xa0]+")
+STANDARDS = re.compile(r"doctype[\t\n\f\r ]+html(?:[\t\n\f\r ]+system[\t\n\f\r ]+(?:\"about:legacy-compat\"|'about:legacy-compat'))?[\t\n\f\r ]*", re.I)
 ROOT_HIDING = frozenset(("html", "body", "*"))
 
 
@@ -58,6 +62,7 @@ class _Text(ScriptedParser):
         self.open: dict[str, int] = {}                             # tag -> how many are on the stack: an end tag with none is skipped in O(1)
         self.classes, self.ids, self.tags = rules
         self.dead = False                                         # the document itself is hidden (html/body) or a shadow host: no text at all
+        self.standards, self.fresh = False, True                  # standards mode (a leading `<!DOCTYPE html>`, else quirks); nothing but blanks seen yet
 
     def _push(self, tag: str, hid: bool, own: bool) -> None:
         self.stack.append([tag, hid, own, len(self.out), marks(self.stack[-1][4] if self.stack else None, tag, len(self.stack))])
@@ -79,6 +84,15 @@ class _Text(ScriptedParser):
     def _hidden(self) -> bool:
         return bool(self.stack) and self.stack[-1][1]
 
+    def foreign(self) -> bool:
+        return bool(self.stack) and self.stack[-1][4][5] >= 0       # the top element is inside a run of svg / math elements
+
+    def handle_decl(self, decl) -> None:
+        """Only the FIRST doctype, before any tag or text, and only `html` (with an optional legacy-compat SYSTEM id) is standards mode; a
+        late, a legacy or a second doctype leaves (or makes) it quirks, where a `<table>` does not close a `<p>` (fail closed)."""
+        self.standards = self.fresh and STANDARDS.fullmatch(decl) is not None
+        self.fresh = False
+
     def _own(self, tag: str, attrs: list) -> bool:
         names = {k for k, _ in attrs}
         values = {k: (v or "") for k, v in reversed(attrs)}
@@ -88,7 +102,8 @@ class _Text(ScriptedParser):
                     or tag in self.tags or values.get("id", "").lower() in self.ids or self.classes & set(values.get("class", "").lower().split()))
 
     def handle_starttag(self, tag, attrs) -> None:
-        while not self.open.get("select") and (i := implied(self.stack[-1][4] if self.stack else None, tag, attrs)) is not None:
+        self.fresh = False
+        while not self.open.get("select") and (i := implied(self.stack[-1][4] if self.stack else None, tag, attrs, self.standards)) is not None:
             self._pop(i)                                            # a select drops start tags: nothing is implied inside one
         own = self._own(tag, attrs)
         hid = self._hidden() or own
@@ -110,6 +125,7 @@ class _Text(ScriptedParser):
         self.out.append("\n" if tag in BLOCK and not hid else "")
 
     def handle_endtag(self, tag) -> None:
+        self.fresh = False
         if self.script_stays_open(tag) or not self.open.get(tag):
             return
         i = next(i for i in range(len(self.stack) - 1, -1, -1) if self.stack[i][0] == tag)
@@ -118,6 +134,7 @@ class _Text(ScriptedParser):
 
     def handle_data(self, data) -> None:
         super().handle_data(data)
+        self.fresh = self.fresh and not data.strip(" \t\n\f\r")
         if not self._hidden():
             self.out.append(data)
 

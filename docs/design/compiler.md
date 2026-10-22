@@ -1050,8 +1050,8 @@ line carries that night's health), refreshes `status.json` for the status line a
 
 The watcher of design `2026-10-21-ace-watcher-and-cockpit` (phase 1, W1) is `compile/watch/`: a model-free configuration watcher that
 PROPOSES and never applies. It is the one network-using package of ace-playbook and is never on the hook path: `watch`, `fetch`,
-`inventory`, `match`, `store`, `summary` and the helper modules `chars`, `fsio`, `cssstyle`, `htmlrules`, `mdrules`, `stylepass`,
-`treerules`, `records`, `pin` and `reconcile` are in the `ABSENT` tuple of `tests/test_hook_conformance.py`. `status.py` imports only
+`inventory`, `match`, `store`, `summary` and the helper modules `chars`, `fsio`, `cssstyle`, `cssscan`, `htmlrules`, `mdrules`,
+`stylepass`, `treerules`, `records`, `pin` and `reconcile` are in the `ABSENT` tuple of `tests/test_hook_conformance.py`. `status.py` imports only
 `watch.summary` (a pure read, no network import); `__main__` imports the light `watch.cli`, which loads `scan`, `fetch` and `inventory` only
 when a scan runs (tested in `tests/test_compile_watch_cli.py`).
 
@@ -1094,19 +1094,30 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   script string, comment, attribute, `<textarea>`, `<title>` or a custom element `<style-x>` hides no rule in this pass (it is skipped when
   the page has no `<style`). `stylepass.style_rules` unions those rules with the ones of a plain linear scan for `<style ... </style`
   (`scan_text`, fake openers included, so it can only add rules), because html.parser and a browser tokenize some pages differently (a
-  CDATA section, a bogus comment); `cssstyle.css_rules` reads the braces in one linear pass. Comments end where a browser ends them
+  CDATA section in svg, a bogus comment); `cssstyle.css_rules` reads the braces in one linear pass (`cssscan.py`: braces, semicolons and
+  comment openers inside CSS strings, escapes and unquoted `url(...)` do not count; a rule with nested blocks is read with them cut out and the
+  nested rules on their own; a rule open at the end applies; CSS escapes in a selector are decoded and the list splits on unescaped commas
+  only). `<![CDATA[` (any `<![`) is a bogus comment that ends at the first `>` in HTML content, a real section to `]]>` only when the top
+  open element is inside a run of svg / math elements (`ScriptedParser.parse_html_declaration` and `foreign()`; `_support_cdata` is off so the
+  EOF path agrees); `noscript` is raw text in both passes (`CDATA_CONTENT_ELEMENTS`, also for `<noscript/>`) and stays in the skipped set.
+  `treerules.implied(..., standards)` lets a `<table>` close an open `<p>` only in standards mode: `_Text.handle_decl` takes it from a FIRST
+  `<!DOCTYPE html>` (optionally `SYSTEM "about:legacy-compat"`) before any tag or non-blank text; none, a late, legacy or second doctype is
+  quirks (fail closed). Comments end where a browser ends them
   (`<!-->`, `<!--->`, `-->`, `--!>`) on every patch release: `htmlrules.ScriptedParser.parse_comment` overrides the stdlib's (which pairs
   an abrupt `<!-->` with a later `-->`) for both passes; the page is not rewritten, because `--!>` ends nothing in script data, an
   attribute value or RCDATA. In Markdown a `===`, `=` or `--` line with no paragraph open is paragraph text (the paragraph flag of
-  `mdrules.scan` stays set); only a heading, a thematic break or a setext underline under an open paragraph ends it. The text and tails inside
+  `mdrules.scan` stays set); only a heading, a thematic break or a setext underline under an open paragraph ends it, and such a line inside
+  a quote or a list item is a lazy continuation, not an underline (the `cont` flag: set by a `>` or list-marker line, kept over blank and
+  indented lines, cleared by an unindented non-marker line after a blank line or by an unindented heading or thematic break). The text and tails inside
   a child element of an XHTML feed field are HTML-escaped before the sanitizer sees them (only the field's own text stays raw), so an
   escaped closer there cannot close a hidden ancestor. The npm `latest` must be an ASCII version (`[0-9]+.[0-9]+.[0-9]+` with an optional
   `-` or `+` suffix of at most 40 `[0-9A-Za-z.-]`), else the fetch is a `parse` drop.
   Helpers: `chars.py` (every Default_Ignorable_Code_Point, the format characters and the control characters, shared by the sanitizer, the
   store and the record cleaner), `cssstyle.py` (the
-  inline-style normaliser and the simple single-selector `<style>` rules, read in one linear pass over the braces with the legacy `<!--`
-  and `-->` tokens ignored; media queries, descendant or attribute selectors and external stylesheets are not handled, see
-  LIMITATIONS.md), `fsio.py` (private atomic write with a unique O_EXCL temporary name, the scan lock).
+  inline-style normaliser and the simple single-selector `<style>` rules, with the legacy `<!--` and `-->` tokens ignored; media queries,
+  descendant or attribute selectors and external stylesheets are not handled, see LIMITATIONS.md), `cssscan.py` (the string-, escape- and
+  url-aware brace scanner, comment stripper, nested-block reader and selector decoder that `cssstyle` uses), `fsio.py` (private atomic
+  write with a unique O_EXCL temporary name, the scan lock).
 - `netguard.py`: the SSRF guard. A host that is, or resolves to, a loopback, link-local, private, multicast or reserved address is dropped
   (`address`) before any request; a redirect is followed only to the same scheme, host and port, at most three hops, with no userinfo in the
   URL, and is dropped (`redirect`) otherwise. The DNS answer can change between the check and the connect (rebinding); the address is checked

@@ -10,16 +10,19 @@ alpha 0); a width or height of 1px or less (zero in any unit) with overflow hidd
 position absolute or fixed far off-screen; a far negative margin or text-indent. "Far" is -500px (or pt, or no unit), -20em, rem or ch,
 and -100%, vw or vh.
 
-`css_rules(css)` reads `<style>` text in one linear pass over its braces (the legacy `<!--` and `-->` tokens ignored, as CSS does): only
-rules whose selector is a single `.class`, `#id`, `tag` or `*` and whose body hides count; rules inside at-rules (media queries) and every
-other selector (descendant, child, attribute, pseudo-class) are NOT handled, nor are external stylesheets (docs: LIMITATIONS.md).
+`css_rules(css)` reads `<style>` text with `cssscan` in one linear pass over its braces (braces in strings, escapes and urls do not count;
+a rule with nested blocks is read without them and the nested rules on their own; an unclosed rule applies; the legacy `<!--` and `-->`
+tokens ignored, as CSS does): only rules whose selector is a single `.class`, `#id`, `tag` or `*` (CSS escapes decoded) and whose body hides
+count; rules inside at-rules (media queries) and every other selector (descendant, child, attribute, pseudo-class) are NOT handled, nor are
+external stylesheets (docs: LIMITATIONS.md).
 """
 
 from __future__ import annotations
 
 import re
 
-CSS_COMMENT, CSS_ESCAPE = re.compile(r"/\*.*?(?:\*/|$)", re.S), re.compile(r"\\([0-9a-fA-F]{1,6})[ \t\r\n\f]?|\\(.)", re.S)
+from .cssscan import rules, simple_selectors, strip_comments, unescape
+
 NUMBER = re.compile(r"([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)([a-z%]*)")
 SCALE = re.compile(r"scale(?:3d|x|y|z)?\(([^)]*)\)")
 INSET = re.compile(r"inset\(([^)]*)\)")
@@ -30,16 +33,6 @@ COLOR_FN = re.compile(r"(?:rgb|rgba|hsl|hsla)\((.*)\)")
 HEX_CLEAR = re.compile(r"#[0-9a-f]{3}0|#[0-9a-f]{6}00")
 FAR = {"px": 500, "pt": 500, "": 500, "em": 20, "rem": 20, "ch": 20, "vw": 100, "vh": 100, "%": 100}
 TINY = {"px": 1, "pt": 0.75, "em": 0.0625, "rem": 0.0625, "ex": 0.125, "ch": 0.125, "%": 6.25, "vw": 0.1, "vh": 0.1}
-TOKEN, AT_START = re.compile(r"[{};]"), re.compile(r"\s*@")
-SIMPLE = re.compile(r"\.[\w-]+|#[\w-]+|[A-Za-z][\w-]*|\*")
-MAX_NESTING = 512
-
-
-def _unescape(m: re.Match) -> str:
-    if m.group(1):
-        n = int(m.group(1), 16)
-        return chr(n) if 0 < n <= 0x10FFFF and not 0xD800 <= n <= 0xDFFF else ""
-    return m.group(2)
 
 
 def _num(value: str) -> tuple[float, str] | None:
@@ -95,7 +88,7 @@ def _clear(value: str) -> bool:
 
 
 def _declarations(style: str) -> list[tuple[str, str]]:
-    s = CSS_ESCAPE.sub(_unescape, CSS_COMMENT.sub("", style.replace("\x00", ""))).lower()
+    s = unescape(strip_comments(style.replace("\x00", ""))).lower()
     out = []
     for d in re.sub(r"\s*!\s*important", "", s).split(";"):
         k, _, v = d.partition(":")
@@ -128,49 +121,12 @@ def style_hidden(style: str) -> bool:
         away and any(k in ("left", "top", "right", "bottom") and _far(v) for k, v in decls))
 
 
-def _rules(css: str) -> list[tuple[str, str]]:
-    """(selectors, body) of each plain rule of `css`, in ONE linear pass over its braces: not inside a CLOSED at-rule block (a media query)
-    and with no block inside its own body (a nested rule is read as a rule of its own, as before). `@import x;` ends at its semicolon.
-    Blocks nested past MAX_NESTING are counted and skipped."""
-    found: list[tuple[str, str]] = []
-    stack: list[list] = []                    # [prelude, index of its "{", a plain block opened inside it, len(found) when it opened]
-    start, head, extra = 0, None, 0           # head: does the text since `start` begin with "@" (None: not looked at yet)
-    for m in TOKEN.finditer(css):
-        ch, i = m.group(), m.start()
-        if ch == ";":
-            if not stack:
-                head = AT_START.match(css, start) is not None if head is None else head
-                start, head = (i + 1, None) if head else (start, head)
-        elif ch == "{":
-            prelude = css[start:i]
-            if stack and "@" not in prelude.rpartition(";")[2]:
-                stack[-1][2] = True
-            if len(stack) < MAX_NESTING:
-                stack.append([prelude, i, False, len(found)])
-            else:
-                extra += 1                        # a block nested past the cap is never read as a rule
-            start, head = i + 1, None
-        else:
-            if extra:
-                extra -= 1
-            elif stack:
-                prelude, at, nested, mark = stack.pop()
-                if "@" in prelude.rpartition(";")[2]:
-                    del found[mark:]                  # the rules inside a closed at-rule are not handled
-                elif not nested:
-                    found.append((prelude, css[at + 1:i]))
-            start, head = i + 1, None
-    return found
-
-
 def css_rules(css: str) -> tuple[frozenset, frozenset, frozenset]:
     """(classes, ids, tags) named by the simple hiding rules of `css`, lower-cased (quirks mode matches class and id names without case)."""
     classes, ids, tags = set(), set(), set()
-    css = CSS_COMMENT.sub("", css).replace("<!--", " ").replace("-->", " ")                  # the legacy CDO / CDC tokens are ignored by CSS
-    for selectors, body in _rules(css):
-        if not style_hidden(body):
-            continue
-        for sel in (s.strip() for s in selectors.split(",")):
-            if SIMPLE.fullmatch(sel):
-                (classes if sel[0] == "." else ids if sel[0] == "#" else tags).add(sel[1:].lower() if sel[0] in ".#" else sel.lower())
+    css = strip_comments(css).replace("<!--", " ").replace("-->", " ")                       # the legacy CDO / CDC tokens are ignored by CSS
+    for selectors, body in rules(css):
+        if style_hidden(body):
+            for prefix, name in simple_selectors(selectors):
+                (classes if prefix == "." else ids if prefix == "#" else tags).add(name)
     return frozenset(classes), frozenset(ids), frozenset(tags)

@@ -14,8 +14,9 @@ a hidden element is involved the same rules apply and anything doubtful keeps th
   The state machine of the HTML tokenizer is run over the script text instead: a `</script` seen in the double-escaped state does not
   close the element.
 * `ScriptedParser`: the html.parser subclass that both passes of `sanitize` (the style text of `stylepass`, the visible text) share, so
-  they tokenize alike: a slash on `<script/>` or `<style/>` is ignored, a double-escaped script keeps its next `</script` as text and a
-  comment ends at `<!-->`, `<!--->`, `-->` or `--!>`.
+  they tokenize alike: a slash on `<script/>`, `<style/>` or `<noscript/>` is ignored, `noscript` is raw text (a browser with scripting on),
+  a double-escaped script keeps its next `</script` as text, a comment ends at `<!-->`, `<!--->`, `-->` or `--!>`, and `<![CDATA[` is a
+  bogus comment that ends at the first `>` (any `<![` is), except in foreign content (`foreign()`), where it runs to `]]>`.
 * `MAX_DEPTH`: the open-element stack is capped; a document nested deeper is a parse failure (`TooDeep`), not a quadratic scan.
 """
 
@@ -91,10 +92,14 @@ class ScriptState:
 
 class ScriptedParser(HTMLParser):
     """An HTMLParser that reads `<script>` the way a browser does (see the module docstring). A subclass sets `self.script =
-    ScriptState()` when it sees the start tag, asks `script_stays_open(tag)` first in `handle_endtag` and calls `super().handle_data`."""
+    ScriptState()` when it sees the start tag, asks `script_stays_open(tag)` first in `handle_endtag`, calls `super().handle_data` and
+    overrides `foreign()` when it tracks the open elements."""
+
+    CDATA_CONTENT_ELEMENTS = (*HTMLParser.CDATA_CONTENT_ELEMENTS, "noscript")                   # raw text; noscript: a browser with scripting on
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
+        self._support_cdata = False                               # the EOF path of `goahead` must agree with `parse_html_declaration` below
         self.script: ScriptState | None = None                    # the script-data state of the open <script>
         self.again = False                                        # a `</script` inside a double-escaped script: stay in script mode
 
@@ -113,9 +118,27 @@ class ScriptedParser(HTMLParser):
             self.handle_comment("" if m else raw[i + 4:end.start()])
         return end.end()
 
+    def foreign(self) -> bool:
+        """True when the current node is a foreign (svg or math) element: a CDATA section is a real one there. A subclass that tracks the
+        open elements overrides this; the default (False) reads every `<![CDATA[` as a bogus comment, which only matters for what follows it."""
+        return False
+
+    def parse_html_declaration(self, i):
+        """`<![CDATA[`, `<![if x]>` and every other `<![` is a bogus comment that ends at the first `>` (a browser: markup declaration open
+        state), whatever the patch release of html.parser; only in foreign content is `<![CDATA[` a section that ends at `]]>`."""
+        raw = self.rawdata
+        if not raw.startswith("<![", i):
+            return super().parse_html_declaration(i)
+        real = raw.startswith("<![CDATA[", i) and self.foreign()
+        end = raw.find("]]>" if real else ">", i + 3)
+        if end < 0:
+            return -1
+        self.handle_comment(raw[i + 2:end])
+        return end + (3 if real else 1)
+
     def handle_startendtag(self, tag, attrs) -> None:
         self.handle_starttag(tag, attrs)                            # a browser ignores the slash on a non-void element
-        if tag in ("script", "style"):
+        if tag in ("script", "style", "noscript"):
             self.set_cdata_mode(tag)
 
     def clear_cdata_mode(self) -> None:

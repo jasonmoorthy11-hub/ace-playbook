@@ -6,9 +6,9 @@ attribute value, a `<textarea>` or `<title>`, a custom element `<style-x>`): a f
 html.parser reads the page once with the same script rules as the second pass (`htmlrules.ScriptedParser`) and collects the character data
 of each `<style>` element, an unclosed one at the end of the page included (a browser applies it). Linear in the size of the page.
 
-The tokenizer is not the browser, though (a `<![CDATA[` section, a bogus comment and the like end at different places), so
-`style_rules` also applies the rules of a plain scan for `<style ... </style` (`scan_text`): a rule found by EITHER applies. The scan
-can only add rules (over-hiding), never remove one.
+The tokenizer is not the browser in every corner (a CDATA section in foreign content, a bogus comment and the like may still end at
+different places), so `style_rules` also applies the rules of a plain scan for `<style ... </style` (`scan_text`): a rule found by EITHER
+applies. The scan can only add rules (over-hiding), never remove one.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ class _Styles(ScriptedParser):
 def scan_text(src: str) -> str:
     """The text between every `<style` start tag and the next `</style`, found by a plain scan (an unclosed one runs to the end of the
     page), one per line. It reads fake `<style`s too, so it can only add rules: `style_rules` unions it with the tokenizer's, which
-    covers every page whose style html.parser and a browser tokenize differently (a CDATA section, a bogus comment, ...). Linear: the
+    covers every page whose style html.parser and a browser tokenize differently (a CDATA section in svg, a bogus comment, ...). Linear: the
     scan resumes after each closer, and ends at the first opener with no `>` or no closer."""
     parts: list[str] = []
     pos = 0

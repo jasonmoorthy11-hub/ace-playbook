@@ -180,9 +180,13 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   close them implicitly and neither does the sanitizer, which only hides more that way). Implied end tags ARE modelled for the elements
   where a missing one would unhide text: a block start tag (`div`, `ul`, `table`, `h1`, `hr`, `pre`, ... the whole `p`-closing set of the
   HTML tree builder) closes an open `<p>` that is in button scope, `<li>` closes an open `<li>` and `<dd>`/`<dt>` close an open
-  `<dd>`/`<dt>`, so `<p>a<div hidden></p>X</div>` keeps X hidden. Not modelled: foster parenting (text directly in a hidden `<table>`
-  is shown by a browser outside it, hidden here), the quirks-mode `table` that does not close a `p`, and every implied close that is
-  not listed. Document-level hiding is modelled: an `<html>` or `<body>` start tag (a late one too, a browser merges its attributes onto the root)
+  `<dd>`/`<dt>`, so `<p>a<div hidden></p>X</div>` keeps X hidden. A `<table>` closes an open `<p>` only in standards mode: the mode is
+  tracked from the doctype (`sanitize._Text.handle_decl`), and only a FIRST `<!DOCTYPE html>` (optionally with `SYSTEM "about:legacy-compat"`)
+  before any tag or non-blank text is standards; no doctype, a late, a legacy (HTML 4, XHTML) or a second one is quirks, where the table
+  nests in the paragraph (fail closed: `<p hidden><table>X` keeps X hidden, also on a legacy-doctype page that a browser reads in
+  standards mode and where X would show: over-hiding, the safe direction). Not modelled: foster parenting (text directly in a hidden `<table>`
+  is shown by a browser outside it, hidden here) and every implied close that is not listed. Document-level hiding is modelled: an `<html>`
+  or `<body>` start tag (a late one too, a browser merges its attributes onto the root)
   that hides, or a simple `<style>` rule that hides `html`, `body` or `*`, makes the whole body empty; `:root`, `html > body` and other
   selectors are NOT read. A `<template shadowrootmode=...>` hides every child of its host element, those before it too. A `<select>`
   hides ALL its option text (a browser shows the selected one), as do `<progress>` and `<meter>` fallbacks: over-hiding. Scope barriers:
@@ -194,17 +198,27 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   normal rules close the `<p>`/`<li>`. `foreignObject`, `desc`, `title`, `mi`, `mo`, `mn`, `ms`, `mtext` and `annotation-xml` (integration
   points, taken in either namespace, `annotation-xml` always) hold HTML again but are scope barriers: nothing implied, and no end tag,
   reaches past them (`<div hidden><svg><foreignObject></div>X` keeps X hidden). A self-closed `<svg/>` stays open here (over-hiding).
-  The tokenizer is html.parser's, not a browser's inside foreign content (`<style>`, `<script>`, `<title>` and CDATA sections of an
-  svg are read as in HTML: over-hiding at worst). A comment ends where a browser ends it, on every patch release of html.parser
+  The tokenizer is html.parser's, not a browser's inside foreign content (`<style>`, `<script>` and `<title>` of an svg are read as in
+  HTML: over-hiding at worst). `<![CDATA[` (and every other `<![`) is a bogus comment that ends at the FIRST `>` in HTML content, as in a
+  browser, whatever the patch release of html.parser (the stdlib's section ran to `]]>`, so `<![CDATA[><div hidden>]]>X</div>` showed X);
+  only when the current node is an `svg` or `math` element (not under an integration point) is it a real section that runs to `]]>`
+  (`htmlrules.ScriptedParser.parse_html_declaration`, `foreign()`). `<noscript>` is raw text, as in a browser with scripting on, so
+  `<div hidden><noscript></div>X</noscript>` keeps X hidden (it stays in the skipped set: its text is never shown; a browser with scripting
+  off would show it, which is the rarer reader). A comment ends where a browser ends it, on every patch release of html.parser
   (`<!-->`, `<!--->`, `-->`, `--!>`; the stdlib pairs an abrupt `<!-->` with a LATER `-->` and older releases ignore `--!>`):
   `htmlrules.ScriptedParser.parse_comment`, so a `<style>` behind such a comment is found. The rules of `<style>` come from a first
   parser pass over the REAL style elements (html.parser with the same script rules as the second pass) UNIONED with a plain scan for
-  `<style ... </style` (a rule found by either applies), so a page that html.parser and a browser tokenize differently (a CDATA section
-  or a bogus comment that ends at the first `>`) cannot hide a style. The scan reads fake `<style`s too (inside a script string,
+  `<style ... </style` (a rule found by either applies), so a page that html.parser and a browser tokenize differently (a CDATA section in svg,
+  an odd bogus comment) cannot hide a style. The scan reads fake `<style`s too (inside a script string,
   comment, attribute, `<textarea>`, `<title>`): their simple hiding rules apply as well, which only hides MORE (a CSS sample in a
   comment can hide the elements it names). An unclosed `<style>` at the end of the page applies to the elements before it; the legacy
-  `<!--` and `-->` tokens in a stylesheet are ignored as CSS does. The stylesheet is read in one linear pass over its braces (blocks nested more
-  than 512 deep are skipped; the rules inside a closed at-rule are not read, as before). The first pass depends on html.parser reading
+  `<!--` and `-->` tokens in a stylesheet are ignored as CSS does. The stylesheet is read in one linear pass over its braces (`cssscan.py`):
+  braces, semicolons and comment openers inside a CSS
+  string (`content:"{"`), after a backslash or in an unquoted `url(...)` do not count; a rule with nested blocks is read with the
+  nested blocks cut out of its body and the nested rules are read on their own as well (over-hiding: a browser matches them only inside the
+  parent); a rule or block still open at the end is closed there, as a browser does (`.h{display:none` applies); CSS escapes in a selector are
+  decoded (`.\68` is `.h`, `#\69 ` is `#i`) and a selector list is split on unescaped commas only (`.a\,b` is the one class `a,b`).
+  Blocks nested more than 512 deep are skipped; the rules inside a closed at-rule are not read, as before. The first pass depends on html.parser reading
   `<textarea>` and `<title>` as RCDATA (Python 3.12.15 and later patch releases; an older 3.12 reads a `<style` in them as a tag, which
   can only add a spurious rule). A double-escaped script closes only at a `</script` followed by an HTML space, `/` or `>`.
   Markdown pages (every Content-Type but `text/html`) are read with the HTML rules, because their site renders raw HTML. A raw-text opener
@@ -228,7 +242,11 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   fence, list item, thematic break or contains a `<` at its start. A definition line right after paragraph text is not a definition (a
   renderer shows it) and stays. A heading, a thematic break (`---`) or a setext underline under paragraph text ends the paragraph, but a
   `===`, `=` or `--` line with NO paragraph open is itself paragraph text, so a definition after it stays too (its tags keep their HTML
-  meaning; a lone `-` is also read as text: over-hiding).
+  meaning; a lone `-` is also read as text: over-hiding). The same holds INSIDE a quote or a list item: there such a line is a lazy
+  continuation of the paragraph, never a setext underline (`> foo` then `===`), so the definition after it stays. The container flag is set
+  by a `>` or a list-marker line, kept over blank and indented lines and cleared by an unindented non-marker line after a blank line, or by an
+  unindented heading or thematic break (a thematic break such as `> foo` then `---` still ends the paragraph); it is not a full CommonMark
+  container parse and errs towards "still inside" (fail closed).
   Whatever fails the rule is left alone and read as HTML (`[x]: /u <script>` hides to its closer; so does
   `[x]:` followed by a `<!--` or `<div hidden>` line), so a definition never swallows the lines after it. A definition with a label over
   more than one line, a title over more than three, or parentheses nested twice in the destination stays visible (a renderer hides it).
