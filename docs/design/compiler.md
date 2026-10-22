@@ -1084,9 +1084,13 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   `address`, `div`, `p`), so the `</p>` of `<p>a<div hidden></p>X</div>` finds no `p` and pops nothing; each stack entry carries the
   nearest such marks, so the check is O(1), and a hidden formatting element popped that way is re-opened. Inside foreign content (`svg`,
   `math`) nothing is implied: a sixth mark holds the first entry of the run of foreign elements that ends the stack, and only a breakout
-  start tag (the spec's list; `font` with `color`, `face` or `size`) pops that run, after which the rules above apply. The integration
-  points (`foreignObject`, `desc`, `title`, `mi`, `mo`, `mn`, `ms`, `mtext`, `annotation-xml`) end the run, are button-scope barriers,
-  stop the `li`/`dd` search and stop end tags in `end_ignored` as well. Document-level hiding is
+  start tag (the spec's list; `font` with `color`, `face` or `size`), or an end tag `</p>` or `</br>`, pops that run (`treerules.breakout`,
+  `_Text.handle_endtag`, `_Styles.handle_endtag`), after which the rules above apply. Every entry also carries its NAMESPACE (0 html, 1 svg,
+  2 math) and its integration kind (0 none, 1 HTML, 2 MathML text, 3 `annotation-xml` without an HTML encoding): the integration points
+  are decided by namespace (svg `foreignObject`, `desc`, `title`; math `mi`, `mo`, `mn`, `ms`, `mtext`, `annotation-xml` with `encoding`
+  `text/html` or `application/xhtml+xml`; `mglyph` and `malignmark` under a math text point stay math, an `<svg>` under `annotation-xml`
+  is svg), end the run and make their children HTML; the same names in the other namespace are ordinary foreign elements. The
+  namespace-blind `INTEGRATION` set remains only for the button-scope barriers, the `li`/`dd` search and `end_ignored`. Document-level hiding is
   modelled: an `html` or `body` start tag, the first or a late one, that hides, or a `<style>` rule that hides `html`, `body` or `*`, makes
   the body empty; a `<template shadowrootmode=...>` hides every child of its host (those before it too), the whole document when it has
   no parent. The rules of `<style>` come from a first parser pass (`stylepass.style_text`): html.parser reads the page once with the same
@@ -1099,16 +1103,23 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   count, nor do they inside a `(` or `[` simple block (a `blocks` stack of closers in `cssscan.rules`; unclosed blocks swallow the rest); a
   rule with nested blocks is read with them cut out and the nested rules on their own; a rule open at the end applies; CSS escapes in a
   selector are decoded and the list splits on unescaped commas only). `<![CDATA[` (any `<![`) is a bogus comment that ends at the first `>`
-  in HTML content, a real section to `]]>` only when the top open element is inside a run of svg / math elements
-  (`ScriptedParser.parse_html_declaration` and `foreign()`; `_support_cdata` is off so the EOF path agrees);
+  in HTML content, a real section to `]]>` whenever the current node is NOT an HTML element: the top element is in the svg or math
+  namespace, a member of a foreign run or an integration point itself (`ScriptedParser.parse_html_declaration` and `foreign()`;
+  `_support_cdata` is off so the EOF path agrees);
   `noscript` is raw text in both passes (`CDATA_CONTENT_ELEMENTS`, also for `<noscript/>`) and stays in the skipped set, but only in HTML content:
-  `ScriptedParser.set_cdata_mode` skips EVERY raw-text, RCDATA and noscript name when `in_foreign()` holds (the parent is a foreign
-  element); inside an open select the mode is entered too, and `_Text.set_cdata_mode` hides the rest of the document once a raw text
-  holding a `<` closes there (both browser readings, over-hiding; `script` exempt). `input`, `keygen`, `textarea` and `select`
+  `ScriptedParser.set_cdata_mode` skips EVERY raw-text, RCDATA and noscript name when `in_foreign()` holds (the element
+  just pushed is in the svg or math namespace); inside an open select the mode is entered too, and `_Text.set_cdata_mode` hides the rest
+  of the document once a raw text holding a `<` closes there (both browser readings, over-hiding; `script` exempt). `input`, `keygen`, `textarea` and `select`
   pop the select (`SELECT_ENDERS`, `_Text._select_to_end`) only when no template, table, integration point, foreign or self-hidden element
-  is above it. `_Text` answers `in_foreign()` from its stack, `_Styles` from `depth` counters. `stylepass` parses each `<style>` sheet
-  alone (`style_sheets` reads a page with a `<select` both ways; `scan_sheets` starts a sheet at every `<style` opener, capped).
-  `end_ignored` ignores the end tag of a foreign integration point with any HTML element above it.
+  is above it. `_Text` and `_Styles` answer `foreign()` and `in_foreign()` from their stack of `(tag, treerules marks)`; the style pass
+  matches an end tag by the nearest name (no scope rules, an approximation the plain scan backs up). `stylepass` parses each `<style>` sheet
+  alone (`style_sheets` reads a page with a `<select` both ways; `scan_sheets` starts a sheet at every `<style` opener, capped, and ends
+  its start tag at the first `>` and at the first `>` outside a quoted attribute value, `TAG_REST`; that work is counted against
+  `MAX_SCAN_CHARS`, so a page of pathological start tags is a `TooDeep` parse drop, fail closed).
+  `end_ignored` ignores the end tag of a foreign integration point with any HTML element above it. A leading byte order mark is dropped
+  (`fetch` decodes `utf-8-sig`, `strip_hidden` removes a U+FEFF): it would make the page quirks mode. In Markdown the `<` of every tag
+  that raw-texts or hides its content (`mdrules.RAW_TEXT`: the raw-text names plus noscript, details, select, svg, math, template, object,
+  dialog, canvas, video, audio, datalist, head, rp, progress, meter) is escaped inside a trusted code span or fence.
   `handle_startendtag` enters raw-text mode for every `CDATA_CONTENT_ELEMENTS` name (`<xmp/>`, `<iframe/>`, `<noembed/>`,
   `<noframes/>`), for the RCDATA ones (`<textarea/>`, `<title/>`) and `<plaintext/>`: a browser ignores the slash.
   `treerules.implied(..., standards)` lets a `<table>` close an open `<p>` only in standards mode: `_Text.handle_decl` takes it from a FIRST

@@ -4,9 +4,10 @@ The rules of a stylesheet apply to the whole page, to elements that come before 
 text is read. A scan for the string `<style` is fooled by every `<style` that is not a start tag (inside a script string, a comment, an
 attribute value, a `<textarea>` or `<title>`, a custom element `<style-x>`): a fake one hides the real rules. Here the tokenizer decides:
 html.parser reads the page once with the same script rules as the second pass (`htmlrules.ScriptedParser`) and collects the character data
-of each `<style>` element, an unclosed one at the end of the page included (a browser applies it). Linear in the size of the page. It counts
-the open `svg`, `math` and integration-point elements only, to know whether a raw-text name is raw text (HTML content) or an element
-(foreign content) and whether a `<![CDATA[` is a section (foreign content): the answers of the second pass, approximated.
+of each `<style>` element, an unclosed one at the end of the page included (a browser applies it). Linear in the size of the page. It keeps
+a stack of the open elements with the namespace marks of `treerules` (an end tag pops to the nearest element of its name, no scope rules; a
+breakout start tag, `</p>` and `</br>` pop the foreign run), to know whether a raw-text name is raw text (HTML content) or an element
+(foreign content) and whether a `<![CDATA[` is a section (the current node is not HTML): the answers of the second pass, approximated.
 
 Every sheet is parsed ON ITS OWN (`style_sheets`, `scan_sheets`; `style_rules` unions the rules of the sheets): an open block, string or
 comment at the end of one `<style>` never carries into the next, as in a browser. `style_text` and `scan_text` join the sheets with newlines.
@@ -15,7 +16,8 @@ A raw-text start tag inside an open `<select>` is ignored by one browser reading
 ways when the page has a `<select` (`_Styles(ignored=True)` is the ignoring reading) and unions the sheets; the scan starts a sheet at EVERY
 `<style` opener, the ones inside another sheet's text included (overlapping sheets only add rules), so a fake opener never merges with a real
 sheet. At most `MAX_OVERLAP` openers may lie inside another sheet and the sheets together at most `MAX_SCAN_CHARS` characters (the work is the
-sum of the sheet lengths): past that the page is a parse failure (`TooDeep`, fail closed).
+sum of the sheet lengths and of the start tags scanned): past that the page is a parse failure (`TooDeep`, fail closed). The end of a start
+tag is looked for twice, at the first `>` and with the quoted attribute values skipped (`<style title="a>b">`): a sheet for each.
 
 The tokenizer is not the browser in every corner (a CDATA section in foreign content, a bogus comment and the like may still end at
 different places), so `style_rules` also applies the rules of a plain scan for `<style ... </style` (`scan_text`): a rule found by EITHER
@@ -27,9 +29,10 @@ from __future__ import annotations
 import re
 
 from .cssstyle import css_rules
-from .htmlrules import INTEGRATION, ScriptedParser, ScriptState, TooDeep
+from .htmlrules import VOID, ScriptedParser, ScriptState, TooDeep
+from .treerules import breakout, marks
 
-WATCHED = frozenset(("svg", "math")) | INTEGRATION
+TAG_REST = re.compile(r"""(?:[^>"'=]|=[ \t\n\f\r]*(?:"[^"]*"?|'[^']*'?)?|["'])*>?""")       # the rest of a start tag: quoted values only after `=`
 STYLE_MARK, SELECT_MARK = re.compile(r"<style", re.I), re.compile(r"<select", re.I)
 MAX_OVERLAP, MAX_SCAN_CHARS = 1000, 4 * 1024 * 1024
 SELECT_KEPT = frozenset(("option", "optgroup", "hr", "script", "template"))                      # the other start tags are ignored in a select
@@ -44,15 +47,17 @@ class _Styles(ScriptedParser):
         self.in_select, self.skipped = False, False
         self.sheets: list[list[str]] = []
         self.inside = False
-        self.depth: dict[str, int] = {}                             # how many svg / math / integration-point elements are open
-        self.born_foreign = False                                   # the last start tag was made in foreign content
+        self.stack: list[tuple] = []                                # (tag, treerules marks) of the open elements: an approximation of `sanitize`
+        self.open: dict[str, int] = {}
 
     def foreign(self) -> bool:
-        """Inside svg or math and in no integration point (an approximation of the tree of the second pass: the plain scan covers the rest)."""
-        return bool(self.depth.get("svg") or self.depth.get("math")) and not any(self.depth.get(t) for t in INTEGRATION)
+        """The current node is in the svg or math namespace (an approximation of the tree of the second pass: the plain scan covers the rest)."""
+        return bool(self.stack) and self.stack[-1][1][6] != 0
 
-    def in_foreign(self) -> bool:
-        return self.born_foreign
+    def _cut(self, i: int) -> None:
+        for t, _ in self.stack[i:]:
+            self.open[t] -= 1
+        del self.stack[i:]
 
     def set_cdata_mode(self, elem, **kw) -> None:
         if self.skipped:                                            # the start tag was ignored by the select: no raw text
@@ -68,9 +73,13 @@ class _Styles(ScriptedParser):
             elif self.in_select and tag not in SELECT_KEPT:
                 self.skipped = True
                 return
-        self.born_foreign = self.foreign()                          # asked before the tag is counted: an integration point is foreign itself
-        if tag in WATCHED:
-            self.depth[tag] = self.depth.get(tag, 0) + 1
+        top = self.stack[-1][1] if self.stack else None
+        if (i := breakout(top, tag, attrs)) is not None:
+            self._cut(i)
+            top = self.stack[-1][1] if self.stack else None
+        if tag not in VOID:
+            self.stack.append((tag, marks(top, tag, len(self.stack), attrs)))
+            self.open[tag] = self.open.get(tag, 0) + 1
         if tag == "script":
             self.script = ScriptState()
         elif tag == "style":
@@ -83,8 +92,10 @@ class _Styles(ScriptedParser):
         if self.ignored and self.in_select and tag not in SELECT_KEPT:
             self.in_select = tag != "select"
             return
-        if self.depth.get(tag):
-            self.depth[tag] -= 1
+        if tag in ("p", "br") and self.stack and self.stack[-1][1][5] >= 0:
+            self._cut(self.stack[-1][1][5])                         # in foreign content `</p>` and `</br>` break out of the run
+        if self.open.get(tag):
+            self._cut(next(i for i in range(len(self.stack) - 1, -1, -1) if self.stack[i][0] == tag))
         if tag == "script":
             self.script = None
         elif tag == "style":
@@ -110,17 +121,20 @@ def scan_sheets(src: str) -> list[str]:
         pos = m.end()
         if gt < pos and (gt := src.find(">", pos)) < 0:
             break
-        start = gt + 1
-        if start == last:
-            continue                                                # the same start tag again: the same sheet
-        if not searched or (close and close.start() < start):
-            close, searched = STYLE_CLOSE.search(src, start), True
-        inner += m.start() < stop
-        stop, last = (close.start() if close else len(src)), start
-        chars += stop - start
-        if inner > MAX_OVERLAP or chars > MAX_SCAN_CHARS:
-            raise TooDeep("too many overlapping style sheets")
-        parts.append(src[start:stop])
+        tag = TAG_REST.match(src, pos, min(len(src), pos + MAX_SCAN_CHARS - chars + 1))
+        chars += tag.end() - pos
+        for end in sorted({gt, tag.end() - 1 if tag.group().endswith(">") else gt}):
+            start = end + 1
+            if start == last:
+                continue                                            # the same start tag again: the same sheet
+            if not searched or (close and close.start() < start):
+                close, searched = STYLE_CLOSE.search(src, start), True
+            inner += m.start() < stop
+            stop, last = (close.start() if close else len(src)), start
+            chars += stop - start
+            if inner > MAX_OVERLAP or chars > MAX_SCAN_CHARS:
+                raise TooDeep("too many overlapping style sheets")
+            parts.append(src[start:stop])
     return parts
 
 

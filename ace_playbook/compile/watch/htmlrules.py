@@ -7,9 +7,10 @@ a hidden element is involved the same rules apply and anything doubtful keeps th
   it. A block-level end tag (`</div>`, ...) is stopped by a scope barrier (`table td th caption object marquee applet template`); `</p>` also
   by `button`, `</li>` also by `ol` and `ul`; a table end tag by a nested `table` or `template`; every other end tag (`</span>`, `</b>`, ...)
   by any "special" element in between. An open `select` stops every end tag below it but its own, hidden or not (the in-select mode drops them).
-  `INTEGRATION` (`foreignObject`, `desc`, `title`, `mi`, `mo`, `mn`, `ms`, `mtext`, `annotation-xml`) are scope barriers too, but their OWN
-  end tag is an "any other end tag": made in foreign content it is ignored when ANY HTML element is above it (the HTML walk reaches the
-  integration point, which is special and never an HTML element with that name), `<svg><desc><span hidden><b></desc></svg>X` keeps X hidden;
+  `INTEGRATION` (`foreignObject`, `desc`, `title`, `mi`, `mo`, `mn`, `ms`, `mtext`, `annotation-xml`, names only) are scope barriers too, but
+  the OWN end tag of a real integration point (by namespace, `treerules`) is an "any other end tag": made in foreign content it is ignored
+  when ANY HTML element is above it (the HTML walk reaches the integration point, which is special and never an HTML element with that
+  name), `<svg><desc><span hidden><b></desc></svg>X` keeps X hidden;
   foreign elements above it do not stop it. Made in HTML content, any special element above it stops it.
 * `SKIP` holds the elements whose content a browser does not render as text, `select` (all its option text), `progress` and `meter`
   (fallback text) among them.
@@ -23,7 +24,7 @@ a hidden element is involved the same rules apply and anything doubtful keeps th
   stays raw text (a browser may ignore the tag there: both readings hide the text, and `sanitize` hides the rest of the page once a raw
   text that held a `<` closes, `stylepass` reads the page both ways); a double-escaped script keeps its next
   `</script` as text, a comment ends at `<!-->`, `<!--->`, `-->` or `--!>`, and `<![CDATA[` is a bogus comment that ends at the first `>` (any `<![` is),
-  except in foreign content, where it runs to `]]>`.
+  except when the current node is not an HTML element (`foreign()`: svg, math, an integration point), where it runs to `]]>`.
 * `MAX_DEPTH`: the open-element stack is capped; a document nested deeper is a parse failure (`TooDeep`), not a quadratic scan.
 """
 
@@ -70,7 +71,7 @@ def end_ignored(stack: list, i: int) -> bool:
     if not (stack[i][1] or any(e[1] for e in above)):
         return False
     tag = stack[i][0]
-    if tag in INTEGRATION and i and stack[i - 1][4][5] >= 0 and any(e[4][5] < 0 for e in above):
+    if stack[i][4][7] in (1, 2) and any(e[4][6] == 0 for e in above):
         return True                         # a foreign integration point with an HTML element above it: the HTML walk meets a special element
     if tag in TABLES:
         return bool(names & {"table", "template"})
@@ -133,8 +134,8 @@ class ScriptedParser(HTMLParser):
         return end.end()
 
     def foreign(self) -> bool:
-        """True when the current node is a foreign (svg or math) element: a CDATA section is a real one there. A subclass that tracks the
-        open elements overrides this; the default (False) reads every `<![CDATA[` as a bogus comment, which only matters for what follows it."""
+        """True when the current node is not an HTML element (svg or math namespace, an integration point included): a CDATA section is a real
+        one there. A subclass that tracks the open elements overrides this; the default (False) reads every `<![CDATA[` as a bogus comment."""
         return False
 
     def parse_html_declaration(self, i):
@@ -151,9 +152,9 @@ class ScriptedParser(HTMLParser):
         return end + (3 if real else 1)
 
     def in_foreign(self) -> bool:
-        """True when the start tag just handled made a FOREIGN element (its parent is a foreign one, not an integration point): a browser
-        enters raw text only for HTML elements. A subclass that tracks the open elements overrides this (the default, False, keeps raw text)."""
-        return False
+        """True when the start tag just handled made a FOREIGN element (svg or math namespace): a browser enters raw text only for HTML
+        elements. Asked after the element is pushed, so it is `foreign()` (whose default, False, keeps raw text)."""
+        return self.foreign()
 
     def set_cdata_mode(self, elem, **kw) -> None:
         """Raw text and RCDATA (and `<noscript>`, a browser with scripting on) only for an HTML element: in foreign content every such name is an

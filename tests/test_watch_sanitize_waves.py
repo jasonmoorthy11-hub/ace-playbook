@@ -550,7 +550,8 @@ def test_the_end_tag_of_an_integration_point_is_stopped_by_a_hidden_element_abov
     root = "math" if tag in ("mi", "mtext", "annotation-xml") else "svg"
     html = f"<{root}><{tag}>{child}</{tag}></{root}>LEAK"
     assert "LEAK" not in strip_hidden(html) and "LEAK" not in body_of(html), html
-    assert strip_hidden(f"<{root}><{tag}><b>t</b></{tag}></{root}>VIS") == "VIS"                          # nothing hidden above: the end tag pops
+    enc = ' encoding="text/html"' if tag == "annotation-xml" else ""                    # wave 14: only with it is annotation-xml an integration point
+    assert strip_hidden(f"<{root}><{tag}{enc}><b>t</b></{tag}></{root}>VIS") == "VIS"                      # nothing hidden above: the end tag pops
 
 
 # ------------------------------------------------------------------ wave 11: per-sheet CSS, select enders and scope, integration end tags
@@ -689,7 +690,7 @@ def test_the_style_pass_reads_a_select_both_ways_so_the_ignored_start_tag_cannot
     assert "HIDDEN" not in strip_hidden(page) and "HIDDEN" not in body_of(page) and "OK" in strip_hidden(page)
     attr = f'{SHEET_PAGE}<select><style title=">"></select><style title=">">.x{{display:none}}</style>'          # a `>` inside an attribute value
     assert ".x{display:none}" in stylepass.style_sheets(attr) and "x" in stylepass.style_rules(attr)[0]
-    assert ".x{display:none}" not in stylepass.scan_sheets(attr)                                    # the scan alone misses it: the select pass is needed
+    assert ".x{display:none}" in stylepass.scan_sheets(attr)                                        # wave 14: the scan skips the quoted `>` too
     assert "HIDDEN" not in strip_hidden(attr) and "HIDDEN" not in body_of(attr) and "OK" in strip_hidden(attr)
     for tag in ("xmp", "iframe", "noembed", "noframes", "noscript", "textarea", "title"):
         page = f"{SHEET_PAGE}<select><{tag}></select>{REAL_SHEET}"

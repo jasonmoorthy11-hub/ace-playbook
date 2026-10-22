@@ -103,7 +103,7 @@ def fetch(url: str, *, expect: tuple[str, ...], store: dict, timeout: float = 20
         return _drop(url, "network " + type(exc).__name__, now)
     if len(raw) > cap:
         return _drop(url, "too large", now)
-    sha, text = hashlib.sha256(raw).hexdigest(), raw.decode("utf-8", "replace")
+    sha, text = hashlib.sha256(raw).hexdigest(), raw.decode("utf-8-sig", "replace")      # the sha covers the raw bytes; a leading BOM is dropped
     try:
         if kind not in XML_KINDS:
             md = ctype != "text/html"                                         # an `md` source served as HTML: definitions leave the VISIBLE text only

@@ -18,7 +18,8 @@ An end tag that a browser ignores (a scope barrier or a special element in betwe
 text; a script that is double-escaped (`<!--<script>`) closes at its next-but-one `</script`. More than `htmlrules.MAX_DEPTH` open elements
 raise `htmlrules.TooDeep` (a ValueError: the page is a parse failure). Tag names are compared as written (`</x:div>` does not close
 `<div>`: a browser ignores it); the inline-XML children of a feed arrive with local names already. `markdown=True` is for Markdown pages:
-a raw-text opener is prose only in a code span that opens and closes on one plain line, or in a fenced block, outside HTML blocks and
+a raw-text or content-hiding opener (`mdrules.RAW_TEXT`) is prose only in a code span that opens and closes on one plain line, or in a
+fenced block, outside HTML blocks and
 with no closer after it (`mdrules`); anywhere else the rules above apply as in HTML (a bare `<script>` hides to its closer, or to the
 end of the input). Link reference definitions (`[x]: url "title"`) are not rendered: with `markdown` the strictly valid ones are dropped
 from the source (`mdrules`); `definitions=True` on an HTML page (`fetch` sets it for a Markdown source served as HTML) drops them from the
@@ -26,13 +27,14 @@ VISIBLE text only, never from the raw markup. The rules of `<style>` come from a
 (`stylepass.style_text`) UNIONED with a plain scan for `<style ... </style` (`stylepass.style_rules`: over-hiding, for pages that
 html.parser and a browser tokenize differently), the visible text from a second parser pass. A comment ends where a browser ends it
 (`<!-->`, `<!--->`, `-->`, `--!>`: `htmlrules.ScriptedParser`); so does `<![CDATA[` in HTML content: a bogus comment that ends at the
-first `>` (a real section to `]]>` only in svg or math), and `<noscript>` is raw text in HTML content, as in a browser with scripting on (an
-ordinary element in svg or math); a slash on any raw-text element (`<xmp/>`, `<iframe/>`, ...) is ignored. A raw-text element opened in an
+first `>` (a real section to `]]>` whenever the current node is not an HTML element: svg, math or an integration point), and `<noscript>`
+is raw text in HTML content, as in a browser with scripting on (an ordinary element in svg or math, outside an integration point, where
+the integration points are decided by namespace: `treerules`); a slash on any raw-text element (`<xmp/>`, ...) is ignored. A raw-text element in an
 open `<select>` (a browser may ignore its start tag there, so the raw text is markup) that holds a `<` hides the REST of the document once
 it closes (over-hiding: `set_cdata_mode`; `script` is exempt, the in-head rules take it in a select). Inside `<svg>` and
-`<math>` no implied end tag happens, except after a breakout tag (`treerules`). A `<table>` closes an open `<p>` only in standards mode, which
+`<math>` no implied end tag happens, except after a breakout tag or `</p>`/`</br>` (`treerules`). A `<table>` closes an open `<p>` only in standards mode, which
 is a FIRST doctype `html` (`<!DOCTYPE html>`, optionally with `SYSTEM "about:legacy-compat"`) before any tag or text; a late, legacy or
-second doctype, or none, is quirks mode (fail closed). The result is plain text, one non-empty line per block.
+second doctype, or none, is quirks mode (fail closed); a leading byte order mark is dropped. The result is plain text, one non-empty line per block.
 Stdlib only.
 """
 
@@ -68,8 +70,8 @@ class _Text(ScriptedParser):
         self.standards, self.fresh = False, True                  # standards mode (a leading `<!DOCTYPE html>`, else quirks); nothing but blanks seen yet
         self.raw_select, self.raw_lt, self.poisoned = False, False, False       # a raw-text element is open in a select; it held a `<`; hide to EOF
 
-    def _push(self, tag: str, hid: bool, own: bool) -> None:
-        self.stack.append([tag, hid, own, len(self.out), marks(self.stack[-1][4] if self.stack else None, tag, len(self.stack))])
+    def _push(self, tag: str, hid: bool, own: bool, attrs: list | tuple = ()) -> None:
+        self.stack.append([tag, hid, own, len(self.out), marks(self.stack[-1][4] if self.stack else None, tag, len(self.stack), attrs)])
         self.open[tag] = self.open.get(tag, 0) + 1
 
     def _pop(self, i: int) -> None:
@@ -89,10 +91,7 @@ class _Text(ScriptedParser):
         return bool(self.stack) and self.stack[-1][1]
 
     def foreign(self) -> bool:
-        return bool(self.stack) and self.stack[-1][4][5] >= 0       # the top element is inside a run of svg / math elements
-
-    def in_foreign(self) -> bool:
-        return len(self.stack) > 1 and self.stack[-2][4][5] >= 0   # the parent of the element just pushed is inside a run of svg / math elements
+        return bool(self.stack) and self.stack[-1][4][6] != 0       # the top element is in the svg or math namespace (an integration point too)
 
     def set_cdata_mode(self, elem, **kw) -> None:
         """A raw-text element (not `script`: a select hands it to the in-head rules, no browser ignores it) opened in an open select is the one
@@ -109,7 +108,7 @@ class _Text(ScriptedParser):
         if not self.open.get("select"):
             return None
         i = next(i for i in range(len(self.stack) - 1, -1, -1) if self.stack[i][0] == "select")
-        return i if all(e[0] not in BARRIERS and e[4][5] < 0 and not e[2] for e in self.stack[i + 1:]) else None
+        return i if all(e[0] not in BARRIERS and e[4][6] == 0 and not e[2] for e in self.stack[i + 1:]) else None
 
     def handle_decl(self, decl) -> None:
         """Only the FIRST doctype, before any tag or text, and only `html` (with an optional legacy-compat SYSTEM id) is standards mode; a
@@ -143,7 +142,7 @@ class _Text(ScriptedParser):
                 del self.out[self.stack[-1][3]:]
             else:
                 self.dead = True
-        self._push(tag, hid, own)
+        self._push(tag, hid, own, attrs)
         if len(self.stack) > MAX_DEPTH:
             raise TooDeep("nesting too deep")
         if tag == "script":
@@ -154,6 +153,8 @@ class _Text(ScriptedParser):
         self.fresh = False
         if self.raw_select:                                         # the end tag of the raw-text element opened in a select
             self.raw_select, self.poisoned = False, self.poisoned or self.raw_lt
+        if tag in ("p", "br") and self.stack and self.stack[-1][4][5] >= 0:      # in foreign content `</p>` and `</br>` break out of the run
+            self._pop(self.stack[-1][4][5])
         if self.script_stays_open(tag) or not self.open.get(tag):
             return
         i = next(i for i in range(len(self.stack) - 1, -1, -1) if self.stack[i][0] == tag)
@@ -171,7 +172,7 @@ class _Text(ScriptedParser):
 def strip_hidden(html: str, markdown: bool = False, definitions: bool | None = None) -> str:
     """The visible text of `html` (see the module docstring); "" when the parser gives up; TooDeep (ValueError) past MAX_DEPTH."""
     defs = markdown if definitions is None else definitions
-    src = markdown_code_as_text(html, markdown, markdown and defs)
+    src = markdown_code_as_text(html.removeprefix("\ufeff"), markdown, markdown and defs)           # a browser drops a leading byte order mark
     try:
         rules = style_rules(src)
         if ROOT_HIDING & rules[2]:

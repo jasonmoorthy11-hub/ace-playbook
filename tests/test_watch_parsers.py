@@ -1,10 +1,11 @@
 """`compile/watch/parsers.py` through `fetch` (so the Content-Type, size and hidden-HTML guards apply to every source kind). No network."""
 
 import json
+from pathlib import Path
 
 import pytest
 
-from ace_playbook.compile.watch import parsers
+from ace_playbook.compile.watch import netguard, parsers
 from ace_playbook.compile.watch.fetch import CAP, EXPECT, fetch
 
 from .watch_support import INJECTION, Opener, Resp, fixture
@@ -18,6 +19,27 @@ GOOD = {"rss": ("rss_ok.xml", "application/rss+xml"), "atom": ("atom_ok.xml", "a
 
 def get(kind, body, ctype, store=None, cap=CAP):
     return fetch(URL, expect=EXPECT[kind], store={} if store is None else store, kind=kind, cap=cap, now=NOW, opener=Opener({URL: Resp(body, ctype)}))
+
+
+ALL_FIXTURES = {                                             # every file under tests/fixtures/watch: the kind and Content-Type it is served as
+    "atom_ok.xml": ("atom", "application/atom+xml"), "atom_xhtml.xml": ("atom", "application/atom+xml"),
+    "deprecations.md": ("deprecations", "text/markdown"), "deprecations_reordered.md": ("deprecations", "text/markdown"),
+    "doc_page.md": ("md", "text/markdown"), "npm_tags.json": ("npm", "application/json"), "page_hidden.html": ("md", "text/html"),
+    "rss_hidden.xml": ("rss", "application/rss+xml"), "rss_inline.xml": ("rss", "application/rss+xml"), "rss_ok.xml": ("rss", "application/rss+xml"),
+    "sitemap.xml": ("sitemap", "application/xml"),
+}
+
+
+def test_the_fixture_table_lists_every_fixture_file():
+    assert sorted(ALL_FIXTURES) == sorted(p.name for p in (Path(__file__).parent / "fixtures" / "watch").iterdir()) and len(ALL_FIXTURES) == 11
+
+
+@pytest.mark.parametrize("name", sorted(ALL_FIXTURES))
+def test_every_fixture_goes_through_fetch_with_the_default_opener_replaced_and_yields_a_body(name, monkeypatch):
+    kind, ctype = ALL_FIXTURES[name]
+    monkeypatch.setattr(netguard, "open_url", lambda req, timeout=None: Resp(fixture(name), ctype))
+    item = fetch(URL, expect=EXPECT[kind], store={}, kind=kind, now=NOW)
+    assert "dropped" not in item and item["body"].strip(), name
 
 
 # ------------------------------------------------------------------ the three guards, for every kind

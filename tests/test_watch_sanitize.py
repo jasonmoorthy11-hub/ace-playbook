@@ -249,8 +249,10 @@ def test_markdown_openers_are_prose_only_inside_code_spans_and_fences():
     assert SECRET not in strip_hidden(f"```\n<style>\n~~~\n```\n<style>{SECRET}", markdown=True)  # only a fence of the same character closes
 
 
-def test_a_non_raw_text_skip_opener_in_a_code_span_still_hides_to_the_end():
-    assert strip_hidden(f"use `<noscript>` {SECRET}", markdown=True) == "use `"
+def test_a_skip_opener_in_a_code_span_is_prose_unless_a_closer_follows_and_a_bare_one_hides_to_the_end():
+    assert strip_hidden("use `<noscript>` VIS", markdown=True) == "use `<noscript>` VIS"                  # wave 14: the span is trusted, as for a script
+    assert strip_hidden(f"use `<noscript>` {SECRET}</noscript> VIS", markdown=True) == "use ` VIS"          # a closer follows: fail closed
+    assert strip_hidden(f"use <noscript> {SECRET}", markdown=True) == "use"
 
 
 # ------------------------------------------------------------------ wave 4: self-closing tags, scope barriers, double-escaped script, markdown

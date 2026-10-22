@@ -195,14 +195,25 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   rules, so `<p hidden><svg><section></section>X` keeps X hidden. Only a breakout tag (`b big blockquote body br center code dd div dl dt em
   embed h1`..`h6 head hr i img li listing menu meta nobr ol p pre ruby s small span strong strike sub sup table tt u ul var`, and `font`
   with `color`, `face` or `size`) pops the foreign elements first, up to the nearest HTML element or integration point, and then the
-  normal rules close the `<p>`/`<li>`. `foreignObject`, `desc`, `title`, `mi`, `mo`, `mn`, `ms`, `mtext` and `annotation-xml` (integration
-  points, taken in either namespace, `annotation-xml` always) hold HTML again but are scope barriers: nothing implied, and no end tag,
-  reaches past them (`<div hidden><svg><foreignObject></div>X` keeps X hidden). A self-closed `<svg/>` stays open here (over-hiding).
-  The tokenizer is html.parser's, not a browser's inside foreign content (`<style>`, `<script>` and `<title>` of an svg are read as in
-  HTML: over-hiding at worst). `<![CDATA[` (and every other `<![`) is a bogus comment that ends at the FIRST `>` in HTML content, as in a
+  normal rules close the `<p>`/`<li>`; so do the end tags `</p>` and `</br>`, which a browser handles in foreign content by popping to
+  the nearest HTML element or integration point (`<svg></p><q hidden></svg>X` keeps X hidden: the `</svg>` is then ignored). Every element
+  has a NAMESPACE (html, svg, math), and the integration points are decided by it: in svg `foreignObject`, `desc`, `title`; in math `mi`,
+  `mo`, `mn`, `ms`, `mtext` and `annotation-xml` with an `encoding` of `text/html` or `application/xhtml+xml` (without it, or with another
+  one, `annotation-xml` is an ordinary math element, but its `<svg>` child is svg). Their children are HTML again (`mglyph` and
+  `malignmark` under a math text point stay math). The same names in the OTHER namespace (svg `mi`, math `title`, ...) are ordinary foreign
+  elements: a raw-text tag there is an element, and `<p` breaks out (`<svg><annotation-xml><style><p hidden></style></annotation-xml></svg>X`
+  keeps X hidden). The namespace-blind set of names stays only as the scope markers: nothing implied, and no end tag, reaches past an
+  integration point (`<div hidden><svg><foreignObject></div>X` keeps X hidden). A self-closed `<svg/>` stays open here (over-hiding).
+  The tokenizer is html.parser's, not a browser's, and is steered by the same stack (an svg `<style>`, `<script>` or `<title>` is an
+  element, a raw-text name under an integration point is raw text); what it does not model (the end tag of a foreign run in the style
+  pass is matched by the nearest name, with no scope rules) is covered by the plain `<style` scan, which only adds rules. `<![CDATA[` (and every
+  other `<![`) is a bogus comment that ends at the FIRST `>` in HTML content, as in a
   browser, whatever the patch release of html.parser (the stdlib's section ran to `]]>`, so `<![CDATA[><div hidden>]]>X</div>` showed X);
-  only when the current node is an `svg` or `math` element (not under an integration point) is it a real section that runs to `]]>`
-  (`htmlrules.ScriptedParser.parse_html_declaration`, `foreign()`). `<noscript>` is raw text, as in a browser with scripting on, so
+  whenever the current node is NOT an HTML element (an `svg` or `math` element or an integration point itself) it is a real section that
+  runs to `]]>` (`htmlrules.ScriptedParser.parse_html_declaration`, `foreign()`); under an HTML element inside an integration point it is
+  a bogus comment again. The plain `<style` scan ends a start tag at the first `>` AND at the first `>` outside a quoted attribute value
+  (`<style title="a>b">`), a sheet for each; that work counts against the 4 MiB budget, so a page of pathological start tags is a `parse`
+  drop (fail closed). `<noscript>` is raw text, as in a browser with scripting on, so
   `<div hidden><noscript></div>X</noscript>` keeps X hidden (it stays in the skipped set: its text is never shown; a browser with scripting
   off would show it, which is the rarer reader); only in HTML content, though: that holds for EVERY raw-text, RCDATA and noscript name
   (`set_cdata_mode`, both passes): made in foreign content (an open svg or math, outside an integration point) it is an ordinary element.
@@ -239,8 +250,12 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   Blocks nested more than 512 deep are skipped; the rules inside a closed at-rule are not read, as before. The first pass depends on html.parser reading
   `<textarea>` and `<title>` as RCDATA (Python 3.12.15 and later patch releases; an older 3.12 reads a `<style` in them as a tag, which
   can only add a spurious rule). A double-escaped script closes only at a `</script` followed by an HTML space, `/` or `>`.
-  Markdown pages (every Content-Type but `text/html`) are read with the HTML rules, because their site renders raw HTML. A raw-text opener
-  (`<script>`, `<style>`, `<title>`, `<textarea>`, `<xmp>`, `<noembed>`, `<noframes>`, `<iframe>`) is prose only when ALL hold: it sits in
+  A leading byte order mark is dropped (`fetch` decodes `utf-8-sig`, `strip_hidden` removes a U+FEFF), so a BOM before `<!DOCTYPE html>`
+  does not make the page quirks mode, as in a browser.
+  Markdown pages (every Content-Type but `text/html`) are read with the HTML rules, because their site renders raw HTML. A raw-text or
+  content-hiding opener (`<script>`, `<style>`, `<title>`, `<textarea>`, `<xmp>`, `<noembed>`, `<noframes>`, `<iframe>`, and since wave 14 also
+  `<noscript>`, `<details>`, `<select>`, `<svg>`, `<math>`, `<template>`, `<object>`, `<dialog>`, `<canvas>`, `<video>`, `<audio>`,
+  `<datalist>`, `<head>`, `<rp>`, `<progress>`, `<meter>`) is prose only when ALL hold: it sits in
   a fenced code block or in an inline code span that opens and closes on ONE line (a span that crosses a line is never trusted: a
   heading, quote, list item, table cell or thematic break may cut it), that line starts with no block marker (`#`, `>`, `-`, `*`, `+`,
   `|`, `1.`), has no backslash directly before a backtick and no `<` before the opening run, and the span holds no `|`; it is not inside an HTML

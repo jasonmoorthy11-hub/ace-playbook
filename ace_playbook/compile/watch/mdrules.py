@@ -44,7 +44,8 @@ from __future__ import annotations
 import re
 from bisect import bisect_right
 
-RAW_TEXT = "script|style|title|textarea|xmp|noembed|noframes|iframe"
+RAW_TEXT = ("script|style|title|textarea|xmp|noembed|noframes|iframe|noscript|details|select|svg|math|template|object|dialog|canvas|video|audio"
+            "|datalist|head|rp|progress|meter")                      # every tag that raw-text or hides its content: prose in a trusted code span
 OPENER = re.compile(rf"<(?P<name>{RAW_TEXT})(?=[\s/>]|$)", re.I)
 CLOSER = re.compile(rf"</(?P<name>{RAW_TEXT})(?=[\s/>]|$)", re.I)
 FENCE = re.compile(r" {0,3}(`{3,}|~{3,})(.*)$")
