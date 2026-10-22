@@ -504,6 +504,9 @@ def test_link_definitions_in_a_fence_or_indented_code_or_with_other_text_stay():
     assert "[x]: u" in strip_hidden("<p>[x]: u</p>", markdown=False)                               # HTML pages keep their text
 
 
+TIME_BUDGET = 6          # seconds per megabyte-scale page; linear passes take ≈ 1.3 s here and ≈ 2 s on the CI runner, a quadratic one minutes
+
+
 def test_a_page_of_unclosed_style_openers_is_scanned_in_linear_time():
     import time
     for page in ("<style>" * 150000, "<style>@a{" * 105000, "<style " * 150000, "<style>/*" * 120000):
@@ -513,7 +516,7 @@ def test_a_page_of_unclosed_style_openers_is_scanned_in_linear_time():
                 strip_hidden(page, markdown=markdown)
             except ValueError:                                       # wave 12: openers inside another sheet are capped: the page fails closed, fast
                 pass
-            assert time.monotonic() - t0 < 2, page[:12]
+            assert time.monotonic() - t0 < TIME_BUDGET, page[:12]
     assert sanitize.style_text("<style>.a{x}</style> <STYLE type=x >.b{y}</style >") == ".a{x}\n.b{y}"
     assert sanitize.style_text("<style>a<style>b</style>c<style>unclosed") == "a<style>b\nunclosed"       # wave 6: an unclosed one applies too
 
@@ -526,7 +529,7 @@ def timed(page: str, **kw) -> None:
         strip_hidden(page, **kw)
     except ValueError:                                               # TooDeep: a page that fails closed does so in time too
         pass
-    assert time.monotonic() - t0 < 2, page[:24]
+    assert time.monotonic() - t0 < TIME_BUDGET, page[:24]
 
 
 DEF_LEAKS = {
