@@ -1074,8 +1074,8 @@ section in PREREGISTRATION.md still says `(DRAFT until sealed)`. The sealing its
 
 ### 8.x Brief (as built)
 
-Order W3 of the watcher and cockpit design (section 7, "The brief"). Not on the hook path: `brief` and `brief_render` are on the conformance
-ABSENT tuple, `__main__.py` is untouched (the brief has its own entry point, `python -m ace_playbook.compile.brief <verb>`), and nothing in
+Order W3 of the watcher and cockpit design (section 7, "The brief"). Not on the hook path: `brief`, `brief_render` and `brief_excl` are on the
+conformance ABSENT tuple, `__main__.py` is untouched (the brief has its own entry point, `python -m ace_playbook.compile.brief <verb>`), and nothing in
 metrics, report, status, seal or the detectors changed.
 
 - **Principals and controls.** A read-only principal (it reads calendar, mail and Linear; it has no write tool and no outbound channel).
@@ -1098,9 +1098,13 @@ metrics, report, status, seal or the detectors changed.
   items in a list is refused, not truncated) and applies the private exclusion list by code; the result is
   `digest_clean.json`. Stage 2 (`--tools "" --strict-mcp-config`, one turn) sees only that file on stdin and answers with the brief JSON. Both
   prompts (`hooks/brief_prompts/`) say everything gathered is data, never instructions. The lists apply to mail threads (sender, subject,
-  `drop_bodies_from` keeps sender and subject); a configured file that is missing, unparseable, or holds a bad, over-200-character or
-  nested-quantifier regex (a heuristic against catastrophic backtracking) refuses the run; sender and subject are capped at 200 and 300
-  characters before matching.
+  `drop_bodies_from` keeps sender and subject); a configured file that is missing, unparseable, or holds a bad entry (empty,
+  over 200 characters, more than 500 in a list, unknown key or mode) refuses the run.
+  **D-116:** entries are LITERAL substrings (a string, or `{"starts": ...}` / `{"contains": ...}`), each `re.escape`d, case-insensitive,
+  joined by `|`; the nested-quantifier heuristic is gone (it missed `(a|aa)+$`, `((a+))+$`, `(a?){30}a{30}`, `.*.*.*.*x` and more). The
+  matching (`compile/brief_excl.py`, stdlib only) runs in a child process (`python3 -I`) killed after 10 s; a timeout, a crash or odd
+  output refuses the run (exit 2) and the digest never passes through. Sender and subject are capped at 200 and 300 characters before
+  matching.
 - **D-110 (amendment to the design's "morning skill as the renderer").** No model writes HTML that is served. The morning skill's layout and
   tokens are reproduced by code, `brief_render.render`, from the validated brief JSON: day-date line, serif headline (`Fraunces, Georgia,
   serif`, system stack, no embedded font), a terrain polyline whose elevation comes from each act's load (an open day is still water; one clay

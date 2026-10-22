@@ -5,11 +5,12 @@ import os
 import stat
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from ace_playbook.compile import brief, brief_render
+from ace_playbook.compile import brief, brief_excl, brief_render
 
 from . import brief_support as bs
 from .test_statusline import ROOT
@@ -118,11 +119,10 @@ def test_digest_apply_refuses_a_bad_digest_with_exit_2_and_writes_nothing(env, c
 
 
 LONG = '{"drop_senders": ["' + "a" * 201 + '"]}'
-NESTED = ["(a+)+$", "^(a*)*b", "(x+x+)+y", "(.*a){3}+", "(ab*)*"]
-
-
-BAD_EXCLUSIONS = ['{"drop_senders": ["("]}', '{"drop_senders": "x"}', '{"drop_other": []}', '{"drop_subjects": [1]}', "[]", LONG,
-                  *(json.dumps({"drop_subjects": [n]}) for n in NESTED)]
+BAD_EXCLUSIONS = ['{"drop_senders": "x"}', '{"drop_other": []}', '{"drop_subjects": [1]}', "[]", LONG, '{"drop_subjects": [""]}',
+                  '{"drop_subjects": [{"ends": "x"}]}', '{"drop_subjects": [{"starts": "x", "contains": "y"}]}', '{"drop_subjects": [{"starts": 1}]}',
+                  '{"drop_subjects": [{"starts": ""}]}', '{"drop_subjects": [{}]}', '{"drop_subjects": [null]}',
+                  json.dumps({"drop_senders": ["x"] * 501})]
 
 
 @pytest.mark.parametrize("ex", BAD_EXCLUSIONS)
@@ -130,6 +130,72 @@ def test_a_bad_exclusions_file_fails_closed(env, capsys, ex):
     os.environ["ACE_PLAYBOOK_CONFIG"] = str(bs.config(env, brief_exclusions=put(env, "ex.json", ex)))
     code, _, err = run(capsys, "digest-apply", put(env, "d.json", bs.digest()))
     assert code == 2 and "schema: exclusions" in err and not (env / "brief" / "digest_clean.json").exists()
+
+
+# D-116: the exclusion entries are LITERAL substrings, so no pattern can backtrack; each of these hung a regex engine for more than 5 s
+HOSTILE = ["(a|aa)+$", "((a+))+$", "((a)+)+$", "(a{1,})+$", "(a|a)*$", "(a?){30}a{30}", ".*.*.*.*x", "(a+)+$", "^(a*)*b", "(x+x+)+y", "(.*a){3}+",
+           "(ab*)*", "(", "[a-", "\\"]
+MISS = "a" * 40 + "!"
+
+
+def mail(tid, sender="Pat <p@example.com>", subject="hello", summary="body text"):
+    return {"thread_id": tid, "sender": sender, "subject": subject, "received": "2026-10-20T17:00:00Z", "asked_me": True, "replied": False,
+            "summary": summary}
+
+
+def kept(env, capsys, ex, mails):
+    os.environ["ACE_PLAYBOOK_CONFIG"] = str(bs.config(env, brief_exclusions=put(env, "ex.json", ex)))
+    start = time.monotonic()
+    code, _, err = run(capsys, "digest-apply", put(env, "d.json", bs.digest(mail=mails)))
+    assert (code, err) == (0, "") and time.monotonic() - start < 5
+    return {m["thread_id"]: m for m in json.loads((env / "brief" / "digest_clean.json").read_text())["mail"]}
+
+
+@pytest.mark.parametrize("pat", HOSTILE)
+def test_a_regex_shaped_entry_is_a_literal_and_finishes_instantly(env, capsys, pat):
+    ex = {"drop_senders": [pat], "drop_subjects": [pat]}
+    out = kept(env, capsys, ex, [mail("a", sender=f"Pat {pat} x"), mail("b", subject=f"re {pat}"), mail("m1", sender=MISS, subject=MISS)])
+    assert list(out) == ["m1"]                                                      # the literal text drops its threads, the look-alike stays
+    out = kept(env, capsys, {"drop_bodies_from": [pat]}, [mail("c", sender=f"{pat} bills"), mail("m2", sender=MISS, subject=MISS)])
+    assert out["c"]["summary"] == "" and out["m2"]["summary"] == "body text"       # the sender keeps sender and subject only
+
+
+def test_starts_and_contains_modes_are_literal_and_case_insensitive(env, capsys):
+    ex = {"drop_senders": [{"starts": "casey"}], "drop_subjects": [{"contains": "PRIVATE"}, "x.y"]}
+    got = kept(env, capsys, ex, [mail("1", sender="CASEY <c@example.org>"), mail("2", sender="not casey <c@example.org>"),
+                                  mail("3", subject="a Private matter"), mail("4", subject="xzy"), mail("5", subject="x.y"), mail("6")])
+    assert sorted(got) == ["2", "4", "6"]
+
+
+def test_the_exclusion_code_has_no_nested_quantifier_heuristic_and_compiles_only_escaped_text():
+    src = (ROOT / "ace_playbook" / "compile" / "brief_excl.py").read_text() + (ROOT / "ace_playbook" / "compile" / "brief.py").read_text()
+    assert "NESTED" not in src and src.count("re.compile(") == 1 and "re.escape(" in src
+
+
+def test_a_hung_exclusion_child_is_killed_and_the_run_refuses(env, capsys, monkeypatch):
+    monkeypatch.setattr(brief_excl, "child_argv", lambda: [sys.executable, "-I", "-c", "import time; time.sleep(60)"])
+    monkeypatch.setattr(brief_excl, "TIMEOUT", 0.5)
+    os.environ["ACE_PLAYBOOK_CONFIG"] = str(bs.config(env, brief_exclusions=str(bs.exclusions(env / "ex.json"))))
+    start = time.monotonic()
+    code, out, err = run(capsys, "digest-apply", put(env, "d.json", bs.digest()))
+    assert (code, out) == (2, "") and "schema: exclusions" in err and time.monotonic() - start < 10
+    assert not (env / "brief" / "digest_clean.json").exists()
+
+
+@pytest.mark.parametrize("body", ["raise SystemExit(7)", "print('not json')", "print('[1]')", "print('{}')", "print(open(0).read())"])
+def test_a_failing_or_garbling_exclusion_child_never_lets_the_digest_through(env, capsys, monkeypatch, body):
+    monkeypatch.setattr(brief_excl, "child_argv", lambda: [sys.executable, "-I", "-c", body])
+    os.environ["ACE_PLAYBOOK_CONFIG"] = str(bs.config(env, brief_exclusions=str(bs.exclusions(env / "ex.json"))))
+    code, _, err = run(capsys, "digest-apply", put(env, "d.json", bs.digest()))
+    assert code == 2 and "schema: exclusions" in err and not (env / "brief" / "digest_clean.json").exists()
+
+
+def test_the_exclusion_module_runs_alone_under_python_dash_I():
+    child = [sys.executable, "-I", str(ROOT / "ace_playbook" / "compile" / "brief_excl.py")]
+    payload = {"ex": {"drop_senders": ["zzz"]}, "mail": [mail("1", sender="a zzz"), mail("2")]}
+    p = subprocess.run(child, input=json.dumps(payload), capture_output=True, text=True, timeout=30)
+    assert p.returncode == 0 and [m["thread_id"] for m in json.loads(p.stdout)] == ["2"]
+    assert subprocess.run(child, input="[", capture_output=True, text=True, timeout=30).returncode == 2
 
 
 def test_a_configured_but_missing_or_unparseable_exclusions_file_fails_closed(env, capsys):
@@ -141,7 +207,7 @@ def test_a_configured_but_missing_or_unparseable_exclusions_file_fails_closed(en
 
 
 def test_exclusions_match_case_insensitively_on_the_cleaned_fields(env, capsys):
-    os.environ["ACE_PLAYBOOK_CONFIG"] = str(bs.config(env, brief_exclusions=str(bs.exclusions(env / "ex.json", drop_senders=["^casey"]))))
+    os.environ["ACE_PLAYBOOK_CONFIG"] = str(bs.config(env, brief_exclusions=str(bs.exclusions(env / "ex.json", drop_senders=[{"starts": "casey"}]))))
     d = bs.digest()
     d["mail"][1]["sender"] = "​CASEY <c@example.org>"                   # a zero-width prefix is stripped before the match
     run(capsys, "digest-apply", put(env, "d.json", d))

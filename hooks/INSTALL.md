@@ -407,17 +407,20 @@ Run it by hand first: `hooks/brief.sh --force` (it needs `uv` and a logged-in `c
 | `brief_dedupe_hours` | 4 | a wake inside this window of the last brief does nothing |
 | `brief_max_budget_usd` | 1.0 | `--max-budget-usd` of each stage |
 
-**Exclusions file** (keep it out of any checkout; regexes, case-insensitive, matched by code on the digest, never by the model):
+**Exclusions file** (keep it out of any checkout; literal text, case-insensitive, matched by code on the digest, never by the model):
 
 ```json
-{"drop_senders": ["@example\\.org$"], "drop_subjects": ["^private"], "drop_bodies_from": ["billing@"]}
+{"drop_senders": ["@example.org", {"starts": "billing"}], "drop_subjects": [{"contains": "private"}], "drop_bodies_from": ["billing@"]}
 ```
 
-A thread whose sender matches `drop_senders` or whose subject matches `drop_subjects` is removed from the digest; one whose sender
-matches `drop_bodies_from` stays as sender and subject only (its summary is emptied). A bad regex, a pattern longer than 200 characters,
-a pattern with a quantified group that itself holds a quantifier (`(a+)+`, refused as a catastrophic-backtracking heuristic, not a proof)
-or an unreadable file stops the run. Sender and subject are capped at 200 and 300 characters before matching. The lists apply to mail
-only, not to calendar titles or issues.
+An entry is a string (found anywhere in the field) or a one-key object, `{"starts": "text"}` (the field must begin with it) or
+`{"contains": "text"}`. It is always plain text: `.`, `*`, `(` and `^` mean themselves (every entry is `re.escape`d), so no entry can
+backtrack. A thread whose sender matches `drop_senders` or whose subject matches `drop_subjects` is removed from the digest; one whose
+sender matches `drop_bodies_from` stays as sender and subject only (its summary is emptied). An empty entry, an entry over 200 characters,
+more than 500 entries in a list, an unknown key or mode, or an unreadable file stops the run. The matching runs in a child process
+(`python3 -I`) that is killed after 10 seconds; a timeout or any failure of the child also stops the run (exit 2), and the digest never
+passes through. Sender and subject are capped at 200 and 300 characters before matching. The lists apply to mail only, not to calendar
+titles or issues.
 
 **Triggers.**
 

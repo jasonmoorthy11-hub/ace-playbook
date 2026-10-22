@@ -18,11 +18,9 @@ from pathlib import Path
 
 from .. import config as cfgmod
 from ..atomic import write_private
-from . import brief_render as br
+from . import brief_excl, brief_render as br
 
 FMT, STATE, LEDGER = "%Y-%m-%dT%H:%M:%SZ", "brief_state.json", "brief_ledger.jsonl"
-EXCLUSIONS = ("drop_senders", "drop_subjects", "drop_bodies_from")
-NESTED = re.compile(r"\([^()]*[+*][^()]*\)\s*[+*{]")      # a quantified group holding a quantifier, e.g. (a+)+: catastrophic backtracking
 
 
 def _jl(text: str):
@@ -43,23 +41,14 @@ def read_json(path):
 
 
 def apply_exclusions(cfg, digest: dict) -> dict:
-    """Remove mail threads whose sender or subject match the private lists; a drop_bodies_from sender keeps sender and subject only.
-    Any problem with the exclusions file refuses (nothing is written without the list applied)."""
+    """Remove mail threads whose sender or subject contain a private literal; a drop_bodies_from sender keeps sender and subject only.
+    brief_excl does the matching in a child process under a timeout; any problem with the file or the child refuses (exit 2), so nothing
+    is written without the list applied."""
     raw = json.loads(Path(cfg.brief_exclusions).read_text(encoding="utf-8")) if cfg.brief_exclusions else {}
-    if not isinstance(raw, dict) or set(raw) - set(EXCLUSIONS) or not all(
-            isinstance(raw.get(k, []), list) and all(isinstance(p, str) and len(p) <= 200 and not NESTED.search(p)
-                                                     for p in raw.get(k, [])) for k in EXCLUSIONS):
-        raise br.SchemaError("exclusions")
     try:
-        ex = {k: [re.compile(p, re.IGNORECASE) for p in raw.get(k, [])] for k in EXCLUSIONS}
-    except re.error:
+        return {**digest, "mail": brief_excl.apply(raw, digest["mail"])}
+    except brief_excl.Refused:
         raise br.SchemaError("exclusions") from None
-
-    def hit(key, s):
-        return any(p.search(s) for p in ex[key])
-    mail = [{**m, "summary": ""} if hit("drop_bodies_from", m["sender"]) else m for m in digest["mail"]
-            if not (hit("drop_senders", m["sender"]) or hit("drop_subjects", m["subject"]))]
-    return {**digest, "mail": mail}
 
 
 def _now() -> str:
