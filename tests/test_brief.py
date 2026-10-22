@@ -372,9 +372,14 @@ def audit(env, capsys, text):
     return code, out, err, [json.loads(ln) for ln in ledger.read_text().splitlines()] if ledger.exists() else []
 
 
-def test_a_clean_stream_passes_the_tool_audit_and_writes_no_row(env, capsys):
+def summary(out):
+    return json.loads(out)
+
+
+def test_a_clean_stream_passes_the_tool_audit_prints_a_summary_and_writes_no_row(env, capsys):
     init = ["ToolSearch", "mcp__claude_ai_Gmail__search_threads", "mcp__claude_ai_Linear__list_issues"]
-    assert audit(env, capsys, bs.stream(init_tools=init, junk=False)) == (0, "", "", [])
+    code, out, err, rows = audit(env, capsys, bs.stream(init_tools=init, junk=False))
+    assert (code, err, rows) == (0, "", []) and out == '{"init": 3, "drift": [], "unknown": 0}\n'
 
 
 @pytest.mark.parametrize("where", ["init", "call", "both"])
@@ -382,17 +387,60 @@ def test_an_mcp_tool_outside_the_allowlist_in_the_init_list_or_a_call_is_drift(e
     tools = (EXTRA,) if where in ("call", "both") else ()
     init = ("ToolSearch", EXTRA, "mcp__claude_ai_Gmail__search_threads") if where in ("init", "both") else ()
     code, out, err, rows = audit(env, capsys, bs.stream(tools=tools, init_tools=init, junk=False))
-    assert (code, out, err) == (2, "", "")          # names go to the ledger only; brief.sh prints the one-line reason
-    assert len(rows) == 1 and rows[0]["drift"] == [EXTRA] and rows[0]["stage"] == "stage1" and rows[0]["ts"].endswith("Z")
+    assert (code, err) == (2, "") and summary(out) == {"init": len(init), "drift": ["unknown"], "unknown": 1} and EXTRA not in out
+    assert len(rows) == 1 and rows[0]["stage"] == "stage1" and rows[0]["ts"].endswith("Z")
+    # the init list is claude's own, so its names may be listed in the ledger; a name only a call shows is counted
+    assert (rows[0]["drift"], rows[0]["unknown_tools"]) == ((["unknown"], 1) if where == "call" else ([EXTRA], 0))
 
 
-def test_a_non_mcp_tool_is_not_drift_and_a_bad_allow_file_fails(env, capsys, tmp_path):
-    assert audit(env, capsys, bs.stream(tools=("ToolSearch",), init_tools=["Bash", "Read"], junk=False))[0] == 0
+def test_a_known_connector_tool_outside_the_allowlist_is_drift_and_named_in_the_summary(env, capsys):
+    send = "mcp__claude_ai_Gmail__send_message"
+    code, out, err, rows = audit(env, capsys, bs.stream(tools=(send,), init_tools=["ToolSearch"], junk=False))
+    assert code == 2 and summary(out) == {"init": 1, "drift": [send], "unknown": 0} and rows[0]["drift"] == [send]
+
+
+def test_any_built_in_in_the_init_list_or_a_call_is_drift_only_toolsearch_and_the_allowlist_pass(env, capsys):
+    code, out, err, rows = audit(env, capsys, bs.stream(tools=("Write",), init_tools=["ToolSearch", "Bash", "Read"], junk=False))
+    assert code == 2 and summary(out) == {"init": 3, "drift": ["Bash", "Read", "Write"], "unknown": 0} and rows[0]["drift"] == ["Bash", "Read", "Write"]
+    assert audit(env, capsys, bs.stream(tools=("ToolSearch",), init_tools=["ToolSearch"], junk=False))[0] == 0
+
+
+def test_a_bad_allow_file_or_a_missing_stream_fails_with_no_summary(env, capsys, tmp_path):
     bad = tmp_path / "allow.txt"
     bad.write_text("mcp__x__read # note\n")
     code, out, err = run(capsys, "tools-audit", put(env, "s.jsonl", bs.stream()), "--allow", str(bad))
     assert code == 1 and out == ""
     assert run(capsys, "tools-audit", str(env / "missing.jsonl"), "--allow", str(ALLOW))[0] == 1
+
+
+NASTY = ["Pat asks whether the draft is final", "mcp__Pat_asks_" + bs.MARKER, "-lead", "a" * 300, "x\ny", "", "mcp__x\u2028y", "mcp__x__\x00"]
+
+
+def test_a_tool_name_outside_the_alphabet_or_unknown_is_counted_and_never_echoed_by_the_audit_the_extract_or_the_ledger(env, capsys):
+    calls, init = tuple(NASTY) + ("mcp__claude_ai_Gmail__search_threads",), ["ToolSearch", NASTY[0], NASTY[2]]
+    stream = put(env, "n.jsonl", bs.stream(tools=calls, init_tools=init, junk=False))
+    code, out, err, rows = audit(env, capsys, open(stream).read())
+    assert code == 2 and summary(out) == {"init": 3, "drift": ["unknown"], "unknown": 8} and rows[0]["drift"] == ["unknown"]
+    res = json.loads(run(capsys, "extract", stream, "--what", "result")[1])
+    assert res["_tools_called"] == ["mcp__claude_ai_Gmail__search_threads"] and res["_unknown_tools"] == len(set(NASTY))
+    junk = env / "j.json"
+    junk.write_text("[]")
+    resf = env / "res.json"
+    resf.write_text(json.dumps({**res, "_tools_called": res["_tools_called"] + NASTY[:1] + NASTY[2:]}))      # a doctored file is filtered by NAME too
+    assert run(capsys, "ledger", str(junk), str(junk), "stage1", str(resf))[0] == 0
+    text = (env / "brief" / "brief_ledger.jsonl").read_text()
+    assert bs.MARKER not in text + out + err and "Pat asks" not in text and "-lead" not in text and "a" * 101 not in text
+    last = json.loads(text.splitlines()[-1])
+    assert last["tools_called"] == ["mcp__claude_ai_Gmail__search_threads"] and last["unknown_tools"] == len(set(NASTY))
+
+
+def test_the_ledger_row_counts_unknown_tools_as_zero_when_the_result_has_none(env, capsys):
+    path = put(env, "s.jsonl", bs.stream())
+    resf = env / "res.json"
+    resf.write_text(run(capsys, "extract", path, "--what", "result")[1])
+    junk = put(env, "j.json", "[]")
+    assert run(capsys, "ledger", junk, junk, "stage1", str(resf))[0] == 0
+    assert json.loads((env / "brief" / "brief_ledger.jsonl").read_text())["unknown_tools"] == 0
 
 
 @pytest.mark.parametrize("init", [{"type": "assistant", "message": {"content": []}}, {"type": "system", "subtype": "init"},
@@ -407,13 +455,16 @@ def test_a_garbage_line_makes_the_audit_refuse_and_a_blank_line_does_not(env, ca
     assert (code, rows) == (0, [])
     for bad in ("not json\n", "[1, 2]\n", '{"type": \n', "[" * 100_000 + "\n"):         # the last one also overflows the parser's recursion
         code, out, err, rows = audit(env, capsys, clean + bad)
-        assert (code, out, err) == (2, "", "") and rows[-1]["drift"] == ["unparseable"] and rows[-1]["stage"] == "stage1", bad[:10]
+        assert (code, err) == (2, "") and summary(out)["drift"] == ["unparseable"] and rows[-1]["drift"] == ["unparseable"], bad[:10]
+        assert rows[-1]["stage"] == "stage1"
 
 
 def test_an_mcp_tool_that_appears_only_in_a_malformed_line_is_refused_and_reported_by_name(env, capsys):
     hidden = '{"type": "assistant", "message": {"content": [{"type": "tool_use", "name" :  "' + EXTRA + '", "input": {\n'
     code, out, err, rows = audit(env, capsys, bs.stream(init_tools=["ToolSearch"], junk=False) + hidden)
-    assert (code, out, err) == (2, "", "") and rows[-1]["drift"] == sorted([EXTRA, "unparseable"])
+    assert (code, err) == (2, "") and rows[-1]["drift"] == ["unknown", "unparseable"] and EXTRA not in out + json.dumps(rows)
+    known = hidden.replace(EXTRA, "mcp__claude_ai_Gmail__send_message")                  # a name from the checked-in snapshot may be listed
+    assert audit(env, capsys, bs.stream(init_tools=["ToolSearch"], junk=False) + known)[3][-1]["drift"] == ["mcp__claude_ai_Gmail__send_message", "unparseable"]
     allowed = '{"name": "mcp__claude_ai_Gmail__search_threads"\n'                       # an allowed name in a malformed line: still unparseable
     assert audit(env, capsys, bs.stream(init_tools=["ToolSearch"], junk=False) + allowed)[3][-1]["drift"] == ["unparseable"]
 
@@ -422,7 +473,7 @@ def test_an_oversized_stream_is_refused_not_truncated(env, capsys, monkeypatch):
     monkeypatch.setattr(ba, "CAP", 1000)
     tail = jsonl([{"type": "assistant", "message": {"content": [{"type": "tool_use", "name": EXTRA, "input": {"pad": "x" * 2000}}]}}])
     code, out, err, rows = audit(env, capsys, bs.stream(init_tools=["ToolSearch"], junk=False) + tail)
-    assert (code, out, err) == (2, "", "") and "unparseable" in rows[-1]["drift"]
+    assert (code, err) == (2, "") and "unparseable" in rows[-1]["drift"] and "unparseable" in summary(out)["drift"]
 
 
 def test_a_u2028_in_the_init_event_does_not_hide_an_extra_tool(env, capsys):

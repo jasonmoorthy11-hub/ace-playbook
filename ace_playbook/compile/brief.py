@@ -69,7 +69,8 @@ def _util(event, window: str):
 
 
 def extract(path: str, what: str, last: bool = False):
-    """One thing out of a stream-json file: the first (or last) rate_limit_event, the result object (+ `_tools_called`) or its text."""
+    """One thing out of a stream-json file: the first (or last) rate_limit_event, the result object (+ `_tools_called` and the count
+    `_unknown_tools` of the tool names that may not be written down, see brief_audit) or its text."""
     events = ba.events(path)
     if what not in ("rate_limit", "result", "text"):
         raise ValueError("what")
@@ -79,7 +80,14 @@ def extract(path: str, what: str, last: bool = False):
     res = next((e for e in reversed(events) if e.get("type") == "result"), None)
     if res is None or what == "text" and (res.get("is_error") or not isinstance(res.get("result"), str)):
         raise ValueError("no usable result")
-    return res["result"] if what == "text" else {**res, "_tools_called": sorted(ba.tool_uses(events))}
+    return res["result"] if what == "text" else {**res, **ba.called_tools(events, _known())}
+
+
+def _known() -> set:
+    try:
+        return ba.known_names()
+    except (OSError, ValueError):          # the list files are checked by brief.sh first; unreadable here, only the init list names remain
+        return set()
 
 
 def cmd_due(cfg, a) -> int:
@@ -122,16 +130,19 @@ def cmd_ledger(cfg, a) -> int:
            "cost_usd": _num(res.get("total_cost_usd")), **{k: _num(use.get(k)) for k in tokens},
            **{f"{w}_{t}": _util(ev, w) for w in ("five_hour", "seven_day") for t, ev in (("before", before), ("after", after))},
            "duration_ms": _num(res.get("duration_ms")), "num_turns": _num(res.get("num_turns")),
-           "tools_called": [t[:100] for t in (res.get("_tools_called") or []) if isinstance(t, str)][:50]}
+           "tools_called": [t for t in (res.get("_tools_called") or []) if isinstance(t, str) and len(t) <= 100 and ba.NAME.fullmatch(t)][:50],
+           "unknown_tools": res["_unknown_tools"] if type(res.get("_unknown_tools")) is int and res["_unknown_tools"] >= 0 else 0}
     ba.append_row(_dir(cfg) / LEDGER, row)
 
 
 def cmd_tools_audit(cfg, a) -> int:
-    """Exit 2 (and one ledger row naming the tools) when stage 1 could see or called an `mcp__` tool outside the allowlist; names go nowhere else."""
-    names = ba.drift(a.stream, a.allow)
-    if not names:
+    """Prints the one-line summary `{"init": N, "drift": [...], "unknown": N}` (names of the checked-in lists only). Exit 2 and one ledger row
+    when the init tool list or a call shows a tool outside the allowlist and `ToolSearch`, built-ins included."""
+    r = ba.audit(a.stream, a.allow)
+    print(json.dumps(r["summary"]))
+    if not r["drift"]:
         return 0
-    ba.append_row(_dir(cfg) / LEDGER, {"ts": _now(), "stage": "stage1", "drift": [n[:100] for n in names][:50]})
+    ba.append_row(_dir(cfg) / LEDGER, {"ts": _now(), "stage": "stage1", "drift": r["drift"][:50], "unknown_tools": r["unknown"]})
     return 2
 
 

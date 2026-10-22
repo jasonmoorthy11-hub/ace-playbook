@@ -177,7 +177,8 @@ def test_the_guard_accepts_blank_lines_and_indented_full_line_comments(tmp_path)
 
 
 BAD_BYTES = [b"\xef\xbb\xbfmcp__x__read\n", b"\xef\xbb\xbf# comment\n", "mcp__x__re ad\n".encode(), " \n".encode(), "mcp__x__é\n".encode(),
-             b"mcp__x__re\rad\n", b"mcp__x__read\x00\n", b"mcp__x__a:b\n", b"\xff\xfe\n"]
+             b"mcp__x__re\rad\n", b"mcp__x__read\x00\n", b"mcp__x__a:b\n", b"\xff\xfe\n",
+             b"-x\n", b"mcp__x__read\n-y\n", b"# a\x00b\n"]
 
 
 @pytest.mark.parametrize("raw", BAD_BYTES)
@@ -193,3 +194,25 @@ def test_a_crlf_list_and_names_with_dots_and_dashes_are_accepted(tmp_path):
     f = tmp_path / "a.txt"
     f.write_bytes(b"# c\r\nmcp__y__fine-1.x\r\n\r\nToolSearch\r\n")
     assert guard(call("mcp__y__fine-1.x"), allowlist=f) == (0, "", "") and guard(call("ToolSearch"), allowlist=f) == (0, "", "")
+
+
+# ------------------------------------------------------------------ the three readers (brief.sh, brief_audit, the guard) agree on every file
+READER_CASES = [(b"ToolSearch\n", True), (b"ToolSearch\n_x\na-b.c\n# c\n", True), (b"ToolSearch\n-x\n", False), (b"-x\nToolSearch\n", False),
+                (b"ToolSearch\n-\n", False), (b"ToolSearch\n.x\n", False), (b"ToolSearch\n--allowedTools\n", False),
+                (b"ToolSearch\n# c\x00d\n", False), (b"ToolSearch\n\x00\n", False), (b"\x00ToolSearch\n", False), (b"ToolSearch\n#\x00\n", False)]
+
+
+@pytest.mark.parametrize("raw, ok", READER_CASES)
+def test_the_shell_the_audit_and_the_guard_accept_and_refuse_the_same_list_files(tmp_path, raw, ok):
+    from ace_playbook.compile import brief_audit
+    f = tmp_path / "a.txt"
+    f.write_bytes(raw)
+    sh = subprocess.run(["/bin/bash", "-c", f'source "{ROOT}/hooks/brief_lib.sh"; names "$1"', "x", str(f)], capture_output=True, text=True)
+    try:
+        py = brief_audit.allowed_names(f)
+    except ValueError:
+        py = None
+    gd = guard(call("ToolSearch"), allowlist=f)
+    assert (sh.returncode == 0, py is not None, gd == (0, "", "")) == (ok, ok, ok), (sh, py, gd)
+    if ok:
+        assert set(sh.stdout.strip().split(",")) == py
