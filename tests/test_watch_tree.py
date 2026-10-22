@@ -406,3 +406,36 @@ def test_w20_control_two_selects_with_nothing_between_them_show_what_follows_the
 def test_w20_over_hide_two_selects_with_a_bare_table_between_them_hide_what_follows_the_template_although_a_browser_shows_it():
     # a browser shows LEAK (no cell marker), but our stack equals the one with `<tr><td>` between the selects (STRUCT tags are ignored in a select): fail closed
     hides("<template><i hidden><select><table><select></template>LEAK")
+
+
+# ------------------------------------------------------------------ wave 21: a template in "in body" mode ignores table-structure start tags
+@pytest.mark.parametrize("html", [
+    "<p><i hidden></p><template><span><td></template>LEAK", "<p><i hidden></p><template><b><td></template>LEAK",
+    "<p><i hidden></p><template><img><td></template>LEAK", "<p><i hidden></p><template><div><td></template>LEAK",
+    "<p><i hidden></p><template><span></span><td></template>LEAK", "<p><i hidden></p><template><span><th></template>LEAK",
+    "<p><i hidden></p><template><span><caption></template>LEAK",
+    "<p><i hidden></p><table><tr><td><template><span><td></template></td></tr></table>LEAK",
+    "<p><b class=h></p><template><div><td></template>LEAK<style>.h{display:none}</style>"])
+def test_w21_a_table_structure_start_tag_in_a_template_in_body_mode_is_ignored_so_the_template_pop_clears_its_own_marker(html):
+    # browser: "in template", any other start tag (span): pop the template mode, push "in body"; a td there is ignored; `</template>` clears once: [i]
+    hides(html)
+
+
+def test_w21_control_a_nested_template_has_its_own_mode_so_its_cell_pushes_a_marker_and_each_end_clears_once():
+    # [i, M_t1, M_t2, M_td] -> inner end -> [i, M_t1, M_t2] -> outer end -> [i, M_t1]: the last entry is a marker, nothing is rebuilt, LEAK shows (checked
+    # in a browser: DOMParser gives `...</template>LEAK`; the brief's expected '' was a miscount). The outer template's "body" flag must not reach the inner one
+    shows_md("<p><i hidden></p><template><span><template><td></template></template>LEAK", "LEAK")
+    shows_md("<p><i hidden></p><template><template><td></template></template>LEAK", "LEAK")
+
+
+def test_w21_a_nested_template_in_body_mode_of_its_own_ignores_its_cell_tag_so_the_two_ends_leave_the_hidden_element_to_rebuild():
+    hides("<p><i hidden></p><template><span><template><span><td></template></template>LEAK")        # [i, M_t1, M_t2] -> [i]: i is rebuilt (browser: hidden)
+    hides("<p><i hidden></p><template><span><template><td></template>LEAK")                         # guard: the outer template is still open, hiding all
+
+
+@pytest.mark.parametrize("html,expected", [
+    ("<p><i hidden></p><template><td></template>VIS", "VIS"), ("<p><i hidden></p><template>x<td></template>VIS", "VIS"),
+    ("<template><i hidden><td></template>VIS", "VIS")])
+def test_w21_controls_a_cell_tag_before_any_other_start_tag_builds_a_cell_and_the_hidden_element_in_body_mode_is_cleared(html, expected):
+    # a td in template mode pushes "in row" and a marker (the list ends [i, M_t]); `<i hidden>` is "any other start tag": body mode, the td is ignored
+    shows_md(html, expected)

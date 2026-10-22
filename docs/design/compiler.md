@@ -1120,7 +1120,8 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   table opened inside a select is no select in a table (`<select><table><td hidden>x</td></table></select>VIS`: over-hide). `template_end` poisons the
   rest of the page when its pop closes a select, or a select nested in it, that `reach` rejects (the whole region above the first select over the
   template is read; the readings' formatting lists differ there:
-  `<template><i hidden><select><table><tr></template>VIS` shows nothing, a browser shows VIS: over-hide). Document-level
+  `<template><i hidden><select><table><tr></template>VIS` and `<template><i hidden><select><table><select></template>VIS` show nothing, a browser
+  shows VIS: over-hide). Document-level
   hiding: an `html` or `body` start tag, the first or a late one, that hides, or a `<style>` rule that hides `html`, `body` or `*`, makes
   the body empty; a `<template shadowrootmode=...>` hides every child of its host (those before it too). THE STYLE PASS (`treestyle.py`,
   re-exported by `stylepass.py`): the sheet of a page is the child text of the `style` elements of the tree in any namespace (HTML: raw
@@ -1147,10 +1148,14 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   every tag that raw-texts or hides its content (`mdrules.RAW_TEXT`: the raw-text names plus noscript, details, select, svg, math,
   template, object, dialog, canvas, video, audio, datalist, head, rp, progress, meter) is escaped inside a trusted code span or fence.
   Kept over-hides, each on purpose: a nested `select` stays open, a raw text a select holds with a `<` hides the rest of the page, the
-  select enders are gated by `reach`, a furthest-block formatting element stays open, `a`, `nobr`, `button`, headings, `option` and
-  `ruby` have no start-tag rules and `form` has no pointer (`</form>` pops only a current form), `colgroup` is read in the table mode
-  and a template routes table tags there and the rest to the body, a closed `details` hides its summary too, and the scan variants hide
-  a CDATA-wrapped HTML style a browser would show as text. The cases the tree decides that the rule stack got wrong are the six Opus
+  select enders are gated by `reach`, a `</template>` that closes a select holding a barrier hides the rest of the page, a table opened inside a
+  select is no select in a table, `</select>` needs the select in scope, a furthest-block formatting element stays open, `a`, `nobr`,
+  `button`, headings, `option` and `ruby` have no start-tag rules and `form` has no pointer (`</form>` pops only a current form), `colgroup`
+  is read in the table mode, a closed `details` hides its summary too, and the scan variants hide a CDATA-wrapped HTML style a browser would show
+  as text. A template builds table parts for table-structure start tags until a start tag that is neither one of them nor an in-head name
+  (`base basefont bgsound link meta noframes script style template title`) makes it a body template for good (`Node.inbody`, `Node.builds`),
+  where they are ignored and push no cell marker, as in a browser (wave 21; routed to the table rules before, the template pop cleared that
+  marker and left its own, so a hidden formatting element opened before the template leaked: `<p><i hidden></p><template><span><td></template>LEAK`). The cases the tree decides that the rule stack got wrong are the six Opus
   wave-7 worlds (BOM before the doctype, svg CDATA style, nearest-name end tag, `annotation-xml` encoding, self-closed integration
   points, frameset) and the older foster-parenting gap. In Markdown a `===`, `=` or `--` line with no paragraph open is paragraph text (the paragraph flag of
   `mdrules.scan` stays set); only a heading, a thematic break or a setext underline under an open paragraph ends it, and such a line inside

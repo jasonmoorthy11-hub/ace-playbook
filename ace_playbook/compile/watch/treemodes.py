@@ -1,9 +1,9 @@
 """The insertion modes of the sanitizer's HTML tree builder (HTML Standard, tree construction) as functions `mode(t, k, n, a, sc)`: `t` the `Tree`, `k` the
 token kind ("c" characters, "s" start tag, "e" end tag, "d" doctype), `n` its name (the data of "c"), `a` its attributes, `sc` its self-closing flag. Stdlib
-only. Simpler than a browser, always towards hiding MORE (LIMITATIONS.md, Watcher): fewer start-tag rules (`a`, `nobr`, `button`, headings, `option`,
-`form`, `ruby` nest deeper), an open select (end tags ignored but its own, nested selects stay open, raw text with a `<` hides the rest of the page),
-`Tree.adopt`. One function for the table modes: the mode is derived from the stack (`Tree.reset_mode`). Foreign content: a breakout start tag, `</p>`,
-`</br>` pop the foreign run and are read again."""
+only. Simpler than a browser, always towards hiding MORE (LIMITATIONS.md, Watcher): fewer start-tag rules (`a`, `nobr`, `button`, headings, `option`, `form`,
+`ruby` nest deeper), an open select (end tags ignored but its own, nested selects stay open, raw text with a `<` hides the rest of the page, a `</template>`
+that closes a select holding a barrier hides it too), `Tree.adopt`. One function for the table modes: the mode is derived from the stack (`Tree.reset_mode`).
+Foreign content: a breakout start tag, `</p>`, `</br>` pop the foreign run and are read again."""
 
 from __future__ import annotations
 
@@ -173,7 +173,7 @@ def inselect(t, k, n, a, sc):
         elif n == "template": head(t, k, n, a, sc)
 
 def intemplate(t, k, n, a, sc):
-    (intable if k == "s" and n in STRUCT else body)(t, k, n, a, sc)       # a table tag in a template builds table parts inside it; the rest is body
+    (intable if t.stack[t.idx["template"][-1]].builds(k, n) else body)(t, k, n, a, sc)       # a table tag builds table parts until the template is in body mode
 
 # ---- foreign content
 def foreign_dispatch(cur, k, n) -> bool:

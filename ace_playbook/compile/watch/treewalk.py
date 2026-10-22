@@ -11,6 +11,7 @@ without case), and so is everything below it. The document hides when the builde
 from __future__ import annotations
 
 from .cssstyle import style_hidden
+from .htmlrules import HEAD_TAGS, STRUCT
 
 SKIP = frozenset(("script style template noscript dialog svg math iframe object embed head title meta link canvas audio video datalist "
                   "noembed noframes rp select progress meter").split())
@@ -32,17 +33,25 @@ def own_attrs(name: str, attrs) -> bool:
 
 
 class Node:
-    __slots__ = ("name", "ns", "attrs", "parent", "kids", "ip", "own", "syn", "mask", "open", "pos")
+    __slots__ = ("name", "ns", "attrs", "parent", "kids", "ip", "own", "syn", "mask", "open", "pos", "inbody")
 
     def __init__(self, name: str, ns: int = 0, attrs=(), syn: bool = False) -> None:
         self.name, self.ns, self.attrs, self.syn, self.parent, self.kids, self.open, self.pos = name, ns, attrs, syn, None, [], False, -1
-        self.mask, self.own, self.ip = MARK.get((ns, name), ()), own_attrs(name, attrs), 0
+        self.mask, self.own, self.ip, self.inbody = MARK.get((ns, name), ()), own_attrs(name, attrs), 0, False
         if ns == 1:
             self.ip = 1 if name in ("foreignobject", "desc", "title") else 0
         elif ns == 2:
             enc = next((v or "" for k, v in attrs if k == "encoding"), "").lower()
             tx = name in ("mi", "mo", "mn", "ms", "mtext")
             self.ip = (1 if enc in ("text/html", "application/xhtml+xml") else 3) if name == "annotation-xml" else 2 if tx else 0
+
+    def builds(self, k: str, n: str) -> bool:
+        """For a template: does this token build table parts? The in-template "any other start tag" (neither a table-structure nor an in-head name) switches
+        the template to "in body" for good (`inbody`), where a table-structure start tag is ignored; characters and end tags do not switch it."""
+        if k != "s" or n in HEAD_TAGS: return False
+        if n in STRUCT: return not self.inbody
+        self.inbody = True
+        return False
 
 
 def hidden(name: str, own: bool, attrs, rules: tuple) -> bool:
