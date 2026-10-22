@@ -39,15 +39,16 @@ def jl(text: str):
 
 
 def num(v):
-    """A number (not a bool) that is finite, else None: JSON `Infinity` and `NaN` parse to floats and must not reach a ledger row."""
-    return v if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else None
+    """An int (never a bool, any size) or a finite float, else None: JSON `Infinity` and `NaN` parse to floats and must not reach a ledger
+    row. Only a float goes through math.isfinite: it raises OverflowError for an int beyond float range."""
+    return v if type(v) is int or (type(v) is float and math.isfinite(v)) else None
 
 
 class OneLineParser(argparse.ArgumentParser):
     """argparse whose usage errors are ONE stderr line `brief: usage: ...` and exit 2 (the default prints the usage block first)."""
 
     def error(self, message):
-        print(f"brief: usage: {self.prog} <verb> [args]: {message}", file=sys.stderr)
+        print(f"brief: usage: {self.prog}: {' '.join(message.split())}", file=sys.stderr)       # argv text may hold a newline: still ONE line
         sys.exit(2)
 
 

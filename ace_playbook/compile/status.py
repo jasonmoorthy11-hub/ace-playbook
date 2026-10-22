@@ -199,7 +199,7 @@ def _heartbeat(cfg: Config, rows: list[dict], notes: list[str]) -> dict:
     ok, extra = rec.get("ok") is True and _stamp(rec.get("last_run")) != "-", rec["notes"] if isinstance(rec.get("notes"), list) else []
     return {"last_hook_row": stamps(rows), "last_live_fire": stamps([r for r in rows if fired(r)]),
             "last_offline_scan": _mtime(cfg.path(OFFLINE_STATE)), "last_nightly_ok": rec["last_run"] if ok else None,
-            "notes": [*notes, *(["nightly:failed"] if rec.get("ok") is False else []), *[n[:80] for n in extra if isinstance(n, str)][:4]]}
+            "notes": [*notes, *(["nightly:failed"] if rec.get("ok") is False else []), *[n[:80] for n in extra if isinstance(n, str) and n.isprintable()][:4]]}
 
 
 def build(cfg: Config, days: int = 14, now: str | None = None) -> dict:

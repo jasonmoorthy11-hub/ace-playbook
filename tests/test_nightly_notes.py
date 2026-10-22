@@ -113,36 +113,66 @@ def test_status_renders_the_notes_of_the_health_record_and_validates_them(w):
     assert "notes: " in status.render(s) and "backup 7h, brain drift: 0 files (1 skipped, 16 entropy)" in status.render(s)
     path.write_text(json.dumps({**base, "notes": ["a", 7, None, ["x"], "b" * 200, "c", "d", "e", "f"]}))
     assert build(w)["heartbeat"]["notes"][-4:] == ["a", "b" * 80, "c", "d"]            # strings only, each cut to 80, at most 4
-    for bad in ("backup 7h", 5, {"a": "b"}, None):
-        path.write_text(json.dumps({**base, "notes": bad}))
-        assert "backup 7h" not in build(w)["heartbeat"]["notes"] and build(w)["heartbeat"]["last_nightly_ok"] == base["last_run"]
     path.write_text(json.dumps(base))
+    plain = build(w)["heartbeat"]["notes"]                                                  # the notes the world has without any check line
     assert "backup" not in status.render(build(w))
+    for bad in ("backup 7h", 5, {"a": "b"}, None, True):
+        path.write_text(json.dumps({**base, "notes": bad}))
+        assert build(w)["heartbeat"]["notes"] == plain and build(w)["heartbeat"]["last_nightly_ok"] == base["last_run"]
 
 
-def test_the_config_takes_the_two_keys_expands_the_home_and_wants_an_existing_regular_file(tmp_path, monkeypatch):
+def test_status_drops_a_note_with_a_control_character_so_it_never_reaches_the_screen_raw(w):
+    base = {"last_run": "2026-10-20T03:00:00Z", "ok": True, "consecutive_failures": 0, "last_error": ""}
+    w.cfg.path("health.json").write_text(json.dumps({**base, "notes": ["esc \u001b[31mRED", "nl\nx", "tab\tx", "backup 7h", "x\u0085y"]}))
+    s = build(w)
+    assert s["heartbeat"]["notes"][-1] == "backup 7h" and not [n for n in s["heartbeat"]["notes"] if not n.isprintable()]
+    assert "\x1b" not in status.render(s) and "RED" not in status.render(s) and "nl\n" not in status.render(s)
+
+
+def test_the_config_takes_the_two_keys_expands_the_home_and_only_type_checks_them(tmp_path, monkeypatch):
+    """D-150: a note source never breaks a loader. A path is not looked at until collection time; a missing script LOADS."""
     monkeypatch.setenv("HOME", str(tmp_path))
     good = script(tmp_path, "check.sh", "echo ok\n")
     cfg = cfgmod.from_dict({"backup_check": "~/check.sh", "brain_check": str(good)})
     assert cfg.backup_check == good and cfg.brain_check == good
     cfg = cfgmod.from_dict({})
     assert cfg.backup_check is None and cfg.brain_check is None
+    cfg = cfgmod.from_dict({"backup_check": str(tmp_path / "missing.sh"), "brain_check": str(tmp_path)})      # gone, and a directory: both load
+    assert cfg.backup_check == tmp_path / "missing.sh" and cfg.brain_check == tmp_path
     for key in ("backup_check", "brain_check"):
-        for bad in (str(tmp_path / "missing.sh"), str(tmp_path), ""):
+        for bad in ("", "   ", 5, ["x"], {"a": 1}, True):
             with pytest.raises(ValueError, match=key):
-                cfgmod.from_dict({key: bad if bad else "~"})      # "" reads as no value to from_dict; "~" is a directory
+                cfgmod.from_dict({key: bad})
     with pytest.raises(ValueError, match="brain_check"):
         cfgmod.Config(brain_check="")                              # a blank path is not "absent"
 
 
-def test_the_config_loader_raises_for_a_missing_check_script(tmp_path):
+def test_the_config_loader_loads_a_config_whose_check_script_is_gone_and_raises_for_a_blank_or_non_string_value(tmp_path):
     conf = tmp_path / "config.json"
     conf.write_text(json.dumps({"data_dir": str(tmp_path / "d"), "backup_check": str(tmp_path / "gone.sh")}))
-    with pytest.raises(ValueError, match="backup_check"):
-        cfgmod.load(conf)
+    assert cfgmod.load(conf).backup_check == tmp_path / "gone.sh"
+    for bad in ("", 7):
+        conf.write_text(json.dumps({"data_dir": str(tmp_path / "d"), "backup_check": bad}))
+        with pytest.raises(ValueError, match="backup_check"):
+            cfgmod.load(conf)
 
 
-def run_nightly(tmp_path, monkeypatch, capsys, conf_extra, *args):
+def test_a_check_script_that_is_gone_or_a_directory_is_a_failed_note_not_an_error(tmp_path):
+    gone, here = script(tmp_path, "g.sh", "echo ok\n"), tmp_path / "adir"
+    here.mkdir()
+    cfg = cfg_of(tmp_path, backup=gone, brain=here)
+    gone.unlink()
+    assert nightly_notes.collect(cfg) == ["backup check failed", "brain check failed"]
+
+
+def test_a_line_whose_first_word_carries_a_colon_cannot_pose_as_a_digest_category(tmp_path):
+    for body in ('echo "silent:hook 9d"\n', 'echo "approvals:broken:3"\n', 'echo "x:y"\n', 'echo "brain: ok"\n'):
+        assert nightly_notes.collect(cfg_of(tmp_path, brain=script(tmp_path, "c.sh", body))) == ["brain check failed"], body
+    ok = script(tmp_path, "ok.sh", 'echo "brain drift: 2 files (1 skipped)"\n')
+    assert nightly_notes.collect(cfg_of(tmp_path, brain=ok)) == ["brain drift: 2 files (1 skipped)"]
+
+
+def load_nightly(tmp_path, monkeypatch, conf_extra, *args):
     import importlib.util
     spec = importlib.util.spec_from_file_location("nightly_sweep_under_test", HOOKS / "nightly_sweep.py")
     mod = importlib.util.module_from_spec(spec)
@@ -152,9 +182,61 @@ def run_nightly(tmp_path, monkeypatch, capsys, conf_extra, *args):
     monkeypatch.setattr(sys, "argv", ["nightly_sweep.py", "--config", str(conf), *args])
     monkeypatch.setattr(offline, "run", lambda cfg, **kw: {"transcripts": 0})
     monkeypatch.setattr(mod, "run_sweep", lambda cfg, **kw: [])
+    return mod, cfgmod.load(conf)
+
+
+def run_nightly(tmp_path, monkeypatch, capsys, conf_extra, *args):
+    mod, cfg = load_nightly(tmp_path, monkeypatch, conf_extra, *args)
     rc = mod.main()
     capsys.readouterr()
-    return rc, cfgmod.load(conf), mod
+    return rc, cfg, mod
+
+
+def boom(*a, **kw):
+    raise KeyError("detail that must not matter")
+
+
+def noted(tmp_path, ok=None):
+    rec = health.read(cfgmod.Config(data_dir=tmp_path / "data"))
+    assert rec is not None and rec["notes"] == ["backup 7h"] and (ok is None or rec["ok"] is ok)
+    return rec
+
+
+def test_a_failed_offline_pass_records_the_failure_with_the_notes(tmp_path, monkeypatch, capsys):
+    backup = script(tmp_path, "b.sh", 'echo "backup 7h"\n')
+    mod, _ = load_nightly(tmp_path, monkeypatch, {"backup_check": str(backup)})
+    monkeypatch.setattr(offline, "run", boom)
+    assert mod.main() == 0
+    assert noted(tmp_path, ok=False)["consecutive_failures"] == 1
+
+
+def test_a_dry_run_sweep_that_raises_records_the_failure_with_the_notes(tmp_path, monkeypatch):
+    backup = script(tmp_path, "b.sh", 'echo "backup 7h"\n')
+    mod, _ = load_nightly(tmp_path, monkeypatch, {"backup_check": str(backup)}, "--dry-run")
+    monkeypatch.setattr(mod, "run_sweep", boom)
+    with pytest.raises(KeyError):
+        mod.main()
+    noted(tmp_path, ok=False)
+
+
+def test_a_real_sweep_that_raises_records_the_failure_with_the_notes(tmp_path, monkeypatch):
+    from ace_playbook import sweep
+    cfg = cfgmod.Config(data_dir=tmp_path / "data", transcripts_root=tmp_path / "projects")
+    monkeypatch.setattr(sweep, "_sweep", boom)
+    with pytest.raises(KeyError):
+        sweep.run_sweep(cfg, notes=["backup 7h"])
+    noted(tmp_path, ok=False)
+
+
+def test_the_nightly_with_a_deleted_check_script_still_runs_and_records_health_with_a_failed_note(tmp_path, monkeypatch, capsys):
+    backup = script(tmp_path, "b.sh", 'echo "backup 7h"\n')
+    brain = script(tmp_path, "n.sh", 'echo "brain drift: 0 files"\n')
+    mod, cfg = load_nightly(tmp_path, monkeypatch, {"backup_check": str(backup), "brain_check": str(brain)}, "--dry-run")
+    backup.unlink()
+    assert mod.main() == 0
+    capsys.readouterr()
+    rec = health.read(cfg)
+    assert rec["ok"] is True and rec["notes"] == ["backup check failed", "brain drift: 0 files"]
 
 
 def test_the_nightly_records_the_notes_in_health_and_a_failing_collection_never_fails_the_night(tmp_path, monkeypatch, capsys):

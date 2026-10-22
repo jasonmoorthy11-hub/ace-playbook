@@ -18,6 +18,16 @@ SUGGESTED_KEY = "chain_key"   # keygen's suggestion beside the config file; neve
 MAX_INJECT_CHARS = 7000
 
 
+CHECK_FIELDS = ("backup_check", "brain_check")   # the nightly's optional note scripts (ace_playbook/nightly_notes.py)
+
+
+def check_value(key: str, value: Any) -> None:
+    """A note source never breaks a loader (D-150): the value is only type-checked here (absent, or a non-blank string or Path); whether the
+    file exists is looked at when the note is collected, where a missing script is a failed note."""
+    if value is not None and not (isinstance(value, (str, Path)) and str(value).strip()):
+        raise ValueError(f"{key} must be a non-blank path (or absent)")
+
+
 @dataclass
 class Config:
     data_dir: Path = field(default_factory=lambda: DEFAULT_DATA)   # looked up per instance, so the test suite can pin it away from the real one
@@ -74,9 +84,8 @@ class Config:
             raise ValueError("holdout_rate must be between 0 and 1")
         if self.brief_dedupe_hours < 0 or not 0 < self.brief_max_budget_usd <= 100:
             raise ValueError("brief_dedupe_hours must be >= 0 and brief_max_budget_usd in (0, 100]")
-        for key in ("backup_check", "brain_check"):
-            if getattr(self, key) is not None and not Path(getattr(self, key)).is_file():
-                raise ValueError(f"{key} must be an existing regular file (or absent)")
+        for key in CHECK_FIELDS:
+            check_value(key, getattr(self, key))
 
     def check_holdout(self) -> None:
         """Raise ValueError if holdout is on without a usable private seed."""
@@ -138,6 +147,8 @@ def from_dict(raw: dict[str, Any]) -> Config:
     unknown = set(raw) - known
     if unknown:
         raise ValueError(f"unknown config keys: {sorted(unknown)}")
+    for key in CHECK_FIELDS:
+        check_value(key, raw.get(key))
     kwargs = {k: (Path(os.path.expanduser(v)) if k in _PATH_FIELDS and v else v)
               for k, v in raw.items()}
     return Config(**kwargs)

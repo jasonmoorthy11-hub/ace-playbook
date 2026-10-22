@@ -1304,7 +1304,8 @@ Order W3 of the watcher and cockpit design (section 7, "The brief"). Not on the 
   checked-in lists only; `brief.sh` shows it on stderr on a refusal). The MODEL chooses the names of its `tool_use` blocks, so a name is written
   anywhere only when it fullmatches `[A-Za-z0-9_][A-Za-z0-9_.-]*` and is on the allowlist, in `hooks/brief_connector_tools.txt`, a built-in
   name or in the init list; any other is counted (`unknown_tools`, pseudo-name `unknown`), never echoed. A stream with no `system/init`
-  event, or with an init event whose `tools` is not a list, is not audited: `brief_audit` raises "no init" (exit 1), so nothing passes. The
+  event, or with an init event whose `tools` is not a list, is not audited: `brief_audit` raises "no init" (exit 1), so nothing passes (a stream that
+  is also unparseable is drift `unparseable`, exit 2). The
   audit fails closed: a non-blank stream line that is
   not a JSON object, a call block (`tool_use`, `server_tool_use`, `mcp_tool_use`) whose `name` is not a string, or a file over 50 MB (it is not
   truncated), counts as drift with the pseudo-name `unparseable`, and a raw scan of the lines that did not parse as JSON objects for

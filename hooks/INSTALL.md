@@ -156,8 +156,8 @@ record untouched. Check it with
 `no health record` before the first run). After 3 failures in a row the SessionStart block adds
 one line telling you to read the reflect log (`reflect.log`) in the data dir.
 
-**Optional notes in `compile status` (`backup`, `brain drift`).** Two config keys name check scripts of your own, each an existing
-regular file (`~` is expanded; the config loader refuses a missing one):
+**Optional notes in `compile status` (`backup`, `brain drift`).** Two config keys name check scripts of your own (`~` is
+expanded; the config loader only checks that the value is a non-blank string, so a moved or deleted script never breaks a loader):
 
 ```json
 "backup_check": "~/path/to/ace_backup.sh",
@@ -167,8 +167,10 @@ regular file (`~` is expanded; the config loader refuses a missing one):
 Each night, before the sweep, `nightly_sweep.py` runs each configured script as `<script> --check` (20 s limit, only `PATH` and `HOME` in its
 environment), keeps the first line it prints (80 characters at most) and stores it in `health.json` under `notes`; `compile status` then
 shows it in its `notes:` line, for example `backup 7h`, `backup missing` or `brain drift: 0 files (1 skipped, 16 entropy)`. The line is
-whatever your script prints, so print no path (a line with a `/` is dropped). A script that exits non-zero, times out or prints nothing shows
-`backup check failed` or `brain check failed`, with no detail. A failing note never fails the night. Leave both keys out and nothing changes.
+whatever your script prints, so print no path (a line with a `/` is dropped). A script that is missing or not a regular file, exits non-zero, times
+out, prints nothing or starts its
+first word with a `:`-bearing token such as `silent:x` shows `backup check failed` or `brain check failed`, with no detail. A failing note never
+fails the night. Leave both keys out and nothing changes.
 
 ## 5. Optional: git pre-commit scrub
 

@@ -631,3 +631,21 @@ def test_help_still_prints_the_full_usage_and_exits_0(env):
     p = subprocess.run([sys.executable, "-m", "ace_playbook.compile.brief", "-h"], capture_output=True, text=True, cwd=ROOT, timeout=30,
                        env={**os.environ, "ACE_PLAYBOOK_CONFIG": str(env / "config.json")})
     assert p.returncode == 0 and "usage:" in p.stdout and len(p.stdout.splitlines()) > 2
+
+
+def test_a_huge_integer_is_kept_as_before_and_is_never_an_overflow_traceback(env, capsys):
+    """`math.isfinite` on an int beyond float range raises OverflowError: only a float goes through it (finite floats and ints are kept)."""
+    big = int("9" * 400)
+    junk = put(env, "j.json", "[]")
+    window = {"type": "rate_limit_event", "rate_limit_info": {"unifiedWindows": {"five_hour": {"utilization": big}}}}
+    res = put(env, "r.json", {"type": "result", "total_cost_usd": big, "duration_ms": 7, "usage": {"output_tokens": -big}})
+    assert run(capsys, "ledger", put(env, "w.json", window), junk, "stage1", res) == (0, "", "")
+    row = last_row(env)
+    assert (row["cost_usd"], row["five_hour_before"], row["duration_ms"], row["output_tokens"]) == (big, big, 7, -big)
+    assert brief._num(big) == big and brief._num(True) is None and brief._num(2.5) == 2.5 and brief._num(float("inf")) is None
+
+
+def test_a_usage_error_is_one_line_even_when_an_argument_holds_a_newline(env):
+    p = subprocess.run([sys.executable, "-m", "ace_playbook.compile.brief", "state-mark", "a\nb", "c\rd"], capture_output=True, text=True, cwd=ROOT,
+                       timeout=30, env={**os.environ, "ACE_PLAYBOOK_CONFIG": str(env / "config.json")})
+    assert p.returncode == 2 and len(p.stderr.splitlines()) == 1 and p.stderr.startswith("brief: usage: ") and "<verb>" not in p.stderr

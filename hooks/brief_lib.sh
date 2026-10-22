@@ -53,7 +53,8 @@ wait_stage() {   # $1 stage name: wait for the background step in CHILD under th
   [ -e "$RUN/timed_out" ] || return "$rc"
   rm -f "$RUN/timed_out"; py timeout-mark "$1" || true; return 124
 }
-notify() {   # $1 message, $2 optional page to open. $ACE_BRIEF_NOTIFIER names the notifier (tests inject a fake; it is never looked up on the PATH)
+notify() {   # $1 message, $2 optional page to open. $ACE_BRIEF_NOTIFIER names the notifier
+  # (tests inject a fake; empty means unset, and the default terminal-notifier comes from the PATH)
   local n="${ACE_BRIEF_NOTIFIER:-terminal-notifier}"
   command -v "$n" > /dev/null 2>&1 || return 0
   "$n" -title "ACE brief" -message "$1" ${2:+-open "$2"} > /dev/null 2>&1 9>&- || true
