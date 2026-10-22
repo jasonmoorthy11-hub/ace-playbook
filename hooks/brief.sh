@@ -15,8 +15,8 @@
 # Stage 1 does NOT pass --strict-mcp-config (the claude.ai connectors are account-level: strict mode shows 0 MCP servers) nor --setting-sources
 # (it drops the connectors too; probed 2026-10-22). Both stages pass --no-session-persistence (no transcript of the raw mail where the nightly
 # reflect sweep would find it) and --settings (disableAllHooks, the deny list). --tools, --allowedTools and --disallowedTools take a variadic
-# list, so the prompt always comes last, after a flag with a single value (--max-budget-usd). One run at a time: a kernel lock (lockf) on
-# brief_dir/run.lockf, released by the kernel when the run dies. Each stage has a wall-clock limit, ACE_BRIEF_STAGE_TIMEOUT seconds (600): TERM,
+# list, so the prompt always comes last, after a flag with a single value (--max-budget-usd). One run at a time: a kernel flock (python fcntl on
+# fd 9) on brief_dir/run.lockf, released by the kernel when the run dies. Each stage has a wall-clock limit, ACE_BRIEF_STAGE_TIMEOUT seconds (600): TERM,
 # then KILL after ACE_BRIEF_KILL_GRACE seconds (10); a stage also runs under its own perl alarm of both, so it dies when this script is killed.
 # Config: $ACE_PLAYBOOK_CONFIG (else the default file) via `python -m ace_playbook.compile.brief conf`. $ACE_BRIEF_CLAUDE names the claude
 # binary and $ACE_BRIEF_NOTIFIER the notifier (default terminal-notifier; tests inject fakes of both); $ACE_BRIEF_KEEP keeps the raw streams.
@@ -50,7 +50,7 @@ on_signal() {   # $1 the exit code; every child of this shell is stopped (one ju
   trap '' TERM INT HUP      # first: a second signal must not cut the stop or the purge short
   [ -n "$CHILD" ] && kill "$CHILD" 2>/dev/null
   pkill -TERM -P $$ 2>/dev/null
-  local i; for ((i = 0; i < ${GRACE:-10} * 5; i++)); do pgrep -qP $$ || break; sleep 0.2 9>&-; done      # up to GRACE seconds to end
+  local i; for ((i = 0; i < ${GRACE:-10} * 5; i++)); do pgrep -P $$ > /dev/null 2>&1 || break; sleep 0.2 9>&-; done   # up to GRACE s to end; no -q (procps)
   [ -n "$CHILD" ] && kill -KILL "$CHILD" 2>/dev/null      # a stage that ignores TERM must not hold the stop (and the purge) until its alarm
   pkill -KILL -P $$ 2>/dev/null
   wait 2>/dev/null

@@ -1156,10 +1156,11 @@ Order W3 of the watcher and cockpit design (section 7, "The brief"). Not on the 
   duration_ms, num_turns, tools_called, unknown_tools}` (`model` lists the `modelUsage` keys that are a NAME, else `unknown`); the window fields
   come from the stream's `rate_limit_event` (`unifiedWindows.<window>.utilization`).
   Jason sets the share of a weekly window after a week of rows (D-97).
-- **Run control.** `brief.sh` takes a kernel lock, `/usr/bin/lockf -s -t 0` on an fd opened on `brief_dir/run.lockf` (one run at a time; the
+- **Run control.** `brief.sh` takes a kernel `flock` (`fcntl.flock(9, LOCK_EX | LOCK_NB)` in
+  `${ACE_PYTHON:-python3}`, portable to macOS and Linux) on an fd opened on `brief_dir/run.lockf` (one run at a time; the
   kernel releases it when the last process holding the fd dies, a SIGKILL included, so there is no pid file, no stale lock and no takeover
   race, and a live run is always respected: a second run exits 0 without a word; the lock is taken on a descriptor, not by re-executing the
-  script under `lockf`, because `lockf` does not forward SIGTERM to its command). The raw files are purged right after the lock is taken.
+  script under a lock wrapper, which would not forward SIGTERM to its command). The raw files are purged right after the lock is taken.
   The helpers (`names`, the lock, the watchdog, `notify`) are in `hooks/brief_lib.sh`, sourced by `brief.sh`. Each stage has a wall-clock
   watchdog, `ACE_BRIEF_STAGE_TIMEOUT` seconds (an integer of at least 1, else 600): a stage that outlasts it gets SIGTERM, and SIGKILL after
   `ACE_BRIEF_KILL_GRACE` seconds (default 10) if it ignores that; the run fails (exit 1) and the ledger gets a row `timeout: stageN`. Each
