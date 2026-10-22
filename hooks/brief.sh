@@ -50,7 +50,7 @@ on_signal() {   # $1 the exit code; every child of this shell is stopped (one ju
   trap '' TERM INT HUP      # first: a second signal must not cut the stop or the purge short
   [ -n "$CHILD" ] && kill "$CHILD" 2>/dev/null
   pkill -TERM -P $$ 2>/dev/null
-  local i; for ((i = 0; i < ${GRACE:-10} * 5; i++)); do pgrep -qP $$ || break; sleep 0.2 9>&-; done      # up to GRACE seconds to end
+  local i; for ((i = 0; i < ${GRACE:-10} * 5; i++)); do pgrep -P $$ > /dev/null 2>&1 || break; sleep 0.2 9>&-; done   # up to GRACE s to end; no -q (procps)
   [ -n "$CHILD" ] && kill -KILL "$CHILD" 2>/dev/null      # a stage that ignores TERM must not hold the stop (and the purge) until its alarm
   pkill -KILL -P $$ 2>/dev/null
   wait 2>/dev/null

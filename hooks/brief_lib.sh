@@ -15,14 +15,15 @@ names() {   # $1 a list file -> `a,b,c`. A line is blank, a full-line `#` commen
   if LC_ALL=C grep -a -q -v -E '^[[:space:]]*(#.*)?$|^[[:space:]]*[A-Za-z0-9_][A-Za-z0-9_.-]*[[:space:]]*$' "$1"; then return 1; fi
   LC_ALL=C grep -a -v -E '^[[:space:]]*(#|$)' "$1" | LC_ALL=C tr -d ' \t\r\013\014' | paste -sd, -
 }
-take_lock() {   # $1 brief_dir. One run at a time: a kernel flock (taken with python's fcntl on the inherited fd 9, since lockf is BSD-only and flock
-  # is Linux-only) lives on the open file description, so it is held by every process that inherits fd 9 and released by the kernel when the last
-  # one dies, a SIGKILL included: no stale lock and no takeover; a live run is always respected (exit 0).
+take_lock() {   # $1 brief_dir. One run at a time: a kernel flock(2) (taken with python's stdlib fcntl on the inherited fd 9: the lockf(1) and
+  # flock(1) commands are each platform-specific, the syscall is not) lives on the open file description, so it is held by every process that
+  # inherits fd 9 and released by the kernel when the last one dies, a SIGKILL included: no stale lock and no takeover; a live run is always
+  # respected (exit 0). Only "somebody holds it" (EWOULDBLOCK) is that quiet exit; any other error of the lock step fails the run.
   mkdir -p -m 700 "$1" || fail "cannot create the brief directory"
   exec 9>> "$1/run.lockf" || fail "cannot open the lock file"
   "${ACE_PYTHON:-python3}" -I -c 'import fcntl,sys
 try: fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)
-except OSError: sys.exit(75)'; local rc=$?
+except BlockingIOError: sys.exit(75)'; local rc=$?
   [ "$rc" -eq 0 ] && return 0
   [ "$rc" -eq 75 ] && exit 0
   fail "lock"

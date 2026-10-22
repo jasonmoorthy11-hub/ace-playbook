@@ -83,7 +83,7 @@ port, at most 500 characters, no control or format character) only as defence in
 runs without `ANTHROPIC_API_KEY`. None of this is on the hook path; the brief runs `claude -p`, which is the one network use, and only on
 your login.
 
-Two more controls. One run at a time: a kernel lock (`lockf`) that the kernel releases when the run dies, so a live run is never taken
+Two more controls. One run at a time: a kernel `flock` (python `fcntl` on fd 9) that the kernel releases when the run dies, so a live run is never taken
 over; each stage has a wall-clock limit (`ACE_BRIEF_STAGE_TIMEOUT`, 600 s). The private exclusion match runs in a child process that
 `brief_excl.py` SPAWNS (a fresh interpreter, killed after 10 s; D-116): a `re` match in C cannot be interrupted in-process, and the child
 sees only the lists and the mail it is handed. That file is the one place under `ace_playbook/compile/` allowed to import

@@ -210,6 +210,7 @@ def test_a_missing_config_is_a_one_line_failure(w):
 
 
 TAKE = "import fcntl,sys\nf = open(sys.argv[1], 'a')\nfcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"      # exit 1 when somebody holds it
+HOLD = "import fcntl,sys,time\nf = open(sys.argv[1], 'a')\nfcntl.flock(f, fcntl.LOCK_EX)\nprint('held', flush=True)\ntime.sleep(60)\n"
 
 
 def free(w):
@@ -218,14 +219,11 @@ def free(w):
 
 
 def hold(w):
-    """A process that holds the run lock (a live run), in its own session; returns it."""
+    """A process that holds the run lock (a live run), in its own session; returns it once it says `held` (a blocking take, so no race with free())."""
     w.dir.mkdir(parents=True, exist_ok=True)
-    proc = subprocess.Popen([sys.executable, "-I", "-c", TAKE + "import time\ntime.sleep(60)", str(w.dir / "run.lockf")], start_new_session=True)
-    for _ in range(50):
-        if not free(w):
-            return proc
-        time.sleep(0.1)
-    raise AssertionError("the holder never took the lock")
+    proc = subprocess.Popen([sys.executable, "-I", "-c", HOLD, str(w.dir / "run.lockf")], start_new_session=True, stdout=subprocess.PIPE, text=True)
+    assert proc.stdout.readline().strip() == "held", "the holder never took the lock"
+    return proc
 
 
 def test_a_held_lock_exits_quietly_and_a_run_proceeds_once_it_is_released(w):
@@ -240,6 +238,17 @@ def test_a_held_lock_exits_quietly_and_a_run_proceeds_once_it_is_released(w):
         os.killpg(holder.pid, signal.SIGKILL)
         holder.wait()
     assert w.run("--force").returncode == 0 and len(w.ledger()) == 2 and free(w)
+
+
+def test_a_failing_lock_step_is_a_one_line_failure_never_a_silent_skip(w):
+    """Only "somebody holds it" is the quiet exit 0; a lock step that cannot run or cannot see fd 9 (EBADF) fails the run with `brief: lock`."""
+    p = w.run("--force", ACE_PYTHON=str(w.tmp / "no-such-python"))
+    assert (p.returncode, p.stdout, p.stderr.strip().splitlines()[-1]) == (1, "", "brief: lock") and not w.ledger()
+    shim = w.tmp / "python-without-fd9"
+    shim.write_text(f'#!/bin/bash\nexec 9>&-\nexec {sys.executable} "$@"\n')
+    shim.chmod(0o755)
+    p = w.run("--force", ACE_PYTHON=str(shim))
+    assert (p.returncode, p.stdout, p.stderr.strip().splitlines()[-1]) == (1, "", "brief: lock") and not w.ledger() and free(w)
 
 
 def test_three_concurrent_runs_make_exactly_one_ledger_pair_and_print_no_path(w):
@@ -567,8 +576,10 @@ def test_a_signal_while_the_stage_ignores_term_kills_it_after_the_grace_instead_
 
 
 def test_the_notifier_comes_from_ace_brief_notifier_even_with_a_bare_path_and_gets_counts_only(w, fake_notifier):
-    """The suite's autouse fake, not the world's own: PATH holds no notifier, /opt/homebrew/bin is appended by brief.sh (the real one lives there)."""
-    p = w.run("--force", PATH="/usr/bin:/bin", ACE_BRIEF_NOTIFIER=os.environ["ACE_BRIEF_NOTIFIER"])
+    """The suite's autouse fake, not the world's own: PATH holds no notifier, /opt/homebrew/bin is appended by brief.sh (the real one lives there).
+    The bare PATH holds no `uv` either (CI installs it elsewhere), so the python command is given by its absolute path; python3 for the lock is /usr/bin."""
+    p = w.run("--force", PATH="/usr/bin:/bin", ACE_BRIEF_NOTIFIER=os.environ["ACE_BRIEF_NOTIFIER"],
+              ACE_BRIEF_PY=f"{shutil.which('uv')} run --quiet --project {ROOT} python")
     assert p.returncode == 0 and not (w.tmp / "notified").exists()
     assert fake_notifier.read_text().splitlines() == ["-title", "ACE brief", "-message", "1 need you", "-open", f"file://{w.dir}/brief.html"]
     assert bs.MARKER not in fake_notifier.read_text() and "Pat" not in fake_notifier.read_text()
