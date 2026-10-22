@@ -483,3 +483,35 @@ def test_w22_controls_a_tag_the_mode_keeps_still_builds_and_the_second_cell_in_r
     # caption builds; in row, the second td pushes a marker (the wave-21 body flag hid this although a browser shows it). The last world was listed in the
     # Opus wave-12 finding 1 as hidden, but its caption is ignored in table body: the list is [M_t, i] and `</template>` clears both, so LEAK shows
     shows_md(html, expected)
+
+
+# ------------------------------------------------------------------ wave 23: a select opened inside a template that is in a table mode is "in a table"
+@pytest.mark.parametrize("html", [
+    "<template><tr></tr><i hidden><select><td></template>LEAK", "<template><td></td><i hidden><select><td></template>LEAK",
+    "<template><caption></caption><i hidden><select><td></template>LEAK", "<template><colgroup></colgroup><i hidden><select><td></template>LEAK",
+    "<template><caption></caption><i hidden><select><caption></template>LEAK", "<template><tr></tr><i hidden><select><th></template>LEAK",
+    "<template><tr></tr><i hidden><div><select><td></template>LEAK", "<template><tr></tr><i hidden><select><option>x<td></template>LEAK",
+    "<table><tr><td><template><tr></tr><b hidden><select><td></template>LEAK</td></tr></table>",
+    "<head><template><tr></tr><i hidden><select><td></template></head>LEAK", "<template><i hidden><template><tr></tr><select><td></template></template>VIS",
+    "<template><tr></tr><i hidden><select><template></template><td></template>LEAK"])
+def test_w23_a_cell_tag_after_a_select_opened_in_a_table_mode_template_ends_the_select_and_pushes_its_marker_so_the_template_pop_keeps_the_hidden_element(html):
+    # browser: in body, `select` switches to "in select in table" when the insertion mode is a table one (the template's own: "in table body"); there a
+    # td pops the select, resets the mode and is reprocessed, so the marker is pushed: [M_t, i, M_td], `</template>` clears M_td, `<i hidden>` is rebuilt
+    hides(html)
+
+
+@pytest.mark.parametrize("html,expected", [
+    ("<template><tr></tr><i hidden><select><caption></template>VIS", "VIS"), ("<template><tr></tr><i hidden><select><tr></template>VIS", "VIS"),
+    ("<template><col><i hidden><select><td></template>VIS", "VIS"), ("<template><i hidden><select><td></template>VIS", "VIS"),
+    ("<template><tbody></tbody><i hidden><select><tr></template>LEAK", "LEAK")])
+def test_w23_controls_a_select_in_a_colgroup_or_body_mode_template_is_no_select_in_a_table_and_a_tr_pushes_no_marker(html, expected):
+    # a caption is ignored in table body and a tr pushes no marker: the list is [M_t, i], which the pop clears whole (Chrome shows all five)
+    shows_md(html, expected)
+
+
+@pytest.mark.parametrize("html,expected", [
+    ("<p><i hidden></p><template><tr></tr><select><td></template>LEAK", "LEAK"),
+    ("<p><b class=h></p><template><tr></tr><select><td></template>VIS<style>.h{display:none}</style>", "VIS")])
+def test_w23_over_hide_cured_the_cell_marker_of_the_ended_select_stops_the_reconstruction_of_a_hidden_element_opened_before_the_template(html, expected):
+    # browser: the pop clears only M_td, the list stays [i, M_t] and the marker M_t stops the reconstruction (Chrome shows both)
+    shows_md(html, expected)

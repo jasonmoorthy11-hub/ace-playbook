@@ -57,8 +57,9 @@ def special(node) -> bool:
 
 
 def select_in_table(t) -> bool:
-    """Was the open select opened in a table? Only if the last table lies BELOW it, no template between (a table above it, opened inside it: no)."""
-    s, tb, tp = ((t.idx.get(k) or [-1])[-1] for k in ("select", "table", "template")); return tp < tb < s
+    """Was the open select opened in a table (below it, no template between) or in a template whose own mode is table, tbody or row? Not a table inside it."""
+    s, tb, tp = ((t.idx.get(k) or [-1])[-1] for k in ("select", "table", "template"))
+    return tp < tb < s or (tb < tp < s and t.stack[tp].tm in ("table", "tbody", "row"))
 
 
 def begin(s, m=None): return s[-1] if m is None else min(i for i in s if i > m)  # where `reach` starts: the first select over template `m`, else the last
