@@ -380,7 +380,8 @@ UNKNOWN = "mcp__claude_ai_Gmail__a_new_write_tool"
 
 def test_a_new_connector_tool_in_the_init_list_refuses_the_run_discards_the_digest_and_names_nothing(w):
     p = w.run("--force", ACE_FAKE_INIT_TOOLS=f"ToolSearch,mcp__claude_ai_Gmail__search_threads,{UNKNOWN}")
-    assert (p.returncode, p.stdout, p.stderr) == (2, "", "brief: tool drift, run refused\n")
+    summary = '{"init": 3, "drift": ["unknown"], "unknown": 1}'          # a name that is in no checked-in list is only counted
+    assert (p.returncode, p.stdout, p.stderr) == (2, "", f"brief: tool drift, run refused\n{summary}\n")
     rows = w.ledger()
     assert [r["stage"] for r in rows] == ["stage1", "stage1"] and rows[1]["drift"] == [UNKNOWN] and "drift" not in rows[0]
     assert not (w.fake / "argv_stage2.json").exists() and not (w.dir / "brief.html").exists() and not (w.dir / "brief_state.json").exists()
@@ -389,9 +390,30 @@ def test_a_new_connector_tool_in_the_init_list_refuses_the_run_discards_the_dige
     assert UNKNOWN not in (w.tmp / "notified").read_text() + p.stdout + p.stderr
 
 
-def test_a_clean_init_list_of_allowed_tools_and_built_ins_proceeds(w):
-    p = w.run("--force", ACE_FAKE_INIT_TOOLS="ToolSearch,Bash,Read,mcp__claude_ai_Gmail__search_threads,mcp__claude_ai_Linear__list_issues")
-    assert p.returncode == 0 and (w.dir / "brief.html").exists() and not any("drift" in r for r in w.ledger())
+def test_a_clean_init_list_of_allowed_tools_proceeds_and_prints_no_summary(w):
+    p = w.run("--force", ACE_FAKE_INIT_TOOLS="ToolSearch,mcp__claude_ai_Gmail__search_threads,mcp__claude_ai_Linear__list_issues")
+    assert p.returncode == 0 and (w.dir / "brief.html").exists() and not any("drift" in r for r in w.ledger()) and "init" not in p.stdout + p.stderr
+
+
+@pytest.mark.parametrize("where", ["init", "call"])
+def test_a_built_in_tool_in_the_init_list_or_a_call_refuses_the_run_and_the_summary_names_it(w, where):
+    kw = {"ACE_FAKE_INIT_TOOLS": "ToolSearch,Bash"} if where == "init" else {"ACE_FAKE_INIT_TOOLS": "ToolSearch", "ACE_FAKE_CALLS": '["Bash"]'}
+    p = w.run("--force", **kw)
+    assert p.returncode == 2 and not (w.fake / "argv_stage2.json").exists() and raw_left(w) == [] and free(w)
+    assert p.stderr.splitlines()[-1].startswith('{"init": ') and '"drift": ["Bash"]' in p.stderr.splitlines()[-1]
+
+
+def test_a_tool_name_the_model_invents_is_counted_and_never_written_to_any_file_stdout_stderr_or_the_notifier(w):
+    secret = f"Pat asks whether the draft is final {bs.MARKER}"
+    calls = [secret, f"mcp__{secret.replace(' ', '_')}", "mcp__claude_ai_Gmail__search_threads"]
+    p = w.run("--force", ACE_FAKE_INIT_TOOLS="ToolSearch,mcp__claude_ai_Gmail__search_threads", ACE_FAKE_CALLS=json.dumps(calls))
+    assert p.returncode == 2 and p.stdout == "" and p.stderr.splitlines()[-1] == '{"init": 2, "drift": ["unknown"], "unknown": 2}'
+    for f in [x for x in w.tmp.rglob("*") if x.is_file() and x.relative_to(w.tmp).parts[0] != "fake"]:
+        assert bs.MARKER.encode() not in f.read_bytes(), f           # the digest, the page, the ledger, the notifier file: none holds it
+    assert bs.MARKER not in p.stdout + p.stderr
+    first, second = w.ledger()
+    assert first["tools_called"] == ["mcp__claude_ai_Gmail__search_threads"] and first["unknown_tools"] == 2
+    assert second["drift"] == ["unknown"] and second["unknown_tools"] == 2 and raw_left(w) == []
 
 
 def test_the_valid_link_url_a_model_invents_is_dropped_so_the_page_has_no_link(w):
@@ -431,7 +453,8 @@ def test_a_name_line_with_a_comment_or_a_second_token_in_a_list_file_stops_the_r
 
 
 LIST_BYTES = [b"\xef\xbb\xbfmcp__x__read\n", b"\xef\xbb\xbf# comment\n", "mcp__x__re ad\n".encode(), " \n".encode(), b"mcp__x__re\rad\n",
-              "mcp__x__é\n".encode(), b"mcp__x__read\x00\n", b"mcp__x__a:b\n"]
+              "mcp__x__é\n".encode(), b"mcp__x__read\x00\n", b"mcp__x__a:b\n",
+              b"-x\n", b"mcp__x__read\n-y\n", b"# a\x00b\n"]
 
 
 @pytest.mark.parametrize("name", ["brief_allowed_tools.txt", "brief_denied_tools.txt"])
@@ -456,3 +479,70 @@ def test_a_list_file_of_blank_lines_full_line_comments_and_single_names_runs(w):
     env = {"ACE_BRIEF_PY": f"uv run --quiet --project {ROOT} python"}
     p = subprocess.run([str(hooks / "brief.sh"), "--force"], capture_output=True, text=True, env={**w.env, **env}, timeout=60, cwd=w.tmp)
     assert p.returncode == 0 and w.seen("argv_stage1.json")[w.seen("argv_stage1.json").index("--allowedTools") + 1].count(",") == 6
+
+
+# ------------------------------------------------------------------ wave 6: signals, kill grace, orphaned stage, limits
+def sig_run(w, sigs, gap):
+    proc = start(w, ACE_FAKE_SLEEP="30")
+    pid = int(wait_for(w.fake / "pid_stage1"))
+    (w.fake / "pid_stage1").unlink()
+    for s in sigs:
+        proc.send_signal(s)
+        time.sleep(gap)
+    proc.communicate(timeout=30)
+    time.sleep(0.3)
+    return proc.returncode, pid
+
+
+@pytest.mark.parametrize("n, gap", [(2, 0.005), (20, 0), (3, 0.05)])
+def test_further_signals_during_the_stop_do_not_skip_the_purge_or_leave_the_lock(w, n, gap):
+    for _ in range(4):
+        code, pid = sig_run(w, [signal.SIGTERM] * n, gap)
+        assert code == 143 and not alive(pid) and free(w) and raw_left(w) == []
+
+
+def test_a_mixed_burst_of_term_int_and_hup_still_purges(w):
+    code, pid = sig_run(w, [signal.SIGTERM, signal.SIGINT, signal.SIGHUP], 0.005)
+    assert code in (143, 130, 129) and not alive(pid) and free(w) and raw_left(w) == []
+
+
+def test_a_stage_that_ignores_term_is_killed_after_the_grace_and_the_run_ends_with_a_timeout_row(w):
+    began = time.monotonic()
+    p = w.run("--force", ACE_FAKE_SLEEP="30", ACE_FAKE_IGNORE_TERM="1", ACE_BRIEF_STAGE_TIMEOUT="2", ACE_BRIEF_KILL_GRACE="1")
+    assert (p.returncode, p.stdout, p.stderr) == (1, "", "brief: stage 1 timed out\n") and time.monotonic() - began < 5
+    assert [(r.get("stage"), r.get("timeout")) for r in w.ledger()] == [("stage1", "stage1")]
+    assert not alive(int((w.fake / "pid_stage1").read_text())) and raw_left(w) == [] and free(w)
+
+
+@pytest.mark.parametrize("watchdog_dies", [False, True])
+def test_a_stage_orphaned_by_a_sigkill_of_the_script_dies_by_its_own_alarm_and_frees_the_lock(w, watchdog_dies):
+    proc = subprocess.Popen([str(SCRIPT), "--force"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=w.tmp,
+                            env={**w.env, "ACE_FAKE_SLEEP": "30", "ACE_FAKE_IGNORE_TERM": "1", "ACE_BRIEF_STAGE_TIMEOUT": "2", "ACE_BRIEF_KILL_GRACE": "1"})
+    pid = int(wait_for(w.fake / "pid_stage1"))
+    began = time.monotonic()
+    if watchdog_dies:          # the watchdog subshell and its sleeps go with the script: only the stage's own alarm is left
+        kids = subprocess.run(["pgrep", "-P", str(proc.pid)], capture_output=True, text=True).stdout.split()
+        for kid in (int(k) for k in kids if int(k) != pid):
+            os.kill(kid, signal.SIGKILL)
+    proc.kill()
+    proc.wait(timeout=30)
+    assert alive(pid) and not free(w)                                      # the orphan holds the inherited lock for now
+    while alive(pid) and time.monotonic() - began < 8:
+        time.sleep(0.1)
+    assert not alive(pid) and time.monotonic() - began < 5
+    time.sleep(0.3)
+    assert free(w) and w.run("--force").returncode == 0 and (w.dir / "brief.html").exists()
+
+
+@pytest.mark.parametrize("timeout, grace, expect", [("0", "0", "600 10"), ("-5", "-1", "600 10"), ("abc", "x", "600 10"), ("1e3", "1.5", "600 10"),
+                                                    ("", "", "600 10"), ("08", "09", "8 9"), ("3", "2", "3 2"), ("99999999", "9999999", "600 10")])
+def test_a_timeout_or_grace_that_is_not_an_integer_of_at_least_one_falls_back(timeout, grace, expect):
+    script = f'source "{ROOT}/hooks/brief_lib.sh"; limits; echo "$STAGE_T $GRACE"'
+    p = subprocess.run(["/bin/bash", "-c", script], capture_output=True, text=True,
+                       env={"PATH": os.environ["PATH"], "ACE_BRIEF_STAGE_TIMEOUT": timeout, "ACE_BRIEF_KILL_GRACE": grace})
+    assert (p.returncode, p.stdout.strip()) == (0, expect)
+
+
+def test_a_zero_stage_timeout_does_not_time_the_stage_out_at_once(w):
+    p = w.run("--force", ACE_FAKE_SLEEP="1", ACE_BRIEF_STAGE_TIMEOUT="0")
+    assert p.returncode == 0 and not any("timeout" in r for r in w.ledger()) and (w.dir / "brief.html").exists()

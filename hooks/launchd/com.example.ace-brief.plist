@@ -2,7 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Example only: LaunchAgent that runs the brief once at login (launchd has no wake event; Hammerspoon covers wake and unlock).
      launchd does not expand ~ or $HOME: replace the four __PLACEHOLDERS__ (__ACE_USER_HOME__ is your home directory) with
-     absolute paths, rename the Label, then see hooks/INSTALL.md section 8. Load it with `launchctl bootstrap gui/$(id -u) <file>`. -->
+     absolute paths, rename the Label, then see hooks/INSTALL.md section 8. Load it with `launchctl bootstrap gui/$(id -u) <file>`.
+     __ACE_CONFIG_FILE__ must be the SAME file as config_file in ~/.hammerspoon/ace_config.lua (the wake trigger): the brief directory, the
+     lock and the exclusions come from it. -->
 <plist version="1.0">
 <dict>
   <key>Label</key>

@@ -7,11 +7,12 @@ run_bg() {   # every long step runs in the background and is waited for: a foreg
   CHILD=$!; wait "$CHILD"; local rc=$?; CHILD=""; return "$rc"
 }
 py() { run_bg "${PYB[@]}" -m ace_playbook.compile.brief "$@"; }
-names() {   # $1 a list file -> `a,b,c`. A line is blank, a full-line `#` comment or ONE name of [A-Za-z0-9_.-]; a BOM, a `#` after a name, a
-  # space inside or any other byte fails (rc 1), exactly as hooks/brief_guard.py reads the file. LC_ALL=C: only ASCII blanks are blanks.
+names() {   # $1 a list file -> `a,b,c`. A line is blank, a full-line `#` comment or ONE name of [A-Za-z0-9_][A-Za-z0-9_.-]*; a BOM, a leading `-`, a
+  # `#` after a name, a space inside, a NUL anywhere or any other byte fails (rc 1), exactly as hooks/brief_guard.py reads the file.
+  # LC_ALL=C: only ASCII blanks are blanks.
   iconv -f UTF-8 -t UTF-8 "$1" > /dev/null 2>&1 || return 1
   LC_ALL=C tr -d '\000' < "$1" | cmp -s - "$1" || return 1      # grep and awk stop at a NUL byte: refuse it
-  if LC_ALL=C grep -a -q -v -E '^[[:space:]]*(#.*)?$|^[[:space:]]*[A-Za-z0-9_.-]+[[:space:]]*$' "$1"; then return 1; fi
+  if LC_ALL=C grep -a -q -v -E '^[[:space:]]*(#.*)?$|^[[:space:]]*[A-Za-z0-9_][A-Za-z0-9_.-]*[[:space:]]*$' "$1"; then return 1; fi
   LC_ALL=C grep -a -v -E '^[[:space:]]*(#|$)' "$1" | LC_ALL=C tr -d ' \t\r\013\014' | paste -sd, -
 }
 take_lock() {   # $1 brief_dir. One run at a time: a kernel lock (lockf) on fd 9, held by every process that inherits it and released by the
@@ -23,17 +24,26 @@ take_lock() {   # $1 brief_dir. One run at a time: a kernel lock (lockf) on fd 9
   [ "$rc" -eq 75 ] && exit 0
   fail "lock"
 }
-watch() {   # $1 pid, $2 seconds: TERM the pid when the time is up and leave $RUN/timed_out; returns at once when the pid is gone
+limits() {   # sets STAGE_T (the wall-clock limit of a stage) and GRACE (the wait between TERM and KILL), integers >= 1 in seconds, and ALARM
+  # (a prefix that makes a stage die on its own alarm even when this script is gone: the lock fd 9 is inherited by the stage)
+  STAGE_T="${ACE_BRIEF_STAGE_TIMEOUT:-600}" GRACE="${ACE_BRIEF_KILL_GRACE:-10}"
+  [[ "$STAGE_T" =~ ^[0-9]{1,6}$ ]] && STAGE_T=$((10#$STAGE_T)) && [ "$STAGE_T" -ge 1 ] || STAGE_T=600
+  [[ "$GRACE" =~ ^[0-9]{1,6}$ ]] && GRACE=$((10#$GRACE)) && [ "$GRACE" -ge 1 ] || GRACE=10
+  ALARM=(/usr/bin/perl -e 'alarm shift; exec @ARGV' "$((STAGE_T + GRACE))")
+}
+watch() {   # $1 pid, $2 seconds, $3 grace: TERM the pid when the time is up (and leave $RUN/timed_out), KILL it when it outlives the grace
   local i
   for ((i = 0; i < $2; i++)); do kill -0 "$1" 2> /dev/null || return 0; sleep 1; done
-  kill -TERM "$1" 2> /dev/null && : > "$RUN/timed_out"
+  kill -TERM "$1" 2> /dev/null || return 0
+  : > "$RUN/timed_out"
+  for ((i = 0; i < $3; i++)); do kill -0 "$1" 2> /dev/null || return 0; sleep 1; done
+  kill -KILL "$1" 2> /dev/null
 }
 wait_stage() {   # $1 stage name: wait for the background step in CHILD under the wall-clock watchdog; rc 124 and a ledger row on a timeout
-  local rc wd t="${ACE_BRIEF_STAGE_TIMEOUT:-600}"
-  [[ "$t" =~ ^[0-9]+$ ]] || t=600
+  local rc wd
   rm -f "$RUN/timed_out"
-  watch "$CHILD" "$t" 9>&- & wd=$!                      # fd 9 closed: a lingering sleep must not hold the run lock
-  wait "$CHILD"; rc=$?
+  watch "$CHILD" "$STAGE_T" "$GRACE" 9>&- & wd=$!       # fd 9 closed: a lingering sleep must not hold the run lock
+  wait "$CHILD" 2> /dev/null; rc=$?                    # bash reports a KILL or an alarm of the child on stderr: the exit code says it
   kill "$wd" 2> /dev/null; wait "$wd" 2> /dev/null
   CHILD=""
   [ -e "$RUN/timed_out" ] || return "$rc"

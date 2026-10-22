@@ -1090,11 +1090,15 @@ Order W3 of the watcher and cockpit design (section 7, "The brief"). Not on the 
   (it controls built-ins only) or `--allowedTools` (it only adds allows); the default mode and `-p` deny it only when no user-level
   `permissions.allow` covers it, so with a server-wide or wildcard entry (`mcp__claude_ai_Gmail`, `mcp__*`) a new Gmail write tool is open to
   stage 1. The operator must never keep such entries for Gmail, Calendar or Linear. **Drift check (D-118):** after stage 1 `brief.sh` runs
-  `tools-audit <stream> --allow hooks/brief_allowed_tools.txt` (`compile/brief_audit.py`): any `mcp__` tool outside the allowlist in the
-  stream's `system/init` `tools` list or in a `tool_use` block, or a stream with no init tool list at all, ends the run (exit 2, or 1 when
-  nothing could be audited), appends a ledger row `{ts, stage, drift: [names]}` (names only), notifies "brief: tool drift, run refused"
-  without names, discards the digest and never starts stage 2. The audit fails closed: a non-blank stream line that is not a JSON object, or a
-  file over 50 MB (it is not truncated), counts as drift with the pseudo-name `unparseable`, and a raw scan of all the bytes for
+  `tools-audit <stream> --allow hooks/brief_allowed_tools.txt` (`compile/brief_audit.py`): ANY tool (a built-in too) outside the allowlist and `ToolSearch`
+  in the stream's `system/init` `tools` list or in a `tool_use` block, or a stream with no init tool list at all, ends the run (exit 2, or 1
+  when nothing could be audited), appends a ledger row `{ts, stage, drift: [names], unknown_tools}`, notifies "brief: tool drift, run refused"
+  without names, discards the digest and never starts stage 2. The verb prints `{"init": N, "drift": [...], "unknown": N}` (names of the
+  checked-in lists only; `brief.sh` shows it on stderr on a refusal). The MODEL chooses the names of its `tool_use` blocks, so a name is written
+  anywhere only when it fullmatches `[A-Za-z0-9_][A-Za-z0-9_.-]*` and is on the allowlist, in `hooks/brief_connector_tools.txt`, a built-in
+  name or in the init list; any other is counted (`unknown_tools`, pseudo-name `unknown`), never echoed. The init list under `--tools
+  ToolSearch` has not been observed yet: the first real run is the acceptance test. The audit fails closed: a non-blank stream line that is
+  not a JSON object, or a file over 50 MB (it is not truncated), counts as drift with the pseudo-name `unparseable`, and a raw scan of all the bytes for
   `"name": "mcp__..."` adds the tool names a malformed line shows. It detects, it cannot undo a call that already ran; (5)
   `--no-session-persistence` on both stages (probed: no `.jsonl` transcript is written, only an
   empty `~/.claude/projects/<cwd slug>/memory/` directory, so the reflect sweep finds no raw mail); (6) `disableAllHooks` in
@@ -1137,7 +1141,8 @@ Order W3 of the watcher and cockpit design (section 7, "The brief"). Not on the 
   link (a title is not also linked).
 - **Verbs.** `due` (exit 3 when the last brief is inside `brief_dedupe_hours`; `--force`), `conf <key>`, `digest-apply <digest> [--out]`
   (exit 2 on a schema or exclusions failure), `render <brief>` (writes `brief.html` and the validated `brief.json`, prints the path),
-  `extract <stream> --what rate_limit|result|text [--last]` (the result object gains `_tools_called`), `ledger <before> <after> <stage> <result>`,
+  `extract <stream> --what rate_limit|result|text [--last]` (the result object gains `_tools_called`, the names that may be written, and
+  `_unknown_tools`, the count of the others), `ledger <before> <after> <stage> <result>`,
   `state-mark` (writes `brief_state.json`: `last_brief`, `needs_you_count`), `tools-audit <stream> --allow <file>` (exit 2 on drift), `timeout-mark
   <stage>` (a ledger row `{ts, stage, timeout}`) and `status`. They print counts and field paths, never mail content. Stream lines are split
   on `"\n"` only: `str.splitlines` also splits on U+2028, U+2029 and U+0085, which a JSON writer may emit raw inside a string and which
@@ -1146,18 +1151,21 @@ Order W3 of the watcher and cockpit design (section 7, "The brief"). Not on the 
   `digest_clean.json`; the raw streams and the unfiltered digest are deleted when the run ends, also on a signal (the `claude` child is killed first),
   and no session transcript is written. The ledger row is `{ts, stage, model, cost_usd,
   input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens, five_hour_before/after, seven_day_before/after,
-  duration_ms, num_turns, tools_called}`; the window fields come from the stream's `rate_limit_event` (`unifiedWindows.<window>.utilization`).
+  duration_ms, num_turns, tools_called, unknown_tools}`; the window fields come from the stream's `rate_limit_event` (`unifiedWindows.<window>.utilization`).
   Jason sets the share of a weekly window after a week of rows (D-97).
 - **Run control.** `brief.sh` takes a kernel lock, `/usr/bin/lockf -s -t 0` on an fd opened on `brief_dir/run.lockf` (one run at a time; the
   kernel releases it when the last process holding the fd dies, a SIGKILL included, so there is no pid file, no stale lock and no takeover
   race, and a live run is always respected: a second run exits 0 without a word; the lock is taken on a descriptor, not by re-executing the
   script under `lockf`, because `lockf` does not forward SIGTERM to its command). The raw files are purged right after the lock is taken.
   The helpers (`names`, the lock, the watchdog, `notify`) are in `hooks/brief_lib.sh`, sourced by `brief.sh`. Each stage has a wall-clock
-  watchdog, `ACE_BRIEF_STAGE_TIMEOUT` seconds (default 600): a stage that outlasts it gets SIGTERM, the run fails (exit 1) and the ledger
-  gets a row `timeout: stageN`. Every step (the `claude` stages and each python verb) runs in the background and is waited for so a
+  watchdog, `ACE_BRIEF_STAGE_TIMEOUT` seconds (an integer of at least 1, else 600): a stage that outlasts it gets SIGTERM, and SIGKILL after
+  `ACE_BRIEF_KILL_GRACE` seconds (default 10) if it ignores that; the run fails (exit 1) and the ledger gets a row `timeout: stageN`. Each
+  stage also runs under `perl -e 'alarm shift; exec @ARGV'` with both times added, so a stage orphaned by a SIGKILL of the script dies alone.
+  Every step (the `claude` stages and each python verb) runs in the background and is waited for so a
   SIGTERM, SIGINT or SIGHUP stops it at once (exit 143, 130, 129); the handler also stops every child of the shell (`pkill -TERM -P $$`), since a
-  child started just before `CHILD=$!` is not yet tracked, and `cleanup` ignores further signals so the purge cannot be cut short. The two list files are read
-  strictly by both `brief.sh` and `brief_guard.py`: a line is blank, a full-line `#` comment or one name of `[A-Za-z0-9_.-]`; a BOM or any
+  child started just before `CHILD=$!` is not yet tracked, and the handler and `cleanup` ignore further signals first so the purge cannot be
+  cut short. The two list files are read strictly by `brief.sh`, `brief_audit.py` and `brief_guard.py`: a line is blank, a full-line `#`
+  comment or one name of `[A-Za-z0-9_][A-Za-z0-9_.-]*`; a BOM or any
   other byte fails the run or makes the guard deny everything. `due` runs under the lock, and a
   failed stage leaves no `brief_state.json`, so the next wake retries. Triggers: Hammerspoon `systemDidWake` and `screensDidUnlock` (20 s
   delay) and a `RunAtLoad` LaunchAgent; `terminal-notifier` fires only when `needs_you` is non-empty.

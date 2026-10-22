@@ -417,7 +417,7 @@ An entry is a string (found anywhere in the field) or a one-key object, `{"start
 `{"contains": "text"}`. It is always plain text: `.`, `*`, `(` and `^` mean themselves (every entry is `re.escape`d), so no entry can
 backtrack. A thread whose sender matches `drop_senders` or whose subject matches `drop_subjects` is removed from the digest; one whose
 sender matches `drop_bodies_from` stays as sender and subject only (its summary is emptied). An empty entry, an entry over 200 characters,
-more than 500 entries in a list, an unknown key or mode, or an unreadable file stops the run. The matching runs in a forked child
+more than 500 entries in a list, an unknown key or mode, or an unreadable file stops the run. The matching runs in a spawned child
 process (`multiprocessing`) that is killed after 10 seconds; a timeout or any failure of the child also stops the run (exit 2), and the
 digest never passes through. Sender and subject are capped at 200 and 300 characters before matching. The lists apply to mail only, not to calendar
 titles or issues.
@@ -436,7 +436,11 @@ dofile(os.getenv("HOME") .. "/ace-playbook/hooks/hammerspoon/ace.lua")
 ```
 
 The path defaults to `$HOME/ace-playbook/hooks/brief.sh`; a `~/.hammerspoon/ace_config.lua` returning
-`{ brief_script = "/abs/path/brief.sh" }` overrides it. Login coverage (launchd has no wake event) is a LaunchAgent that runs the
+`{ brief_script = "/abs/path/brief.sh", config_file = "/abs/path/config.json" }` overrides it. **Both triggers must use the
+same config file**: `config_file` is exported to the wake run as `ACE_PLAYBOOK_CONFIG` and must equal `__ACE_CONFIG_FILE__` in the LaunchAgent below.
+The brief directory, the run lock and the exclusion list all come from that file, so a wake run without it reads the default config:
+another directory and another lock (the two triggers could then run at once) and no exclusions. Hammerspoon starts the task with
+only `HOME`, `PATH` and that variable. Login coverage (launchd has no wake event) is a LaunchAgent that runs the
 script once at load:
 
 ```sh
@@ -471,36 +475,51 @@ adds tools. A connector tool added after the snapshot, and any user-scope MCP se
 controls built-ins only) or `--allowedTools` (it only adds allows): the default mode and `-p` deny it only when no user-level
 `permissions.allow` covers it. **Never keep a server-wide or wildcard `permissions.allow` entry for Gmail, Calendar or Linear (or any
 `mcp__*` wildcard) in your user settings**: with one, a new Gmail write tool is open to stage 1. As a check after the fact, `brief.sh` runs
-`python -m ace_playbook.compile.brief tools-audit` on the stage 1 stream: any `mcp__` tool outside `hooks/brief_allowed_tools.txt` in the
-init tool list or in a call refuses the run (exit 2, `brief: tool drift, run refused` on stderr and in the notification, no names, the digest
-is discarded and stage 2 never starts, a ledger row `drift: [names]`). That detects drift, it cannot undo a call that already ran.
+`python -m ace_playbook.compile.brief tools-audit` on the stage 1 stream: ANY tool, a built-in too, outside `hooks/brief_allowed_tools.txt`
+and `ToolSearch` in the init tool list or in a call refuses the run (exit 2, `brief: tool drift, run refused` on stderr and in the
+notification, the digest is discarded and stage 2 never starts, a ledger row `drift: [names]`). The verb prints one summary line,
+`{"init": N, "drift": [...], "unknown": N}`, which `brief.sh` shows on stderr only on a refusal: `init` is the size of the init tool list,
+`drift` names only tools of the checked-in lists (the allowlist, `hooks/brief_connector_tools.txt` and the built-in tool names), and
+`unknown` counts the rest. **The model chooses the names of its tool calls**, so a name is written to the ledger only when it is a name of
+letters, digits, `_`, `.` and `-` (not starting with `-`, at most 100 characters) that is on the allowlist, in the connector snapshot, a
+built-in name or in the init list; every other name is counted (`unknown_tools` in the stage row, the pseudo-name `unknown` in the drift
+row) and never echoed, so injected mail text cannot reach a file, the notification or the terminal through a made-up tool name.
+**Not yet observed:** the init tool list under `--tools ToolSearch` has not been seen on a real run. If it lists built-ins or other
+tools the audit refuses every run; the first real `brief.sh --force` is the acceptance test. Read the summary line (it shows the size of
+the init list and which tools drifted) and the `drift` row of `brief_ledger.jsonl`, then decide whether to tighten the scope or to
+widen the audit. That detects drift, it cannot undo a call that already ran.
 It cannot use `--strict-mcp-config`, because the claude.ai connectors are account-level and cannot be named in an mcp-config file.
 The prompt is always the last argument, after a single-value flag, because `--tools`, `--allowedTools` and `--disallowedTools` take
 a variadic list that would swallow a positional prompt.
 The brief JSON carries no usable link: the digest has no url field, so the validator (`compile/brief_render.py`) sets every `url` to null
 and the page has no `<a>`. The renderer would still write a link only for `mail.google.com`, `calendar.google.com` or `linear.app` (constant
 `LINK_HOSTS`; https, at most 500 characters, no control or format character), as defence in depth. In `brief_allowed_tools.txt` and
-`brief_denied_tools.txt` a line is blank, a full-line `#` comment or exactly one name of letters, digits, `_`, `.` and `-`: a `#` after a
-name, a BOM, a space inside or any other byte makes `brief.sh` stop (and the guard deny everything), because the same line would
-otherwise be a dead rule in `--disallowedTools` and a live one in the guard.
+`brief_denied_tools.txt` a line is blank, a full-line `#` comment or exactly one name of letters, digits, `_`, `.` and `-` that does not
+start with `-` (it would turn into an option of `--allowedTools`): a `#` after a name, a BOM, a space inside, a NUL byte anywhere in the
+file or any other byte makes `brief.sh`, the audit and the guard all refuse the file, because the same line would otherwise be a dead rule
+in `--disallowedTools` and a live one in the guard.
 
 **Ledger.** Each stage appends one line to `brief_ledger.jsonl` (0600): `ts`, `stage`, `model`, `cost_usd` (list-price equivalent; the
-subscription is not billed per run), the four token counts, `duration_ms`, `num_turns`, `tools_called`, and the plan windows read from
+subscription is not billed per run), the four token counts, `duration_ms`, `num_turns`, `tools_called` (only the names described under
+Tool scope), `unknown_tools` (how many other names the model called), and the plan windows read from
 the stream's `rate_limit_event`: `five_hour_before/after` and `seven_day_before/after` (utilization, 0 to 1; both readings come from the
 same stream, so compare consecutive rows for the share of a week). `uv run python -m ace_playbook.compile.brief status` prints the last
 brief, the needs-you count, the ledger row count and the last cost of each stage.
 
 The raw streams of a run hold mail the exclusion list has not seen, so `brief.sh` deletes them when it exits, also on SIGTERM, SIGINT or
 SIGHUP (exit 143, 130 and 129), which also stop the running `claude` or python step at once (every step runs in the background and is
-waited for, so the signal is not deferred). A SIGKILL cannot be caught: it leaves the raw files, and the next run deletes them first thing
+waited for, so the signal is not deferred). The handler ignores further signals first, so a burst of them cannot skip the purge. A SIGKILL
+cannot be caught: it leaves the raw files, and the next run deletes them first thing
 (`ACE_BRIEF_KEEP=1` keeps them, 0600, under `brief_dir/run`; the session transcript is
 never written, see Sessions above). `digest_clean.json` (summaries after the exclusions) stays there until the next run.
 
 **One run at a time.** `brief.sh` takes a kernel lock, `/usr/bin/lockf`, on `brief_dir/run.lockf` (an empty file that stays). The kernel
 drops it when the last process holding it dies, a SIGKILL included, so there is no stale lock to take over; a live run, or a `claude` stage
 that outlived a killed script, is always respected: a second run exits 0 without a word. Each stage has a wall-clock limit,
-`ACE_BRIEF_STAGE_TIMEOUT` seconds (default 600): a stage that runs longer is stopped, the run fails (exit 1, `brief: stage N timed out`) and
-the ledger gets a row `timeout: stageN`.
+`ACE_BRIEF_STAGE_TIMEOUT` seconds (an integer of at least 1, else 600): a stage that runs longer gets SIGTERM, and SIGKILL after
+`ACE_BRIEF_KILL_GRACE` seconds (an integer of at least 1, else 10) if it ignores that; the run fails (exit 1, `brief: stage N timed out`) and
+the ledger gets a row `timeout: stageN`. Each stage also runs under its own `perl` alarm (`/usr/bin/perl`, the two times added), so a stage
+orphaned by a SIGKILL of the script dies by itself and releases the lock instead of holding it for good.
 
 ## What the hooks write
 

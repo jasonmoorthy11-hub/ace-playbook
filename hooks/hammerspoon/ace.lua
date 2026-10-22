@@ -1,13 +1,17 @@
 -- ACE brief on wake (hooks/INSTALL.md section 8). Load from ~/.hammerspoon/init.lua with:
 --   dofile(os.getenv("HOME") .. "/ace-playbook/hooks/hammerspoon/ace.lua")
 -- Runs hooks/brief.sh when the Mac wakes or the screen unlocks. brief.sh dedupes (once per brief_dedupe_hours), holds its own lock and
--- notifies only when something needs you, so firing on both events is safe. Optional override: ~/.hammerspoon/ace_config.lua returning
--- { brief_script = "/absolute/path/to/brief.sh" }.
+-- notifies only when something needs you, so firing on both events is safe. Optional ~/.hammerspoon/ace_config.lua returning
+-- { brief_script = "/absolute/path/to/brief.sh", config_file = "/absolute/path/to/config.json" }. config_file is exported to the task as
+-- ACE_PLAYBOOK_CONFIG and MUST be the same file as __ACE_CONFIG_FILE__ in the LaunchAgent: the brief dir, the lock and the exclusions all
+-- come from that file, and without it a wake run reads the default config (another dir and lock, no exclusions).
 local home = os.getenv("HOME")
 local script = os.getenv("HOME") .. "/ace-playbook/hooks/brief.sh"
+local config_file = nil
 local ok, local_config = pcall(require, "ace_config")
-if ok and type(local_config) == "table" and type(local_config.brief_script) == "string" then
-  script = local_config.brief_script
+if ok and type(local_config) == "table" then
+  if type(local_config.brief_script) == "string" then script = local_config.brief_script end
+  if type(local_config.config_file) == "string" then config_file = local_config.config_file end
 end
 
 -- The task and the timer live in module-level (global) variables: Hammerspoon collects an hs.task or hs.timer nothing refers to, which
@@ -20,7 +24,11 @@ local function run_brief()
   ace_brief_task = hs.task.new("/bin/bash", function(code, _out, err)
     if code ~= 0 then print("ace brief: exit " .. tostring(code) .. " " .. tostring(err)) end
   end, { script })
-  ace_brief_task:setEnvironment({ HOME = home, PATH = "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:" .. home .. "/.local/bin" })
+  local env = { HOME = home, PATH = "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:" .. home .. "/.local/bin" }
+  if config_file then
+    env.ACE_PLAYBOOK_CONFIG = config_file
+  end
+  ace_brief_task:setEnvironment(env)
   ace_brief_task:start()
 end
 

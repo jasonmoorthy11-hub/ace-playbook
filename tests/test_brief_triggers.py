@@ -41,3 +41,19 @@ def test_the_lua_watches_wake_and_unlock_and_runs_the_brief_script_through_hs_ta
 def test_nothing_in_the_trigger_files_names_a_home_directory_or_a_real_account():
     for path in (PLIST, LUA):
         assert "/".join(["", "Users", ""]) not in path.read_text()
+
+
+def test_the_lua_exports_the_config_file_of_ace_config_to_the_task_environment():
+    text = LUA.read_text()
+    assert 'type(local_config.config_file) == "string"' in text and "config_file = local_config.config_file" in text
+    env_table = re.search(r"local env = \{([^}]*)\}", text)
+    assert env_table and "HOME = home" in env_table.group(1) and "PATH =" in env_table.group(1)       # the task still gets HOME and PATH
+    assert re.search(r"if config_file then\s+env\.ACE_PLAYBOOK_CONFIG = config_file\s+end", text)
+    assert re.search(r"setEnvironment\(env\)", text)                                                  # the table with the export is the one passed
+
+
+def test_the_install_guide_and_the_plist_require_the_same_config_file_for_both_triggers():
+    guide = (ROOT / "hooks" / "INSTALL.md").read_text()
+    section = guide[guide.index("## 8. Brief on wake"):guide.index("## What the hooks write")]
+    assert "config_file" in section and "ACE_PLAYBOOK_CONFIG" in section and "same config file" in section and "no exclusions" in section
+    assert "config_file" in PLIST.read_text()

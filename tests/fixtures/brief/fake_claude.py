@@ -4,16 +4,20 @@
 Reads $ACE_FAKE_DIR: digest.json (the stage 1 answer), brief.json (the stage 2 answer); writes argv_<stage>.json, env_<stage>.json and
 stdin_stage2.txt there so the test can see what the script passed. $ACE_FAKE_FAIL = stage1 | stage2 makes that stage exit 1 with an error
 result; $ACE_FAKE_SLEEP sleeps first (and pid_<stage> records the pid; $ACE_FAKE_SLEEP_ONLY limits it to one stage); $ACE_FAKE_INIT_TOOLS
-(comma separated) is the `tools` list of the init event; $ACE_FAKE_FENCE wraps the answer in a ```json fence. Synthetic data only.
+(comma separated) is the `tools` list of the init event; $ACE_FAKE_CALLS (a JSON list of names) adds a stage 1 tool_use block for each name;
+$ACE_FAKE_IGNORE_TERM ignores SIGTERM; $ACE_FAKE_FENCE wraps the answer in a ```json fence. Synthetic data only.
 """
 
 import json
 import os
+import signal
 import sys
 import time
 from pathlib import Path
 
 argv = sys.argv[1:]
+if os.environ.get("ACE_FAKE_IGNORE_TERM"):
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
 stage = "stage2" if "--tools" in argv and argv[argv.index("--tools") + 1] == "" else "stage1"
 root = Path(os.environ["ACE_FAKE_DIR"])
 (root / f"argv_{stage}.json").write_text(json.dumps(argv))
@@ -36,6 +40,8 @@ events = [{"type": "system", "subtype": "init", "model": argv[argv.index("--mode
 if stage == "stage1":
     events += [{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "mcp__claude_ai_Gmail__search_threads", "input": {}}]}},
                {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": "FAKE-MAIL-BODY-IN-THE-STREAM"}]}}]
+    events += [{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "c", "name": n, "input": {}}]}}
+               for n in json.loads(os.environ.get("ACE_FAKE_CALLS", "[]"))]
 events += [{"type": "rate_limit_event", "rate_limit_info": window},
            {"type": "result", "subtype": "error_during_execution" if failing else "success", "is_error": failing, "result": "" if failing else answer,
             "total_cost_usd": 0.2424 if stage == "stage1" else 0.012, "duration_ms": 1000, "num_turns": 3 if stage == "stage1" else 1,
