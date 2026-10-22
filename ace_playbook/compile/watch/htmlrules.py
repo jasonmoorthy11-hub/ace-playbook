@@ -7,7 +7,8 @@ a hidden element is involved the same rules apply and anything doubtful keeps th
   it. A block-level end tag (`</div>`, ...) is stopped by a scope barrier (`table td th caption object marquee applet template`); `</p>` also
   by `button`, `</li>` also by `ol` and `ul`; a table end tag by a nested `table` or `template`; every other end tag (`</span>`, `</b>`, ...)
   by any "special" element in between. An open `select` stops every end tag but its own (the in-select insertion mode drops them).
-  `INTEGRATION` (`foreignObject`, `desc`, `title`, `mi`, `mo`, `mn`, `ms`, `mtext`, `annotation-xml`) are scope barriers too.
+  `INTEGRATION` (`foreignObject`, `desc`, `title`, `mi`, `mo`, `mn`, `ms`, `mtext`, `annotation-xml`) are scope barriers too, but their OWN
+  end tag is an "any other end tag": any special element above it stops it (`<svg><desc><div hidden></desc></svg>X` keeps X hidden).
 * `SKIP` holds the elements whose content a browser does not render as text, `select` (all its option text), `progress` and `meter`
   (fallback text) among them.
 * `ScriptState`: html.parser has no "script data double escaped" state, so `<script><!--<script></script>X</script>` would show X.
@@ -15,8 +16,9 @@ a hidden element is involved the same rules apply and anything doubtful keeps th
   close the element.
 * `ScriptedParser`: the html.parser subclass that both passes of `sanitize` (the style text of `stylepass`, the visible text) share, so
   they tokenize alike: a slash on `<script/>`, `<style/>`, `<noscript/>`, `<xmp/>`, `<iframe/>`, `<noembed/>`, `<noframes/>`, `<textarea/>`,
-  `<title/>` or `<plaintext/>` is ignored, `noscript` is raw text (a browser with scripting on) in HTML content only: in foreign content
-  (`foreign()`) or inside an open `<select>` (`in_select()`) it is an ordinary element, a double-escaped script keeps its next `</script` as
+  `<title/>` or `<plaintext/>` is ignored, `noscript` is raw text (a browser with scripting on), and every raw-text, RCDATA and `noscript`
+  name is raw text in HTML content only: made in foreign content (`in_foreign()`) it is an ordinary element, and inside an open `<select>`
+  (`in_select()`) every start tag but `<script>` is ignored, so its content is markup; a double-escaped script keeps its next `</script` as
   text, a comment ends at `<!-->`, `<!--->`, `-->` or `--!>`, and `<![CDATA[` is a bogus comment that ends at the first `>` (any `<![` is),
   except in foreign content, where it runs to `]]>`.
 * `MAX_DEPTH`: the open-element stack is capped; a document nested deeper is a parse failure (`TooDeep`), not a quadratic scan.
@@ -31,6 +33,7 @@ MAX_DEPTH = 512
 VOID = frozenset("area base br col embed hr img input link meta param source track wbr".split())
 SKIP = frozenset(("script style template noscript dialog svg math iframe object embed head title meta link canvas audio video datalist "
                   "noembed noframes rp select progress meter").split())
+SELECT_ENDERS = frozenset(("input", "keygen", "textarea", "select"))                           # a start tag that pops an open select (in-select insertion mode)
 FORMATTING = frozenset("a b big code em font i nobr s small strike strong tt u".split())
 BLOCK = frozenset("address article aside blockquote dd div dl dt fieldset figcaption figure footer form h1 h2 h3 h4 h5 h6 header "
                   "li main nav ol p pre section table tbody td tfoot th thead tr ul".split())
@@ -64,7 +67,8 @@ def end_ignored(stack: list, i: int) -> bool:
         return True
     if tag in TABLES:
         return bool(names & {"table", "template"})
-    return bool(names & (BARRIERS | EXTRA.get(tag, frozenset()) if tag in SPECIAL else SPECIAL))
+    scoped = tag in SPECIAL and tag not in INTEGRATION                  # the end tag of an integration point is an "any other end tag"
+    return bool(names & (BARRIERS | EXTRA.get(tag, frozenset()) if scoped else SPECIAL))
 
 
 class ScriptState:
@@ -140,13 +144,20 @@ class ScriptedParser(HTMLParser):
         return end + (3 if real else 1)
 
     def in_select(self) -> bool:
-        """True when a `<select>` is open: a browser ignores a `<noscript>` start tag there, so its content is not raw text. A subclass that
-        tracks the open elements overrides this; the default (False) only matters for a `<noscript>` inside a select."""
+        """True when a `<select>` is open: a browser ignores a raw-text start tag there, so its content is markup. A subclass that tracks the
+        open elements overrides this (the default, False, keeps raw text)."""
+        return False
+
+    def in_foreign(self) -> bool:
+        """True when the start tag just handled made a FOREIGN element (its parent is a foreign one, not an integration point): a browser
+        enters raw text only for HTML elements. A subclass that tracks the open elements overrides this (the default, False, keeps raw text)."""
         return False
 
     def set_cdata_mode(self, elem, **kw) -> None:
-        """`<noscript>` is raw text only in HTML content (a browser with scripting on); in foreign content or a select it is an element."""
-        if elem == "noscript" and (self.foreign() or self.in_select()):
+        """Raw text and RCDATA (and `<noscript>`, a browser with scripting on) only for an HTML element: in foreign content every such name is an
+        ordinary element. An open `<select>` ignores every start tag but `<script>` (its text is then read as markup), and `<input>`, `<keygen>`,
+        `<textarea>` and `<select>` end the select first (the subclass pops it before this runs)."""
+        if self.in_foreign() or (self.in_select() and elem != "script"):
             return
         super().set_cdata_mode(elem, **kw)
 

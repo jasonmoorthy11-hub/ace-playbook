@@ -40,7 +40,7 @@ import re
 
 from .chars import control, invisible
 from .cssstyle import style_hidden  # noqa: F401 - style_hidden is part of this module's surface
-from .htmlrules import BLOCK, FORMATTING, MAX_DEPTH, SKIP, VOID, ScriptedParser, ScriptState, TooDeep, end_ignored
+from .htmlrules import BLOCK, FORMATTING, MAX_DEPTH, SELECT_ENDERS, SKIP, VOID, ScriptedParser, ScriptState, TooDeep, end_ignored
 from .mdrules import drop_definitions, markdown_code_as_text
 from .stylepass import style_rules, style_text  # noqa: F401 - style_text is part of this module's surface
 from .treerules import implied, marks
@@ -88,6 +88,9 @@ class _Text(ScriptedParser):
     def foreign(self) -> bool:
         return bool(self.stack) and self.stack[-1][4][5] >= 0       # the top element is inside a run of svg / math elements
 
+    def in_foreign(self) -> bool:
+        return len(self.stack) > 1 and self.stack[-2][4][5] >= 0   # the parent of the element just pushed is inside a run of svg / math elements
+
     def in_select(self) -> bool:
         return bool(self.open.get("select"))
 
@@ -107,6 +110,8 @@ class _Text(ScriptedParser):
 
     def handle_starttag(self, tag, attrs) -> None:
         self.fresh = False
+        if tag in SELECT_ENDERS and self.open.get("select"):        # these end the select first (a nested select stays open: fail closed)
+            self._pop(next(i for i in range(len(self.stack) - 1, -1, -1) if self.stack[i][0] == "select"))
         while not self.open.get("select") and (i := implied(self.stack[-1][4] if self.stack else None, tag, attrs, self.standards)) is not None:
             self._pop(i)                                            # a select drops start tags: nothing is implied inside one
         own = self._own(tag, attrs)

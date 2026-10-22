@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 
 from .cssstyle import css_rules
-from .htmlrules import INTEGRATION, ScriptedParser, ScriptState
+from .htmlrules import INTEGRATION, SELECT_ENDERS, ScriptedParser, ScriptState
 
 WATCHED = frozenset(("svg", "math", "select")) | INTEGRATION
 STYLE_MARK = re.compile(r"<style", re.I)
@@ -31,15 +31,22 @@ class _Styles(ScriptedParser):
         self.sheets: list[list[str]] = []
         self.inside = False
         self.depth: dict[str, int] = {}                             # how many svg / math / select / integration-point elements are open
+        self.born_foreign = False                                   # the last start tag was made in foreign content
 
     def foreign(self) -> bool:
         """Inside svg or math and in no integration point (an approximation of the tree of the second pass: the plain scan covers the rest)."""
         return bool(self.depth.get("svg") or self.depth.get("math")) and not any(self.depth.get(t) for t in INTEGRATION)
 
+    def in_foreign(self) -> bool:
+        return self.born_foreign
+
     def in_select(self) -> bool:
         return bool(self.depth.get("select"))
 
     def handle_starttag(self, tag, attrs) -> None:
+        self.born_foreign = self.foreign()                          # asked before the tag is counted: an integration point is foreign itself
+        if tag in SELECT_ENDERS and self.depth.get("select"):
+            self.depth["select"] = 1 if tag == "select" else 0      # these end the select (a nested select stays open, as in the second pass)
         if tag in WATCHED:
             self.depth[tag] = self.depth.get(tag, 0) + 1
         if tag == "script":

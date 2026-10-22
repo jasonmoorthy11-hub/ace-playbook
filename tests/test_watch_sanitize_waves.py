@@ -427,3 +427,118 @@ def test_a_comment_opener_inside_an_escaped_url_does_not_swallow_the_declaration
     from ace_playbook.compile.watch import cssscan
     assert cssscan.strip_comments("a{b:\\75rl(/*)}c") == "a{b:\\75rl(/*)}c" and cssscan.strip_comments("a{b:u\\72l(/*)}c/**/d") == "a{b:u\\72l(/*)}cd"
     assert cssscan.strip_comments("a{b:\\76rl(/*)}c") == "a{b:\\76rl(" and cssscan.strip_comments("a/**/\\75rl(x)/**/b") == "a\\75rl(x)b"
+
+
+# ------------------------------------------------------------------ wave 10: CSS simple blocks, raw text only in HTML content, the scope of a select
+CSS_BLOCK_HIDES = {                                          # braces and semicolons inside ( ) and [ ] are component values, not structure (CSS Syntax 3)
+    "fn-brace": ".h{background:foo(});display:none}", "paren-brace": ".h{background:(});display:none}", "mismatch": ".h{background:foo([)]);display:none}",
+    "bracket-semicolon": ".h{x:[;];display:none}", "bracket-brace": ".h{x:[}];display:none}", "nested": ".h{background:a(b(c{}));display:none}",
+    "in-order": ".h{x:({[}]});display:none}", "url-brace": ".h{background:url(x});display:none}", "after-block": ".x{y:(})}.h{display:none}",
+    "selector-parens": ".x:not(.y){color:red}.h{display:none}", "media": "@media (min-width:1px){.z{color:red}}.h{display:none}",
+    "string-in-block": '.h{x:foo(")");display:none}', "unclosed-after": ".h{display:none;x:(", "bracket-string": ".x[a=\"]\"]{color:red}.h{display:none}",
+    "nested-fn": ".h{x:a(b[c(})]);display:none}",
+}
+CSS_BLOCK_SHOWS = {                                          # a browser keeps `display:none` INSIDE a block here (an open block or a comment swallows it)
+    "comment": ".h{background:foo(/*);display:none}/**/", "open-brace": ".h{background:foo({);display:none}", "swallowed-rule": ".x{y:(}.h{display:none}",
+    "unclosed-paren": ".h{x:(;display:none}", "unclosed-bracket": ".h{x:[;display:none}",
+    "escaped-paren": ".h{x:\\(});display:none}", "nested-unclosed": ".h{x:a(b[c(})];display:none}",       # `\\(` opens nothing: its `}` ends the rule
+}
+
+
+@pytest.mark.parametrize("name", sorted(CSS_BLOCK_HIDES))
+def test_a_brace_or_semicolon_inside_a_parenthesis_or_bracket_block_is_not_structure(name):
+    assert "h" in cssstyle.css_rules(CSS_BLOCK_HIDES[name])[0], name
+    assert css_hidden(CSS_BLOCK_HIDES[name]), name
+
+
+@pytest.mark.parametrize("name", sorted(CSS_BLOCK_SHOWS))
+def test_an_open_block_or_a_comment_swallows_what_follows_it_as_in_a_browser(name):
+    assert cssstyle.css_rules(CSS_BLOCK_SHOWS[name]) == NO_RULES, name
+
+
+def test_the_rules_keep_their_whole_body_around_the_simple_blocks():
+    from ace_playbook.compile.watch import cssscan
+    assert cssscan.rules(".h{background:a(b(c{}));display:none}") == [(".h", "background:a(b(c{}));display:none")]
+    assert cssscan.rules(".h{x:[}];color:red}.z{a:b}") == [(".h", "x:[}];color:red"), (".z", "a:b")]
+    assert cssscan.rules("@media (min-width:1px){.z{display:none}}.h{display:none}") == [(".h", "display:none")]
+    assert cssscan.rules(".a:not(.b){c:d}") == [(".a:not(.b)", "c:d")] and cssscan.rules(".h{x:(") == [(".h", "x:(")]
+
+
+def test_the_css_simple_blocks_are_linear():
+    for sheet in ("(" * 2**20, "[" * 2**20, "({[" * 349526, ")" * 2**20, ".h{" + "(" * 2**20, ".h{" + "{" * 2**20, "[(" * 524288 + ".h{display:none}"):
+        timed(f"<style>{sheet}</style><p>ok", markdown=False)
+    assert cssstyle.css_rules("(" * 2**20 + ".h{display:none}") == NO_RULES
+
+
+RAW_TEXT_TAGS = ("xmp", "iframe", "noembed", "noframes", "textarea", "style", "script", "noscript", "plaintext")
+FOREIGN_RAW_SPELLINGS = ("<svg><{t}/><div hidden></{t}></svg>LEAK", "<svg><{t}><div hidden></{t}></svg>LEAK", "<math><{t}/><div hidden></{t}></math>LEAK",
+                         "<SVG><{T}/><DIV HIDDEN></{T}></SVG>LEAK", "<svg><g><{t}/><div hidden></{t}></g></svg>LEAK",
+                         "<math><mrow><{t}><p hidden></{t}></mrow></math>LEAK")
+
+
+@pytest.mark.parametrize("tag", [t for t in RAW_TEXT_TAGS if t != "plaintext"])
+@pytest.mark.parametrize("spelling", range(len(FOREIGN_RAW_SPELLINGS)))
+def test_a_raw_text_name_in_foreign_content_is_an_element_so_the_hidden_markup_after_it_hides_the_text(tag, spelling):
+    html = FOREIGN_RAW_SPELLINGS[spelling].format(t=tag, T=tag.upper())
+    assert "LEAK" not in strip_hidden(html) and "LEAK" not in strip_hidden(html, markdown=True), html
+    assert "LEAK" not in body_of(html), html
+
+
+@pytest.mark.parametrize("tag", [t for t in RAW_TEXT_TAGS if t != "noscript"])
+def test_a_raw_text_name_in_foreign_content_does_not_swallow_the_breakout_tag_after_it(tag):
+    for html in (f"<svg><{tag}><p>VIS</p></{tag}>", f"<svg><{tag}/><p>VIS</p>", f"<math><{tag}><p>VIS</p>"):
+        assert strip_hidden(html) == "VIS" and body_of(html) == "VIS", html
+
+
+SELECT_IGNORES = ("iframe", "xmp", "noembed", "noframes", "style")                         # (`title` stays an element that hides to its closer: over-hiding)
+
+
+@pytest.mark.parametrize("tag", SELECT_IGNORES)
+def test_a_select_ignores_a_raw_text_start_tag_so_the_closer_after_it_ends_the_select(tag):
+    for html in (f"<select><{tag}></select>VIS", f"<select><{tag}/></select>VIS", f"<select><{tag}><p hidden>X</p></{tag}></select>VIS"):
+        assert strip_hidden(html) == "VIS" and body_of(html) == "VIS", html
+
+
+def test_a_script_in_a_select_is_still_raw_text_and_an_open_select_hides_what_follows():
+    assert "VIS" not in strip_hidden("<select><script></select>X</script>VIS") and "VIS" not in body_of("<select><script></select>X</script>VIS")
+    assert "VIS" not in strip_hidden("<select><iframe><p hidden>X</p></iframe>VIS") and "X" not in strip_hidden("<select><iframe><p hidden>X</p></iframe>VIS")
+
+
+SELECT_ENDERS_SHOWN = {                                      # input, keygen, textarea and select close an open select (the spec pops up to and including it)
+    "input": ("<select><input>VIS", "VIS"), "keygen": ("<select><keygen>VIS", "VIS"), "input-slash": ("<select><input/>VIS", "VIS"),
+    "textarea": ("<select><textarea>X</textarea>VIS", "XVIS"), "textarea-open": ("<select><textarea>X", "X"),
+    "after-option": ("<select><option>a<input>VIS", "VIS"), "hidden-div": ("<div hidden><select><input></div>VIS", "VIS"),
+    "noscript-raw": ("<select><input><noscript><div hidden></div>X</noscript>VIS", "VIS"),
+    "noscript-after": ("<select><input><noscript><div hidden></noscript>VIS", "VIS"), "upper": ("<SELECT><INPUT>VIS", "VIS"),
+    "keygen-noscript": ("<select><keygen><noscript></noscript>VIS", "VIS"),
+}
+SELECT_STAYS_OPEN = ("<select><option>a<b>X</b>", "<select><div>X", "<select><optgroup><option>X", "<select><hr>X", "<select><img>X", "<select><br>X")
+
+
+@pytest.mark.parametrize("name", sorted(SELECT_ENDERS_SHOWN))
+def test_an_input_keygen_or_textarea_start_tag_ends_the_select_scope(name):
+    html, shown = SELECT_ENDERS_SHOWN[name]
+    assert strip_hidden(html) == shown and body_of(html).replace("\n", "") == shown.replace("\n", ""), html
+
+
+@pytest.mark.parametrize("html", SELECT_STAYS_OPEN)
+def test_other_start_tags_leave_the_select_open_so_its_text_stays_hidden(html):
+    assert "X" not in strip_hidden(html) and "X" not in body_of(html), html
+
+
+def test_a_nested_select_keeps_the_text_after_it_hidden_and_the_noscript_context_follows_the_scope():
+    assert strip_hidden("<select><select>X") == "" and strip_hidden("<select><option>a<select>X") == ""        # fail closed: the second one stays open
+    assert strip_hidden("<select></select><noscript><div hidden></div>X</noscript>VIS") == "VIS"
+    assert strip_hidden("<select><noscript><div hidden></noscript></select>VIS") == "VIS"                   # still in the select: an element, then closed
+    assert sanitize.style_text("<select><input><noscript><style>.h{display:none}</style></noscript>") == ""
+    assert sanitize.style_text("<select><noscript><style>.h{display:none}</style></noscript>") == ".h{display:none}"
+    assert sanitize.style_text("<select><textarea></textarea><noscript><style>.h{display:none}</style></noscript>") == ""
+
+
+@pytest.mark.parametrize("tag", ["title", "desc", "foreignObject", "mi", "mtext", "annotation-xml"])
+@pytest.mark.parametrize("child", ["<div hidden>", "<p hidden>", "<section hidden>"])         # a special element (a `<span hidden>` is passed over)
+def test_the_end_tag_of_an_integration_point_is_stopped_by_a_hidden_element_above_it(tag, child):
+    root = "math" if tag in ("mi", "mtext", "annotation-xml") else "svg"
+    html = f"<{root}><{tag}>{child}</{tag}></{root}>LEAK"
+    assert "LEAK" not in strip_hidden(html) and "LEAK" not in body_of(html), html
+    assert strip_hidden(f"<{root}><{tag}><b>t</b></{tag}></{root}>VIS") == "VIS"                          # nothing hidden above: the end tag pops

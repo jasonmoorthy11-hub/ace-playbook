@@ -1096,14 +1096,17 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   (`scan_text`, fake openers included, so it can only add rules), because html.parser and a browser tokenize some pages differently (a
   CDATA section in svg, a bogus comment); `cssstyle.css_rules` reads the braces in one linear pass (`cssscan.py`: braces, semicolons and
   comment openers inside CSS strings, escapes and unquoted `url(...)` (the ident matched after escape decoding: `\75rl(`, `u\72l(`) do not
-  count; a rule with nested blocks is read with them cut out and the
-  nested rules on their own; a rule open at the end applies; CSS escapes in a selector are decoded and the list splits on unescaped commas
-  only). `<![CDATA[` (any `<![`) is a bogus comment that ends at the first `>` in HTML content, a real section to `]]>` only when the top
-  open element is inside a run of svg / math elements (`ScriptedParser.parse_html_declaration` and `foreign()`; `_support_cdata` is off so the
-  EOF path agrees); `noscript` is raw text in both passes (`CDATA_CONTENT_ELEMENTS`, also for `<noscript/>`) and stays in the skipped set,
-  but only in HTML content: `ScriptedParser.set_cdata_mode` skips it when `foreign()` or `in_select()` holds (`_Text` from its stack,
-  `_Styles` from `depth` counters). `handle_startendtag` enters raw-text mode for every `CDATA_CONTENT_ELEMENTS` name (`<xmp/>`,
-  `<iframe/>`, `<noembed/>`, `<noframes/>`), for the RCDATA ones (`<textarea/>`, `<title/>`) and `<plaintext/>`: a browser ignores the slash.
+  count, nor do they inside a `(` or `[` simple block (a `blocks` stack of closers in `cssscan.rules`; unclosed blocks swallow the rest); a
+  rule with nested blocks is read with them cut out and the nested rules on their own; a rule open at the end applies; CSS escapes in a
+  selector are decoded and the list splits on unescaped commas only). `<![CDATA[` (any `<![`) is a bogus comment that ends at the first `>`
+  in HTML content, a real section to `]]>` only when the top open element is inside a run of svg / math elements
+  (`ScriptedParser.parse_html_declaration` and `foreign()`; `_support_cdata` is off so the EOF path agrees);
+  `noscript` is raw text in both passes (`CDATA_CONTENT_ELEMENTS`, also for `<noscript/>`) and stays in the skipped set, but only in HTML content:
+  `ScriptedParser.set_cdata_mode` skips EVERY raw-text, RCDATA and noscript name when `in_foreign()` holds (the parent is a foreign
+  element) and, inside an open select, every name but `script` (`in_select()`; `input`, `keygen`, `textarea` and `select` pop the select
+  first: `SELECT_ENDERS`); `_Text` answers from its stack, `_Styles` from `depth` counters.
+  `handle_startendtag` enters raw-text mode for every `CDATA_CONTENT_ELEMENTS` name (`<xmp/>`, `<iframe/>`, `<noembed/>`,
+  `<noframes/>`), for the RCDATA ones (`<textarea/>`, `<title/>`) and `<plaintext/>`: a browser ignores the slash.
   `treerules.implied(..., standards)` lets a `<table>` close an open `<p>` only in standards mode: `_Text.handle_decl` takes it from a FIRST
   `<!DOCTYPE html>` (optionally `SYSTEM "about:legacy-compat"`) before any tag or non-blank text; none, a late, legacy or second doctype is
   quirks (fail closed). Comments end where a browser ends them

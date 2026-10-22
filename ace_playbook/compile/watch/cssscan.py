@@ -11,6 +11,9 @@ decoding, as a browser does (`\\75rl(`, `u\\72l(`, `\\55RL(`, `URL(`; a quote af
   OUT of its body, and each nested rule is read on its own too (over-hiding: a browser would match it only inside its parent). The rules
   inside a CLOSED at-rule block (a media query) are dropped, `@import x;` ends at its semicolon, blocks nested past `MAX_NESTING` are
   skipped, and a rule still open at the end of the text is closed there, as a browser does (an unclosed at-rule block keeps its rules).
+  A `(` or `[` opens a SIMPLE BLOCK (CSS Syntax 3) that runs to its own `)` or `]`: inside it `{`, `}` and `;` are plain values, and a `{`, `(`
+  or `[` opens a nested block that must close first (`foo(})` keeps its `}`; a closer that matches nothing is ignored). A block still open at
+  the end swallows the rest of the text, as in a browser. Comments are already gone (`strip_comments`), so `foo(/*)` opens a comment.
 * `simple_selectors(prelude)`: `(prefix, name)` for each member of a selector list that is one `.class`, `#id`, tag or `*`; the list is split
   on UNESCAPED commas only and the name is decoded and lower-cased (`.\\68` is `.h`; `.a\\,b` is the one class `a,b`).
 """
@@ -31,7 +34,8 @@ def _letter(c: str) -> str:
 
 URL = _letter("u") + _letter("r") + _letter("l") + r"\((?![ \t\r\n\f]*[\"'])[^)\\]*(?:\\.[^)\\]*)*\)?"            # `url(` as the DECODED ident spells it
 SKIP = rf"{STRING}|{URL}|\\."                                       # URL before the escape: `\75rl(` starts with a backslash
-COMMENT, PUNCT = re.compile(rf"({SKIP})|/\*.*?(?:\*/|$)", re.S | re.I), re.compile(rf"(?:{SKIP})|([{{}};])", re.S | re.I)
+COMMENT, PUNCT = re.compile(rf"({SKIP})|/\*.*?(?:\*/|$)", re.S | re.I), re.compile(rf"(?:{SKIP})|([{{}};()\[\]])", re.S | re.I)
+CLOSER = {"(": ")", "[": "]", "{": "}"}
 ESCAPE = re.compile(r"\\([0-9a-fA-F]{1,6})(?:\r\n|[ \t\r\n\f])?|\\(.)", re.S)
 HEX = r"(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{1,5}(?![0-9a-fA-F]))"                                  # one way to read a run of hex digits: no backtracking
 IDENT = rf"(?:[\w-]|\\(?:{HEX}(?:\r\n|[ \t\r\n\f])?|[^\n\r\f0-9a-fA-F]))"
@@ -71,9 +75,16 @@ def rules(css: str) -> list[tuple[str, str]]:
     found: list[tuple[str, str]] = []
     stack: list[list] = []                    # [selector, body pieces so far, start of the piece being read (-1: a nested block is open), len(found)]
     start, head, extra = 0, None, 0           # head: does the text since `start` begin with "@" (None: not looked at yet)
+    blocks: list[str] = []                    # closers of the open simple blocks `(`, `[` and a `{` inside one: no structure inside them
     for m in PUNCT.finditer(css):
         ch, i = m.group(1), m.start()
         if ch is None:
+            continue
+        if blocks or ch in "([)]":            # CSS Syntax 3 "consume a simple block": it runs to its own closer, nested blocks close in order
+            if blocks and ch == blocks[-1]:
+                blocks.pop()
+            elif ch in CLOSER and (blocks or ch != "{"):
+                blocks.append(CLOSER[ch])
             continue
         if ch == ";":
             if not stack:
