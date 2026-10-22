@@ -47,6 +47,56 @@ of the lesson store, and the settings and hooks of the agent that consumes it.
 6. **Reflector prompt** tells the model to ignore instructions inside tool results. This is the
    weakest control and is not relied on.
 
+## The brief on wake (optional)
+
+`hooks/brief.sh` is a read-only principal: it may read private data (calendar, mail, Linear) and has no write tool, no send and no
+outbound channel. Its controls, in order:
+
+1. `--tools ToolSearch`: no built-in file, shell or web tool is loaded at all.
+2. `--allowedTools` from `hooks/brief_allowed_tools.txt`: the read allowlist (a calendar, a mail and an issue read).
+3. `--disallowedTools` from `hooks/brief_denied_tools.txt`, repeated as `permissions.deny` in `hooks/brief-settings.json`: every tool of
+   Gmail, Google Calendar and Linear that is not on the allowlist, by full name (`hooks/brief_connector_tools.txt` is a dated snapshot of the
+   real tool list and a test checks each of its names is allowed or denied), every other connector as a whole server, and the built-in file, shell and
+   web tools.
+   A denied tool is hidden from the model (probed: it reports the tool as not available). A test keeps the two lists equal.
+4. `-p` is non-interactive, so a tool that is not allowed is denied rather than asked, with a caveat (D-117): the operator's own user-level
+   `permissions.allow` and `defaultMode` still apply inside the run, so an unlisted tool is not denied by `-p` alone. That is why stage 1
+   passes `--permission-mode default` and the deny file names every connector tool the brief does not need, reads included.
+   **Residual:** a connector tool added after the snapshot, or a user-scope MCP server that is not in it, is NOT stopped by `--tools`
+   (built-ins only) or `--allowedTools` (it only adds allows). With a server-wide or wildcard `permissions.allow` entry in the operator's
+   user settings (`mcp__claude_ai_Gmail`, `mcp__*`) such a tool is open to stage 1, a new Gmail write tool included. The operator must never
+   keep such entries for Gmail, Calendar or Linear. After stage 1, `tools-audit` reads the stream's init tool list and its tool calls and
+   refuses the run (exit 2, digest discarded, stage 2 never starts, notification without names) when ANY tool outside the allowlist and
+   `ToolSearch` appears, a built-in one too: it detects the drift, it cannot undo a call that already ran. The ledger row and the one-line
+   summary name only tools of the checked-in lists, the built-ins and claude's own init list; a name the model invents is counted
+   (`unknown`), never written down. It fails closed: a stream line that is not a JSON object, a call block (`tool_use`, `server_tool_use`,
+   `mcp_tool_use`) whose name is not a string, or a stream over 50 MB, is refused as `unparseable`; a raw scan names the tools a malformed
+   line shows (a parsed line is read by structure, so a tool name inside a mail body or an allowed tool's input is data, not a call).
+5. `--no-session-persistence`: no transcript of the raw mail is written where the nightly reflect sweep reads (probed: only an empty
+   per-directory folder appears).
+6. `disableAllHooks` in the settings file: the operator's own hooks (inject, citation ledger, holdout draws) do not run inside the brief.
+
+The PreToolUse guard is not active in the brief because `disableAllHooks` is required to keep the operator's own hooks out of the run; it is
+kept (`hooks/brief_guard.py`, deny by default, fails closed, tested) for principals that run with hooks. Two limits follow: the brief relies
+on tool scoping and deny lists, not on a hook, and `--setting-sources` cannot be used to drop the user hooks because it also drops the
+claude.ai connectors (probed 2026-10-22). Stage 1 cannot use `--strict-mcp-config` either: the connectors are account-level and cannot be
+named in an mcp-config file; stage 2 (no tools) does. Stage 1 emits a JSON digest and code applies the private exclusion list; stage 2
+(`--tools "" --strict-mcp-config`) sees only the cleaned digest. Everything gathered is treated as data, never instructions. No model
+writes HTML that is served: the model emits JSON, validated and capped by code, and code renders the page with every field escaped, a
+`default-src 'none'` CSP, no script and no external resource (D-110). A link is an outbound channel (a query string can carry mail text), and
+the digest has no url field, so any url in a brief was invented by a model: the validator sets every `url` to null and the page has no
+link. The renderer keeps its host allowlist (`mail.google.com`, `calendar.google.com`, `linear.app`; https, exact host, no userinfo, no
+port, at most 500 characters, no control or format character) only as defence in depth. Every call passes an explicit model and
+runs without `ANTHROPIC_API_KEY`. None of this is on the hook path; the brief runs `claude -p`, which is the one network use, and only on
+your login.
+
+Two more controls. One run at a time: a kernel `flock` (python `fcntl` on fd 9) that the kernel releases when the run dies, so a live run is never taken
+over; each stage has a wall-clock limit (`ACE_BRIEF_STAGE_TIMEOUT`, 600 s). The private exclusion match runs in a child process that
+`brief_excl.py` SPAWNS (a fresh interpreter, killed after 10 s; D-116): a `re` match in C cannot be interrupted in-process, and the child
+sees only the lists and the mail it is handed. That file is the one place under `ace_playbook/compile/` allowed to import
+`multiprocessing`; `tests/test_compile_events.py` bans the module everywhere else and names this exemption (a stale exemption fails too).
+Spawn is not a shell or a network use, but it does start a process, which the "never spawn" rule of that test otherwise forbids.
+
 ## Planned, not implemented
 
 A compiler that emits specs and diffs only, behind a human gate and a second reviewer that sees

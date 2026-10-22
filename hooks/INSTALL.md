@@ -436,6 +436,150 @@ symbols or ANSI. The plugin finds your checkout
 from its own location (through the symlink), or from `ACE_PLAYBOOK_REPO`; the config is found as for the status line (`ACE_PLAYBOOK_CONFIG`,
 else the default file; `ACE_PYTHON` picks the interpreter). It reads `status.json` only, prints a one-line fallback on any error and exits 0.
 
+## 8. Brief on wake (optional, read-only)
+
+`hooks/brief.sh` writes one local page, `brief.html`, from your calendar, mail and Linear issues each time the Mac wakes or unlocks (at
+most once per `brief_dedupe_hours`). It is a read-only principal: two `claude -p` stages, no write tool, no send, no outbound channel.
+Stage 1 has the tools of `hooks/brief_allowed_tools.txt` and emits a JSON digest; code removes the threads on your private exclusion list;
+stage 2 has no tools and writes the brief JSON from the cleaned digest; code (not a model) renders the page with every field escaped.
+Run it by hand first: `hooks/brief.sh --force` (it needs `uv` and a logged-in `claude` on the PATH; it never sees `ANTHROPIC_API_KEY`).
+
+**Config keys** (all optional, in the same config file as the rest):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `brief_dir` | `data_dir/brief` | where the page, JSON, ledger and state live (created 0700; files 0600) |
+| `brief_exclusions` | none | path of the private exclusions file below |
+| `brief_model` / `brief_model_stage2` | `claude-sonnet-5-5` | the explicit model of each stage |
+| `brief_dedupe_hours` | 4 | a wake inside this window of the last brief does nothing |
+| `brief_max_budget_usd` | 1.0 | `--max-budget-usd` of each stage |
+
+**Exclusions file** (keep it out of any checkout; literal text, case-insensitive, matched by code on the digest, never by the model):
+
+```json
+{"drop_senders": ["@example.org", {"starts": "billing"}], "drop_subjects": [{"contains": "private"}], "drop_bodies_from": ["billing@"]}
+```
+
+An entry is a string (found anywhere in the field) or a one-key object, `{"starts": "text"}` (the field must begin with it) or
+`{"contains": "text"}`. It is always plain text: `.`, `*`, `(` and `^` mean themselves (every entry is `re.escape`d), so no entry can
+backtrack. A thread whose sender matches `drop_senders` or whose subject matches `drop_subjects` is removed from the digest; one whose
+sender matches `drop_bodies_from` stays as sender and subject only (its summary is emptied). An empty entry, an entry over 200 characters,
+more than 500 entries in a list, an unknown key or mode, or an unreadable file stops the run. The matching runs in a spawned child
+process (`multiprocessing`) that is killed after 10 seconds; a timeout or any failure of the child also stops the run (exit 2), and the
+digest never passes through. Sender and subject are capped at 200 and 300 characters before matching. The lists apply to mail only, not to calendar
+titles or issues.
+
+**Triggers.**
+
+```sh
+brew install --cask hammerspoon        # wake and unlock
+brew install terminal-notifier         # the "N need you" notification; optional
+```
+
+`brief.sh` runs `$ACE_BRIEF_NOTIFIER` when it is set, else `terminal-notifier` from the PATH (to which it adds `/opt/homebrew/bin`). Set
+the variable to another executable to change the notifier; the test suite sets it to a recording fake for every test, so no test can open
+a real notification. The notifier only ever gets a count (`N need you`), `brief: tool drift, run refused`, and the page's `file://` link.
+
+Grant Hammerspoon Accessibility (System Settings, Privacy and Security, Accessibility), then add one line to `~/.hammerspoon/init.lua`:
+
+```lua
+dofile(os.getenv("HOME") .. "/ace-playbook/hooks/hammerspoon/ace.lua")
+```
+
+The path defaults to `$HOME/ace-playbook/hooks/brief.sh`; a `~/.hammerspoon/ace_config.lua` returning
+`{ brief_script = "/abs/path/brief.sh", config_file = "/abs/path/config.json" }` overrides it. **Both triggers must use the
+same config file**: `config_file` is exported to the wake run as `ACE_PLAYBOOK_CONFIG` and must equal `__ACE_CONFIG_FILE__` in the LaunchAgent below.
+The brief directory, the run lock and the exclusion list all come from that file, so a wake run without it would read the default config:
+another directory and another lock (the two triggers could then run at once) and no exclusions. `config_file` is therefore required:
+without it `ace.lua` prints a warning, shows an alert and skips the run (fail closed). Hammerspoon starts the task with
+only `HOME`, `PATH` and that variable. Login coverage (launchd has no wake event) is a LaunchAgent that runs the
+script once at load:
+
+```sh
+cp hooks/launchd/com.example.ace-brief.plist "$HOME/Library/LaunchAgents/com.example.ace-brief.plist"
+# edit the file: replace __ACE_PLAYBOOK_HOME__, __ACE_CONFIG_FILE__, __ACE_DATA_DIR__ and __ACE_USER_HOME__ (your home directory)
+# with absolute paths and rename the Label to something you own
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.example.ace-brief.plist"
+```
+
+Remove it with `launchctl bootout "gui/$(id -u)/com.example.ace-brief"`, delete the `dofile` line and `brew uninstall` what you added.
+
+**What phase 0 measured.** Your own `~/.claude` hooks fire inside every plain `claude -p` run (six SessionStart events per probe).
+`brief-settings.json` therefore sets `disableAllHooks` (probed: the connectors still load, no hook starts). `--setting-sources` cannot do
+this job: it drops the claude.ai connectors too (probed 2026-10-22). A side effect is that a PreToolUse guard cannot run in the brief:
+`hooks/brief_guard.py` is not active there (it is kept for principals that run with hooks); the brief relies on tool scoping and deny
+lists, not on a hook. `--allowedTools` does not shrink the prompt: all connector tool definitions still load, about 140k cached input
+tokens per stage-1 run (about 52k created plus 91k read in the measured run); stage 2 loads none. The model was seen calling only the
+allowed tools, and asking for a denied one (a mail send) got "not available".
+
+**Sessions.** Both stages pass `--no-session-persistence`, so no session transcript is written: without it Claude Code would store every
+raw mail result under `~/.claude/projects/` where the nightly reflect sweep reads transcripts. Probed: a run creates only an empty
+`~/.claude/projects/<cwd slug>/memory/` directory and no `.jsonl` (the empty directory is harmless).
+
+**Tool scope.** Stage 1 passes `--tools ToolSearch` (no built-in file or shell tool loads), `--allowedTools` from
+`hooks/brief_allowed_tools.txt`, `--permission-mode default`, and `--disallowedTools` from `hooks/brief_denied_tools.txt` (every connector
+tool of Gmail, Google Calendar and Linear that the brief does not need, reads included, by full name, and the other connectors as whole servers;
+`hooks/brief-settings.json` repeats the list in `permissions.deny` and a test keeps them equal).
+`-p` denies an unlisted tool, but your user-level `permissions.allow` and `defaultMode` still apply inside the run, which is why
+`--permission-mode default` is passed and every unneeded connector tool is denied by name. `hooks/brief_connector_tools.txt` is a dated
+snapshot of the connector tool names seen on 2026-10-22 and a test checks each is allowed or denied; refresh it by hand when a connector
+adds tools. A connector tool added after the snapshot, and any user-scope MCP server that is not in it, is NOT stopped by `--tools` (it
+controls built-ins only) or `--allowedTools` (it only adds allows): the default mode and `-p` deny it only when no user-level
+`permissions.allow` covers it. **Never keep a server-wide or wildcard `permissions.allow` entry for Gmail, Calendar or Linear (or any
+`mcp__*` wildcard) in your user settings**: with one, a new Gmail write tool is open to stage 1. As a check after the fact, `brief.sh` runs
+`python -m ace_playbook.compile.brief tools-audit` on the stage 1 stream: ANY tool, a built-in too, outside `hooks/brief_allowed_tools.txt`
+and `ToolSearch` in the init tool list or in a call refuses the run (exit 2, `brief: tool drift, run refused` on stderr and in the
+notification, the digest is discarded and stage 2 never starts, a ledger row `drift: [names]`). The verb prints one summary line,
+`{"init": N, "drift": [...], "unknown": N}`, which `brief.sh` shows on stderr only on a refusal: `init` is the size of the init tool list,
+`drift` names only tools of the checked-in lists (the allowlist, `hooks/brief_connector_tools.txt` and the built-in tool names), and
+`unknown` counts the rest. **The model chooses the names of its tool calls**, so a name is written to the ledger only when it is a name of
+letters, digits, `_`, `.` and `-` (not starting with `-`, at most 100 characters) that is on the allowlist, in the connector snapshot, a
+built-in name or in the init list; every other name is counted (`unknown_tools` in the stage row, the pseudo-name `unknown` in the drift
+row) and never echoed, so injected mail text cannot reach a file, the notification or the terminal through a made-up tool name. A call
+block (`tool_use`, `server_tool_use`, `mcp_tool_use`) whose name is not a string refuses the run as `unparseable`. A tool name that appears
+only as text inside a parsed line (an allowed tool's input, a mail body) is data; only lines that are not JSON objects are scanned raw.
+**Not yet observed:** the init tool list under `--tools ToolSearch` has not been seen on a real run. If it lists built-ins or other
+tools the audit refuses every run; the first real `brief.sh --force` is the acceptance test. Read the summary line (it shows the size of
+the init list and which tools drifted) and the `drift` row of `brief_ledger.jsonl`, then decide whether to tighten the scope or to
+widen the audit. That detects drift, it cannot undo a call that already ran.
+It cannot use `--strict-mcp-config`, because the claude.ai connectors are account-level and cannot be named in an mcp-config file.
+The prompt is always the last argument, after a single-value flag, because `--tools`, `--allowedTools` and `--disallowedTools` take
+a variadic list that would swallow a positional prompt.
+The brief JSON carries no usable link: the digest has no url field, so the validator (`compile/brief_render.py`) sets every `url` to null
+and the page has no `<a>`. The renderer would still write a link only for `mail.google.com`, `calendar.google.com` or `linear.app` (constant
+`LINK_HOSTS`; https, at most 500 characters, no control or format character), as defence in depth. In `brief_allowed_tools.txt` and
+`brief_denied_tools.txt` a line is blank, a full-line `#` comment or exactly one name of letters, digits, `_`, `.` and `-` that does not
+start with `-` (it would turn into an option of `--allowedTools`): a `#` after a name, a BOM, a space inside, a NUL byte anywhere in the
+file or any other byte makes `brief.sh`, the audit and the guard all refuse the file, because the same line would otherwise be a dead rule
+in `--disallowedTools` and a live one in the guard.
+
+**Ledger.** Each stage appends one line to `brief_ledger.jsonl` (0600): `ts`, `stage`, `model`, `cost_usd` (list-price equivalent; the
+subscription is not billed per run; `model` lists the model names the stream reports, `unknown` when none is a plain name),
+the four token counts, `duration_ms`, `num_turns`,
+`tools_called` (only the names described under
+Tool scope), `unknown_tools` (how many other names the model called), and the plan windows read from
+the stream's `rate_limit_event`: `five_hour_before/after` and `seven_day_before/after` (utilization, 0 to 1; both readings come from the
+same stream, so compare consecutive rows for the share of a week). `uv run python -m ace_playbook.compile.brief status` prints the last
+brief, the needs-you count, the ledger row count and the last cost of each stage.
+
+The raw streams of a run hold mail the exclusion list has not seen, so `brief.sh` deletes them when it exits, also on SIGTERM, SIGINT or
+SIGHUP (exit 143, 130 and 129), which also stop the running `claude` or python step at once (every step runs in the background and is
+waited for, so the signal is not deferred). The handler ignores further signals first, so a burst of them cannot skip the purge, and it
+waits at most `ACE_BRIEF_KILL_GRACE` seconds for the children before it SIGKILLs them (a stage that ignores TERM cannot hold it). A SIGKILL
+cannot be caught: it leaves the raw files, and the next run deletes them first thing
+(`ACE_BRIEF_KEEP=1` keeps them, 0600, under `brief_dir/run`; the session transcript is
+never written, see Sessions above). `digest_clean.json` (summaries after the exclusions) stays there until the next run.
+
+**One run at a time.** `brief.sh` takes a kernel `flock` (python's `fcntl` on the inherited fd 9; the interpreter is `ACE_PYTHON`,
+else `python3`: any python3 with the stdlib `fcntl` will do, launchd's bare PATH finds `/usr/bin/python3`, which on macOS is the Command
+Line Tools shim and must be installed, else set `ACE_PYTHON` in the LaunchAgent) on `brief_dir/run.lockf` (an empty file that stays).
+The kernel drops it when the last process holding it dies, a SIGKILL included, so there is no stale lock to take over; a live run, or a `claude` stage
+that outlived a killed script, is always respected: a second run exits 0 without a word. Each stage has a wall-clock limit,
+`ACE_BRIEF_STAGE_TIMEOUT` seconds (an integer of at least 1, else 600): a stage that runs longer gets SIGTERM, and SIGKILL after
+`ACE_BRIEF_KILL_GRACE` seconds (an integer of at least 1, else 10) if it ignores that; the run fails (exit 1, `brief: stage N timed out`) and
+the ledger gets a row `timeout: stageN`. Each stage also runs under its own `perl` alarm (`/usr/bin/perl`, the two times added), so a stage
+orphaned by a SIGKILL of the script dies by itself and releases the lock instead of holding it for good.
+
 ## What the hooks write
 
 All under `data_dir`: `deltas.jsonl` (+ `.lock`), `playbook.sqlite` (disposable view),

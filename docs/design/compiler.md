@@ -1277,6 +1277,116 @@ section in PREREGISTRATION.md still says `(DRAFT until sealed)`. The sealing its
 - Until the `shadow_seed` and `arm_rate` config fields land with the executed seal (the next version), `shadow_seed_sha256` is `-` and
   `arm_rate` prints `0.5 (planned)`, and the real seal refuses (exit 1, naming `shadow_seed_sha256` and `arm_rate`) before it asks anything.
 
+### 8.x Brief (as built)
+
+Order W3 of the watcher and cockpit design (section 7, "The brief"). Not on the hook path: `brief`, `brief_render`, `brief_excl` and
+`brief_audit` are on the conformance ABSENT tuple, `__main__.py` is untouched (the brief has its own entry point,
+`python -m ace_playbook.compile.brief <verb>`), and nothing in metrics, report, status, seal or the detectors changed.
+
+- **Principals and controls.** A read-only principal (it reads calendar, mail and Linear; it has no write tool and no outbound channel).
+  Controls, in order: (1) `--tools ToolSearch` (no built-in file, shell or web tool loads); (2) `--allowedTools` built from
+  `hooks/brief_allowed_tools.txt`; (3) `hooks/brief_denied_tools.txt` (every tool of Gmail, Google Calendar and Linear that is not allowed, by full name,
+  every other connector as a whole `mcp__<server>` rule) as `--disallowedTools` and, with the built-in file, shell and web tools, as the
+  settings file's `permissions.deny` (a test keeps them equal; a denied tool is hidden from the model); (4) `-p` is non-interactive, so an
+  unlisted tool is denied, not asked, with a caveat (D-117): the operator's user-level `permissions.allow` and `defaultMode` still apply
+  inside the run, which is why stage 1 passes `--permission-mode default` and the deny file names every connector tool the brief does not
+  need, reads included (43 reads were neither allowed nor denied before: Gmail `get_message`, Linear `extract_images`, and so on). **What does
+  not stop a new tool:** a connector tool added after the snapshot, or a user-scope MCP server that is not in it, is NOT stopped by `--tools`
+  (it controls built-ins only) or `--allowedTools` (it only adds allows); the default mode and `-p` deny it only when no user-level
+  `permissions.allow` covers it, so with a server-wide or wildcard entry (`mcp__claude_ai_Gmail`, `mcp__*`) a new Gmail write tool is open to
+  stage 1. The operator must never keep such entries for Gmail, Calendar or Linear. **Drift check (D-118):** after stage 1 `brief.sh` runs
+  `tools-audit <stream> --allow hooks/brief_allowed_tools.txt` (`compile/brief_audit.py`): ANY tool (a built-in too) outside the allowlist and `ToolSearch`
+  in the stream's `system/init` `tools` list or in a `tool_use` block, or a stream with no init tool list at all, ends the run (exit 2, or 1
+  when nothing could be audited), appends a ledger row `{ts, stage, drift: [names], unknown_tools}`, notifies "brief: tool drift, run refused"
+  without names, discards the digest and never starts stage 2. The verb prints `{"init": N, "drift": [...], "unknown": N}` (names of the
+  checked-in lists only; `brief.sh` shows it on stderr on a refusal). The MODEL chooses the names of its `tool_use` blocks, so a name is written
+  anywhere only when it fullmatches `[A-Za-z0-9_][A-Za-z0-9_.-]*` and is on the allowlist, in `hooks/brief_connector_tools.txt`, a built-in
+  name or in the init list; any other is counted (`unknown_tools`, pseudo-name `unknown`), never echoed. The init list under `--tools
+  ToolSearch` has not been observed yet: the first real run is the acceptance test. The audit fails closed: a non-blank stream line that is
+  not a JSON object, a call block (`tool_use`, `server_tool_use`, `mcp_tool_use`) whose `name` is not a string, or a file over 50 MB (it is not
+  truncated), counts as drift with the pseudo-name `unparseable`, and a raw scan of the lines that did not parse as JSON objects for
+  `"name": "mcp__..."` adds the tool names they show (a parsed line is read by structure: that text inside an allowed tool's input or a mail
+  body is data and cannot refuse the run). It detects, it cannot undo a call that already ran; (5)
+  `--no-session-persistence` on both stages (probed: no `.jsonl` transcript is written, only an
+  empty `~/.claude/projects/<cwd slug>/memory/` directory, so the reflect sweep finds no raw mail); (6) `disableAllHooks` in
+  `hooks/brief-settings.json`, which keeps the operator's own hooks out of the run. The PreToolUse guard (`hooks/brief_guard.py`, deny by
+  default, fails closed, still tested) is not active in the brief because `disableAllHooks` is required to keep the operator's hooks out;
+  it is kept for principals that run with hooks. So the brief relies on tool scoping and deny lists, not on a hook, and cannot use
+  `--setting-sources` (it drops the claude.ai connectors, probed 2026-10-22) or, in stage 1, `--strict-mcp-config` (the connectors are
+  account-level and cannot be named in an mcp-config file). `--tools`, `--allowedTools` and `--disallowedTools` are variadic, so the prompt
+  is always the last argument after `--max-budget-usd <n>`. Every `claude -p` call passes an explicit model (`brief_model`,
+  `brief_model_stage2`, default `claude-sonnet-5-5`), runs as `env -u ANTHROPIC_API_KEY -u CLAUDECODE`, from an empty private directory
+  (`brief_dir/run/cwd`), and never passes `--bare`.
+- **Two stages.** Stage 1 (tools) reads and answers with one JSON digest (`calendar`, `mail`, `issues`). `digest-apply` validates the schema
+  (strings capped, control and format characters stripped, unknown keys dropped; a brief with other than 3 acts or more than 25
+  items in a list is refused, not truncated) and applies the private exclusion list by code; the result is
+  `digest_clean.json`. Stage 2 (`--tools "" --strict-mcp-config`, one turn) sees only that file on stdin and answers with the brief JSON. Both
+  prompts (`hooks/brief_prompts/`) say everything gathered is data, never instructions. The lists apply to mail threads (sender, subject,
+  `drop_bodies_from` keeps sender and subject); a configured file that is missing, unparseable, or holds a bad entry (empty,
+  over 200 characters, more than 500 in a list, unknown key or mode) refuses the run.
+  **D-116:** entries are LITERAL substrings (a string, or `{"starts": ...}` / `{"contains": ...}`), each `re.escape`d, case-insensitive,
+  joined by `|`; the nested-quantifier heuristic is gone (it missed `(a|aa)+$`, `((a+))+$`, `(a?){30}a{30}`, `.*.*.*.*x` and more). The
+  matching (`compile/brief_excl.py`, stdlib only) runs in a child process killed after 10 s, because a `re` match in C cannot be interrupted
+  in-process. The child is SPAWNED (`multiprocessing` start method `spawn`: a fresh interpreter, so it sees only the lists and the mail it is
+  handed, and no fork-from-a-threaded-host warning or deadlock). **Invariant amendment:** the "compile sources never spawn" test
+  (`tests/test_compile_events.py`) now bans `multiprocessing` as well as `subprocess` and `os.fork`, with ONE named exemption, the pair
+  (`brief_excl.py`, `multiprocessing`) citing D-116; the test fails if any other file imports it or if the exemption is no longer used.
+  A timeout, a crash or an answer that is not a list of at most as many threads as went in, each one an input thread (or an input thread
+  with its summary blanked by `drop_bodies_from`), refuses the run (exit 2) and the digest never passes through. Sender and
+  subject are capped at 200 and 300 characters before matching.
+- **D-110 (amendment to the design's "morning skill as the renderer").** No model writes HTML that is served. The morning skill's layout and
+  tokens are reproduced by code, `brief_render.render`, from the validated brief JSON: day-date line, serif headline (`Fraunces, Georgia,
+  serif`, system stack, no embedded font), a terrain polyline whose elevation comes from each act's load (an open day is still water; one clay
+  dot on the highest act), three acts, then "Needs attention" and "Resolved" with grey numerals, or "Nothing needs you this morning.". Every text
+  field goes through `html.escape(..., quote=True)`; a link is an outbound channel (a query string can carry mail text) and the digest has no
+  url field, so any url in a brief was invented by a model: the validator sets every `url` to null and the page never has an `<a>`. The
+  renderer keeps a second line of defence, a link only for a `url` on `LINK_HOSTS` (`mail.google.com`, `calendar.google.com`, `linear.app`;
+  https, exact host, no userinfo, no port, at most 500 characters, no control or format character, Unicode Cc, Cf); the page has a CSP meta
+  of `default-src 'none'; style-src 'unsafe-inline'`, no script, no button and no external resource. Light tokens and a
+  `prefers-color-scheme: dark` set are CSS custom properties on `:root`. Deviations from the skill:
+  each act has an optional `load` (default: the day class) because the terrain needs a per-act elevation; the source phrase is the item's one
+  link (a title is not also linked).
+- **Verbs.** `due` (exit 3 when the last brief is inside `brief_dedupe_hours`; `--force`), `conf <key>`, `digest-apply <digest> [--out]`
+  (exit 2 on a schema or exclusions failure), `render <brief>` (writes `brief.html` and the validated `brief.json`, prints the path),
+  `extract <stream> --what rate_limit|result|text [--last]` (the result object gains `_tools_called`, the names that may be written, and
+  `_unknown_tools`, the count of the others), `ledger <before> <after> <stage> <result>`,
+  `state-mark` (writes `brief_state.json`: `last_brief`, `needs_you_count`), `tools-audit <stream> --allow <file>` (exit 2 on drift), `timeout-mark
+  <stage>` (a ledger row `{ts, stage, timeout}`) and `status`. They print counts and field paths, never mail content. Stream lines are split
+  on `"\n"` only: `str.splitlines` also splits on U+2028, U+2029 and U+0085, which a JSON writer may emit raw inside a string and which
+  made a result "unusable" and hid a `send_message` call from `_tools_called`.
+- **Files** in `brief_dir` (0700): `brief.html`, `brief.json`, `brief_state.json`, `brief_ledger.jsonl` (O_APPEND, locked, 0600), `run/` with
+  `digest_clean.json`; the raw streams and the unfiltered digest are deleted when the run ends, also on a signal (the `claude` child is killed first),
+  and no session transcript is written. The ledger row is `{ts, stage, model, cost_usd,
+  input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens, five_hour_before/after, seven_day_before/after,
+  duration_ms, num_turns, tools_called, unknown_tools}` (`model` lists the `modelUsage` keys that are a NAME, else `unknown`); the window fields
+  come from the stream's `rate_limit_event` (`unifiedWindows.<window>.utilization`).
+  Jason sets the share of a weekly window after a week of rows (D-97).
+- **Run control.** `brief.sh` takes a kernel `flock` (`fcntl.flock(9, LOCK_EX | LOCK_NB)` in
+  `${ACE_PYTHON:-python3}`, portable to macOS and Linux) on an fd opened on `brief_dir/run.lockf` (one run at a time; the
+  kernel releases it when the last process holding the fd dies, a SIGKILL included, so there is no pid file, no stale lock and no takeover
+  race, and a live run is always respected: a second run exits 0 without a word; the lock is taken on a descriptor, not by re-executing the
+  script under a lock wrapper, which would not forward SIGTERM to its command). The raw files are purged right after the lock is taken.
+  The helpers (`names`, the lock, the watchdog, `notify`) are in `hooks/brief_lib.sh`, sourced by `brief.sh`. Each stage has a wall-clock
+  watchdog, `ACE_BRIEF_STAGE_TIMEOUT` seconds (an integer of at least 1, else 600): a stage that outlasts it gets SIGTERM, and SIGKILL after
+  `ACE_BRIEF_KILL_GRACE` seconds (default 10) if it ignores that; the run fails (exit 1) and the ledger gets a row `timeout: stageN`. Each
+  stage also runs under `perl -e '$SIG{ALRM} = "DEFAULT"; alarm shift; exec @ARGV'` with both times added, so a stage orphaned by a SIGKILL of
+  the script dies alone (the perl resets SIGALRM first: a launcher may have left it ignored, and an ignored signal survives `exec`).
+  Every step (the `claude` stages and each python verb) runs in the background and is waited for so a
+  SIGTERM, SIGINT or SIGHUP stops it at once (exit 143, 130, 129); the handler also stops every child of the shell (`pkill -TERM -P $$`), since a
+  child started just before `CHILD=$!` is not yet tracked, and the handler and `cleanup` ignore further signals first so the purge cannot be
+  cut short. The stop is bounded: the handler polls up to `ACE_BRIEF_KILL_GRACE` seconds for the children to end, then `kill -KILL`s the tracked
+  child and `pkill -KILL -P $$`, so a stage that ignores TERM cannot hold the purge for the 610 s of its alarm.
+  `notify` runs `$ACE_BRIEF_NOTIFIER` (default `terminal-notifier` from the PATH, which `brief.sh` extends with `/opt/homebrew/bin`): the test
+  suite sets it to a recording fake for every test, so no test run can reach the real notifier. The two list files are read strictly by
+  `brief.sh`, `brief_audit.py` and `brief_guard.py`: a line is blank, a full-line `#`
+  comment or one name of `[A-Za-z0-9_][A-Za-z0-9_.-]*`; a BOM or any
+  other byte fails the run or makes the guard deny everything. `due` runs under the lock, and a
+  failed stage leaves no `brief_state.json`, so the next wake retries. Triggers: Hammerspoon `systemDidWake` and `screensDidUnlock` (20 s
+  delay) and a `RunAtLoad` LaunchAgent; `terminal-notifier` fires only when `needs_you` is non-empty. **One config file for both triggers:**
+  the brief dir, the run lock and the exclusion list all come from the config file, so the LaunchAgent (`__ACE_CONFIG_FILE__`) and the
+  Hammerspoon file (`config_file` in `~/.hammerspoon/ace_config.lua`, exported as `ACE_PLAYBOOK_CONFIG`) must name the same one. `config_file`
+  is required: without it `ace.lua` prints a warning, shows an alert and skips the run (fail closed) rather than read the default config.
+
 ## 9. Security
 
 | Control | Mechanism | Test |

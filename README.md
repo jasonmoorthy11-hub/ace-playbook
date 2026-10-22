@@ -113,6 +113,9 @@ sweep runs it quietly and appends one line to `digest.log`, so a night without a
 `hooks/statusline.sh` is an optional Claude Code status-line command: one line from `status.json` (approved, unlabelled fires in the last 24 h, unlabelled total, chains, heartbeat).
 `compile watch scan|status|queue` is the model-free configuration watcher: inert proposals from sources you list, nothing applied (hooks/INSTALL.md, Watch).
 
+`hooks/brief.sh` is an optional, read-only "brief on wake": a local HTML page rendered by code from your calendar, mail and issues
+([INSTALL.md](hooks/INSTALL.md) section 8).
+
 ## Run it
 
 Requirements: Python 3.12 or newer and [uv](https://docs.astral.sh/uv/). Runtime code uses only the

@@ -332,6 +332,27 @@ synthetic corpus is generated to match its own patterns, so detection on it is c
 Paraphrase leakage (a lesson that restates a token's prefix or last characters) is a hypothesis
 the long-token lint partly covers and nothing measures.
 
+## Brief on wake
+
+The brief's Hammerspoon trigger (`hooks/hammerspoon/ace.lua`) has no test here: no Lua interpreter is installed on the build machine, so the
+file is checked as text and reviewed by eye, and the LaunchAgent template is only `plutil -lint`ed. The brief's tool allowlist does not shrink
+the prompt: every connector's tool definitions still load, about 140k cached input tokens per stage-1 run (phase-0 measurement); a probe of a
+Haiku run that loaded them all showed 248k cache-creation tokens ($0.25-equivalent) on a cold cache, so the connector definitions, not the
+model, dominate stage-1 cost. The brief relies on tool scoping and deny lists, not on a hook, and `-p` alone does not deny an unlisted tool because
+the operator's
+user-level `permissions.allow` and `defaultMode` still apply, so stage 1 passes `--permission-mode default` and the deny file names every
+unneeded connector tool by name; the list is a snapshot (`hooks/brief_connector_tools.txt`, 2026-10-22). A connector tool added later, and
+any user-scope MCP server that is not in the snapshot, is NOT stopped by `--tools` (built-ins only) or `--allowedTools` (it only adds allows):
+the default mode and `-p` deny it only when no user-level `permissions.allow` covers it, so with a server-wide or wildcard allow such as
+`mcp__claude_ai_Gmail` or `mcp__*` a new Gmail write tool is open to stage 1 (the D-117 caveat). Operators must never keep server-wide or
+wildcard `permissions.allow` entries for Gmail, Calendar or Linear (or any `mcp__*` wildcard) in user settings. The after-the-fact check
+`tools-audit` refuses a run whose init tool list or calls show an `mcp__` tool outside the allowlist (exit 2, digest discarded, ledger row),
+but it detects, it does not prevent: the tool may already have run. `--setting-sources` cannot be
+used because it drops the claude.ai
+connectors (probed 2026-10-22), so `disableAllHooks` keeps the operator's hooks out, which also disables the PreToolUse guard. Isolating
+with a private `CLAUDE_CONFIG_DIR` does not work: credentials are bound to the config dir, so a fresh one is "Not logged in". The window figures in its
+ledger are one reading per stream, so a single run cannot show its own cost in plan share; only the trend over consecutive rows does.
+
 ## Platform assumptions
 
 Behavior of Claude Code hooks (SessionStart context cap, SessionEnd budget, Stop payload,
