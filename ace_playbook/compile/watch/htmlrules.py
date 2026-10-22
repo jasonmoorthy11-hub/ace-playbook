@@ -61,6 +61,9 @@ def select_in_table(t) -> bool:
     s, tb, tp = ((t.idx.get(k) or [-1])[-1] for k in ("select", "table", "template")); return tp < tb < s
 
 
+def begin(s, m=None): return s[-1] if m is None else min(i for i in s if i > m)  # where `reach` starts: the first select over template `m`, else the last
+
+
 class ScriptState:
     """The script-data states of the HTML tokenizer: `data`, `escaped` (after `<!--`) and `double` (after `<!--` and `<script`)."""
 

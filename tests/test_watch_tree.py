@@ -379,3 +379,30 @@ def test_w19_over_hide_a_template_end_closing_a_select_that_holds_a_table_hides_
     ("<p><template><select><td></template></p>VIS", "VIS"), ("<template><select><option>a</template>VIS", "VIS")])
 def test_w19_controls_a_template_end_closing_a_select_that_holds_no_barrier_leaves_the_rest_visible(html, expected):
     shows_md(html, expected)
+
+
+# ------------------------------------------------------------------ wave 20: the template-end poison inspects the whole select region above the template
+@pytest.mark.parametrize("html", [
+    "<template><i hidden><select><table><tr><td><select></template>LEAK", "<template><i hidden><select><table><tr><th><select></template>LEAK",
+    "<template><i hidden><select><table><caption><select></template>LEAK", "<template><i hidden><select><table><td><select></template>LEAK",
+    "<template><i hidden><select><marquee><select></template>LEAK", "<template><i hidden><select><object><select></template>LEAK",
+    "<template><i hidden><select><applet><select></template>LEAK", "<head><template><b hidden><select><table><tr><td><select></template></head>LEAK"])
+def test_w20_a_template_end_closing_an_inner_select_with_a_barrier_between_the_two_selects_hides_the_rest(html):
+    hides(html)                                                      # the newer reading's cell marker is cleared once by the template pop: the lists diverge
+
+
+@pytest.mark.parametrize("html", [
+    "<template><i hidden><table><tr><td><select><marquee><select><td></template>LEAK", "<template><i hidden><select><table><tr></template>LEAK",
+    "<template><i hidden><select><table><td></template>LEAK"])
+def test_w20_guards_the_wave_19_poisons_still_hide_the_rest(html):
+    hides(html)
+
+
+def test_w20_control_two_selects_with_nothing_between_them_show_what_follows_the_template():
+    # correct: no marker was pushed after the template's, so both readings clear [marker, i] whole and the reconstructed `i` is gone: LEAK is visible
+    shows_md("<template><i hidden><select><select></template>LEAK", "LEAK")
+
+
+def test_w20_over_hide_two_selects_with_a_bare_table_between_them_hide_what_follows_the_template_although_a_browser_shows_it():
+    # a browser shows LEAK (no cell marker), but our stack equals the one with `<tr><td>` between the selects (STRUCT tags are ignored in a select): fail closed
+    hides("<template><i hidden><select><table><select></template>LEAK")

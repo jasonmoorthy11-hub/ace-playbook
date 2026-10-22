@@ -230,9 +230,10 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   over-hide). Table-structure start tags inside a select close the select when it was opened in a table, and are ignored otherwise. A cell tag closes
   it only when nothing above the select hides itself or is a scope marker, so `<table><tr><td><select><b hidden><td>VIS` and `…<marquee><td>VIS` show
   nothing although a browser shows VIS (over-hide); a table opened inside a select is no select in a table, so
-  `<select><table><td hidden>x</td></table></select>VIS` shows nothing (over-hide). A `</template>` that closes a select holding a scope marker, a
-  table, a foreign or a hiding element hides the rest of the page, because the two readings' formatting lists differ from there on:
-  `<template><i hidden><select><table><tr></template>VIS` shows nothing although a browser shows VIS (over-hide). A raw-text element
+  `<select><table><td hidden>x</td></table></select>VIS` shows nothing (over-hide). A `</template>` that closes a select, or a select nested in it,
+  holding a scope marker, a table, a foreign or a hiding element hides the rest of the page, because the two readings' formatting lists differ from
+  there on: `<template><i hidden><select><table><tr></template>VIS` shows nothing although a browser shows VIS (over-hide; so does
+  `…<select><table><select></template>VIS`). A raw-text element
   opened in a select that holds a `<` poisons the rest of the document: nothing after it shows (over-hiding by design, not for `script`).
   The rules of `<style>` come from the TREE: the sheet of a page is the child text of its `style` elements in any namespace (an HTML one
   is raw text, comments included, as CSS reads them; an svg one is character data: a CDATA section counts, a comment does not, character

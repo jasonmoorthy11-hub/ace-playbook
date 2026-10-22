@@ -8,7 +8,7 @@ only. Simpler than a browser, always towards hiding MORE (LIMITATIONS.md, Watche
 from __future__ import annotations
 
 from .htmlrules import (BARRIERS, BREAKOUT, FORMAT, HEAD_TAGS, CTX, HEADINGS, IGNORED, OPS, RAW_ANY, SCOPED_END, SECTIONS, STANDARDS, STRUCT, VOID, WS,
-                        select_in_table, special)
+                        begin, select_in_table, special)
 
 def run(t, o, n, a):
     """A simple start tag (`htmlrules.OPS`): close a p, reconstruct, not frameset-ok, then the element (void, raw text or plain), the extras."""
@@ -36,7 +36,7 @@ def before(t, k, n, a, sc):
     own or t.process(k, n, a, sc)
 
 def template_end(t):          # closing a select that holds a barrier: the readings' formatting lists differ from here, so the rest hides (fail closed)
-    t.poisoned |= bool(t.relaxed and (m := t.idx.get("template")) and (s := t.idx.get("select")) and s[-1] > m[-1] and not reach(t))
+    t.poisoned |= bool(t.relaxed and (m := t.idx.get("template")) and (s := t.idx.get("select")) and s[-1] > m[-1] and not reach(t, m[-1]))
     if t.idx.get("template"): t.implied(thorough=True); t.pop_to("template"); t.reset_mode()      # no scope check: pops to the template whatever lies between
 
 def head(t, k, n, a, sc):
@@ -147,9 +147,9 @@ def intable(t, k, n, a, sc):
         t.foster = f
 
 # ---- select and template
-def reach(t) -> bool:
-    """May `input`, `keygen`, `textarea` end the open select? Nothing above it may be a scope marker, a foreign element or hide itself (fail closed)."""
-    return bool(t.idx.get("select")) and all(e.ns == 0 and e.name not in BARRIERS and not e.own for e in t.stack[t.idx["select"][-1] + 1:])
+def reach(t, m=None) -> bool:
+    """May `input`, `keygen`, `textarea` end the open select? Nothing above it (over template `m`: the whole region) may be a marker, foreign or hide itself."""
+    return bool(s := t.idx.get("select")) and all(e.ns == 0 and (e.name == "select" or e.name not in BARRIERS and not e.own) for e in t.stack[begin(s, m) + 1:])
 
 def inselect(t, k, n, a, sc):
     st = t.stack

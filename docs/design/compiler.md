@@ -1118,7 +1118,8 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   is the nearest below it: the tag is read again) and are ignored otherwise, as in body, so no cell marker is pushed outside the table modes. The
   cell tags are gated by `reach` too (`<table><tr><td><select><b hidden><td>VIS`, `…<marquee><td>VIS`: nothing shows, a browser shows VIS: over-hide), and a
   table opened inside a select is no select in a table (`<select><table><td hidden>x</td></table></select>VIS`: over-hide). `template_end` poisons the
-  rest of the page when its pop closes a select that `reach` rejects (the readings' formatting lists differ there:
+  rest of the page when its pop closes a select, or a select nested in it, that `reach` rejects (the whole region above the first select over the
+  template is read; the readings' formatting lists differ there:
   `<template><i hidden><select><table><tr></template>VIS` shows nothing, a browser shows VIS: over-hide). Document-level
   hiding: an `html` or `body` start tag, the first or a late one, that hides, or a `<style>` rule that hides `html`, `body` or `*`, makes
   the body empty; a `<template shadowrootmode=...>` hides every child of its host (those before it too). THE STYLE PASS (`treestyle.py`,
