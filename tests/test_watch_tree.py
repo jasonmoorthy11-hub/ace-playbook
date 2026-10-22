@@ -539,3 +539,41 @@ def test_w24_the_inner_template_pop_puts_the_older_reading_back_in_select_so_the
 def test_w24_controls_a_select_end_tag_first_shows_both_readings_agree_and_the_other_worlds_keep_their_results(html, expected):
     # `</select>` resets to the template mode first (both readings show); a tr after the inner template hid already; no select: both readings agree
     shows_md(html, expected)
+
+
+# ------------------------------------------------------------------ wave 25 (Opus wave-15 G1): a table end tag in table scope ends a select in a table
+P25 = "<p><i hidden></p><template>"
+
+
+@pytest.mark.parametrize("html", [
+    P25 + "<td><select></td></template>LEAK", P25 + "<th><select></th></template>LEAK", P25 + "<caption><select></caption></template>LEAK",
+    P25 + "<tr><td><select></td></template>LEAK", P25 + "<tr><td><select></tr></template>LEAK", P25 + "<tbody><tr><td><select></tbody></template>LEAK",
+    P25 + "<table><tr><td><select></table></template>LEAK", P25 + "<td><select><option>x</option></td></template>LEAK",
+    "<p><u hidden></p><template><th><select><optgroup></th></template>LEAK", P25 + "<td><select><b></td></template>LEAK",
+    P25 + "<template><td><select></td></template></template>LEAK", "<p><s hidden></p><template><caption><select><option></caption></template>LEAK",
+    "<p><b class=h></p><template><td><select></td></template>VIS<style>.h{display:none}</style>",
+    "<p><i hidden></p><table><tr><td><template><td><select></td></template></td></tr></table>LEAK",
+    P25 + "<td><select><template></template></td></template>LEAK"])
+def test_w25_a_table_end_tag_in_table_scope_ends_the_select_so_the_cell_marker_clears_at_the_end_tag_and_the_template_pop_clears_its_own(html):
+    # browser: "in select in table", end tag td (caption table tbody tfoot thead tr td th): in table scope, pop the select, reset the mode, reprocess; the
+    # cell clears to its marker, `</template>` clears once more and the list is [i]. Both readings hide (the newer one, in cell, reaches the same list)
+    hides(html)
+
+
+@pytest.mark.parametrize("html,expected", [
+    ("<template><i hidden><table><tr><td><select></td></template>LEAK", "LEAK"),
+    ("<template><i hidden><table><caption><select></caption></template>LEAK", "LEAK"), ("<table><tr><td><select></td></tr></table>VIS", "VIS"),
+    ("<table><tr><td><select></table>VIS", "VIS"), ("<table><caption><select></caption></table>VIS", "VIS"),
+    (P25 + "<td><select></template>LEAK", "LEAK"), (P25 + "<td><select></th></template>LEAK", "LEAK"), (P25 + "<td><select></td><td></template>LEAK", "LEAK"),
+    ("<template><i hidden><table><tr><td><select><template><td></template><td></template>LEAK", "LEAK"),
+    ("<template><tr></tr><i hidden><select><template><td></template><input><td></template>LEAK", "LEAK")])
+def test_w25_controls_the_end_tag_cures_the_over_hides_and_the_flag_never_fires_in_a_real_table_or_after_input(html, expected):
+    # Chrome 152 shows all ten: `</td>` clears M_td and `</template>` clears [M_t, i] whole; a select in a real table ends at its cell's end tag; `</template>`
+    # and `</th>` (not in scope: no th) change nothing; the second td's marker takes the clear; the poison flag is only for a table tag after a template
+    shows_md(html, expected)
+
+
+@pytest.mark.parametrize("html", [P25 + "<td><select><marquee></td></template>LEAK", P25 + "<td><select></select></td></template>LEAK"])
+def test_w25_kept_hidden_a_barrier_in_the_select_is_the_region_poison_and_a_select_end_tag_first_resets_to_the_template_mode(html):
+    # the marquee world shows LEAK in Chrome: it stays hidden here as the documented wave-19/20 two-reading over-hide (`reach` fails, the tag is ignored)
+    hides(html)

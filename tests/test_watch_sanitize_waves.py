@@ -722,17 +722,18 @@ def test_overlapping_style_openers_are_capped_and_the_page_fails_closed():
 
 
 # ------------------------------------------------------------------ wave 13: an end tag below an open select pops nothing, whatever is hidden
-@pytest.mark.parametrize("opener,closer", [("<div>", "</div>"), ("<p>", "</p>"), ("<span>", "</span>"), ("<b>", "</b>"), ("<table>", "</table>"),
-                                           ("<table><tr><td>", "</td>"), ("<ul><li>", "</li>"), ("<a>", "</a>")])
+@pytest.mark.parametrize("opener,closer", [("<div>", "</div>"), ("<p>", "</p>"), ("<span>", "</span>"), ("<b>", "</b>"), ("<table>", "</td>"),
+                                           ("<table><tr><td>", "</th>"), ("<ul><li>", "</li>"), ("<a>", "</a>")])
 def test_an_end_tag_below_an_open_select_pops_nothing_even_when_nothing_is_hidden(opener, closer):
-    # spec, "in select": every end tag but optgroup, option, select and template is ignored; the select stays open and hides what follows
+    # spec, "in select": every end tag but optgroup, option, select and template is ignored; the select stays open and hides what follows (a table end tag in
+    # table scope ends a select in a table, "in select in table": wave 25; the table openers use a tag that is not in scope)
     html = f"{opener}<select>{closer}X"
     assert "X" not in strip_hidden(html) and "X" not in body_of(html), html
     assert strip_hidden(f"{opener}<select></select>{closer}X") == "X", html                        # control: the select closed first
 
 
 SELECT_OPEN_WORLDS = ["<select><div></div>{r}", "<div><select></div>{r}", "<p><select></p>{r}", "<b><select></b>{r}", "<span><select><option></span>{r}",
-                      "<select><option></option></p>{r}", "<select><option></div>{r}", "<table><td><select></td>{r}", "<table><select></table>{r}",
+                      "<select><option></option></p>{r}", "<select><option></div>{r}", "<table><td><select></th>{r}", "<table><select></tr>{r}",
                       "<select><optgroup><option></optgroup>{r}", "<select><svg></svg>{r}", "<select><select>{r}",
                       "<div hidden><select><option></div>{r}", "<select><template></select>{r}"]
 

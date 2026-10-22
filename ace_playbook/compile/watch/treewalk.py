@@ -11,7 +11,7 @@ without case), and so is everything below it. The document hides when the builde
 from __future__ import annotations
 
 from .cssstyle import style_hidden
-from .htmlrules import HEAD_TAGS, STRUCT
+from .htmlrules import HEAD_TAGS, STRUCT, select_in_table
 
 SKIP = frozenset(("script style template noscript dialog svg math iframe object embed head title meta link canvas audio video datalist "
                   "noembed noframes rp select progress meter").split())
@@ -67,6 +67,15 @@ class Node:
         before any table) and ignores a cell tag, while the newer one (Chrome) ends the select: the readings split, so `tq` makes that tag poison the rest."""
         tb, tp = ((t.idx.get(k) or [-1])[-1] for k in ("table", "template"))
         self.tq = self.tq or (tb < tp and t.stack[tp].tm in ("table", "tbody", "row"))
+
+    def ends(self, t, k: str, n: str, a, sc: bool) -> None:
+        """This open select (`reach` passed) is ended by `input` `keygen` `textarea` `select`, a table start tag (`STRUCT`) or a table end tag (caption table
+        tbody tfoot thead tr td th) that is in table scope while the select is in a table; else the end tag is ignored. Pop it, reset the mode, read the
+        token again (not `<select>`). A table tag of a select that `via_template` flagged (`tq`) poisons the rest."""
+        if k == "e" and not (select_in_table(t) and t.in_scope(n, 3)): return
+        t.poisoned |= (k == "e" or n in STRUCT) and self.tq
+        t.popto(t.idx["select"][-1]); t.reset_mode()
+        n != "select" and t.process(k, n, a, sc)
 
 
 def hidden(name: str, own: bool, attrs, rules: tuple) -> bool:

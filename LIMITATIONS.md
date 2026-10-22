@@ -225,7 +225,9 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   a browser ends it, on every patch release of html.parser (`<!-->`, `<!--->`, `-->`, `--!>`): `htmlrules.ScriptedParser.parse_comment`.
   An open `<select>` is read in TWO ways because browsers differ: the older ignores start tags in it, the newer inserts them. The
   visible text uses the newer (the more hiding), and a page with a `<select` has its `<style>` sheets read in both and unioned. In it
-  every end tag is ignored but `</option>`, `</optgroup>`, `</select>` and `</template>`; a nested `<select>` stays open; `<input>`,
+  every end tag is ignored but `</option>`, `</optgroup>`, `</select>`, `</template>` and, when the select is in a table and the tag is in table scope,
+  `</caption>`, `</table>`, `</tbody>`, `</tfoot>`, `</thead>`, `</tr>`, `</td>` and `</th>`, which end it (as a browser's "in select in table" rule does,
+  past `reach`; the cell's marker clears there, so a hidden element opened before a template is not rebuilt); a nested `<select>` stays open; `<input>`,
   `<keygen>` and `<textarea>` end it only when nothing between the top and the select is a template, a table, an integration point, a
   foreign element or a hidden element (`<div hidden><select><template><input></template></div>X` keeps X hidden). `</select>` needs the select in
   scope under the newer reading, so an open select that held a scope marker or a formatting element hides the rest even after that element closed

@@ -401,7 +401,7 @@ def test_every_default_ignorable_code_point_is_invisible():
 # ------------------------------------------------------------------ wave 5: scope barriers, document-level hiding, shadow DOM, one-line code spans
 S = SECRET
 SCOPE_LEAKS = [f"<p hidden><button></p>{S}", f"<li hidden><ul></li>{S}", f"<li hidden><ol><li>x</li></li>{S}", f"<div hidden><select></div>{S}",
-               f"<div hidden><select><option>x</div>{S}", f"<table hidden><select></table>{S}", f"<b hidden><select></b>{S}"]
+               f"<div hidden><select><option>x</div>{S}", f"<table hidden><select></td>{S}", f"<b hidden><select></b>{S}"]
 
 
 @pytest.mark.parametrize("html", SCOPE_LEAKS)

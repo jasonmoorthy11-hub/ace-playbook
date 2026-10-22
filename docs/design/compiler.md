@@ -1108,16 +1108,18 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   trimmed, is `text/html` or `application/xhtml+xml`; 2 MathML text: `mi`, `mo`, `mn`, `ms`, `mtext`; 3 `annotation-xml` without an HTML
   encoding); `htmlrules.special(node)` asks the special category by namespace. An open select is built in two readings (`Tree.relaxed`):
   A, the older, ignores start tags and keeps the tokenizer out of raw text; B, the newer and the one the visible text uses, inserts them
-  and ignores every end tag but `option`, `optgroup`, `select` and `template`, keeps a nested `select` open, lets `input`, `keygen` and
-  `textarea` pop the select only when `treemodes.reach` finds no template, table, integration point, foreign or hidden element above
+  and ignores every end tag but `option`, `optgroup`, `select`, `template` and the table ones (`caption`, `table`, `tbody`, `tfoot`, `thead`, `tr`, `td`,
+  `th`: in table scope they end a select in a table past `reach`, the browser's "in select in table" step), keeps a nested `select` open, lets `input`,
+  `keygen` and `textarea` pop the select only when `treemodes.reach` finds no template, table, integration point, foreign or hidden element above
   it, and lets a raw text holding a `<` poison the rest of the page (`selraw`, `rawlt`, `poisoned`; `script` exempt). `</select>` needs the select
   in scope under the newer reading, so an open select that held a scope marker or a formatting element hides the rest even after that element
   closed (`<select><object></object></select>VIS`, `<select><b hidden></b></select>VIS`: a browser shows VIS under both readings, we hide:
-  over-hide, by the rule that every end tag is ignored but option, optgroup, select, template). Table-structure start tags (`caption`, `col`,
-  `colgroup`, `tbody`, `td`, `tfoot`, `th`, `thead`, `tr`) in a select close the select when it was opened in a table (a table, not a template,
-  is the nearest below it: the tag is read again) and are ignored otherwise, as in body, so no cell marker is pushed outside the table modes. The
-  cell tags are gated by `reach` too (`<table><tr><td><select><b hidden><td>VIS`, `…<marquee><td>VIS`: nothing shows, a browser shows VIS: over-hide), and a
-  table opened inside a select is no select in a table (`<select><table><td hidden>x</td></table></select>VIS`: over-hide). `template_end` poisons the
+  over-hide, by the rule that every end tag is ignored but option, optgroup, select, template and the table end tags of a select in a table).
+  Table-structure start tags (`caption`, `col`, `colgroup`, `tbody`, `td`, `tfoot`, `th`, `thead`, `tr`) in a select close the select when it was opened
+  in a table (a table, not a template, is the nearest below it: the tag is read again) and are ignored otherwise, as in body, so no cell marker is
+  pushed outside the table modes. The cell tags are gated by `reach` too (`<table><tr><td><select><b hidden><td>VIS`, `…<marquee><td>VIS`: nothing
+  shows, a browser shows VIS: over-hide), and a table opened inside a select is no select in a table (`<select><table><td
+  hidden>x</td></table></select>VIS`: over-hide). `template_end` poisons the
   rest of the page when its pop closes a select, or a select nested in it, that `reach` rejects (the whole region above the first select over the
   template is read; the readings' formatting lists differ there:
   `<template><i hidden><select><table><tr></template>VIS` and `<template><i hidden><select><table><select></template>VIS` show nothing, a browser

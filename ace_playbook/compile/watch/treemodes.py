@@ -1,8 +1,9 @@
 """The insertion modes of the sanitizer's tree builder (HTML Standard) as functions `mode(t, k, n, a, sc)`: `t` the `Tree`, `k` the kind ("c" characters, "s"
-start tag, "e" end tag, "d" doctype), `n` its name (the data of "c"), `a` its attributes, `sc` self-closing. Stdlib only. Simpler than a browser, towards hiding
-MORE: no start-tag rules for `a`, `nobr`, `button`, headings, `option`, `form`, `ruby`, an open select (end tags ignored but its own, nested selects stay open,
-a raw text `<` hides the rest, a `</template>` that closes a select holding a barrier hides it too, a cell tag ends it only past `reach`, a table in it is no
-select in a table, `</select>` needs scope), `Tree.adopt`. One function for the table modes (by `Tree.reset_mode`); a template keeps its own (`Node.tm`)."""
+start tag, "e" end tag, "d" doctype), `n` its name (the data of "c"), `a` its attributes, `sc` self-closing. Stdlib only. Simpler than a browser, towards
+hiding MORE: no start-tag rules for `a`, `nobr`, `button`, headings, `option`, `form`, `ruby`, an open select (end tags ignored but its own and a table end tag
+in table scope, which ends a select in a table; nested selects stay open, a raw text `<` hides the rest, a `</template>` that closes a select holding a barrier
+hides it too, a cell tag ends it only past `reach`, a table in it is no select in a table, a cell tag after a template-closed select hides the rest,
+`</select>` needs scope), `Tree.adopt`. One function for the table modes (by `Tree.reset_mode`); a template keeps its own (`Node.tm`)."""
 
 from __future__ import annotations
 
@@ -11,8 +12,7 @@ from .htmlrules import (BARRIERS, BREAKOUT, FORMAT, HEAD_TAGS, CTX, HEADINGS, IG
 
 def run(t, o, n, a):
     """A simple start tag (`htmlrules.OPS`): close a p, reconstruct, not frameset-ok, then the element (void, raw text or plain), the extras."""
-    if "p" in o: t.close_p()
-    if "r" in o: t.reconstruct()
+    "p" in o and t.close_p(); "r" in o and t.reconstruct()
     if "f" in o: t.ok = False
     (t.void if "v" in o else t.rawtext if "x" in o else t.insert)(n, a)
     if "F" in o: t.fmt_push(t.stack[-1])
@@ -161,14 +161,14 @@ def inselect(t, k, n, a, sc):
             (t.void if n == "hr" else t.insert)(n, a)
         elif n in ("script", "template"): head(t, k, n, a, sc)
         elif (n in ("input", "keygen", "textarea") or (n == "select" and not t.relaxed) or (n in STRUCT and select_in_table(t))) and reach(t):
-            t.poisoned |= (n in STRUCT) & t.stack[i := t.idx["select"][-1]].tq; t.popto(i); t.reset_mode()      # a table tag ends a select in a table (`tq`)
-            n != "select" and t.process(k, n, a, sc)
+            t.stack[t.idx["select"][-1]].ends(t, k, n, a, sc)                               # a table tag ends a select in a table (`tq`)
         elif t.relaxed and n not in STRUCT:                          # any other start tag is inserted as it is (strict: ignored; STRUCT: as in body)
             if n in RAW_ANY: t.rawtext(n, a)
             elif n in ("svg", "math"): t.insert(n, a, 1 if n == "svg" else 2); sc and t.pop()
             else: run(t, "rF", n, a) if n in FORMAT else t.void(n, a) if n in VOID else t.insert(n, a)       # a formatting tag as in body
     elif k == "e":
         if n == "select" and (t.in_scope(n) if t.relaxed else reach(t)): t.popto(t.idx["select"][-1]); t.reset_mode()
+        elif n in ("caption", "table", "tbody", "tfoot", "thead", "tr", "td", "th") and reach(t): st[t.idx["select"][-1]].ends(t, k, n, a, sc)
         elif n in ("option", "optgroup"): st[-1].name == "option" and t.pop(); n == "optgroup" and st[-1].name == "optgroup" and t.pop()
         elif n == "template": head(t, k, n, a, sc)
 
