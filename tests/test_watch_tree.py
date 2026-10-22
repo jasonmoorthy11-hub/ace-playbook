@@ -348,3 +348,34 @@ def test_w18_controls_a_select_opened_in_a_table_is_still_closed_by_a_cell_tag_w
 
 def test_w18_a_cell_tag_in_a_select_with_a_template_between_it_and_the_table_is_ignored():
     hides("<table><tr><td hidden><template><select><td></select>LEAK")
+
+
+# ------------------------------------------------------------------ wave 19: `</template>` closing a select that holds a barrier hides the rest
+@pytest.mark.parametrize("html", [
+    "<template><i hidden><select><table><td></template>LEAK", "<template><i hidden><select><table><th></template>LEAK",
+    "<template><i hidden><select><table><caption></template>LEAK", "<head><template><b hidden><select><table><tr><td></template></head>LEAK"])
+def test_w19_a_template_end_closing_a_select_that_holds_a_table_hides_the_rest(html):
+    hides(html)                                                      # the newer reading pushes a cell marker the older does not: the lists diverge, fail closed
+
+
+def test_w19_a_template_end_closing_a_select_that_holds_a_marquee_and_a_row_tag_hides_the_rest():
+    hides("<template><i hidden><table><tr><td><select><marquee><tr></template>LEAK")
+
+
+@pytest.mark.parametrize("html", [
+    "<template><i hidden><table><tr><td><select><marquee><td></template>LEAK", "<template><i hidden><table><tr><td><select><object><td></template>LEAK",
+    "<template><i hidden><table><tr><td><select><applet><td></template>LEAK", "<template><i hidden><table><caption><select><marquee><td></template>LEAK",
+    "<template><i hidden><table><tr><td><select><object></template>LEAK", "<template><i hidden><table><tr><td><select><marquee></select><td></template>LEAK"])
+def test_w19_a_template_end_closing_a_select_that_holds_a_marquee_object_or_applet_hides_the_rest(html):
+    hides(html)                                                      # the older reading ignores the marquee, the newer keeps its marker: the readings disagree
+
+
+def test_w19_over_hide_a_template_end_closing_a_select_that_holds_a_table_hides_the_rest_although_a_browser_shows_it():
+    hides("<template><i hidden><select><table><tr></template>VIS")   # documented over-hide (LIMITATIONS.md): fail closed, D-128
+
+
+@pytest.mark.parametrize("html,expected", [
+    ("<template><table><tr><td><select><td></template>VIS", "VIS"), ("<template><select><option>a</select></template>VIS", "VIS"),
+    ("<p><template><select><td></template></p>VIS", "VIS"), ("<template><select><option>a</template>VIS", "VIS")])
+def test_w19_controls_a_template_end_closing_a_select_that_holds_no_barrier_leaves_the_rest_visible(html, expected):
+    shows_md(html, expected)
