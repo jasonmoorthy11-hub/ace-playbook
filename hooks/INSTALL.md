@@ -156,6 +156,20 @@ record untouched. Check it with
 `no health record` before the first run). After 3 failures in a row the SessionStart block adds
 one line telling you to read the reflect log (`reflect.log`) in the data dir.
 
+**Optional notes in `compile status` (`backup`, `brain drift`).** Two config keys name check scripts of your own, each an existing
+regular file (`~` is expanded; the config loader refuses a missing one):
+
+```json
+"backup_check": "~/path/to/ace_backup.sh",
+"brain_check": "~/path/to/sync.sh"
+```
+
+Each night, before the sweep, `nightly_sweep.py` runs each configured script as `<script> --check` (20 s limit, only `PATH` and `HOME` in its
+environment), keeps the first line it prints (80 characters at most) and stores it in `health.json` under `notes`; `compile status` then
+shows it in its `notes:` line, for example `backup 7h`, `backup missing` or `brain drift: 0 files (1 skipped, 16 entropy)`. The line is
+whatever your script prints, so print no path (a line with a `/` is dropped). A script that exits non-zero, times out or prints nothing shows
+`backup check failed` or `brain check failed`, with no detail. A failing note never fails the night. Leave both keys out and nothing changes.
+
 ## 5. Optional: git pre-commit scrub
 
 To scan staged files in a repository before every commit (this touches only that repo's
@@ -476,7 +490,7 @@ brew install --cask hammerspoon        # wake and unlock
 brew install terminal-notifier         # the "N need you" notification; optional
 ```
 
-`brief.sh` runs `$ACE_BRIEF_NOTIFIER` when it is set, else `terminal-notifier` from the PATH (to which it adds `/opt/homebrew/bin`). Set
+`brief.sh` runs `$ACE_BRIEF_NOTIFIER` when it is set and not empty, else `terminal-notifier` from the PATH (to which it adds `/opt/homebrew/bin`). Set
 the variable to another executable to change the notifier; the test suite sets it to a recording fake for every test, so no test can open
 a real notification. The notifier only ever gets a count (`N need you`), `brief: tool drift, run refused`, and the page's `file://` link.
 
@@ -491,8 +505,11 @@ The path defaults to `$HOME/ace-playbook/hooks/brief.sh`; a `~/.hammerspoon/ace_
 same config file**: `config_file` is exported to the wake run as `ACE_PLAYBOOK_CONFIG` and must equal `__ACE_CONFIG_FILE__` in the LaunchAgent below.
 The brief directory, the run lock and the exclusion list all come from that file, so a wake run without it would read the default config:
 another directory and another lock (the two triggers could then run at once) and no exclusions. `config_file` is therefore required:
-without it `ace.lua` prints a warning, shows an alert and skips the run (fail closed). Hammerspoon starts the task with
-only `HOME`, `PATH` and that variable. Login coverage (launchd has no wake event) is a LaunchAgent that runs the
+without it `ace.lua` prints a warning, shows an alert and skips the run (fail closed); an empty `config_file`, an `ace_config.lua` that does not
+load or return a table and a `brief_script` or `config_file` that is not a string are the same (one logged line, run skipped). `brief.sh` takes
+only `--force`; any other argument is `brief: usage: brief.sh [--force]`, exit 2. Hammerspoon starts the task with
+only a small environment: the task's environment is HOME, USER, LOGNAME, PATH and ACE_PLAYBOOK_CONFIG; the claude CLI needs USER to find its
+login (without it a wake run fails with "Not logged in"). Login coverage (launchd has no wake event) is a LaunchAgent that runs the
 script once at load:
 
 ```sh

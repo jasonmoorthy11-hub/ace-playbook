@@ -75,8 +75,8 @@ def prune_queue(cfg: Config) -> None:
 
 def run_sweep(cfg: Config, client: ReflectorClient | None = None, max_n: int = 20,
               dry_run: bool = False, idle_minutes: float = 60.0,
-              now: float | None = None) -> list[dict]:
-    """Reflect pending transcripts, then record the outcome in health.json (not on dry runs).
+              now: float | None = None, notes: list[str] | None = None) -> list[dict]:
+    """Reflect pending transcripts, then record the outcome in health.json (not on dry runs); `notes` go into that record.
 
     An exception still propagates unchanged; health writing never raises.
     """
@@ -85,10 +85,10 @@ def run_sweep(cfg: Config, client: ReflectorClient | None = None, max_n: int = 2
         out = _sweep(cfg, client, max_n, dry_run, idle_minutes, now, problems)
     except Exception as exc:
         if not dry_run:
-            health.record(cfg, False, exc=exc)
+            health.record(cfg, False, exc=exc, notes=notes)
         raise
     if not dry_run:
-        health.record(cfg, not problems, "; ".join(problems))
+        health.record(cfg, not problems, "; ".join(problems), notes=notes)
     return out
 
 

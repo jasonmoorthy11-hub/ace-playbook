@@ -569,3 +569,65 @@ def test_the_ledger_model_is_filtered_by_name_and_unknown_when_nothing_is_left(e
     assert ledger_model(env, capsys, {secret: {}, "a b": {}, "mcp__x y": {}}) == "unknown"
     assert ledger_model(env, capsys, {}) == "unknown" and ledger_model(env, capsys, ["claude-sonnet-5-5"]) == "unknown"
     assert bs.MARKER not in (env / "brief" / "brief_ledger.jsonl").read_text()
+
+
+# ------------------------------------------------------------------ wave-6 minors
+def last_row(env):
+    return json.loads((env / "brief" / "brief_ledger.jsonl").read_text().splitlines()[-1])
+
+
+def test_status_tolerates_a_ledger_stage_that_is_a_list_or_an_object_and_renders_it(env, capsys):
+    (env / "brief").mkdir()
+    rows = [{"stage": ["a", "b"], "cost_usd": 0.1}, {"stage": {"x": 1}, "cost_usd": 0.2}, {"stage": "stage1", "cost_usd": 0.3}, {"stage": None}]
+    (env / "brief" / "brief_ledger.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    code, out, err = run(capsys, "status")
+    assert (code, err) == (0, "") and "ledger rows: 4" in out and "stage1 $0.3" in out and "['a', 'b'] $0.1" in out
+
+
+@pytest.mark.parametrize("v", [float("inf"), float("-inf"), float("nan")])
+def test_num_rejects_inf_and_nan_as_missing(v):
+    assert brief._num(v) is None and brief._num(1.5) == 1.5 and brief._num(0) == 0 and brief._num(True) is None and brief._num("1") is None
+
+
+def test_the_ledger_row_treats_an_infinite_or_nan_figure_as_missing(env, capsys):
+    junk = put(env, "j.json", "[]")
+    res = put(env, "r.json", '{"type": "result", "total_cost_usd": Infinity, "duration_ms": NaN, "num_turns": -Infinity, "usage": {"output_tokens": 5}}')
+    assert run(capsys, "ledger", junk, junk, "stage1", res)[0] == 0
+    row = last_row(env)
+    assert (row["cost_usd"], row["duration_ms"], row["num_turns"], row["output_tokens"]) == (None, None, None, 5)
+    assert "Infinity" not in (env / "brief" / "brief_ledger.jsonl").read_text() and "NaN" not in (env / "brief" / "brief_ledger.jsonl").read_text()
+
+
+def test_the_drift_list_is_sorted_before_the_cut_to_50(env, capsys, monkeypatch):
+    names = [f"mcp__tool{i:02d}" for i in range(60)][::-1]
+    monkeypatch.setattr(ba, "audit", lambda stream, allow: {"drift": names, "unknown": 0, "summary": {"init": 0, "drift": [], "unknown": 0}})
+    assert run(capsys, "tools-audit", "x", "--allow", "y")[0] == 2
+    assert last_row(env)["drift"] == sorted(names)[:50]
+
+
+def test_the_ledger_tool_list_is_sorted_before_the_cut_to_50(env, capsys):
+    names = [f"mcp__claude_ai_Gmail__t{i:02d}" for i in range(60)][::-1]
+    junk = put(env, "j.json", "[]")
+    res = put(env, "r.json", {"type": "result", "_tools_called": names})
+    assert run(capsys, "ledger", junk, junk, "stage1", res)[0] == 0
+    assert last_row(env)["tools_called"] == sorted(names)[:50]
+
+
+def test_the_ledger_model_cuts_each_name_before_it_joins_so_a_long_first_name_does_not_hide_the_rest(env, capsys):
+    long = "claude-" + "a" * 300
+    assert ledger_model(env, capsys, {long: {}, "claude-b": {}}) == f"{long[:40]},claude-b"
+    assert ledger_model(env, capsys, {"claude-sonnet-5-5": {}, "claude-haiku-5-5": {}}) == "claude-haiku-5-5,claude-sonnet-5-5"
+
+
+@pytest.mark.parametrize("argv", [["state-mark", "junk"], ["due", "--bogus"], ["bogus"], [], ["conf"], ["ledger", "a", "b"]])
+def test_unknown_or_missing_argv_exits_2_with_a_one_line_usage_error(env, argv):
+    p = subprocess.run([sys.executable, "-m", "ace_playbook.compile.brief", *argv], capture_output=True, text=True, cwd=ROOT, timeout=30,
+                       env={**os.environ, "ACE_PLAYBOOK_CONFIG": str(env / "config.json")})
+    assert p.returncode == 2 and p.stdout == ""
+    assert len(p.stderr.splitlines()) == 1 and p.stderr.startswith("brief: usage: ") and "Traceback" not in p.stderr
+
+
+def test_help_still_prints_the_full_usage_and_exits_0(env):
+    p = subprocess.run([sys.executable, "-m", "ace_playbook.compile.brief", "-h"], capture_output=True, text=True, cwd=ROOT, timeout=30,
+                       env={**os.environ, "ACE_PLAYBOOK_CONFIG": str(env / "config.json")})
+    assert p.returncode == 0 and "usage:" in p.stdout and len(p.stdout.splitlines()) > 2

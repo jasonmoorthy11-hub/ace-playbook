@@ -1,5 +1,6 @@
 """`compile/brief_render.py`: the page is written by code from validated JSON; nothing the model or a mail wrote can become markup."""
 
+import json
 import re
 
 import pytest
@@ -166,3 +167,13 @@ def test_a_format_or_bidi_character_anywhere_in_a_link_makes_it_no_link(cf):
         assert "<a " not in R.render(sample(needs_you=[item(url=url)], resolved=[])), repr(url)
         assert R.validate_brief(sample(needs_you=[item(url=url)]))["needs_you"][0]["url"] is None
     assert R.link_ok("https://linear.app/team/issue/ENG-1")
+
+
+def test_lone_surrogates_are_dropped_so_the_page_and_the_json_encode():
+    b = sample(headline="Head\ud800line\udfff!", needs_you=[item(title="a\udc00b", sentence="\ud83d only half \ude00")])
+    out = R.validate_brief(b)
+    assert out["headline"] == "Headline!" and out["needs_you"][0]["title"] == "ab" and out["needs_you"][0]["sentence"] == "only half"
+    R.render(out).encode("utf-8")
+    json.dumps(out, ensure_ascii=False).encode("utf-8")
+    pair = chr(0xD800) + chr(0xDBFF) + chr(0xDFFF)          # chr() makes three LONE surrogates (a high one is not joined to the next)
+    assert R._clean("x" + pair + "y", 10) == "xy" and R._clean("\U0001F600 ok", 10) == "\U0001F600 ok"      # a real code point above the BMP stays

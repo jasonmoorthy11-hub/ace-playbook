@@ -23,7 +23,7 @@ take_lock() {   # $1 brief_dir. One run at a time: a kernel flock(2) (taken with
   exec 9>> "$1/run.lockf" || fail "cannot open the lock file"
   "${ACE_PYTHON:-python3}" -I -c 'import fcntl,sys
 try: fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)
-except BlockingIOError: sys.exit(75)'; local rc=$?
+except BlockingIOError: sys.exit(75)' 2> /dev/null; local rc=$?      # stderr off: a failure is ONE line, `brief: lock`, never a traceback
   [ "$rc" -eq 0 ] && return 0
   [ "$rc" -eq 75 ] && exit 0
   fail "lock"

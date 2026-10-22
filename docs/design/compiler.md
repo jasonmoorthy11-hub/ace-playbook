@@ -1121,7 +1121,8 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   pushed outside the table modes. The table tags end the select past anything it holds, a hidden option or a foreign element too
   (`<table><tr><td><select><b hidden><td>VIS` shows VIS); an `applet`, `marquee` or `object` above the select makes that tag poison the rest
   (`…<marquee><td>VIS`: nothing shows, a browser shows VIS: over-hide, the two readings' cell clears differ). `col` and `colgroup` split the
-  readings (the older "in select in table" step names neither and ignores them, the newer closes the cell) and hide the rest
+  readings (the older "in select in table" step names neither and ignores them, the newer ends the select through the table steps (it closes the cell
+  or caption, or clears back to the table)) and hide the rest
   (`<table><tr><td><select><col></td>VIS` shows nothing, Chrome shows VIS: over-hide, kept on purpose; `<table><tr><td><select><col>LEAK</table>`
   shows LEAK in Chrome and is hidden here). A table opened inside a
   select is no select in a table (`<select><table><td
@@ -1157,7 +1158,8 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   template, object, dialog, canvas, video, audio, datalist, head, rp, progress, meter) is escaped inside a trusted code span or fence.
   Kept over-hides, each on purpose: a nested `select` stays open, a raw text a select holds with a `<` hides the rest of the page, the
   `input`, `keygen` and `textarea` enders are gated by `reach` (a table tag is not), a `</template>` that closes a select holding a barrier hides the
-  rest of the page, a table opened inside a
+  rest of the page, an `applet`, `marquee` or `object` above a select makes a table tag that ends it poison the rest, the next cell tag
+  after a template-closed select does the same, a table opened inside a
   select is no select in a table, `col` and `colgroup` in a select in a table hide the rest, `</select>` needs the select in scope, a
   furthest-block formatting element stays open, `a`, `nobr`,
   `button`, headings, `option` and `ruby` have no start-tag rules and `form` has no pointer (`</form>` pops only a current form), `colgroup`
@@ -1301,8 +1303,9 @@ Order W3 of the watcher and cockpit design (section 7, "The brief"). Not on the 
   without names, discards the digest and never starts stage 2. The verb prints `{"init": N, "drift": [...], "unknown": N}` (names of the
   checked-in lists only; `brief.sh` shows it on stderr on a refusal). The MODEL chooses the names of its `tool_use` blocks, so a name is written
   anywhere only when it fullmatches `[A-Za-z0-9_][A-Za-z0-9_.-]*` and is on the allowlist, in `hooks/brief_connector_tools.txt`, a built-in
-  name or in the init list; any other is counted (`unknown_tools`, pseudo-name `unknown`), never echoed. The init list under `--tools
-  ToolSearch` has not been observed yet: the first real run is the acceptance test. The audit fails closed: a non-blank stream line that is
+  name or in the init list; any other is counted (`unknown_tools`, pseudo-name `unknown`), never echoed. A stream with no `system/init`
+  event, or with an init event whose `tools` is not a list, is not audited: `brief_audit` raises "no init" (exit 1), so nothing passes. The
+  audit fails closed: a non-blank stream line that is
   not a JSON object, a call block (`tool_use`, `server_tool_use`, `mcp_tool_use`) whose `name` is not a string, or a file over 50 MB (it is not
   truncated), counts as drift with the pseudo-name `unparseable`, and a raw scan of the lines that did not parse as JSON objects for
   `"name": "mcp__..."` adds the tool names they show (a parsed line is read by structure: that text inside an allowed tool's input or a mail
@@ -1318,7 +1321,7 @@ Order W3 of the watcher and cockpit design (section 7, "The brief"). Not on the 
   `brief_model_stage2`, default `claude-sonnet-5-5`), runs as `env -u ANTHROPIC_API_KEY -u CLAUDECODE`, from an empty private directory
   (`brief_dir/run/cwd`), and never passes `--bare`.
 - **Two stages.** Stage 1 (tools) reads and answers with one JSON digest (`calendar`, `mail`, `issues`). `digest-apply` validates the schema
-  (strings capped, control and format characters stripped, unknown keys dropped; a brief with other than 3 acts or more than 25
+  (strings capped, control, format and lone-surrogate characters stripped, unknown keys dropped; a brief with other than 3 acts or more than 25
   items in a list is refused, not truncated) and applies the private exclusion list by code; the result is
   `digest_clean.json`. Stage 2 (`--tools "" --strict-mcp-config`, one turn) sees only that file on stdin and answers with the brief JSON. Both
   prompts (`hooks/brief_prompts/`) say everything gathered is data, never instructions. The lists apply to mail threads (sender, subject,
@@ -1351,21 +1354,28 @@ Order W3 of the watcher and cockpit design (section 7, "The brief"). Not on the 
   `extract <stream> --what rate_limit|result|text [--last]` (the result object gains `_tools_called`, the names that may be written, and
   `_unknown_tools`, the count of the others), `ledger <before> <after> <stage> <result>`,
   `state-mark` (writes `brief_state.json`: `last_brief`, `needs_you_count`), `tools-audit <stream> --allow <file>` (exit 2 on drift), `timeout-mark
-  <stage>` (a ledger row `{ts, stage, timeout}`) and `status`. They print counts and field paths, never mail content. Stream lines are split
+  <stage>` (a ledger row `{ts, stage, timeout}`) and `status`. They print counts and field paths, never mail content. A usage error (an unknown verb
+  or argument, a missing one) is ONE stderr line,
+  `brief: usage: ...`, exit 2; `brief.sh` takes only `--force` and answers anything else with `brief: usage: brief.sh [--force]`, exit 2, before it
+  reads the config or takes the lock. A number that is not finite (`Infinity`, `NaN` in a result file) is missing in a ledger row. Stream lines are split
   on `"\n"` only: `str.splitlines` also splits on U+2028, U+2029 and U+0085, which a JSON writer may emit raw inside a string and which
   made a result "unusable" and hid a `send_message` call from `_tools_called`.
 - **Files** in `brief_dir` (0700): `brief.html`, `brief.json`, `brief_state.json`, `brief_ledger.jsonl` (O_APPEND, locked, 0600), `run/` with
   `digest_clean.json`; the raw streams and the unfiltered digest are deleted when the run ends, also on a signal (the `claude` child is killed first),
   and no session transcript is written. The ledger row is `{ts, stage, model, cost_usd,
   input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens, five_hour_before/after, seven_day_before/after,
-  duration_ms, num_turns, tools_called, unknown_tools}` (`model` lists the `modelUsage` keys that are a NAME, else `unknown`); the window fields
+  duration_ms, num_turns, tools_called, unknown_tools}` (`model` lists up to five `modelUsage` keys that are a NAME, sorted, each cut to 40
+  characters before they are joined, else `unknown`;
+  `tools_called` and the tool-drift row's `drift` are sorted first and then cut to 50); the window fields
   come from the stream's `rate_limit_event` (`unifiedWindows.<window>.utilization`).
   Jason sets the share of a weekly window after a week of rows (D-97).
 - **Run control.** `brief.sh` takes a kernel `flock` (`fcntl.flock(9, LOCK_EX | LOCK_NB)` in
   `${ACE_PYTHON:-python3}`, portable to macOS and Linux) on an fd opened on `brief_dir/run.lockf` (one run at a time; the
   kernel releases it when the last process holding the fd dies, a SIGKILL included, so there is no pid file, no stale lock and no takeover
   race, and a live run is always respected: a second run exits 0 without a word; the lock is taken on a descriptor, not by re-executing the
-  script under a lock wrapper, which would not forward SIGTERM to its command). The raw files are purged right after the lock is taken.
+  script under a lock wrapper, which would not forward SIGTERM to its command). The raw files are purged right after the lock is taken. A lock step
+  that cannot run or cannot use fd 9 fails the run with the single line
+  `brief: lock` (its stderr is discarded: no traceback and no shell message before it).
   The helpers (`names`, the lock, the watchdog, `notify`) are in `hooks/brief_lib.sh`, sourced by `brief.sh`. Each stage has a wall-clock
   watchdog, `ACE_BRIEF_STAGE_TIMEOUT` seconds (an integer of at least 1, else 600): a stage that outlasts it gets SIGTERM, and SIGKILL after
   `ACE_BRIEF_KILL_GRACE` seconds (default 10) if it ignores that; the run fails (exit 1) and the ledger gets a row `timeout: stageN`. Each
@@ -1376,7 +1386,8 @@ Order W3 of the watcher and cockpit design (section 7, "The brief"). Not on the 
   child started just before `CHILD=$!` is not yet tracked, and the handler and `cleanup` ignore further signals first so the purge cannot be
   cut short. The stop is bounded: the handler polls up to `ACE_BRIEF_KILL_GRACE` seconds for the children to end, then `kill -KILL`s the tracked
   child and `pkill -KILL -P $$`, so a stage that ignores TERM cannot hold the purge for the 610 s of its alarm.
-  `notify` runs `$ACE_BRIEF_NOTIFIER` (default `terminal-notifier` from the PATH, which `brief.sh` extends with `/opt/homebrew/bin`): the test
+  `notify` runs `$ACE_BRIEF_NOTIFIER` (default, also when the variable is empty: `terminal-notifier` from the PATH, which `brief.sh` extends with
+  `/opt/homebrew/bin`): the test
   suite sets it to a recording fake for every test, so no test run can reach the real notifier. The two list files are read strictly by
   `brief.sh`, `brief_audit.py` and `brief_guard.py`: a line is blank, a full-line `#`
   comment or one name of `[A-Za-z0-9_][A-Za-z0-9_.-]*`; a BOM or any
@@ -1386,6 +1397,11 @@ Order W3 of the watcher and cockpit design (section 7, "The brief"). Not on the 
   the brief dir, the run lock and the exclusion list all come from the config file, so the LaunchAgent (`__ACE_CONFIG_FILE__`) and the
   Hammerspoon file (`config_file` in `~/.hammerspoon/ace_config.lua`, exported as `ACE_PLAYBOOK_CONFIG`) must name the same one. `config_file`
   is required: without it `ace.lua` prints a warning, shows an alert and skips the run (fail closed) rather than read the default config.
+  An empty or blank `config_file` counts as none (it is never exported as an empty `ACE_PLAYBOOK_CONFIG`); so does an `ace_config.lua` that fails
+  to load, returns something other than a table, or holds a `brief_script` or `config_file` that is not a string (one logged line at load, a
+  skipped run at every wake); a blank `brief_script` keeps the default script. `ace.lua` never raises, so the rest of `init.lua` still loads. The
+  task's environment is HOME, USER, LOGNAME, PATH
+  and ACE_PLAYBOOK_CONFIG (the claude CLI needs USER to find its login; a wake run without it was "Not logged in").
 
 ## 9. Security
 

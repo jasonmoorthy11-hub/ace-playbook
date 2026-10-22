@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ace_playbook import config as cfgmod  # noqa: E402
-from ace_playbook import health  # noqa: E402
+from ace_playbook import health, nightly_notes  # noqa: E402
 from ace_playbook.sweep import run_sweep  # noqa: E402
 
 
@@ -24,6 +24,10 @@ def main() -> int:
     ap.add_argument("--offline-dry-run", action="store_true", help="the offline pass computes its counts and writes nothing")
     args = ap.parse_args()
     cfg = cfgmod.load(args.config)
+    try:                                              # the operator's optional backup / brain checks, once a night; never fails the night
+        notes = nightly_notes.collect(cfg)
+    except Exception:  # noqa: BLE001 - no detail is kept
+        notes = []
     report, failed = {}, ""
     if not args.no_offline:
         try:                                          # the pass makes no API call, so --dry-run does not stop it
@@ -34,16 +38,16 @@ def main() -> int:
             report["offline"] = {"error": type(exc).__name__}
             failed = f"offline pass raised {type(exc).__name__}"
     try:
-        report["sweep"] = run_sweep(cfg, max_n=args.max_n, dry_run=args.dry_run, idle_minutes=args.idle_minutes)
+        report["sweep"] = run_sweep(cfg, max_n=args.max_n, dry_run=args.dry_run, idle_minutes=args.idle_minutes, notes=notes)
     except Exception as exc:                          # run_sweep records its own crash unless it was a dry run: a crashed night is a failed night
         if args.dry_run and not failed and not (args.no_offline or args.offline_dry_run):
-            health.record(cfg, False, f"sweep raised {type(exc).__name__}")   # type only, like the offline stage above
+            health.record(cfg, False, f"sweep raised {type(exc).__name__}", notes=notes)   # type only, like the offline stage above
         raise
     finally:
         if failed and not args.offline_dry_run:       # a real offline pass failed, whatever --dry-run says about reflection
-            health.record(cfg, False, failed)
+            health.record(cfg, False, failed, notes=notes)
     if args.dry_run and not failed and not (args.no_offline or args.offline_dry_run):
-        health.record(cfg, True)                      # a reflection dry run records nothing itself; a real, clean offline pass still means the nightly ran
+        health.record(cfg, True, notes=notes)  # a reflection dry run records nothing itself; a real, clean offline pass still means the nightly ran
     try:                                              # after the sweep, so tonight's line carries tonight's health; none written in an offline dry run
         from ace_playbook.compile import digest
         report["digest"] = digest.run_quiet(cfg, write=not args.offline_dry_run)

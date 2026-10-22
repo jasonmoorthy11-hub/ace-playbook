@@ -192,7 +192,7 @@ ALLOWED_ACE = {"ace_playbook", "ace_playbook.config", "ace_playbook.canon", "ace
                    "shadow", "state", "evidence", "proposal", "modes", "demotions", "approvals", "chains", "catalogue",
                    "detectors", "events", "shell", "srchash"))}
 ABSENT = ("seal", "dashboard", "dashboard_html", "status", "digest", "queue", "report", "synth", "metrics", "scrub", "measure",
-          "brief", "brief_render", "brief_excl", "brief_audit",
+          "brief", "brief_render", "brief_excl", "brief_audit", "nightly_notes",
           "watch", "fetch", "inventory", "match", "store", "summary", "chars", "fsio", "cssstyle", "records", "pin",
           "reconcile", "htmlrules", "mdrules", "stylepass", "cssscan", "treebuild", "treemodes", "treestyle", "treewalk")   # `watch`: network-using (W1)
 HEAVY = {"sqlite3", "subprocess", "socket", "ssl", "http", "urllib.request", "asyncio", "multiprocessing", "threading", "ctypes"}

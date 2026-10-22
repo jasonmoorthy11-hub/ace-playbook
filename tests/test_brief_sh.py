@@ -242,14 +242,15 @@ def test_a_held_lock_exits_quietly_and_a_run_proceeds_once_it_is_released(w):
 
 
 def test_a_failing_lock_step_is_a_one_line_failure_never_a_silent_skip(w):
-    """Only "somebody holds it" is the quiet exit 0; a lock step that cannot run or cannot see fd 9 (EBADF) fails the run with `brief: lock`."""
+    """Only "somebody holds it" is the quiet exit 0; a lock step that cannot run or cannot see fd 9 (EBADF) fails the run with `brief: lock`
+    and that line is ALL it prints: no traceback of the python child and no shell "No such file" line before it."""
     p = w.run("--force", ACE_PYTHON=str(w.tmp / "no-such-python"))
-    assert (p.returncode, p.stdout, p.stderr.strip().splitlines()[-1]) == (1, "", "brief: lock") and not w.ledger()
+    assert (p.returncode, p.stdout, p.stderr) == (1, "", "brief: lock\n") and not w.ledger()
     shim = w.tmp / "python-without-fd9"
     shim.write_text(f'#!/bin/bash\nexec 9>&-\nexec "{sys.executable}" "$@"\n')
     shim.chmod(0o755)
     p = w.run("--force", ACE_PYTHON=str(shim))
-    assert (p.returncode, p.stdout, p.stderr.strip().splitlines()[-1]) == (1, "", "brief: lock") and not w.ledger() and free(w)
+    assert (p.returncode, p.stdout, p.stderr) == (1, "", "brief: lock\n") and "Traceback" not in p.stderr and not w.ledger() and free(w)
 
 
 def test_three_concurrent_runs_make_exactly_one_ledger_pair_and_print_no_path(w):
@@ -590,3 +591,19 @@ def test_every_test_runs_with_a_recording_fake_notifier_and_a_missing_one_is_not
     assert os.path.dirname(os.environ["ACE_BRIEF_NOTIFIER"]) == str(fake_notifier.parent) and not fake_notifier.exists()
     p = w.run("--force", ACE_BRIEF_NOTIFIER=str(w.tmp / "no-such-notifier"))          # w.bin/terminal-notifier is first on the PATH: it must stay unused
     assert p.returncode == 0 and not (w.tmp / "notified").exists() and not fake_notifier.exists()
+
+
+# ------------------------------------------------------------------ wave-6 minors
+def test_an_empty_ace_brief_notifier_behaves_as_unset_and_uses_the_default_notifier_of_the_path(w, fake_notifier):
+    """`:-` (not `-`): an empty value is the default, terminal-notifier from the PATH (the world's recording fake is first on it)."""
+    p = w.run("--force", ACE_BRIEF_NOTIFIER="")
+    assert p.returncode == 0 and p.stderr == "" and not fake_notifier.exists()
+    assert (w.tmp / "notified").read_text().splitlines()[:4] == ["-title", "ACE brief", "-message", "1 need you"]
+
+
+@pytest.mark.parametrize("args", [["--bogus"], ["--force", "extra"], ["force"], [""], ["--force", "--force"]])
+def test_an_unknown_argument_is_a_one_line_usage_error_and_nothing_runs(w, args):
+    p = w.run(*args)
+    assert (p.returncode, p.stdout, p.stderr) == (2, "", "brief: usage: brief.sh [--force]\n")
+    assert not w.dir.exists() and not (w.fake / "argv_stage1.json").exists() and not (w.tmp / "notified").exists()
+

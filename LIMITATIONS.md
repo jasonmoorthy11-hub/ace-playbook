@@ -243,7 +243,8 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   (start or end, the end tag in table scope) closes it past anything it holds (`<table><tr><td><select><b hidden><td>VIS` shows VIS); only an
   `applet`, `marquee` or `object` above the select makes that tag poison the rest, as only the newer reading inserts them, each with a marker, so
   `…<marquee><td>VIS` shows nothing although a browser shows VIS (over-hide); `col` and `colgroup` in a select in a table split the
-  readings (the older step ignores them, the newer closes the cell) and hide the rest (`<table><tr><td><select><col></td>VIS` shows
+  readings (the older step ignores them, the newer ends the select through the table steps (it closes the cell or caption, or clears back to the
+  table)) and hide the rest (`<table><tr><td><select><col></td>VIS` shows
   nothing, Chrome shows VIS: over-hide, kept on purpose); a table opened inside a select is no select in a table, so
   `<select><table><td hidden>x</td></table></select>VIS` shows nothing (over-hide). A `</template>` that closes a select, or a select nested in it,
   holding a scope marker, a table, a foreign or a hiding element hides the rest of the page, because the two readings' formatting lists differ from
@@ -335,7 +336,9 @@ the long-token lint partly covers and nothing measures.
 ## Brief on wake
 
 The brief's Hammerspoon trigger (`hooks/hammerspoon/ace.lua`) has no test here: no Lua interpreter is installed on the build machine, so the
-file is checked as text and reviewed by eye, and the LaunchAgent template is only `plutil -lint`ed. The brief's tool allowlist does not shrink
+file is checked as text and reviewed by eye (this covers its reading of `ace_config.lua` too: an empty or blank `config_file`, a file that does
+not load or return a table, or a value that is not a string skips the run with one logged line), and the LaunchAgent template is only `plutil
+-lint`ed. The brief's tool allowlist does not shrink
 the prompt: every connector's tool definitions still load, about 140k cached input tokens per stage-1 run (phase-0 measurement); a probe of a
 Haiku run that loaded them all showed 248k cache-creation tokens ($0.25-equivalent) on a cold cache, so the connector definitions, not the
 model, dominate stage-1 cost. The brief relies on tool scoping and deny lists, not on a hook, and `-p` alone does not deny an unlisted tool because
@@ -346,12 +349,21 @@ any user-scope MCP server that is not in the snapshot, is NOT stopped by `--tool
 the default mode and `-p` deny it only when no user-level `permissions.allow` covers it, so with a server-wide or wildcard allow such as
 `mcp__claude_ai_Gmail` or `mcp__*` a new Gmail write tool is open to stage 1 (the D-117 caveat). Operators must never keep server-wide or
 wildcard `permissions.allow` entries for Gmail, Calendar or Linear (or any `mcp__*` wildcard) in user settings. The after-the-fact check
-`tools-audit` refuses a run whose init tool list or calls show an `mcp__` tool outside the allowlist (exit 2, digest discarded, ledger row),
+`tools-audit` refuses a run whose init tool list or calls show ANY tool outside the allowlist and `ToolSearch`, a built-in too (exit 2, digest
+discarded, ledger row),
 but it detects, it does not prevent: the tool may already have run. `--setting-sources` cannot be
 used because it drops the claude.ai
 connectors (probed 2026-10-22), so `disableAllHooks` keeps the operator's hooks out, which also disables the PreToolUse guard. Isolating
 with a private `CLAUDE_CONFIG_DIR` does not work: credentials are bound to the config dir, so a fresh one is "Not logged in". The window figures in its
 ledger are one reading per stream, so a single run cannot show its own cost in plan share; only the trend over consecutive rows does.
+
+## Nightly check notes
+
+The two optional config keys `backup_check` and `brain_check` name local scripts that the nightly runs as `<script> --check`. A note is text
+from a local script the operator configured, not from the network; first line, 80 chars, failures are reported as `check failed` without
+detail (a non-zero exit, a timeout of 20 s, a start error, an empty or unprintable first line and a line that contains a `/` all give
+`backup check failed` or `brain check failed`: never stderr, the script path or an exception text). The script's own line is shown as it
+wrote it, so what it prints is only as good as the script; `compile status` shows at most four notes, each cut to 80 characters.
 
 ## Platform assumptions
 

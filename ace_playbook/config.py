@@ -57,11 +57,14 @@ class Config:
     deny_terms: list[str] = field(default_factory=list)
     # the brief on wake (docs/design/compiler.md 8.x "Brief"): read-only, its own private directory under data_dir
     brief_dir: Path | None = None  # None means data_dir / "brief"
-    brief_exclusions: Path | None = None  # private JSON: drop_senders, drop_subjects, drop_bodies_from (regex lists)
+    brief_exclusions: Path | None = None  # private JSON: drop_senders, drop_subjects, drop_bodies_from (literal substrings, D-116)
     brief_model: str = "claude-sonnet-5-5"  # stage 1 (tools: reads calendar, mail, issues)
     brief_model_stage2: str = "claude-sonnet-5-5"  # stage 2 (no tools: writes the brief JSON from the cleaned digest)
     brief_dedupe_hours: int = 4
     brief_max_budget_usd: float = 1.0
+    # the nightly's optional health notes (ace_playbook/nightly_notes.py): two operator scripts run as `<script> --check`; None means none
+    backup_check: Path | None = None
+    brain_check: Path | None = None
     source: ClassVar[Path | None] = None  # not a config key: the file `load` read (or would have read), set on the instance by `load`
 
     def __post_init__(self) -> None:
@@ -71,6 +74,9 @@ class Config:
             raise ValueError("holdout_rate must be between 0 and 1")
         if self.brief_dedupe_hours < 0 or not 0 < self.brief_max_budget_usd <= 100:
             raise ValueError("brief_dedupe_hours must be >= 0 and brief_max_budget_usd in (0, 100]")
+        for key in ("backup_check", "brain_check"):
+            if getattr(self, key) is not None and not Path(getattr(self, key)).is_file():
+                raise ValueError(f"{key} must be an existing regular file (or absent)")
 
     def check_holdout(self) -> None:
         """Raise ValueError if holdout is on without a usable private seed."""
@@ -124,7 +130,7 @@ class Config:
 
 
 _PATH_FIELDS = {"data_dir", "transcripts_root", "api_key_path", "engagements_path", "chain_key_path", "brief_dir", "brief_exclusions",
-                "watch_dir", "watch_sources", "watch_inventory_map"}
+                "watch_dir", "watch_sources", "watch_inventory_map", "backup_check", "brain_check"}
 
 
 def from_dict(raw: dict[str, Any]) -> Config:
