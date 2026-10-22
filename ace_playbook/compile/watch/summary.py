@@ -21,7 +21,8 @@ TITLES = 3
 def fields(cfg: Config, now: str | None = None) -> dict:
     """`watch_open` (open, leads excluded), `watch_leads`, `watch_oldest` (the oldest open non-lead), `watch_top` and `watch_titles`
     (up to three, ranked), `watch_disabled` (the kill file), `watch_last_scan` (an ISO stamp or None) and `watch_corrupt` (proposal
-    files skipped as unreadable or malformed). A store that raises anything gives the zeros: the status line must never fail on it."""
+    files skipped as unreadable or malformed, a decisions log or a `watch_dir` that is a link or the wrong kind). A store that raises
+    anything gives the zeros: the status line must never fail on it."""
     now, wd = now or now_iso(), store.watch_dir(cfg)
     out = {"watch_open": 0, "watch_leads": 0, "watch_oldest": None, "watch_top": None, "watch_titles": [],
            "watch_disabled": store.disabled(wd), "watch_last_scan": None, "watch_corrupt": 0}
@@ -32,7 +33,8 @@ def fields(cfg: Config, now: str | None = None) -> dict:
         scan = store.read_seen(wd).get("last_scan")
         real = sorted((p for p in live if p.get("class") != "lead"), key=store.rank_key)
         titles = [store.clean(p.get("title")) for p in real[:TITLES]]
-        bad += int(odd(wd / store.DECISIONS))                           # a decisions log that is a directory or a link drops every decision
+        bad += int(odd(wd / store.DECISIONS)) + int(odd(wd, True))      # a decisions log that is a directory or a link drops every decision;
+        #                                                                 a watch_dir that is a link makes every scan exit 2
         return {**out, "watch_open": len(real), "watch_leads": len(live) - len(real), "watch_titles": titles, "watch_corrupt": bad,
                 "watch_oldest": min((str(p.get("created")) for p in real), default=None), "watch_top": titles[0] if titles else None,
                 "watch_last_scan": scan if isinstance(scan, str) and STAMP.fullmatch(scan) else None}

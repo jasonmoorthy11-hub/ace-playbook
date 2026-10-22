@@ -3,7 +3,7 @@ Each case is also pushed through `fetch`, so the text is checked in the body the
 
 import pytest
 
-from ace_playbook.compile.watch import sanitize
+from ace_playbook.compile.watch import cssstyle, sanitize
 from ace_playbook.compile.watch.fetch import fetch, strip_hidden
 from ace_playbook.compile.watch.sanitize import style_hidden
 
@@ -227,7 +227,7 @@ def test_a_bare_unclosed_skip_element_hides_to_the_end(tag, markdown):
     assert strip_hidden(f"before <{tag}>{SECRET} after", markdown=markdown) == "before"
 
 
-@pytest.mark.parametrize("fence", ["```", "~~~", "````", "   ```"])
+@pytest.mark.parametrize("fence", ["```", "~~~", "````"])
 def test_markdown_openers_in_a_fenced_block_are_prose(fence):
     closer = fence.strip()
     shown = strip_hidden(f"intro\n{fence}html\n<script>\n{closer}\nvisible text", markdown=True)
@@ -510,4 +510,183 @@ def test_a_page_of_unclosed_style_openers_is_scanned_in_linear_time():
             strip_hidden(page, markdown=markdown)
             assert time.monotonic() - t0 < 2, page[:12]
     assert sanitize.style_text("<style>.a{x}</style> <STYLE type=x >.b{y}</style >") == ".a{x}\n.b{y}"
-    assert sanitize.style_text("<style>a<style>b</style>c<style>unclosed") == "a<style>b"
+    assert sanitize.style_text("<style>a<style>b</style>c<style>unclosed") == "a<style>b\nunclosed"       # wave 6: an unclosed one applies too
+
+
+# ------------------------------------------------------------------ wave 6: strict link definitions, two-pass style text, implied end tags, container fences
+def timed(page: str, **kw) -> None:
+    import time
+    t0 = time.monotonic()
+    strip_hidden(page, **kw)
+    assert time.monotonic() - t0 < 2, page[:24]
+
+
+DEF_LEAKS = {
+    "trailing-script": "[x]: https://a.test <script>\nLEAK\n</script>\nafter", "title-then-div": '[x]: https://a.test "t" <div hidden>\nLEAK\n</div>',
+    "comment-dest": "[x]: <!--\nLEAK\n-->\nafter", "style-after-dest": "[x]: /u <style>\nLEAK\n</style>",
+    "next-line-comment": "[x]:\n<!--\nLEAK1\n\nLEAK2\n-->\nafter", "unclosed-title-comment": '[x]: /u "open\n<!--\nLEAK1\n\nLEAK2\n-->\nafter',
+    "next-line-div": "[x]:\n<div hidden>\nLEAK1\n\nLEAK2\n</div>", "title-line-comment": "[x]: /u\n'<!--\nLEAK1\n\nLEAK2\n-->",
+    "block-after-dest": "[x]: /u\n<div hidden>\nLEAK1\n\nLEAK2\n</div>", "title-spans-heading": '[x]: /u "a\n# b\n<script>\nLEAK\n"',
+    "dest-with-lt": "[x]: /u<script>\nLEAK\n</script>", "in-a-paragraph": 'para\n[x]: <script> "t"\nLEAK\n</script>',
+    "label-only": "[x]:\n\n<script>\nLEAK", "escaped-title-end": '[x]: /u "a\\"\n<script>\nLEAK',
+}
+
+
+@pytest.mark.parametrize("name", sorted(DEF_LEAKS))
+def test_a_line_is_dropped_as_a_link_definition_only_when_it_is_a_strictly_valid_one(name):
+    text = DEF_LEAKS[name]
+    assert "LEAK" not in strip_hidden(text, markdown=True), name
+    for ctype in ("text/markdown", "text/plain"):
+        assert "LEAK" not in md_body(text, ctype), (name, ctype)
+
+
+def test_strictly_valid_definitions_are_dropped_and_the_text_after_them_stays():
+    for text in ('[x]: <script> "t"\nshown', '[x]: https://a.test "<div hidden>"\nshown', "[x]: <!-- a> 'q'\nshown", "[x]: /u (<style>)\nshown",
+                 '[x]:\n  https://a.test\n  "t"\nshown', "[x]:\n  https://a.test\nshown", '[x]: /u\n"t"\nshown', '[x]: /u\n"t\nmore"\nshown',
+                 '[x]: /u\r\n"t"\r\nshown', "[x]: /u(a)\nshown", "# H\n[x]: /u\nshown", "[x]: /u\n[y]: /v\nshown", '[x]: /u\n"never closed\nshown'):
+        assert strip_hidden(text, markdown=True).splitlines()[-1] == "shown", text
+    assert strip_hidden('[x]: /u\n"never closed\nshown', markdown=True) == '"never closed\nshown'      # a title that is not closed is not one
+    assert strip_hidden('[x]:\n  https://a.test\n  "t"\nok', markdown=True) == "ok"
+    assert strip_hidden("# H\n[x]: /u\nshown", markdown=True) == "# H\nshown"
+    assert strip_hidden("para\n[x]: /u\nok", markdown=True) == "para\n[x]: /u\nok"                      # a definition cannot interrupt a paragraph
+    assert strip_hidden("[x]: /u 'a\nb\nc\nd'\nok", markdown=True) != "ok"                               # a title spans at most three lines
+
+
+def test_a_definition_scan_finds_only_whole_definitions():
+    from ace_playbook.compile.watch import mdrules
+    assert mdrules.scan('[x]: /u "t"\nbody')[1] == [(0, 12)]
+    assert mdrules.scan("[x]:\n  /u\n  'q'\nbody")[1] == [(0, 16)]
+    assert mdrules.scan("[x]: /u <script>\nbody")[1] == [] and mdrules.scan("[x]:\n<div>\n")[1] == []
+
+
+def test_a_page_of_failing_definitions_is_scanned_in_linear_time():
+    for page in ("[a]: b '\n" * 100000, '[a]: b "\n[a]: b (\n' * 50000, "[a]:\n" * 150000, "[a]: <" * 150000, "[a]: (" * 150000,
+                 "[a]: " + "(" * 500000, "[" + "a" * 500000, "[a]: b 'c\n\n" * 90000):
+        timed(page, markdown=True)
+
+
+HTML_DEFS = {
+    "div-hidden": "<p>i</p>\n\n[x]: /u <div hidden>\nLEAK\n</div>\n", "comment": "<p>i</p>\n\n[a]: b <!--\nLEAK\n-->\n",
+    "open-tag": "<p>i</p>\n\n<div\n\n[x]: hidden\n>\nLEAK</div>\n", "script": "<p>i</p>\n\n[a]: b <script>\nLEAK\n</script>ok\n",
+    "style": "<p>i</p>\n\n[a]: b <style>\n.h{display:none}</style>\n<p class=h>LEAK</p>\n",
+}
+
+
+@pytest.mark.parametrize("name", sorted(HTML_DEFS))
+def test_definitions_are_dropped_from_the_visible_text_of_an_html_page_never_from_its_raw_markup(name):
+    assert "LEAK" not in strip_hidden(HTML_DEFS[name], definitions=True), name
+    assert "LEAK" not in md_body(HTML_DEFS[name], "text/html"), name
+
+
+def test_an_html_page_for_a_markdown_source_loses_its_visible_definition_lines_only():
+    page = '<p>i</p>\n\n<p>[x]: https://a.test "SECRETTEXT"</p>\n<p>ok</p><p>see [y]: z</p>'
+    assert strip_hidden(page, definitions=True) == "i\nok\nsee [y]: z" and md_body(page, "text/html") == "i\nok\nsee [y]: z"
+    assert strip_hidden(page) == 'i\n[x]: https://a.test "SECRETTEXT"\nok\nsee [y]: z'
+    assert strip_hidden("<p>i</p>\n\n[x]: /u <div hidden>\nLEAK\n</div>\n", definitions=True) == "i"             # no edge newline is left behind
+
+
+FAKE_STYLES = {
+    "F4-script-string": '<script>x="<style>"</script><style>.h{display:none}</style><p class=h>LEAK</p>',
+    "F5-comment": "<!-- <style> --><style>body{display:none}</style><p>LEAK</p>",
+    "F6-attribute": '<p title="<style>">ok</p><style>#x{display:none}</style><p id=x>LEAK</p>',
+    "F7-custom-element": "<style-x>a</style-x><style>.h{display:none}</style><p class=h>LEAK</p>",
+    "F8-textarea": "<textarea><style</textarea><style>.h{display:none}</style><p class=h>LEAK</p>",
+    "title": "<title><style></title><style>.h{display:none}</style><p class=h>LEAK</p>",
+    "double-escaped": "<script><!--<script></script><style></script><style>.h{display:none}</style><p class=h>LEAK</p>",
+    "unclosed-style-last": "<p class=h>LEAK</p><style>.h{display:none}", "slash-style": "<style/>.h{display:none}</style><p class=h>LEAK</p>",
+    "upper-case": "<STYLE>.h{display:none}</STYLE><p class=h>LEAK</p>", "legacy-comment-tokens": "<style><!-- .h{display:none} --></style><p class=h>LEAK</p>",
+}
+
+
+@pytest.mark.parametrize("name", sorted(FAKE_STYLES))
+@pytest.mark.parametrize("markdown", [False, True])
+def test_style_rules_come_from_the_real_style_elements_of_the_tokenizer(name, markdown):
+    assert "LEAK" not in strip_hidden(FAKE_STYLES[name], markdown=markdown), name
+    assert "LEAK" not in body_of(FAKE_STYLES[name]), name
+
+
+def test_style_text_follows_the_tokenizer():
+    assert sanitize.style_text('<script>x="<style>"</script><style>.a{x}</style>') == ".a{x}"
+    assert sanitize.style_text("<style-x>a</style-x><textarea><style></textarea><!-- <style>b</style> -->") == ""
+    assert sanitize.style_text("<style>.a{x}</style><p><style>.b{y}</style>") == ".a{x}\n.b{y}"
+    assert sanitize.style_text("<style>a<style>b</style>c<style>unclosed") == "a<style>b\nunclosed"           # a browser applies an unclosed one too
+
+
+def test_both_parser_passes_are_linear_on_a_megabyte_of_markup():
+    for page in ("<style>x</style>" * 65000, "<p>" * 350000, "<style>" * 150000, '<script>"<style>"</script>' * 40000, "<!--<style>-->" * 70000,
+                 "<textarea><style></textarea>" * 35000, "<style>@a{" * 105000, "<b>" * 400 + "<li></li>" * 100000, "<li>a" * 200000,
+                 "<dt>a<dd>b" * 100000, "<p><table><td>" + "<div></div>" * 90000):
+        for markdown in (False, True):
+            timed(page, markdown=markdown)
+
+
+IMPLIED = {
+    "F1-div": "<p>a<div hidden></p>LEAK</div>", "F2-ul": "<p>a<ul hidden></p>LEAK</ul>", "F3-dt": "<dl><dd>a<dt hidden>b</dd>LEAK</dt></dl>",
+    "dd-by-dd": "<dl><dt>a<dd hidden>b</dt>LEAK</dd></dl>", "p-by-h2": "<p>a<h2 hidden></p>LEAK</h2>",
+    "p-by-table": "<p>a<table hidden></p>LEAK</table>", "p-by-pre": "<p>a<pre hidden></p>LEAK</pre>",
+    "li-closes-p": "<ul><li><p>a<li hidden>b</p>LEAK</li></ul>", "span-between": "<p>a<span>b<div hidden></p>LEAK</div>",
+    "p-in-hidden-format": "<p><b hidden>x<div>LEAK</div></b>", "p-by-dd": "<dl><dd><p>a<dd hidden>b</p>LEAK</dd></dl>",
+}
+
+
+@pytest.mark.parametrize("name", sorted(IMPLIED))
+@pytest.mark.parametrize("markdown", [False, True])
+def test_an_end_tag_for_an_element_the_browser_closed_implicitly_pops_nothing(name, markdown):
+    assert "LEAK" not in strip_hidden(IMPLIED[name], markdown=markdown), name
+    assert "LEAK" not in body_of(IMPLIED[name]), name
+
+
+def test_implied_end_tags_also_reach_the_markdown_heading_through_fetch():
+    page = "<p>a<div hidden></p><h1>LEAK heading</h1></div>"
+    item = fetch(URL, expect=("text/html",), store={}, kind="md", now="2026-10-21T12:00:00Z", opener=Opener({URL: Resp(page.encode(), "text/html")}))
+    assert "LEAK" not in str(item["data"]) and item["body"] == "a"
+
+
+@pytest.mark.parametrize("html,shown", [
+    ("<p>a<span hidden>b</p>LEAK", "a\nLEAK"), ("<ul><li>a<li hidden>b</ul>LEAK", "a\nLEAK"), ("<p hidden>a<div>VISIBLE</div>", "VISIBLE"),
+    ("<ul><li hidden>a<li>VISIBLE</ul>", "VISIBLE"), ("<dl><dt hidden>a<dd>VISIBLE</dl>", "VISIBLE"), ("<p>a<div>b</div>c", "a\nb\nc"),
+    ("<p>a<td><div hidden></p>x</div>VISIBLE", "a\nVISIBLE"), ("<p>a<button><div hidden></p>x</div>VISIBLE", "a\nVISIBLE"),
+    ("<li hidden><ul><li>x</li></ul>y</li>VISIBLE", "VISIBLE"), ("<ul><li>a<ul><li>b</ul></ul>", "a\nb"), ("<p>a<hr>b", "a\nb"),
+    ("<dl><dd>a<li hidden>b</dd>LEAK</dl>", "a\nLEAK")])
+def test_elements_the_browser_does_not_close_stay_open_and_the_ones_it_closes_end_their_hiding(html, shown):
+    assert strip_hidden(html) == shown, html
+
+
+FENCE_LEAKS = {"item-fence": "- item\n\n  ```\nx\n<script>\nLEAK\n", "item-fence-inline": "- a\n  ```\n\nx <script>\nLEAK\n",
+               "ordered": "1. a\n\n   ~~~\n   x\ny <style>\nLEAK\n", "one-space": "- a\n ```\nx\n<script>\nLEAK\n"}
+
+
+@pytest.mark.parametrize("name", sorted(FENCE_LEAKS))
+def test_a_fence_inside_a_container_is_never_trusted_as_code(name):
+    text = FENCE_LEAKS[name]
+    assert "LEAK" not in strip_hidden(text, markdown=True), name
+    for ctype in ("text/markdown", "text/plain"):
+        assert "LEAK" not in md_body(text, ctype), (name, ctype)
+
+
+def test_only_a_fence_that_starts_at_the_left_margin_makes_its_openers_prose():
+    assert "<script>" in strip_hidden("```\n<script>\nLEAK\n", markdown=True)
+    assert "<script>" in strip_hidden("~~~html\n<script>\n~~~\nafter\n", markdown=True)
+    assert "after" in strip_hidden("~~~\n<script>\n~~~\nafter", markdown=True)
+    assert "<script>" not in strip_hidden("  ```\n<script>\nLEAK\n  ```\n", markdown=True)
+    body = "- item\n\n  ```\nx\n<script>\n# LEAK heading\n"
+    item = fetch(URL, expect=("text/markdown",), store={}, kind="md", now="2026-10-21T12:00:00Z", opener=Opener({URL: Resp(body.encode(), "text/markdown")}))
+    assert "LEAK" not in str(item["data"]) and "LEAK" not in item["body"]
+
+
+def test_a_stylesheet_is_scanned_in_linear_time_whatever_its_closed_or_unclosed_content():
+    for sheet in ("x" * 1000000, "@" * 1000000, ";" * 1000000, "a;" * 500000, "{}" * 250000, ".a{display:none}" * 60000, "@a;" * 300000,
+                  "@a{}" * 200000, "} " * 400000, "/*" * 400000, "<!--" * 250000, "a{b" * 300000, "@" + "{" * 500 + "}" * 500):
+        timed(f"<style>{sheet}</style><p>ok", markdown=False)
+    assert strip_hidden("<style>" + "{" * 600 + "</style><p>x") == "x"                                 # blocks past the nesting cap are skipped
+    assert cssstyle.css_rules("@a{" * 100000 + ".h{display:none}") == (frozenset(), frozenset(), frozenset())
+    assert cssstyle.css_rules("{" * 600 + "}" * 600 + ".h{display:none}")[0] == {"h"}
+
+
+@pytest.mark.parametrize("css,hidden", [
+    (".h{display:none}", True), ("@media print{.h{display:none}}", False), ("@import url(x);.h{display:none}", True),
+    ("@media x{.a{b:c}} .h{display:none}", True), (".h{display:none; @media print{color:red}}", True), (".h{.b{color:red}}", False),
+    ("a{b{c}} .h{display:none}", True), ("@media x{ .h{display:none}", True), ("}} .h{display:none}", True), (".h{display:none", False),
+    ("@a{@b{.h{display:none}}} .h2{x:y}", False), ("<!-- .h{display:none} -->", True), ("x;.h{display:none}", False)])
+def test_stylesheet_rules_read_in_one_pass_match_the_old_rule_reader(css, hidden):
+    assert ("h" in cssstyle.css_rules(css)[0]) is hidden, css

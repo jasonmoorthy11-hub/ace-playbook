@@ -9,7 +9,8 @@ style that hides (`cssstyle.style_hidden`), any element matched by a SIMPLE hidi
 character (`chars.invisible`: all Unicode format characters, tag characters, variation selectors and the blank fillers). An element that
 is never closed stays hidden to the end of the input (fail closed); a formatting element closed implicitly by an outer end tag is re-opened
 hidden, as a browser's adoption agency would. A slash on a non-void tag (`<div hidden/>`, `<script/>`) is ignored, as a browser ignores it.
-Document-level hiding is
+Implied end tags are modelled (`treerules`): a block start tag closes an open `<p>`, `<li>` closes `<li>`, `<dd>`/`<dt>` close `<dd>`/`<dt>`,
+before the new element is pushed, so the later `</p>` of `<p>a<div hidden></p>X</div>` pops nothing. Document-level hiding is
 modelled: an `<html>` or `<body>` start tag, the first or a late one (a browser merges its attributes onto the root), that hides, or a
 `<style>` rule that hides `html`, `body` or `*`, makes the whole result "". A `<template shadowrootmode=...>` makes its host element hide
 all its children (they are unslotted), those before it included; at the top level the host is the document.
@@ -19,41 +20,26 @@ raise `htmlrules.TooDeep` (a ValueError: the page is a parse failure). Tag names
 `<div>`: a browser ignores it); the inline-XML children of a feed arrive with local names already. `markdown=True` is for Markdown pages:
 a raw-text opener is prose only in a code span that opens and closes on one plain line, or in a fenced block, outside HTML blocks and
 with no closer after it (`mdrules`); anywhere else the rules above apply as in HTML (a bare `<script>` hides to its closer, or to the
-end of the input). Link reference definitions (`[x]: url "title"`) are not rendered and are dropped (`definitions=True`, implied by
-`markdown`; `fetch` also sets it for a Markdown source served as HTML). `<style>` text is found by a linear scan (`style_text`). The result is plain
-text, one non-empty line per block.
+end of the input). Link reference definitions (`[x]: url "title"`) are not rendered: with `markdown` the strictly valid ones are dropped
+from the source (`mdrules`); `definitions=True` on an HTML page (`fetch` sets it for a Markdown source served as HTML) drops them from the
+VISIBLE text only, never from the raw markup. The rules of `<style>` come from a first parser pass over the real style elements
+(`stylepass.style_text`), the visible text from a second. The result is plain text, one non-empty line per block.
 Stdlib only.
 """
 
 from __future__ import annotations
 
 import re
-from html.parser import HTMLParser
 
 from .chars import control, invisible
 from .cssstyle import css_rules, style_hidden  # noqa: F401 - style_hidden is part of this module's surface
-from .htmlrules import BLOCK, FORMATTING, MAX_DEPTH, SKIP, VOID, ScriptState, TooDeep, end_ignored
-from .mdrules import markdown_code_as_text
+from .htmlrules import BLOCK, FORMATTING, MAX_DEPTH, SKIP, VOID, ScriptedParser, ScriptState, TooDeep, end_ignored
+from .mdrules import drop_definitions, markdown_code_as_text
+from .stylepass import style_text  # noqa: F401 - style_text is part of this module's surface
+from .treerules import implied, marks
 
 SPACES = re.compile(r"[ \t\r\f\v\xa0]+")
-STYLE_OPEN, STYLE_CLOSE = re.compile(r"<style\b", re.I), re.compile(r"</style\s*>", re.I)
 ROOT_HIDING = frozenset(("html", "body", "*"))
-
-
-def style_text(src: str) -> str:
-    """The text of every closed `<style>` block of `src`, one per line, in one linear pass: the first opener without a `>` or without a
-    closer ends the scan (the rest of the page is inside a style element, hidden anyway)."""
-    out, at = [], 0
-    for m in STYLE_OPEN.finditer(src):
-        if m.start() < at:
-            continue
-        gt = src.find(">", m.end())
-        close = STYLE_CLOSE.search(src, gt + 1) if gt >= 0 else None
-        if close is None:
-            break
-        out.append(src[gt + 1:close.start()])
-        at = close.end()
-    return "\n".join(out)
 
 
 def plain(text: str) -> str:
@@ -61,16 +47,31 @@ def plain(text: str) -> str:
     return "".join("\n" if c in "\u2028\u2029" else c for c in text if not invisible(c) and not control(c))
 
 
-class _Text(HTMLParser):
+class _Text(ScriptedParser):
     def __init__(self, rules: tuple) -> None:
-        super().__init__(convert_charrefs=True)
-        self.stack: list[list] = []                                # [tag, hidden: this element or an ancestor is, hidden: this element is, out index]
+        super().__init__()
+        self.stack: list[list] = []                                # [tag, hidden: it or an ancestor is, hidden: it is, out index, treerules marks]
         self.out: list[str] = []
         self.open: dict[str, int] = {}                             # tag -> how many are on the stack: an end tag with none is skipped in O(1)
         self.classes, self.ids, self.tags = rules
-        self.script: ScriptState | None = None                    # the script-data state of the open <script>
-        self.again = False                                        # a `</script` inside a double-escaped script: stay in script mode
         self.dead = False                                         # the document itself is hidden (html/body) or a shadow host: no text at all
+
+    def _push(self, tag: str, hid: bool, own: bool) -> None:
+        self.stack.append([tag, hid, own, len(self.out), marks(self.stack[-1][4] if self.stack else None, tag, len(self.stack))])
+        self.open[tag] = self.open.get(tag, 0) + 1
+
+    def _pop(self, i: int) -> None:
+        """Pop `stack[i:]` (for an end tag, or implied by a start tag). A hidden formatting element popped from above `stack[i]` is re-opened."""
+        popped, tag = self.stack[i + 1:], self.stack[i][0]
+        for e in self.stack[i:]:
+            self.open[e[0]] -= 1
+        del self.stack[i:]
+        if tag == "script":
+            self.script = None
+        for t, hid, own, _, _ in popped:                            # `<b><i hidden></b>X</i>`: the browser re-opens the hidden <i> around X
+            if t in FORMATTING and hid:
+                self._push(t, self._hidden() or own, own)
+        self.out.append("\n" if tag in BLOCK and not self._hidden() else "")
 
     def _hidden(self) -> bool:
         return bool(self.stack) and self.stack[-1][1]
@@ -84,6 +85,8 @@ class _Text(HTMLParser):
                     or tag in self.tags or values.get("id", "").lower() in self.ids or self.classes & set(values.get("class", "").lower().split()))
 
     def handle_starttag(self, tag, attrs) -> None:
+        while not self.open.get("select") and (i := implied(self.stack[-1][4] if self.stack else None, tag)) is not None:
+            self._pop(i)                                            # a select drops start tags: nothing is implied inside one
         own = self._own(tag, attrs)
         hid = self._hidden() or own
         self.dead = self.dead or (own and tag in ("html", "body"))
@@ -96,61 +99,35 @@ class _Text(HTMLParser):
                 del self.out[self.stack[-1][3]:]
             else:
                 self.dead = True
-        self.stack.append([tag, hid, own, len(self.out)])
-        self.open[tag] = self.open.get(tag, 0) + 1
+        self._push(tag, hid, own)
         if len(self.stack) > MAX_DEPTH:
             raise TooDeep("nesting too deep")
         if tag == "script":
             self.script = ScriptState()
         self.out.append("\n" if tag in BLOCK and not hid else "")
 
-    def handle_startendtag(self, tag, attrs) -> None:
-        self.handle_starttag(tag, attrs)                            # a browser ignores the slash on a non-void element
-        if tag in ("script", "style"):
-            self.set_cdata_mode(tag)
-
-    def clear_cdata_mode(self) -> None:
-        if self.again:                                              # the end tag was a `</script` of a double-escaped script
-            self.again = False
-            return
-        super().clear_cdata_mode()
-
     def handle_endtag(self, tag) -> None:
-        if tag == "script" and self.script is not None and not self.script.closes():
-            self.again = True
-            return
-        if not self.open.get(tag):
+        if self.script_stays_open(tag) or not self.open.get(tag):
             return
         i = next(i for i in range(len(self.stack) - 1, -1, -1) if self.stack[i][0] == tag)
-        if end_ignored(self.stack, i):
-            return
-        popped = self.stack[i + 1:]
-        for t, _, _, _ in self.stack[i:]:
-            self.open[t] -= 1
-        del self.stack[i:]
-        if tag == "script":
-            self.script = None
-        for t, hid, own, _ in popped:                               # `<b><i hidden></b>X</i>`: the browser re-opens the hidden <i> around X
-            if t in FORMATTING and hid:
-                self.stack.append([t, self._hidden() or own, own, len(self.out)])
-                self.open[t] += 1
-        self.out.append("\n" if tag in BLOCK and not self._hidden() else "")
+        if not end_ignored(self.stack, i):
+            self._pop(i)
 
     def handle_data(self, data) -> None:
-        if self.script is not None:
-            self.script.feed(data)
+        super().handle_data(data)
         if not self._hidden():
             self.out.append(data)
 
 
 def strip_hidden(html: str, markdown: bool = False, definitions: bool | None = None) -> str:
     """The visible text of `html` (see the module docstring); "" when the parser gives up; TooDeep (ValueError) past MAX_DEPTH."""
-    src = markdown_code_as_text(html, markdown, markdown if definitions is None else definitions)
-    rules = css_rules(style_text(src))
-    if ROOT_HIDING & rules[2]:
-        return ""
-    parser = _Text(rules)
+    defs = markdown if definitions is None else definitions
+    src = markdown_code_as_text(html, markdown, markdown and defs)
     try:
+        rules = css_rules(style_text(src))
+        if ROOT_HIDING & rules[2]:
+            return ""
+        parser = _Text(rules)
         parser.feed(src)
         parser.close()
     except TooDeep:
@@ -160,7 +137,8 @@ def strip_hidden(html: str, markdown: bool = False, definitions: bool | None = N
     if parser.dead:
         return ""
     lines = (SPACES.sub(" ", plain("".join(parser.out))).split("\n"))
-    return "\n".join(s for s in (ln.strip() for ln in lines) if s)
+    text = "\n".join(s for s in (ln.strip() for ln in lines) if s)
+    return text if markdown or not defs else drop_definitions(text)
 
 
 def one_line(text: str, limit: int) -> str:

@@ -12,12 +12,15 @@ a hidden element is involved the same rules apply and anything doubtful keeps th
 * `ScriptState`: html.parser has no "script data double escaped" state, so `<script><!--<script></script>X</script>` would show X.
   The state machine of the HTML tokenizer is run over the script text instead: a `</script` seen in the double-escaped state does not
   close the element.
+* `ScriptedParser`: the html.parser subclass that both passes of `sanitize` (the style text of `stylepass`, the visible text) share, so
+  they tokenize alike: a slash on `<script/>` or `<style/>` is ignored and a double-escaped script keeps its next `</script` as text.
 * `MAX_DEPTH`: the open-element stack is capped; a document nested deeper is a parse failure (`TooDeep`), not a quadratic scan.
 """
 
 from __future__ import annotations
 
 import re
+from html.parser import HTMLParser
 
 MAX_DEPTH = 512
 VOID = frozenset("area base br col embed hr img input link meta param source track wbr".split())
@@ -80,3 +83,35 @@ class ScriptState:
             self.state = "escaped"
             return False
         return True
+
+
+class ScriptedParser(HTMLParser):
+    """An HTMLParser that reads `<script>` the way a browser does (see the module docstring). A subclass sets `self.script =
+    ScriptState()` when it sees the start tag, asks `script_stays_open(tag)` first in `handle_endtag` and calls `super().handle_data`."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.script: ScriptState | None = None                    # the script-data state of the open <script>
+        self.again = False                                        # a `</script` inside a double-escaped script: stay in script mode
+
+    def handle_startendtag(self, tag, attrs) -> None:
+        self.handle_starttag(tag, attrs)                            # a browser ignores the slash on a non-void element
+        if tag in ("script", "style"):
+            self.set_cdata_mode(tag)
+
+    def clear_cdata_mode(self) -> None:
+        if self.again:                                              # the end tag was a `</script` of a double-escaped script
+            self.again = False
+            return
+        super().clear_cdata_mode()
+
+    def script_stays_open(self, tag: str) -> bool:
+        """True for a `</script` that a double-escaped script reads as text: the end tag does nothing."""
+        if tag == "script" and self.script is not None and not self.script.closes():
+            self.again = True
+            return True
+        return False
+
+    def handle_data(self, data) -> None:
+        if self.script is not None:
+            self.script.feed(data)

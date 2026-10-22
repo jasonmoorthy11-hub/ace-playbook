@@ -193,7 +193,7 @@ ALLOWED_ACE = {"ace_playbook", "ace_playbook.config", "ace_playbook.canon", "ace
                    "detectors", "events", "shell", "srchash"))}
 ABSENT = ("seal", "dashboard", "dashboard_html", "status", "digest", "queue", "report", "synth", "metrics", "scrub", "measure",
           "watch", "fetch", "inventory", "match", "store", "summary", "chars", "fsio", "cssstyle", "records", "pin",
-          "reconcile", "htmlrules", "mdrules")                                                          # `watch` is the one network-using package (W1)
+          "reconcile", "htmlrules", "mdrules", "stylepass", "treerules")                                # `watch` is the one network-using package (W1)
 HEAVY = {"sqlite3", "subprocess", "socket", "ssl", "http", "urllib.request", "asyncio", "multiprocessing", "threading", "ctypes"}
 
 

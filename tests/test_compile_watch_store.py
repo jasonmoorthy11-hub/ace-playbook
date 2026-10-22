@@ -282,3 +282,15 @@ def test_ensure_refuses_a_watch_dir_that_is_a_symlink_without_naming_a_path(tmp_
     with pytest.raises(store.UnsafeDir):
         store.ensure(link)
     assert not (tmp_path / "dangling").exists()
+
+
+# ------------------------------------------------------------------ wave 6: a symlinked watch_dir shows on the tile
+def test_a_symlinked_watch_dir_counts_as_corrupt_so_the_tile_does_not_say_none(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    f = summary.fields(cfgmod.Config(data_dir=tmp_path, watch_dir=link), NOW)
+    assert f["watch_corrupt"] == 1 and summary.block(f, NOW, lambda ts, now: "1h") == ["none  corrupt 1"]
+    assert summary.fields(cfgmod.Config(data_dir=tmp_path, watch_dir=real), NOW)["watch_corrupt"] == 0
+    assert summary.fields(cfgmod.Config(data_dir=tmp_path, watch_dir=tmp_path / "missing"), NOW)["watch_corrupt"] == 0

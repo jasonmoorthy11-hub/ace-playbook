@@ -1050,8 +1050,8 @@ line carries that night's health), refreshes `status.json` for the status line a
 
 The watcher of design `2026-10-21-ace-watcher-and-cockpit` (phase 1, W1) is `compile/watch/`: a model-free configuration watcher that
 PROPOSES and never applies. It is the one network-using package of ace-playbook and is never on the hook path: `watch`, `fetch`,
-`inventory`, `match`, `store`, `summary` and the helper modules `chars`, `fsio`, `cssstyle`, `htmlrules`, `mdrules`, `records`, `pin` and
-`reconcile` are in the `ABSENT` tuple of `tests/test_hook_conformance.py`. `status.py` imports only
+`inventory`, `match`, `store`, `summary` and the helper modules `chars`, `fsio`, `cssstyle`, `htmlrules`, `mdrules`, `stylepass`,
+`treerules`, `records`, `pin` and `reconcile` are in the `ABSENT` tuple of `tests/test_hook_conformance.py`. `status.py` imports only
 `watch.summary` (a pure read, no network import); `__main__` imports the light `watch.cli`, which loads `scan`, `fetch` and `inventory` only
 when a scan runs (tested in `tests/test_compile_watch_cli.py`).
 
@@ -1067,22 +1067,36 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   a deprecations page that parses to no rows is a `parse` drop (never an empty table); the `md` kind is read in markdown mode
   (the HTML rules, except that a raw-text opener is prose when it is in a fenced block or in a code span that opens and closes on ONE plain
   line, outside every HTML block, and no closer for it follows later; a plain line has no block marker at its start, no backslash before a
-  backtick, no `<` before the opening run and no `|` inside the span; and link reference definitions, the `[//]: # (...)` idiom among them,
-  are dropped with their title lines: `mdrules.py`; a `md` source served as `text/html` still loses its definitions). The tree rules are
-  fail closed (`htmlrules.py`): a slash on a non-void tag is ignored, an end tag a browser ignores (a scope barrier or a "special" element in
-  between; `button` stops `</p>`, `ol` and `ul` stop `</li>`, an open `select` stops every end tag but its own) pops nothing when that
-  would unhide text, a double-escaped script closes at its next-but-one `</script` (HTML whitespace only, as the tokenizer reads it), and
-  more than 512 open elements raise `TooDeep` (a `parse` drop). Document-level hiding is modelled: an `html` or `body` start tag, the first
-  or a late one, that hides, or a `<style>` rule that hides `html`, `body` or `*`, makes the body empty; a `<template shadowrootmode=...>`
-  hides every child of its host (those before it too), the whole document when it has no parent. `<style>` text is found by a linear scan
-  (`sanitize.style_text`; the first opener without a closer ends it), so a 1 MiB page of openers costs milliseconds. The text and tails inside
+  backtick, no `<` before the opening run and no `|` inside the span, and a fence counts only when it starts at the left margin: an
+  indented fence may sit in a list item, which ends it, so its lines keep their HTML meaning; link reference definitions, the
+  `[//]: # (...)` idiom among them, are dropped ONLY when strictly valid per CommonMark: `mdrules.DEFINITION`, a label on one line, a
+  destination, an optional title of at most three lines, nothing else on the last line, no line after the first that a paragraph could
+  not continue, and never right after paragraph text. Anything else stays and keeps its HTML meaning, so `[x]: /u <script>` hides to its
+  closer and the HTML start is checked before any definition continuation: `mdrules.py`; for a `md` source served as `text/html` the
+  strictly valid definition lines are dropped from the VISIBLE text after `strip_hidden`, never from the raw markup). The tree rules are
+  fail closed (`htmlrules.py`, `treerules.py`): a slash on a non-void tag is ignored, an end tag a browser ignores (a scope barrier or a
+  "special" element in between; `button` stops `</p>`, `ol` and `ul` stop `</li>`, an open `select` stops every end tag but its own) pops
+  nothing when that would unhide text, a double-escaped script closes at its next-but-one `</script` (HTML whitespace only, as the
+  tokenizer reads it), and more than 512 open elements raise `TooDeep` (a `parse` drop). Implied end tags are modelled: a start tag of
+  the `p`-closing set (address, article, aside, blockquote, center, details, dialog, dir, div, dl, fieldset, figcaption, figure, footer,
+  form, h1 to h6, header, hgroup, hr, main, menu, nav, ol, p, pre, search, section, summary, table, ul, xmp, li, dd, dt) pops an open `p`
+  that is in button scope first, `li` pops an open `li` and `dd`/`dt` an open `dd`/`dt` (searching down through non-special elements and
+  `address`, `div`, `p`), so the `</p>` of `<p>a<div hidden></p>X</div>` finds no `p` and pops nothing; each stack entry carries the
+  nearest such marks, so the check is O(1), and a hidden formatting element popped that way is re-opened. Document-level hiding is
+  modelled: an `html` or `body` start tag, the first or a late one, that hides, or a `<style>` rule that hides `html`, `body` or `*`, makes
+  the body empty; a `<template shadowrootmode=...>` hides every child of its host (those before it too), the whole document when it has
+  no parent. The rules of `<style>` come from a first parser pass (`stylepass.style_text`): html.parser reads the page once with the same
+  script rules as the second pass and collects the text of the REAL style elements, an unclosed one included, so a `<style` inside a
+  script string, comment, attribute, `<textarea>`, `<title>` or a custom element `<style-x>` hides no rule (it is skipped when the page
+  has no `<style`); `cssstyle.css_rules` then reads the braces in one linear pass. The text and tails inside
   a child element of an XHTML feed field are HTML-escaped before the sanitizer sees them (only the field's own text stays raw), so an
   escaped closer there cannot close a hidden ancestor. The npm `latest` must be an ASCII version (`[0-9]+.[0-9]+.[0-9]+` with an optional
   `-` or `+` suffix of at most 40 `[0-9A-Za-z.-]`), else the fetch is a `parse` drop.
   Helpers: `chars.py` (every Default_Ignorable_Code_Point, the format characters and the control characters, shared by the sanitizer, the
   store and the record cleaner), `cssstyle.py` (the
-  inline-style normaliser and the simple single-selector `<style>` rules; media queries, descendant or attribute selectors and external
-  stylesheets are not handled, see LIMITATIONS.md), `fsio.py` (private atomic write with a unique O_EXCL temporary name, the scan lock).
+  inline-style normaliser and the simple single-selector `<style>` rules, read in one linear pass over the braces with the legacy `<!--`
+  and `-->` tokens ignored; media queries, descendant or attribute selectors and external stylesheets are not handled, see
+  LIMITATIONS.md), `fsio.py` (private atomic write with a unique O_EXCL temporary name, the scan lock).
 - `netguard.py`: the SSRF guard. A host that is, or resolves to, a loopback, link-local, private, multicast or reserved address is dropped
   (`address`) before any request; a redirect is followed only to the same scheme, host and port, at most three hops, with no userinfo in the
   URL, and is dropped (`redirect`) otherwise. The DNS answer can change between the check and the connect (rebinding); the address is checked
@@ -1132,7 +1146,8 @@ inventory lead) while its source was read. Docs and feed-lead proposals are even
 (leads excepted); the rest are written `queued` and a `promoted` decision row opens them in ranking order (model_pin, version, docs) when a
 slot frees. A reader never raises on a corrupt store: JSON too deeply nested, bad UTF-8, a decision row of the wrong type and a proposal
 of the wrong shape are skipped, and the proposals skipped are counted in `status.json` as `watch_corrupt` (`corrupt N` in the digest block);
-a proposals path that is a file or a link and a `decisions.jsonl` that is a directory or a link count as one each.
+a proposals path that is a file or a link, a `decisions.jsonl` that is a directory or a link, and a `watch_dir` that is a link count as one
+each (the last so that the tile says `none  corrupt 1`, not a bare `none`, while every scan exits 2).
 `ensure` keeps the mode of a directory that exists and refuses a symlinked `watch_dir` or proposals folder (`compile watch scan` exits 2). With
 `DISABLED` present `scan` prints `watch: disabled`, fetches nothing and writes nothing.
 

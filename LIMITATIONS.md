@@ -176,13 +176,24 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   `</x:div>` does not close `<div>`, as in a browser. The tree rules are fail closed: a slash on a non-void tag is ignored (`<div hidden/>`
   hides what follows), an end tag a browser ignores because a scope barrier or a "special" element sits in between pops nothing when that
   would unhide text, and a double-escaped `<script><!--<script></script>` closes at its next-but-one `</script`. More than 512 open
-  elements make the page a `parse` drop (`<p>`, `<li>` and `<td>` without end tags count: html.parser does not close them implicitly).
-  Document-level hiding is modelled: an `<html>` or `<body>` start tag (a late one too, a browser merges its attributes onto the root)
+  elements make the page a `parse` drop (`<td>`, `<tr>`, `<option>`, `<h1>`..`<h6>` and `<a>` without end tags count: html.parser does not
+  close them implicitly and neither does the sanitizer, which only hides more that way). Implied end tags ARE modelled for the elements
+  where a missing one would unhide text: a block start tag (`div`, `ul`, `table`, `h1`, `hr`, `pre`, ... the whole `p`-closing set of the
+  HTML tree builder) closes an open `<p>` that is in button scope, `<li>` closes an open `<li>` and `<dd>`/`<dt>` close an open
+  `<dd>`/`<dt>`, so `<p>a<div hidden></p>X</div>` keeps X hidden. Not modelled: foster parenting (text directly in a hidden `<table>`
+  is shown by a browser outside it, hidden here), the quirks-mode `table` that does not close a `p`, and every implied close that is
+  not listed. Document-level hiding is modelled: an `<html>` or `<body>` start tag (a late one too, a browser merges its attributes onto the root)
   that hides, or a simple `<style>` rule that hides `html`, `body` or `*`, makes the whole body empty; `:root`, `html > body` and other
   selectors are NOT read. A `<template shadowrootmode=...>` hides every child of its host element, those before it too. A `<select>`
   hides ALL its option text (a browser shows the selected one), as do `<progress>` and `<meter>` fallbacks: over-hiding. Scope barriers:
-  `</p>` is stopped by `button`, `</li>` by `ol` and `ul`, every end tag but `</select>` by an open `select`. `<style>` text is read by a
-  linear scan; an opener with no closer ends it. A double-escaped script closes only at a `</script` followed by an HTML space, `/` or `>`.
+  `</p>` is stopped by `button`, `</li>` by `ol` and `ul`, every end tag but `</select>` by an open `select` (no implied close happens
+  inside one either). The rules of `<style>` come from a first parser pass over the REAL style elements (html.parser with the same script
+  rules as the second pass), so a `<style` inside a script string, comment, attribute, `<textarea>`, `<title>` or a custom element
+  `<style-x>` hides no rule, and an unclosed `<style>` at the end of the page applies to the elements before it; the legacy `<!--` and
+  `-->` tokens in a stylesheet are ignored as CSS does. The stylesheet is read in one linear pass over its braces (blocks nested more
+  than 512 deep are skipped; the rules inside a closed at-rule are not read, as before). The first pass depends on html.parser reading
+  `<textarea>` and `<title>` as RCDATA (Python 3.12.15 and later patch releases; an older 3.12 reads a `<style` in them as a tag, which
+  can only add a spurious rule). A double-escaped script closes only at a `</script` followed by an HTML space, `/` or `>`.
   Markdown pages (every Content-Type but `text/html`) are read with the HTML rules, because their site renders raw HTML. A raw-text opener
   (`<script>`, `<style>`, `<title>`, `<textarea>`, `<xmp>`, `<noembed>`, `<noframes>`, `<iframe>`) is prose only when ALL hold: it sits in
   a fenced code block or in an inline code span that opens and closes on ONE line (a span that crosses a line is never trusted: a
@@ -193,13 +204,25 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   marker; a backtick inside a tag opens no span); and NO matching closer (`</script` for `<script`) follows it anywhere later in the input.
   Every other opener hides to its closer or to the end of the input, so a page that mentions `<script>` in code and later closes it, or does
   so inside a `<Note>` block, loses the text in between (hiding more is the safe direction). The detection is a CommonMark subset (no
-  indented code blocks, no nested quote or list handling beyond the marker prefix); an indented `<script>` is read as markup. Link
-  reference definitions (`[x]: url "title"`, `[//]: # (comment)`) are dropped, with a following title line and, for an incomplete one,
-  every line up to the next blank line; the same drop applies to a `md` source served as `text/html`, and a footnote or a definition
-  inside a paragraph is dropped too (over-hiding). NOT handled: image alt text and link titles in running text (`![alt](u)`,
-  `[a](u "title")`) stay in the text although a renderer shows them only on a failed image or a hover. The defence is not the sanitizer
-  alone: web text reaches a record only as a title or a 400-character quote, never as a diff, a target or a command, and every model id
-  must pass a strict pattern first. A `watch_dir` that is itself a symlink is refused (`compile watch scan` exits 2, no path in the message).
+  indented code blocks, no nested quote or list handling beyond the marker prefix); an indented `<script>` is read as markup. A fence
+  that does not start at the left margin (an indent of 1 to 3 spaces, as inside a list item, which ends the fence with the item) is
+  never trusted as code: its lines keep their HTML meaning, so a `<script>` in a code sample inside a list item hides to its closer or
+  the end of the page (fail closed; the price is lost text on pages that show HTML samples inside lists). Link
+  reference definitions (`[x]: url "title"`, `[//]: # (comment)`) are dropped ONLY when strictly valid per CommonMark: the label on one
+  line, `:`, a destination (`<...>` with no `<`, `>` or newline inside, or non-space characters with no `<` and at most one level of
+  balanced parentheses), an optional title fully quoted (`"..."`, `'...'` or `(...)`) over at most three lines with no blank line, and
+  nothing else on the last line; the destination and the title may be on the next lines, unless such a line starts a quote, heading,
+  fence, list item, thematic break or contains a `<` at its start. A definition line right after paragraph text is not a definition (a
+  renderer shows it) and stays. Whatever fails the rule is left alone and read as HTML (`[x]: /u <script>` hides to its closer; so does
+  `[x]:` followed by a `<!--` or `<div hidden>` line), so a definition never swallows the lines after it. A definition with a label over
+  more than one line, a title over more than three, or parentheses nested twice in the destination stays visible (a renderer hides it).
+  A `md` source served as `text/html` loses its definition lines from the VISIBLE text only, after the markup is gone. A footnote
+  definition (`[^1]: text`) is dropped like a link definition (CommonMark has no footnotes; GitHub shows them).
+  NOT handled: image alt text and link titles in running text (`![alt](u)`, `[a](u "title")`) stay in the text although a renderer
+  shows them only on a failed image or a hover. The defence is not the sanitizer alone: web text reaches a record only as a title or a
+  400-character quote, never as a diff, a target or a command, and every model id must pass a strict pattern first. A `watch_dir` that is
+  itself a symlink is refused (`compile watch scan` exits 2, no path in the message) and counts as one corrupt entry, so the status tile
+  reads `none  corrupt 1`.
 
 ## Security and scrubbing
 

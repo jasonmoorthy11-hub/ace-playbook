@@ -106,7 +106,7 @@ def fetch(url: str, *, expect: tuple[str, ...], store: dict, timeout: float = 20
     sha, text = hashlib.sha256(raw).hexdigest(), raw.decode("utf-8", "replace")
     try:
         if kind not in XML_KINDS:
-            md = ctype != "text/html"
+            md = ctype != "text/html"                                         # an `md` source served as HTML: definitions leave the VISIBLE text only
             text = strip_hidden(text, markdown=md, definitions=md or kind == "md") if kind in TEXT_KINDS or ctype in HTMLISH else plain(text)
         data = PARSERS[kind](text) if kind else None
         if kind == "deprecations" and not data:

@@ -14,12 +14,23 @@ its closer or to the end of the input:
 * NO matching closer (`</script` for `<script`) follows it anywhere later in the input, however the closer is written. A closer
   means a browser or a renderer would hide what lies between them, so the text there is never shown.
 
-A link reference definition (`[label]: url "title"`, the `[//]: # (comment)` idiom included) renders nothing: outside fences and HTML
-blocks its line is dropped, with the lines that go on with it (a destination or a title on the next line, a title that is not closed on
-its own line, up to the next blank line). A definition inside a paragraph is dropped too (over-hiding is safe).
+* it is not in a fence that starts away from the left margin (a fence with an indent can sit in a list item, which ends the fence and
+  the code with it; the indent alone cannot tell a container from a top-level fence): such a fence is not trusted, its lines keep their
+  HTML meaning, and a bare opener in them hides to its closer or the end of the input (fail closed; only a fence at column 0 makes prose).
+
+A link reference definition (`[label]: url "title"`, the `[//]: # (comment)` idiom included) renders nothing, and a line is dropped ONLY
+when it is a STRICTLY valid one (`DEFINITION`, CommonMark 0.31): the label on one line, `:`, a destination (`<...>` with no `<`, `>` or
+newline inside, or a run of non-space characters with no `<` and balanced parentheses), optionally a title fully quoted with `"..."`,
+`'...'` or `(...)` of at most three lines and no blank line, and nothing else on the last line. The destination and the title may
+follow on the next line; any line after the first that a paragraph could not continue (a quote, a heading, a fence, a list item, a
+thematic break, a `<` at all) makes it no definition. A definition cannot start inside a paragraph, so the line after paragraph text
+stays. Whatever fails the rule is not dropped and keeps its HTML meaning: `[x]: /u <script>` hides to the closer, as a renderer
+passes the tag through. Never "a definition and whatever goes on with it": a definition is at most a label, a destination and a
+title, each strictly valid.
 
 `markdown_code_as_text(text, prose, definitions)` escapes the `<` of the prose openers (`&lt;`) so the HTML parser reads them as text and
-drops the definition lines.
+drops the definition lines. `drop_definitions(text)` drops the strictly valid ones from VISIBLE text (no paragraph rule: the text of an
+HTML page has no structure left, and a visible `[x]: url` line there is never markup).
 """
 
 from __future__ import annotations
@@ -35,7 +46,39 @@ HTML_START = re.compile(r"[ \t>]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)*<(?:([A-Za-z][A
 BLOCK_END = {"!--": re.compile(r"-->"), "?": re.compile(r"\?>"), "![CDATA[": re.compile(r"\]\]>")}
 TYPE_ONE = frozenset(("script", "pre", "style", "textarea"))
 TICKS, MARKER = re.compile(r"`+"), re.compile(r"[ \t]*(?:[#>|*+-]|\d{1,9}[.)])")
-DEFINITION, TITLE_LINE, TITLE_OPEN = re.compile(r" {0,3}\[[^\]\n]+\]:(?:\s|$)"), re.compile(r"[ \t]{0,3}[\"'(]"), re.compile(r"\s([\"'(])")
+
+
+def _quoted(o: str, c: str) -> str:
+    """A title opened by `o` and closed by `c`: at most three lines, none blank, backslash escapes allowed."""
+    line = rf"(?:[^{re.escape(o + c)}\\\n]|\\[^\n])*"
+    return rf"{re.escape(o)}{line}(?:\n(?![ \t\r]*(?:\n|\Z)){line}){{0,2}}{re.escape(c)}"
+
+
+_ARG = r"(?:[^\s()<\\\x00-\x1f\x7f]|\\\S)"
+DESTINATION = rf"(?:<(?:[^<>\n\\]|\\.)*>|(?:{_ARG}|\({_ARG}*\))+)"
+TITLE = "|".join(_quoted(o, c) for o, c in (('"', '"'), ("'", "'"), ("(", ")")))
+DEFINITION = re.compile(rf" {{0,3}}\[(?![ \t]*\])(?:[^\[\]\\\n]|\\[^\n]){{1,999}}\]:[ \t]*(?:\r?\n[ \t]*)?{DESTINATION}"
+                        rf"(?:(?:[ \t]+|[ \t]*\r?\n[ \t]*)(?:{TITLE}))?[ \t]*(?:\r?\n|\Z)")
+INTERRUPT = re.compile(r" {0,3}(?:<|>|#{1,6}(?:[ \t\r]|$)|`{3}|~{3}|[-*+_](?:[ \t\r]|$)|\d{1,9}[.)](?:[ \t\r]|$)|[-*_=]{2,}[ \t\r]*$)")
+ENDS_PARAGRAPH = re.compile(r" {0,3}(?:#{1,6}(?:[ \t\r]|$)|([-*_])(?:[ \t]*\1){2,}[ \t\r]*$|[=-]+[ \t\r]*$)")
+
+
+def _definition(text: str, start: int) -> int:
+    """The end offset of the strictly valid link reference definition that starts at `start` (the start of a line), else 0."""
+    m = DEFINITION.match(text, start)
+    return m.end() if m and not any(INTERRUPT.match(ln) for ln in text[start:m.end()].splitlines()[1:]) else 0
+
+
+def drop_definitions(text: str) -> str:
+    """`text` without its strictly valid link reference definitions (see the module docstring)."""
+    out, pos = [], 0
+    while pos < len(text):
+        end = _definition(text, pos)
+        if not end:
+            end = text.find("\n", pos) + 1 or len(text)
+            out.append(text[pos:end])
+        pos = end
+    return "".join(out).rstrip("\n")                                  # the text of `strip_hidden` has no blank lines and no edge newlines
 
 
 def _spans(line: str, base: int) -> list[tuple[int, int]]:
@@ -62,47 +105,42 @@ def _spans(line: str, base: int) -> list[tuple[int, int]]:
     return out
 
 
-def _incomplete(rest: str) -> bool:
-    """True when what follows `[label]:` is empty (the destination is on the next line) or opens a title that this line does not close."""
-    if not rest.strip():
-        return True
-    m = TITLE_OPEN.search(rest)
-    return bool(m) and (")" if m.group(1) == "(" else m.group(1)) not in rest[m.end():]
-
-
 def scan(text: str) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
-    """(offsets of the code spans and fenced blocks outside every HTML block, offsets of the link definition lines), each in order."""
+    """(offsets of the code spans and fenced blocks outside every HTML block, offsets of the link definitions: all their lines), in order."""
     ranges: list[tuple[int, int]] = []
     drops: list[tuple[int, int]] = []
-    fence, block, more, pos = None, None, None, 0                     # fence: (char, length); block: None, "blank" or a closing pattern
-
+    fence, block, para, skip, pos = None, None, False, 0, 0            # fence: (char, length); block: None, "blank" or a closing pattern
+    #                                                                    para: the line above is paragraph text; skip: end of the open definition
     for line in text.splitlines(keepends=True):
-        start, pos, more, after = pos, pos + len(line), None, more
+        start, pos = pos, pos + len(line)
+        if start < skip:
+            continue                                                  # a later line of a definition that began above
         m = FENCE.match(line)
         if fence:
             ranges.append((start, pos))
             if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= fence[1] and not m.group(2).strip():
                 fence = None
+            para = False
         elif block is not None:
             if block == "blank":
                 block = None if not line.strip() else block
             elif block.search(line):
                 block = None
-        elif m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
-            fence = (m.group(1)[0], len(m.group(1)))                  # the info string is not rendered text: it stays markup
-        elif after and line.strip() and (after == "block" or TITLE_LINE.match(line)):
-            drops.append((start, pos))                                # a destination or a title that goes on from a definition
-            more = "block" if after == "block" or _incomplete(" " + line.strip()) else None
-        elif DEFINITION.match(line):
-            drops.append((start, pos))
-            more = "block" if _incomplete(line[line.index("]:") + 2:]) else "title"
+            para = False
+        elif m and m.start(1) == 0 and not (m.group(1)[0] == "`" and "`" in m.group(2)):
+            fence, para = (m.group(1)[0], len(m.group(1))), False     # only a fence at column 0: the info string is not rendered text
+        elif not para and (start == 0 or text[start - 1] == "\n") and (end := _definition(text, start)):
+            drops.append((start, end))
+            skip, para = end, False
         elif (h := HTML_START.match(line)):
             name = (h.group(1) or "").lower()
             block = re.compile(rf"</{name}\b", re.I) if name in TYPE_ONE else BLOCK_END.get(h.group(2) or h.group(3) or h.group(4) or "", "blank")
             if block != "blank" and block.search(line, h.end()):
                 block = None
+            para = False
         else:
             ranges.extend(_spans(line, start))
+            para = bool(line.strip()) and not ENDS_PARAGRAPH.match(line)
     return ranges, drops
 
 
