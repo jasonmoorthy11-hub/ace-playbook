@@ -48,8 +48,18 @@ def test_the_lua_exports_the_config_file_of_ace_config_to_the_task_environment()
     assert 'type(local_config.config_file) == "string"' in text and "config_file = local_config.config_file" in text
     env_table = re.search(r"local env = \{([^}]*)\}", text)
     assert env_table and "HOME = home" in env_table.group(1) and "PATH =" in env_table.group(1)       # the task still gets HOME and PATH
-    assert re.search(r"if config_file then\s+env\.ACE_PLAYBOOK_CONFIG = config_file\s+end", text)
+    assert "ACE_PLAYBOOK_CONFIG = config_file" in env_table.group(1)           # unconditional: the run is skipped before it when there is none
     assert re.search(r"setEnvironment\(env\)", text)                                                  # the table with the export is the one passed
+
+
+def test_the_lua_skips_the_run_with_a_warning_when_ace_config_has_no_config_file():
+    text = LUA.read_text()
+    run = text[text.index("local function run_brief()"):text.index("-- the network is not up")]
+    guard = re.search(r"if not config_file then(.*?)\n  end", run, re.S)
+    assert guard and "hs.printf(" in guard.group(1) and "hs.alert.show(" in guard.group(1) and re.search(r"\breturn\b", guard.group(1))
+    assert run.index("if not config_file then") < run.index("hs.task.new(") < run.index("setEnvironment(env)")      # fail closed, before any task
+    assert not re.search(r"if config_file then", text) and "default config" in text.split("local home")[0]        # no silent fallback; the header says so
+    assert text.count("(") == text.count(")") and text.count("{") == text.count("}")
 
 
 def test_the_install_guide_and_the_plist_require_the_same_config_file_for_both_triggers():

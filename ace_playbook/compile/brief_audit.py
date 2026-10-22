@@ -40,10 +40,25 @@ def events(path) -> list:
     return [e for e in map(jl, Path(path).read_bytes()[:CAP].decode("utf-8", "replace").split("\n")) if isinstance(e, dict)]
 
 
+def call_blocks(evs: list) -> list:
+    """Every tool call block of the assistant messages: a content block whose `type` ends with `tool_use` (tool_use, server_tool_use,
+    mcp_tool_use). A single block given as a dict counts like a list of one."""
+    out = []
+    for e in evs:
+        content = e["message"].get("content") if e.get("type") == "assistant" and isinstance(e.get("message"), dict) else None
+        out += [b for b in (content if isinstance(content, list) else [content])
+                if isinstance(b, dict) and isinstance(b.get("type"), str) and b["type"].endswith("tool_use")]
+    return out
+
+
 def tool_uses(evs: list) -> set:
-    """The names of every tool_use block of the assistant messages."""
-    return {b["name"] for e in evs if e.get("type") == "assistant" and isinstance(e.get("message"), dict)
-            for b in e["message"].get("content") or [] if isinstance(b, dict) and b.get("type") == "tool_use" and isinstance(b.get("name"), str)}
+    """The names of the call blocks (strings only; see `nameless_calls`)."""
+    return {b["name"] for b in call_blocks(evs) if isinstance(b.get("name"), str)}
+
+
+def nameless_calls(evs: list) -> int:
+    """The number of call blocks whose `name` is not a string (a list, dict, number, null or absent): the audit cannot say what was called."""
+    return sum(not isinstance(b.get("name"), str) for b in call_blocks(evs))
 
 
 def init_tools(evs: list) -> set:
@@ -76,14 +91,16 @@ def called_tools(evs: list, known: set) -> dict:
     """The tool_use names that may go to the ledger (a NAME of at most 100 characters that is known or in the init list), the rest counted."""
     init, used = init_tools(evs), tool_uses(evs)
     keep = sorted(t for t in used if len(t) <= 100 and NAME.fullmatch(t) and (t in known or t in init))
-    return {"_tools_called": keep, "_unknown_tools": len(used) - len(keep)}
+    return {"_tools_called": keep, "_unknown_tools": len(used) - len(keep) + nameless_calls(evs)}
 
 
 def audit(stream, allow, connectors=None) -> dict:
     """{"init": N, "drift": [...], "unknown": N, "summary": {...}}. `drift` (for the ledger) lists the tools outside the allowlist and
     `ToolSearch` that may be named (see the module doc), plus the pseudo-names `unknown` (a name that may not be written down) and
-    `unparseable` (the audit cannot vouch for the stream: a non-blank line that is not a JSON object, or a file over CAP bytes). A raw scan of
-    ALL the bytes for `"name": "mcp__..."` adds the names a malformed line shows. `summary` is the one line for stdout: the same, but it
+    `unparseable` (the audit cannot vouch for the stream: a non-blank line that is not a JSON object, a call block whose name is not a string,
+    or a file over CAP bytes). A raw scan for `"name": "mcp__..."` of the lines that did NOT parse as JSON objects adds the names they show (a
+    parsed line is read by structure: the same text inside an allowed tool's input or a mail body is data). `summary` is the one line for
+    stdout: the same, but it
     names only tools of the checked-in lists and the built-ins; any other is counted. ValueError when the stream is whole but has no init
     event with a `tools` list (nothing was audited, so nothing may pass)."""
     ok, known = allowed_names(allow), known_names(allow, connectors)
@@ -91,12 +108,12 @@ def audit(stream, allow, connectors=None) -> dict:
     text = raw.decode("utf-8", "replace")
     parsed = [(ln, jl(ln)) for ln in text[:CAP].split("\n") if ln.strip()]
     evs = [e for _, e in parsed if isinstance(e, dict)]
-    bad = len(raw) > CAP or len(evs) != len(parsed)
+    bad = len(raw) > CAP or len(evs) != len(parsed) or nameless_calls(evs) > 0
     inits = [e.get("tools") for e in evs if e.get("type") == "system" and e.get("subtype") == "init"]
     if not bad and (not inits or not all(isinstance(t, list) for t in inits)):
         raise ValueError("no init")
     init = init_tools(evs)
-    seen = init | tool_uses(evs) | set(RAW_NAME.findall(text))
+    seen = init | tool_uses(evs) | set(RAW_NAME.findall("\n".join(ln for ln, e in parsed if not isinstance(e, dict))))      # malformed lines only
     listable = {t for t in seen if NAME.fullmatch(t) and (t in known or (t in init and len(t) <= 100))}
     named = sorted((listable - ok) - {"ToolSearch"})
     unknown, pseudo = len(seen - listable), (["unparseable"] if bad else [])

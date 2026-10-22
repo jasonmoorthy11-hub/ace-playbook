@@ -19,7 +19,8 @@
 # brief_dir/run.lockf, released by the kernel when the run dies. Each stage has a wall-clock limit, ACE_BRIEF_STAGE_TIMEOUT seconds (600): TERM,
 # then KILL after ACE_BRIEF_KILL_GRACE seconds (10); a stage also runs under its own perl alarm of both, so it dies when this script is killed.
 # Config: $ACE_PLAYBOOK_CONFIG (else the default file) via `python -m ace_playbook.compile.brief conf`. $ACE_BRIEF_CLAUDE names the claude
-# binary (tests inject a fake); $ACE_BRIEF_KEEP keeps the raw streams. stdout/stderr carry counts and one-line reasons, never mail content.
+# binary and $ACE_BRIEF_NOTIFIER the notifier (default terminal-notifier; tests inject fakes of both); $ACE_BRIEF_KEEP keeps the raw streams.
+# stdout/stderr carry counts and one-line reasons, never mail content. A signal: the children get TERM, then KILL after the same grace.
 set -u -o pipefail
 umask 077
 HOOKS=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P) && REPO=$(dirname "$HOOKS") || exit 1
@@ -49,6 +50,9 @@ on_signal() {   # $1 the exit code; every child of this shell is stopped (one ju
   trap '' TERM INT HUP      # first: a second signal must not cut the stop or the purge short
   [ -n "$CHILD" ] && kill "$CHILD" 2>/dev/null
   pkill -TERM -P $$ 2>/dev/null
+  local i; for ((i = 0; i < ${GRACE:-10} * 5; i++)); do pgrep -qP $$ || break; sleep 0.2 9>&-; done      # up to GRACE seconds to end
+  [ -n "$CHILD" ] && kill -KILL "$CHILD" 2>/dev/null      # a stage that ignores TERM must not hold the stop (and the purge) until its alarm
+  pkill -KILL -P $$ 2>/dev/null
   wait 2>/dev/null
   exit "$1"
 }

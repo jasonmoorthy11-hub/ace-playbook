@@ -1098,8 +1098,10 @@ Order W3 of the watcher and cockpit design (section 7, "The brief"). Not on the 
   anywhere only when it fullmatches `[A-Za-z0-9_][A-Za-z0-9_.-]*` and is on the allowlist, in `hooks/brief_connector_tools.txt`, a built-in
   name or in the init list; any other is counted (`unknown_tools`, pseudo-name `unknown`), never echoed. The init list under `--tools
   ToolSearch` has not been observed yet: the first real run is the acceptance test. The audit fails closed: a non-blank stream line that is
-  not a JSON object, or a file over 50 MB (it is not truncated), counts as drift with the pseudo-name `unparseable`, and a raw scan of all the bytes for
-  `"name": "mcp__..."` adds the tool names a malformed line shows. It detects, it cannot undo a call that already ran; (5)
+  not a JSON object, a call block (`tool_use`, `server_tool_use`, `mcp_tool_use`) whose `name` is not a string, or a file over 50 MB (it is not
+  truncated), counts as drift with the pseudo-name `unparseable`, and a raw scan of the lines that did not parse as JSON objects for
+  `"name": "mcp__..."` adds the tool names they show (a parsed line is read by structure: that text inside an allowed tool's input or a mail
+  body is data and cannot refuse the run). It detects, it cannot undo a call that already ran; (5)
   `--no-session-persistence` on both stages (probed: no `.jsonl` transcript is written, only an
   empty `~/.claude/projects/<cwd slug>/memory/` directory, so the reflect sweep finds no raw mail); (6) `disableAllHooks` in
   `hooks/brief-settings.json`, which keeps the operator's own hooks out of the run. The PreToolUse guard (`hooks/brief_guard.py`, deny by
@@ -1151,7 +1153,8 @@ Order W3 of the watcher and cockpit design (section 7, "The brief"). Not on the 
   `digest_clean.json`; the raw streams and the unfiltered digest are deleted when the run ends, also on a signal (the `claude` child is killed first),
   and no session transcript is written. The ledger row is `{ts, stage, model, cost_usd,
   input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens, five_hour_before/after, seven_day_before/after,
-  duration_ms, num_turns, tools_called, unknown_tools}`; the window fields come from the stream's `rate_limit_event` (`unifiedWindows.<window>.utilization`).
+  duration_ms, num_turns, tools_called, unknown_tools}` (`model` lists the `modelUsage` keys that are a NAME, else `unknown`); the window fields
+  come from the stream's `rate_limit_event` (`unifiedWindows.<window>.utilization`).
   Jason sets the share of a weekly window after a week of rows (D-97).
 - **Run control.** `brief.sh` takes a kernel lock, `/usr/bin/lockf -s -t 0` on an fd opened on `brief_dir/run.lockf` (one run at a time; the
   kernel releases it when the last process holding the fd dies, a SIGKILL included, so there is no pid file, no stale lock and no takeover
@@ -1160,15 +1163,23 @@ Order W3 of the watcher and cockpit design (section 7, "The brief"). Not on the 
   The helpers (`names`, the lock, the watchdog, `notify`) are in `hooks/brief_lib.sh`, sourced by `brief.sh`. Each stage has a wall-clock
   watchdog, `ACE_BRIEF_STAGE_TIMEOUT` seconds (an integer of at least 1, else 600): a stage that outlasts it gets SIGTERM, and SIGKILL after
   `ACE_BRIEF_KILL_GRACE` seconds (default 10) if it ignores that; the run fails (exit 1) and the ledger gets a row `timeout: stageN`. Each
-  stage also runs under `perl -e 'alarm shift; exec @ARGV'` with both times added, so a stage orphaned by a SIGKILL of the script dies alone.
+  stage also runs under `perl -e '$SIG{ALRM} = "DEFAULT"; alarm shift; exec @ARGV'` with both times added, so a stage orphaned by a SIGKILL of
+  the script dies alone (the perl resets SIGALRM first: a launcher may have left it ignored, and an ignored signal survives `exec`).
   Every step (the `claude` stages and each python verb) runs in the background and is waited for so a
   SIGTERM, SIGINT or SIGHUP stops it at once (exit 143, 130, 129); the handler also stops every child of the shell (`pkill -TERM -P $$`), since a
   child started just before `CHILD=$!` is not yet tracked, and the handler and `cleanup` ignore further signals first so the purge cannot be
-  cut short. The two list files are read strictly by `brief.sh`, `brief_audit.py` and `brief_guard.py`: a line is blank, a full-line `#`
+  cut short. The stop is bounded: the handler polls up to `ACE_BRIEF_KILL_GRACE` seconds for the children to end, then `kill -KILL`s the tracked
+  child and `pkill -KILL -P $$`, so a stage that ignores TERM cannot hold the purge for the 610 s of its alarm.
+  `notify` runs `$ACE_BRIEF_NOTIFIER` (default `terminal-notifier` from the PATH, which `brief.sh` extends with `/opt/homebrew/bin`): the test
+  suite sets it to a recording fake for every test, so no test run can reach the real notifier. The two list files are read strictly by
+  `brief.sh`, `brief_audit.py` and `brief_guard.py`: a line is blank, a full-line `#`
   comment or one name of `[A-Za-z0-9_][A-Za-z0-9_.-]*`; a BOM or any
   other byte fails the run or makes the guard deny everything. `due` runs under the lock, and a
   failed stage leaves no `brief_state.json`, so the next wake retries. Triggers: Hammerspoon `systemDidWake` and `screensDidUnlock` (20 s
-  delay) and a `RunAtLoad` LaunchAgent; `terminal-notifier` fires only when `needs_you` is non-empty.
+  delay) and a `RunAtLoad` LaunchAgent; `terminal-notifier` fires only when `needs_you` is non-empty. **One config file for both triggers:**
+  the brief dir, the run lock and the exclusion list all come from the config file, so the LaunchAgent (`__ACE_CONFIG_FILE__`) and the
+  Hammerspoon file (`config_file` in `~/.hammerspoon/ace_config.lua`, exported as `ACE_PLAYBOOK_CONFIG`) must name the same one. `config_file`
+  is required: without it `ace.lua` prints a warning, shows an alert and skips the run (fail closed) rather than read the default config.
 
 ## 9. Security
 

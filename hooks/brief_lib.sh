@@ -29,7 +29,7 @@ limits() {   # sets STAGE_T (the wall-clock limit of a stage) and GRACE (the wai
   STAGE_T="${ACE_BRIEF_STAGE_TIMEOUT:-600}" GRACE="${ACE_BRIEF_KILL_GRACE:-10}"
   [[ "$STAGE_T" =~ ^[0-9]{1,6}$ ]] && STAGE_T=$((10#$STAGE_T)) && [ "$STAGE_T" -ge 1 ] || STAGE_T=600
   [[ "$GRACE" =~ ^[0-9]{1,6}$ ]] && GRACE=$((10#$GRACE)) && [ "$GRACE" -ge 1 ] || GRACE=10
-  ALARM=(/usr/bin/perl -e 'alarm shift; exec @ARGV' "$((STAGE_T + GRACE))")
+  ALARM=(/usr/bin/perl -e '$SIG{ALRM} = "DEFAULT"; alarm shift; exec @ARGV' "$((STAGE_T + GRACE))")      # a launcher may have left SIGALRM ignored
 }
 watch() {   # $1 pid, $2 seconds, $3 grace: TERM the pid when the time is up (and leave $RUN/timed_out), KILL it when it outlives the grace
   local i
@@ -49,7 +49,8 @@ wait_stage() {   # $1 stage name: wait for the background step in CHILD under th
   [ -e "$RUN/timed_out" ] || return "$rc"
   rm -f "$RUN/timed_out"; py timeout-mark "$1" || true; return 124
 }
-notify() {   # $1 message, $2 optional page to open
-  command -v terminal-notifier > /dev/null 2>&1 || return 0
-  terminal-notifier -title "ACE brief" -message "$1" ${2:+-open "$2"} > /dev/null 2>&1 9>&- || true
+notify() {   # $1 message, $2 optional page to open. $ACE_BRIEF_NOTIFIER names the notifier (tests inject a fake; it is never looked up on the PATH)
+  local n="${ACE_BRIEF_NOTIFIER:-terminal-notifier}"
+  command -v "$n" > /dev/null 2>&1 || return 0
+  "$n" -title "ACE brief" -message "$1" ${2:+-open "$2"} > /dev/null 2>&1 9>&- || true
 }

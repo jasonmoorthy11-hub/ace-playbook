@@ -7,6 +7,8 @@ import sys
 
 import pytest
 
+from ace_playbook.compile.brief_audit import BUILTINS
+
 from .test_statusline import ROOT
 
 GUARD = ROOT / "hooks" / "brief_guard.py"
@@ -88,10 +90,11 @@ def test_hard_mode_exits_2_with_the_reason_on_stderr_and_nothing_on_stdout():
 def test_the_settings_file_disables_all_hooks_has_no_hooks_block_and_denies_writes():
     s = json.loads((ROOT / "hooks" / "brief-settings.json").read_text())
     assert s["disableAllHooks"] is True and "hooks" not in s and set(s) == {"disableAllHooks", "permissions"}   # the guard does not run here
-    builtin = ["Bash", "Edit", "Write", "WebFetch", "WebSearch", "Agent", "Read", "Glob", "Grep", "LS", "NotebookRead", "MultiEdit",
-               "NotebookEdit", "Task"]
     denied = [ln.strip() for ln in (ROOT / "hooks" / "brief_denied_tools.txt").read_text().splitlines() if ln.strip() and ln[0] != "#"]
-    assert s["permissions"]["deny"] == builtin + denied              # the settings list is the built-ins plus the data file, in order
+    deny = s["permissions"]["deny"]
+    assert deny[len(deny) - len(denied):] == denied                  # the data file last, in order; before it the built-ins
+    assert set(deny[:len(deny) - len(denied)]) == BUILTINS - set(names()) and len(deny) == len(set(deny))      # the audit's own set, ToolSearch is allowed
+    assert {"BashOutput", "ExitPlanMode", "KillShell", "Skill", "SlashCommand", "TodoWrite"} <= set(deny) and "ToolSearch" not in deny
 
 
 def test_the_connector_deny_list_names_every_write_tool_of_the_three_servers_and_whole_other_servers():
@@ -152,7 +155,7 @@ def test_the_three_servers_the_brief_reads_deny_every_unneeded_tool_by_full_name
 def test_the_deny_file_and_the_settings_deny_list_stay_equal_with_no_allow_or_default_mode():
     s = json.loads((ROOT / "hooks" / "brief-settings.json").read_text())
     builtin = [n for n in s["permissions"]["deny"] if not n.startswith("mcp__")]
-    assert s["permissions"]["deny"] == builtin + rule_lines(DENIED) and "Bash" in builtin
+    assert s["permissions"]["deny"] == builtin + rule_lines(DENIED) and set(builtin) == BUILTINS - set(names())      # brief_audit.BUILTINS
     assert len(rule_lines(DENIED)) == len(set(rule_lines(DENIED))) and set(s["permissions"]) == {"deny"}
 
 

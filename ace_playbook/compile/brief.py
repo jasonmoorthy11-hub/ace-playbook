@@ -126,7 +126,7 @@ def cmd_ledger(cfg, a) -> int:
     res = res if isinstance(res, dict) else {}
     tokens = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")
     use, models = (res.get(k) if isinstance(res.get(k), dict) else {} for k in ("usage", "modelUsage"))
-    row = {"ts": _now(), "stage": a.stage, "model": ",".join(sorted(k for k in models if isinstance(k, str)))[:100],
+    row = {"ts": _now(), "stage": a.stage, "model": ",".join(sorted(k for k in models if isinstance(k, str) and ba.NAME.fullmatch(k)))[:100] or "unknown",
            "cost_usd": _num(res.get("total_cost_usd")), **{k: _num(use.get(k)) for k in tokens},
            **{f"{w}_{t}": _util(ev, w) for w in ("five_hour", "seven_day") for t, ev in (("before", before), ("after", after))},
            "duration_ms": _num(res.get("duration_ms")), "num_turns": _num(res.get("num_turns")),
@@ -158,8 +158,9 @@ def cmd_extract(cfg, a) -> int:
 
 
 def cmd_status(cfg, a) -> int:
-    d = _dir(cfg)
-    state = read_json(d / STATE) or {}
+    d = cfg.brief_path          # status only reads: it never creates the directory
+    state = read_json(d / STATE)
+    state = state if isinstance(state, dict) else {}
     rows = [r for r in map(_jl, (d / LEDGER).read_text(errors="replace").split("\n") if (d / LEDGER).is_file() else []) if isinstance(r, dict)]
     costs = ", ".join(f"{s} ${c}" for s, c in sorted({r.get("stage"): r.get("cost_usd") for r in rows if "cost_usd" in r}.items(), key=str))
     print(f"last brief: {state.get('last_brief', 'never')}\nneeds you: {state.get('needs_you_count', 0)}\nledger rows: {len(rows)}")

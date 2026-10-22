@@ -332,7 +332,7 @@ def test_ledger_survives_garbage_inputs_and_refuses_a_bad_stage(env, capsys):
     junk = put(env, "j.json", "[1, 2")
     assert run(capsys, "ledger", junk, junk, "stage1", junk)[0] == 0
     row = json.loads((env / "brief" / "brief_ledger.jsonl").read_text())
-    assert row["cost_usd"] is None and row["tools_called"] == [] and row["model"] == ""
+    assert row["cost_usd"] is None and row["tools_called"] == [] and row["model"] == "unknown"
     assert run(capsys, "ledger", junk, junk, "Stage 1; rm", junk)[0] == 2
 
 
@@ -487,3 +487,85 @@ def test_timeout_mark_appends_one_row_and_status_ignores_it_for_costs(env, capsy
     rows = [json.loads(ln) for ln in (env / "brief" / "brief_ledger.jsonl").read_text().splitlines()]
     assert len(rows) == 1 and rows[0]["timeout"] == "stage1" and rows[0]["ts"].endswith("Z")
     assert run(capsys, "status")[1].splitlines()[2:] == ["ledger rows: 1", "last stage costs: none"]
+
+
+# ------------------------------------------------------------------ wave 7: every tool call block, the raw scan, status, the ledger model
+INIT_OK = ["ToolSearch", "mcp__claude_ai_Gmail__search_threads"]
+SEND = "mcp__claude_ai_Gmail__send_message"
+
+
+def call_event(block):
+    return {"type": "assistant", "message": {"content": [block]}}
+
+
+@pytest.mark.parametrize("name", [["mcp__x"], {"a": 1}, 7, 1.5, None, True])
+@pytest.mark.parametrize("kind", ["tool_use", "server_tool_use", "mcp_tool_use"])
+def test_a_tool_call_block_whose_name_is_not_a_string_makes_the_stream_unparseable(env, capsys, kind, name):
+    code, out, err, rows = audit(env, capsys, bs.stream(init_tools=INIT_OK, junk=False) + jsonl([call_event({"type": kind, "name": name, "input": {}})]))
+    assert (code, err) == (2, "") and summary(out)["drift"] == ["unparseable"] and rows[-1]["drift"] == ["unparseable"]
+
+
+def test_a_tool_call_block_with_no_name_at_all_is_unparseable(env, capsys):
+    code, out, err, rows = audit(env, capsys, bs.stream(init_tools=INIT_OK, junk=False) + jsonl([call_event({"type": "tool_use", "input": {}})]))
+    assert code == 2 and summary(out)["drift"] == ["unparseable"] and rows[-1]["drift"] == ["unparseable"]
+
+
+@pytest.mark.parametrize("kind", ["server_tool_use", "mcp_tool_use"])
+def test_server_and_mcp_tool_use_blocks_are_audited_like_tool_use(env, capsys, kind):
+    code, out, err, rows = audit(env, capsys, bs.stream(init_tools=INIT_OK, junk=False) + jsonl([call_event({"type": kind, "name": SEND})]))
+    assert code == 2 and summary(out) == {"init": 2, "drift": [SEND], "unknown": 0} and rows[-1]["drift"] == [SEND]
+    code, out, err, rows = audit(env, capsys, bs.stream(init_tools=INIT_OK, junk=False) + jsonl([call_event({"type": kind, "name": INIT_OK[1]})]))
+    assert (code, len(rows)) == (0, 1)          # the first run's ledger row only: an allowed name writes none
+    code, out, err, rows = audit(env, capsys, bs.stream(init_tools=INIT_OK, junk=False) + jsonl([call_event({"type": kind, "name": EXTRA})]))
+    assert code == 2 and summary(out)["drift"] == ["unknown"] and EXTRA not in out
+
+
+def test_a_non_string_call_name_counts_as_an_unknown_tool_in_the_extract(env, capsys):
+    calls = [call_event({"type": "tool_use", "name": n}) for n in (["x"], None, 3)]
+    res = json.loads(run(capsys, "extract", put(env, "s.jsonl", jsonl([{"type": "result", "result": "x"}] + calls)), "--what", "result")[1])
+    assert res["_tools_called"] == [] and res["_unknown_tools"] == 3
+
+
+def test_a_name_key_inside_an_allowed_tools_input_is_data_and_does_not_refuse_the_run(env, capsys):
+    block = {"type": "tool_use", "name": INIT_OK[1], "input": {"query": '{"name": "mcp__evil__x"}', "name": "mcp__evil", "n": [{"name": "mcp__evil2"}]}}
+    code, out, err, rows = audit(env, capsys, bs.stream(init_tools=INIT_OK, junk=False) + jsonl([call_event(block)]))
+    assert (code, err, rows) == (0, "", []) and summary(out) == {"init": 2, "drift": [], "unknown": 0}
+    result = {"type": "user", "message": {"content": [{"type": "tool_result", "content": f'"name": "{SEND}"'}]}}
+    assert audit(env, capsys, bs.stream(init_tools=INIT_OK, junk=False) + jsonl([result]))[0] == 0      # a mail body that quotes a tool name
+
+
+def test_the_same_text_on_a_malformed_line_is_still_refused(env, capsys):
+    bad = '{"type": "assistant", "input": {"name": "' + SEND + '"}\n'
+    code, out, err, rows = audit(env, capsys, bs.stream(init_tools=INIT_OK, junk=False) + bad)
+    assert code == 2 and rows[-1]["drift"] == [SEND, "unparseable"] and summary(out)["drift"] == [SEND, "unparseable"]
+
+
+@pytest.mark.parametrize("body", ["1", '"x"', "[1]", "null", "true", "[]", "{", "2.5"])
+def test_status_treats_a_state_file_that_is_not_an_object_as_empty(env, capsys, body):
+    (env / "brief").mkdir()
+    (env / "brief" / "brief_state.json").write_text(body)
+    code, out, err = run(capsys, "status")
+    assert (code, err) == (0, "") and out.splitlines()[:3] == ["last brief: never", "needs you: 0", "ledger rows: 0"]
+
+
+def test_status_never_creates_the_brief_directory(env, capsys):
+    assert not (env / "brief").exists()
+    code, out, err = run(capsys, "status")
+    assert (code, err) == (0, "") and out.splitlines() == ["last brief: never", "needs you: 0", "ledger rows: 0", "last stage costs: none"]
+    assert not (env / "brief").exists()
+
+
+def ledger_model(env, capsys, models):
+    junk = put(env, "j.json", "[]")
+    res = put(env, "r.json", {"type": "result", "modelUsage": models})
+    assert run(capsys, "ledger", junk, junk, "stage1", res)[0] == 0
+    return json.loads((env / "brief" / "brief_ledger.jsonl").read_text().splitlines()[-1])["model"]
+
+
+def test_the_ledger_model_is_filtered_by_name_and_unknown_when_nothing_is_left(env, capsys):
+    secret = f"Pat asks whether the draft is final {bs.MARKER}"
+    assert ledger_model(env, capsys, {"claude-sonnet-5-5": {}, "claude-haiku-5-5": {}}) == "claude-haiku-5-5,claude-sonnet-5-5"
+    assert ledger_model(env, capsys, {secret: {}, "claude-sonnet-5-5": {}, "-lead": {}, "x\ny": {}, "": {}}) == "claude-sonnet-5-5"
+    assert ledger_model(env, capsys, {secret: {}, "a b": {}, "mcp__x y": {}}) == "unknown"
+    assert ledger_model(env, capsys, {}) == "unknown" and ledger_model(env, capsys, ["claude-sonnet-5-5"]) == "unknown"
+    assert bs.MARKER not in (env / "brief" / "brief_ledger.jsonl").read_text()

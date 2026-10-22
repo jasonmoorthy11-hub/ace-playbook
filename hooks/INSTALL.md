@@ -429,6 +429,10 @@ brew install --cask hammerspoon        # wake and unlock
 brew install terminal-notifier         # the "N need you" notification; optional
 ```
 
+`brief.sh` runs `$ACE_BRIEF_NOTIFIER` when it is set, else `terminal-notifier` from the PATH (to which it adds `/opt/homebrew/bin`). Set
+the variable to another executable to change the notifier; the test suite sets it to a recording fake for every test, so no test can open
+a real notification. The notifier only ever gets a count (`N need you`), `brief: tool drift, run refused`, and the page's `file://` link.
+
 Grant Hammerspoon Accessibility (System Settings, Privacy and Security, Accessibility), then add one line to `~/.hammerspoon/init.lua`:
 
 ```lua
@@ -438,8 +442,9 @@ dofile(os.getenv("HOME") .. "/ace-playbook/hooks/hammerspoon/ace.lua")
 The path defaults to `$HOME/ace-playbook/hooks/brief.sh`; a `~/.hammerspoon/ace_config.lua` returning
 `{ brief_script = "/abs/path/brief.sh", config_file = "/abs/path/config.json" }` overrides it. **Both triggers must use the
 same config file**: `config_file` is exported to the wake run as `ACE_PLAYBOOK_CONFIG` and must equal `__ACE_CONFIG_FILE__` in the LaunchAgent below.
-The brief directory, the run lock and the exclusion list all come from that file, so a wake run without it reads the default config:
-another directory and another lock (the two triggers could then run at once) and no exclusions. Hammerspoon starts the task with
+The brief directory, the run lock and the exclusion list all come from that file, so a wake run without it would read the default config:
+another directory and another lock (the two triggers could then run at once) and no exclusions. `config_file` is therefore required:
+without it `ace.lua` prints a warning, shows an alert and skips the run (fail closed). Hammerspoon starts the task with
 only `HOME`, `PATH` and that variable. Login coverage (launchd has no wake event) is a LaunchAgent that runs the
 script once at load:
 
@@ -483,7 +488,9 @@ notification, the digest is discarded and stage 2 never starts, a ledger row `dr
 `unknown` counts the rest. **The model chooses the names of its tool calls**, so a name is written to the ledger only when it is a name of
 letters, digits, `_`, `.` and `-` (not starting with `-`, at most 100 characters) that is on the allowlist, in the connector snapshot, a
 built-in name or in the init list; every other name is counted (`unknown_tools` in the stage row, the pseudo-name `unknown` in the drift
-row) and never echoed, so injected mail text cannot reach a file, the notification or the terminal through a made-up tool name.
+row) and never echoed, so injected mail text cannot reach a file, the notification or the terminal through a made-up tool name. A call
+block (`tool_use`, `server_tool_use`, `mcp_tool_use`) whose name is not a string refuses the run as `unparseable`. A tool name that appears
+only as text inside a parsed line (an allowed tool's input, a mail body) is data; only lines that are not JSON objects are scanned raw.
 **Not yet observed:** the init tool list under `--tools ToolSearch` has not been seen on a real run. If it lists built-ins or other
 tools the audit refuses every run; the first real `brief.sh --force` is the acceptance test. Read the summary line (it shows the size of
 the init list and which tools drifted) and the `drift` row of `brief_ledger.jsonl`, then decide whether to tighten the scope or to
@@ -500,7 +507,9 @@ file or any other byte makes `brief.sh`, the audit and the guard all refuse the 
 in `--disallowedTools` and a live one in the guard.
 
 **Ledger.** Each stage appends one line to `brief_ledger.jsonl` (0600): `ts`, `stage`, `model`, `cost_usd` (list-price equivalent; the
-subscription is not billed per run), the four token counts, `duration_ms`, `num_turns`, `tools_called` (only the names described under
+subscription is not billed per run; `model` lists the model names the stream reports, `unknown` when none is a plain name),
+the four token counts, `duration_ms`, `num_turns`,
+`tools_called` (only the names described under
 Tool scope), `unknown_tools` (how many other names the model called), and the plan windows read from
 the stream's `rate_limit_event`: `five_hour_before/after` and `seven_day_before/after` (utilization, 0 to 1; both readings come from the
 same stream, so compare consecutive rows for the share of a week). `uv run python -m ace_playbook.compile.brief status` prints the last
@@ -508,7 +517,8 @@ brief, the needs-you count, the ledger row count and the last cost of each stage
 
 The raw streams of a run hold mail the exclusion list has not seen, so `brief.sh` deletes them when it exits, also on SIGTERM, SIGINT or
 SIGHUP (exit 143, 130 and 129), which also stop the running `claude` or python step at once (every step runs in the background and is
-waited for, so the signal is not deferred). The handler ignores further signals first, so a burst of them cannot skip the purge. A SIGKILL
+waited for, so the signal is not deferred). The handler ignores further signals first, so a burst of them cannot skip the purge, and it
+waits at most `ACE_BRIEF_KILL_GRACE` seconds for the children before it SIGKILLs them (a stage that ignores TERM cannot hold it). A SIGKILL
 cannot be caught: it leaves the raw files, and the next run deletes them first thing
 (`ACE_BRIEF_KEEP=1` keeps them, 0600, under `brief_dir/run`; the session transcript is
 never written, see Sessions above). `digest_clean.json` (summaries after the exclusions) stays there until the next run.

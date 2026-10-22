@@ -6,6 +6,7 @@ import shutil
 import signal
 import stat
 import subprocess
+import sys
 import time
 
 import pytest
@@ -32,7 +33,8 @@ class World:
         self.conf = bs.config(tmp_path, brief_exclusions=str(bs.exclusions(tmp_path / "ex.json")), **cfg)
         self.dir = tmp_path / "brief"
         self.env = {"HOME": str(tmp_path / "home"), "PATH": f"{self.bin}:{os.environ['PATH']}", "ACE_PLAYBOOK_CONFIG": str(self.conf),
-                    "ACE_BRIEF_CLAUDE": str(FAKE), "ACE_FAKE_DIR": str(self.fake), "ANTHROPIC_API_KEY": "FAKE-key", "CLAUDECODE": "1"}
+                    "ACE_BRIEF_CLAUDE": str(FAKE), "ACE_FAKE_DIR": str(self.fake), "ANTHROPIC_API_KEY": "FAKE-key", "CLAUDECODE": "1",
+                    "ACE_BRIEF_NOTIFIER": str(notifier)}
 
     def set_answers(self, digest=None, brief=None):
         (self.fake / "digest.json").write_text(digest if isinstance(digest, str) else json.dumps(digest or bs.digest()))
@@ -514,9 +516,14 @@ def test_a_stage_that_ignores_term_is_killed_after_the_grace_and_the_run_ends_wi
     assert not alive(int((w.fake / "pid_stage1").read_text())) and raw_left(w) == [] and free(w)
 
 
+IGNORE_ALRM = [sys.executable, "-c", "import os, signal, sys; signal.signal(signal.SIGALRM, signal.SIG_IGN); os.execv(sys.argv[1], sys.argv[1:])"]
+
+
+@pytest.mark.parametrize("alarm_ignored", [False, True])
 @pytest.mark.parametrize("watchdog_dies", [False, True])
-def test_a_stage_orphaned_by_a_sigkill_of_the_script_dies_by_its_own_alarm_and_frees_the_lock(w, watchdog_dies):
-    proc = subprocess.Popen([str(SCRIPT), "--force"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=w.tmp,
+def test_a_stage_orphaned_by_a_sigkill_of_the_script_dies_by_its_own_alarm_and_frees_the_lock(w, watchdog_dies, alarm_ignored):
+    """alarm_ignored: the launcher started the script with SIGALRM ignored (an ignored signal survives exec); the stage must still get its alarm."""
+    proc = subprocess.Popen([*(IGNORE_ALRM if alarm_ignored else []), str(SCRIPT), "--force"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=w.tmp,
                             env={**w.env, "ACE_FAKE_SLEEP": "30", "ACE_FAKE_IGNORE_TERM": "1", "ACE_BRIEF_STAGE_TIMEOUT": "2", "ACE_BRIEF_KILL_GRACE": "1"})
     pid = int(wait_for(w.fake / "pid_stage1"))
     began = time.monotonic()
@@ -546,3 +553,28 @@ def test_a_timeout_or_grace_that_is_not_an_integer_of_at_least_one_falls_back(ti
 def test_a_zero_stage_timeout_does_not_time_the_stage_out_at_once(w):
     p = w.run("--force", ACE_FAKE_SLEEP="1", ACE_BRIEF_STAGE_TIMEOUT="0")
     assert p.returncode == 0 and not any("timeout" in r for r in w.ledger()) and (w.dir / "brief.html").exists()
+
+
+def test_a_signal_while_the_stage_ignores_term_kills_it_after_the_grace_instead_of_waiting_for_the_alarm(w):
+    proc = start(w, ACE_FAKE_SLEEP="30", ACE_FAKE_IGNORE_TERM="1", ACE_BRIEF_KILL_GRACE="1")
+    pid = int(wait_for(w.fake / "pid_stage1"))
+    began = time.monotonic()
+    proc.send_signal(signal.SIGTERM)
+    proc.communicate(timeout=20)
+    assert proc.returncode == 143 and time.monotonic() - began < 4          # the stage's own alarm is 610 s away with the defaults
+    time.sleep(0.3)
+    assert not alive(pid) and free(w) and raw_left(w) == []
+
+
+def test_the_notifier_comes_from_ace_brief_notifier_even_with_a_bare_path_and_gets_counts_only(w, fake_notifier):
+    """The suite's autouse fake, not the world's own: PATH holds no notifier, /opt/homebrew/bin is appended by brief.sh (the real one lives there)."""
+    p = w.run("--force", PATH="/usr/bin:/bin", ACE_BRIEF_NOTIFIER=os.environ["ACE_BRIEF_NOTIFIER"])
+    assert p.returncode == 0 and not (w.tmp / "notified").exists()
+    assert fake_notifier.read_text().splitlines() == ["-title", "ACE brief", "-message", "1 need you", "-open", f"file://{w.dir}/brief.html"]
+    assert bs.MARKER not in fake_notifier.read_text() and "Pat" not in fake_notifier.read_text()
+
+
+def test_every_test_runs_with_a_recording_fake_notifier_and_a_missing_one_is_not_looked_up_on_the_path(w, fake_notifier):
+    assert os.path.dirname(os.environ["ACE_BRIEF_NOTIFIER"]) == str(fake_notifier.parent) and not fake_notifier.exists()
+    p = w.run("--force", ACE_BRIEF_NOTIFIER=str(w.tmp / "no-such-notifier"))          # w.bin/terminal-notifier is first on the PATH: it must stay unused
+    assert p.returncode == 0 and not (w.tmp / "notified").exists() and not fake_notifier.exists()
