@@ -55,6 +55,12 @@ outbound channel. Its controls, in order:
 4. `-p` is non-interactive, so a tool that is not allowed is denied rather than asked, with a caveat (D-117): the operator's own user-level
    `permissions.allow` and `defaultMode` still apply inside the run, so an unlisted tool is not denied by `-p` alone. That is why stage 1
    passes `--permission-mode default` and the deny file names every connector tool the brief does not need, reads included.
+   **Residual:** a connector tool added after the snapshot, or a user-scope MCP server that is not in it, is NOT stopped by `--tools`
+   (built-ins only) or `--allowedTools` (it only adds allows). With a server-wide or wildcard `permissions.allow` entry in the operator's
+   user settings (`mcp__claude_ai_Gmail`, `mcp__*`) such a tool is open to stage 1, a new Gmail write tool included. The operator must never
+   keep such entries for Gmail, Calendar or Linear. After stage 1, `tools-audit` reads the stream's init tool list and its tool calls and
+   refuses the run (exit 2, digest discarded, stage 2 never starts, ledger row with the tool names, notification without them) when an
+   `mcp__` tool outside the allowlist appears: it detects the drift, it cannot undo a call that already ran.
 5. `--no-session-persistence`: no transcript of the raw mail is written where the nightly reflect sweep reads (probed: only an empty
    per-directory folder appears).
 6. `disableAllHooks` in the settings file: the operator's own hooks (inject, citation ledger, holdout draws) do not run inside the brief.
@@ -66,11 +72,19 @@ claude.ai connectors (probed 2026-10-22). Stage 1 cannot use `--strict-mcp-confi
 named in an mcp-config file; stage 2 (no tools) does. Stage 1 emits a JSON digest and code applies the private exclusion list; stage 2
 (`--tools "" --strict-mcp-config`) sees only the cleaned digest. Everything gathered is treated as data, never instructions. No model
 writes HTML that is served: the model emits JSON, validated and capped by code, and code renders the page with every field escaped, a
-`default-src 'none'` CSP, no script and no external resource (D-110). A link is an outbound channel, so a `url` survives validation only
-on `mail.google.com`, `calendar.google.com` or `linear.app` (https, exact host, no userinfo, no port, at most 500 characters, no control or format
-character such as a bidi mark). Every call passes an explicit model and
+`default-src 'none'` CSP, no script and no external resource (D-110). A link is an outbound channel (a query string can carry mail text), and
+the digest has no url field, so any url in a brief was invented by a model: the validator sets every `url` to null and the page has no
+link. The renderer keeps its host allowlist (`mail.google.com`, `calendar.google.com`, `linear.app`; https, exact host, no userinfo, no
+port, at most 500 characters, no control or format character) only as defence in depth. Every call passes an explicit model and
 runs without `ANTHROPIC_API_KEY`. None of this is on the hook path; the brief runs `claude -p`, which is the one network use, and only on
 your login.
+
+Two more controls. One run at a time: a kernel lock (`lockf`) that the kernel releases when the run dies, so a live run is never taken
+over; each stage has a wall-clock limit (`ACE_BRIEF_STAGE_TIMEOUT`, 600 s). The private exclusion match runs in a child process that
+`brief_excl.py` SPAWNS (a fresh interpreter, killed after 10 s; D-116): a `re` match in C cannot be interrupted in-process, and the child
+sees only the lists and the mail it is handed. That file is the one place under `ace_playbook/compile/` allowed to import
+`multiprocessing`; `tests/test_compile_events.py` bans the module everywhere else and names this exemption (a stale exemption fails too).
+Spawn is not a shell or a network use, but it does start a process, which the "never spawn" rule of that test otherwise forbids.
 
 ## Planned, not implemented
 

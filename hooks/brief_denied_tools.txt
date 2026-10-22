@@ -4,8 +4,11 @@
 # brief, so EVERY connector tool of the three servers the brief reads (Gmail, Google Calendar, Linear) that is not in
 # hooks/brief_allowed_tools.txt is denied here by FULL NAME, reads included; a `mcp__<server>` line is Claude Code's whole-server rule for a
 # connector the brief does not read at all. A test checks every name of hooks/brief_connector_tools.txt (a dated snapshot of the real
-# tool list) is allowed or denied; a connector tool added after the snapshot is stopped by --tools, --allowedTools, `--permission-mode default`
-# and the non-interactive -p denial of anything unlisted, and the snapshot is refreshed by hand.
+# tool list) is allowed or denied. A connector tool added AFTER the snapshot, and any user-scope MCP server not in it, is NOT stopped by
+# --tools (it scopes built-ins only) or --allowedTools (it only adds allows): the default mode and -p deny it only if no user-level
+# permissions.allow covers it, so a server-wide or wildcard allow (mcp__claude_ai_Gmail, mcp__*) leaves a new Gmail write tool open to stage 1.
+# Never keep such an entry for Gmail, Calendar or Linear in user settings. brief.sh's `tools-audit` refuses the run after the fact (exit 2).
+# Refresh the snapshot and this list by hand when a connector adds tools.
 mcp__claude_ai_Gmail__apply_sensitive_message_label
 mcp__claude_ai_Gmail__apply_sensitive_thread_label
 mcp__claude_ai_Gmail__create_draft

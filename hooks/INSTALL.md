@@ -467,13 +467,21 @@ tool of Gmail, Google Calendar and Linear that the brief does not need, reads in
 `-p` denies an unlisted tool, but your user-level `permissions.allow` and `defaultMode` still apply inside the run, which is why
 `--permission-mode default` is passed and every unneeded connector tool is denied by name. `hooks/brief_connector_tools.txt` is a dated
 snapshot of the connector tool names seen on 2026-10-22 and a test checks each is allowed or denied; refresh it by hand when a connector
-adds tools. It cannot use `--strict-mcp-config`, because the claude.ai connectors are account-level and cannot be named in an mcp-config file.
+adds tools. A connector tool added after the snapshot, and any user-scope MCP server that is not in it, is NOT stopped by `--tools` (it
+controls built-ins only) or `--allowedTools` (it only adds allows): the default mode and `-p` deny it only when no user-level
+`permissions.allow` covers it. **Never keep a server-wide or wildcard `permissions.allow` entry for Gmail, Calendar or Linear (or any
+`mcp__*` wildcard) in your user settings**: with one, a new Gmail write tool is open to stage 1. As a check after the fact, `brief.sh` runs
+`python -m ace_playbook.compile.brief tools-audit` on the stage 1 stream: any `mcp__` tool outside `hooks/brief_allowed_tools.txt` in the
+init tool list or in a call refuses the run (exit 2, `brief: tool drift, run refused` on stderr and in the notification, no names, the digest
+is discarded and stage 2 never starts, a ledger row `drift: [names]`). That detects drift, it cannot undo a call that already ran.
+It cannot use `--strict-mcp-config`, because the claude.ai connectors are account-level and cannot be named in an mcp-config file.
 The prompt is always the last argument, after a single-value flag, because `--tools`, `--allowedTools` and `--disallowedTools` take
 a variadic list that would swallow a positional prompt.
-Links on the page are limited to `mail.google.com`, `calendar.google.com` and `linear.app` (constant `LINK_HOSTS` in
-`compile/brief_render.py`), at most 500 characters and without control or format characters (Unicode Cc, Cf): a link is an outbound
-channel, so any other URL in the brief is dropped. In `brief_allowed_tools.txt` and `brief_denied_tools.txt` a line is blank, a full-line
-`#` comment or exactly one name: a `#` after a name makes `brief.sh` stop (and the guard deny everything), because the same line would
+The brief JSON carries no usable link: the digest has no url field, so the validator (`compile/brief_render.py`) sets every `url` to null
+and the page has no `<a>`. The renderer would still write a link only for `mail.google.com`, `calendar.google.com` or `linear.app` (constant
+`LINK_HOSTS`; https, at most 500 characters, no control or format character), as defence in depth. In `brief_allowed_tools.txt` and
+`brief_denied_tools.txt` a line is blank, a full-line `#` comment or exactly one name of letters, digits, `_`, `.` and `-`: a `#` after a
+name, a BOM, a space inside or any other byte makes `brief.sh` stop (and the guard deny everything), because the same line would
 otherwise be a dead rule in `--disallowedTools` and a live one in the guard.
 
 **Ledger.** Each stage appends one line to `brief_ledger.jsonl` (0600): `ts`, `stage`, `model`, `cost_usd` (list-price equivalent; the
@@ -484,10 +492,15 @@ brief, the needs-you count, the ledger row count and the last cost of each stage
 
 The raw streams of a run hold mail the exclusion list has not seen, so `brief.sh` deletes them when it exits, also on SIGTERM, SIGINT or
 SIGHUP (exit 143, 130 and 129), which also stop the running `claude` or python step at once (every step runs in the background and is
-waited for, so the signal is not deferred). A SIGKILL cannot be caught: it leaves the lock and the raw files, so the lock directory holds the
-owner's `pid`, the next run takes over a lock whose pid is dead (or that is older than 30 minutes) and deletes the raw files first thing
+waited for, so the signal is not deferred). A SIGKILL cannot be caught: it leaves the raw files, and the next run deletes them first thing
 (`ACE_BRIEF_KEEP=1` keeps them, 0600, under `brief_dir/run`; the session transcript is
 never written, see Sessions above). `digest_clean.json` (summaries after the exclusions) stays there until the next run.
+
+**One run at a time.** `brief.sh` takes a kernel lock, `/usr/bin/lockf`, on `brief_dir/run.lockf` (an empty file that stays). The kernel
+drops it when the last process holding it dies, a SIGKILL included, so there is no stale lock to take over; a live run, or a `claude` stage
+that outlived a killed script, is always respected: a second run exits 0 without a word. Each stage has a wall-clock limit,
+`ACE_BRIEF_STAGE_TIMEOUT` seconds (default 600): a stage that runs longer is stopped, the run fails (exit 1, `brief: stage N timed out`) and
+the ledger gets a row `timeout: stageN`.
 
 ## What the hooks write
 
