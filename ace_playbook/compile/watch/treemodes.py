@@ -8,7 +8,7 @@ only. Simpler than a browser, always towards hiding MORE (LIMITATIONS.md, Watche
 from __future__ import annotations
 
 from .htmlrules import (BARRIERS, BREAKOUT, FORMAT, HEAD_TAGS, CTX, HEADINGS, IGNORED, OPS, RAW_ANY, SCOPED_END, SECTIONS, STANDARDS, STRUCT, VOID, WS,
-                        special)
+                        select_in_table, special)
 
 def run(t, o, n, a):
     """A simple start tag (`htmlrules.OPS`): close a p, reconstruct, not frameset-ok, then the element (void, raw text or plain), the extras."""
@@ -160,10 +160,10 @@ def inselect(t, k, n, a, sc):
             if n != "option" and st[-1].name == "optgroup": t.pop()
             (t.void if n == "hr" else t.insert)(n, a)
         elif n in ("script", "template"): head(t, k, n, a, sc)
-        elif (n in ("input", "keygen", "textarea") or (n == "select" and not t.relaxed)) and reach(t):
-            t.popto(t.idx["select"][-1]); t.reset_mode()
+        elif ((n in ("input", "keygen", "textarea") or (n == "select" and not t.relaxed)) and reach(t)) or (n in STRUCT and select_in_table(t)):
+            t.popto(t.idx["select"][-1]); t.reset_mode()             # a table tag closes a select opened in a table (read again); elsewhere it is ignored
             n != "select" and t.process(k, n, a, sc)
-        elif t.relaxed:                                              # any other start tag is inserted as it is (strict: ignored)
+        elif t.relaxed and n not in STRUCT:                          # any other start tag is inserted as it is (strict: ignored; STRUCT: as in body)
             if n in RAW_ANY: t.rawtext(n, a)
             elif n in ("svg", "math"): t.insert(n, a, 1 if n == "svg" else 2); sc and t.pop()
             else: run(t, "rF", n, a) if n in FORMAT else t.void(n, a) if n in VOID else t.insert(n, a)       # a formatting tag as in body

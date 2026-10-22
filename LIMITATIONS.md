@@ -227,7 +227,7 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   foreign element or a hidden element (`<div hidden><select><template><input></template></div>X` keeps X hidden). `</select>` needs the select in
   scope under the newer reading, so an open select that held a scope marker or a formatting element hides the rest even after that element closed
   (`<select><object></object></select>VIS` and `<select><b hidden></b></select>VIS`: a browser shows VIS under both readings, we hide:
-  over-hide). A raw-text element
+  over-hide). Table-structure start tags inside a select close the select when it was opened in a table, and are ignored otherwise. A raw-text element
   opened in a select that holds a `<` poisons the rest of the document: nothing after it shows (over-hiding by design, not for `script`).
   The rules of `<style>` come from the TREE: the sheet of a page is the child text of its `style` elements in any namespace (an HTML one
   is raw text, comments included, as CSS reads them; an svg one is character data: a CDATA section counts, a comment does not, character

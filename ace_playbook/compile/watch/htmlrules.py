@@ -56,6 +56,11 @@ def special(node) -> bool:
     return node.name in HTML_SPECIAL if node.ns == 0 else (node.ns, node.name) in FOREIGN_SPECIAL
 
 
+def select_in_table(t) -> bool:
+    """Was the open select opened in a table ("in select in table": a table lies below it, no template between)? Above the select there is neither."""
+    return (t.idx.get("table") or [-1])[-1] > (t.idx.get("template") or [-1])[-1]
+
+
 class ScriptState:
     """The script-data states of the HTML tokenizer: `data`, `escaped` (after `<!--`) and `double` (after `<!--` and `<script`)."""
 

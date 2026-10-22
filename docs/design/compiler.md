@@ -1113,7 +1113,9 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   it, and lets a raw text holding a `<` poison the rest of the page (`selraw`, `rawlt`, `poisoned`; `script` exempt). `</select>` needs the select
   in scope under the newer reading, so an open select that held a scope marker or a formatting element hides the rest even after that element
   closed (`<select><object></object></select>VIS`, `<select><b hidden></b></select>VIS`: a browser shows VIS under both readings, we hide:
-  over-hide, by the rule that every end tag is ignored but option, optgroup, select, template). Document-level
+  over-hide, by the rule that every end tag is ignored but option, optgroup, select, template). Table-structure start tags (`caption`, `col`,
+  `colgroup`, `tbody`, `td`, `tfoot`, `th`, `thead`, `tr`) in a select close the select when it was opened in a table (a table, not a template,
+  is the nearest below it: the tag is read again) and are ignored otherwise, as in body, so no cell marker is pushed outside the table modes. Document-level
   hiding: an `html` or `body` start tag, the first or a late one, that hides, or a `<style>` rule that hides `html`, `body` or `*`, makes
   the body empty; a `<template shadowrootmode=...>` hides every child of its host (those before it too). THE STYLE PASS (`treestyle.py`,
   re-exported by `stylepass.py`): the sheet of a page is the child text of the `style` elements of the tree in any namespace (HTML: raw

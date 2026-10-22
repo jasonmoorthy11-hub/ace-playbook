@@ -293,3 +293,33 @@ def test_w16_a_template_end_clears_the_formatting_list_once_not_once_per_popped_
     ("<template><i hidden><table><tr><td>x</td></tr></table></template>VIS", "VIS")])
 def test_w16_controls_a_cell_or_caption_that_closed_by_itself_clears_its_own_marker_once(html, expected):
     shows_md(html, expected)
+
+
+# ------------------------------------------------------------------ wave 17: a table tag in a select closes it (opened in a table) or is ignored
+@pytest.mark.parametrize("html", [
+    "<template><i hidden><table><tr><td><select><td></template>LEAK", "<template><i hidden><table><tr><td><select><th></template>LEAK",
+    "<template><i hidden><table><tr><td><select><caption></template>LEAK",
+    "<p><i hidden><template><select><td></template></p>LEAK", "<p><i hidden><template><select><caption></template></p>LEAK",
+    "<p><i hidden><template><select><th></template></p>LEAK"])
+def test_w17_a_table_structure_start_tag_in_a_select_pushes_no_cell_marker_outside_the_table_modes(html):
+    hides(html)                                                      # in a table the tag closes the select; elsewhere it is ignored as in body
+
+
+@pytest.mark.parametrize("html", [
+    "<i hidden><select><td></select>LEAK", "<select><td><i hidden></select>LEAK", "<i hidden><select><caption></select>LEAK"])
+def test_w17_guards_these_worlds_were_hidden_before_and_stay_hidden(html):
+    hides(html)
+
+
+@pytest.mark.parametrize("html", [
+    "<template><i hidden><table><tr><td><select><tr></template>LEAK", "<table><tr><td><i hidden><select><td></select></td></tr></table>LEAK"])
+def test_w17_a_select_closed_by_a_cell_tag_reads_like_the_same_page_without_the_select(html):
+    shows_md(html, "LEAK")                                           # the cell closes (the i goes with it): a browser shows it, like the select-free page
+    shows_md(html.replace("<select>", "").replace("</select>", ""), "LEAK")
+
+
+@pytest.mark.parametrize("html,expected", [
+    ("<table><tr><td><select><td>VIS", "VIS"), ("<p><template><select><td></template></p>VIS", "VIS"),
+    ("<table><tr><td><select><tr><td>VIS", "VIS"), ("<table><tr><td><select><th>VIS", "VIS")])
+def test_w17_controls_a_visible_cell_after_a_select_start_tag_shows_its_text(html, expected):
+    shows_md(html, expected)
