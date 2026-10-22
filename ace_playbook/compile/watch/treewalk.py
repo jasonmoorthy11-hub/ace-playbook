@@ -23,6 +23,8 @@ MARK.update({(0, n): (0, 1, 2, 3) for n in ("html", "table", "template")})
 MARK.update({(0, "ol"): (1,), (0, "ul"): (1,), (0, "button"): (2,)})
 MARK.update({(2, n): (0, 1, 2) for n in "mi mo mn ms mtext annotation-xml".split()})
 MARK.update({(1, n): (0, 1, 2) for n in ("foreignobject", "desc", "title")})
+FIRST = {**{n: "table" for n in "caption colgroup tbody tfoot thead".split()}, "col": "colgroup", "tr": "tbody", "td": "row", "th": "row"}      # template mode
+KEEP = {"table": STRUCT, "colgroup": frozenset(("col",)), "tbody": frozenset(("tr", "td", "th")), "row": frozenset(("td", "th"))}      # tags each keeps
 
 
 def own_attrs(name: str, attrs) -> bool:
@@ -33,11 +35,11 @@ def own_attrs(name: str, attrs) -> bool:
 
 
 class Node:
-    __slots__ = ("name", "ns", "attrs", "parent", "kids", "ip", "own", "syn", "mask", "open", "pos", "inbody")
+    __slots__ = ("name", "ns", "attrs", "parent", "kids", "ip", "own", "syn", "mask", "open", "pos", "tm")
 
     def __init__(self, name: str, ns: int = 0, attrs=(), syn: bool = False) -> None:
         self.name, self.ns, self.attrs, self.syn, self.parent, self.kids, self.open, self.pos = name, ns, attrs, syn, None, [], False, -1
-        self.mask, self.own, self.ip, self.inbody = MARK.get((ns, name), ()), own_attrs(name, attrs), 0, False
+        self.mask, self.own, self.ip, self.tm = MARK.get((ns, name), ()), own_attrs(name, attrs), 0, None
         if ns == 1:
             self.ip = 1 if name in ("foreignobject", "desc", "title") else 0
         elif ns == 2:
@@ -45,13 +47,18 @@ class Node:
             tx = name in ("mi", "mo", "mn", "ms", "mtext")
             self.ip = (1 if enc in ("text/html", "application/xhtml+xml") else 3) if name == "annotation-xml" else 2 if tx else 0
 
-    def builds(self, k: str, n: str) -> bool:
-        """For a template: does this token build table parts? The in-template "any other start tag" (neither a table-structure nor an in-head name) switches
-        the template to "in body" for good (`inbody`), where a table-structure start tag is ignored; characters and end tags do not switch it."""
+    def builds(self, k: str, n: str):
+        """For a template, its insertion mode `tm` is set once, by its first start tag outside HEAD_TAGS (`FIRST`; "body" otherwise), and never changes.
+        True: the token goes to the table rules (a structure tag its mode keeps: `KEEP`); False: to the body, whose IGNORED set drops the other structure
+        tags; None: ignored (any other start tag in "colgroup" mode, `<table>` in a table mode). Characters and end tags always go to the body."""
         if k != "s" or n in HEAD_TAGS: return False
-        if n in STRUCT: return not self.inbody
-        self.inbody = True
-        return False
+        self.tm = self.tm or FIRST.get(n, "body")
+        if n in STRUCT: return self.keeps(n)
+        return None if self.tm == "colgroup" or (n == "table" and self.tm != "body") else False
+
+    def keeps(self, n: str) -> bool:
+        """Does the template's mode build this table-structure tag? Else a browser ignores it: no tbody, tr or table lies in scope inside the template."""
+        return n in KEEP.get(self.tm, ())
 
 
 def hidden(name: str, own: bool, attrs, rules: tuple) -> bool:

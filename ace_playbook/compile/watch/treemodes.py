@@ -1,9 +1,9 @@
 """The insertion modes of the sanitizer's HTML tree builder (HTML Standard, tree construction) as functions `mode(t, k, n, a, sc)`: `t` the `Tree`, `k` the
 token kind ("c" characters, "s" start tag, "e" end tag, "d" doctype), `n` its name (the data of "c"), `a` its attributes, `sc` its self-closing flag. Stdlib
-only. Simpler than a browser, always towards hiding MORE (LIMITATIONS.md, Watcher): fewer start-tag rules (`a`, `nobr`, `button`, headings, `option`, `form`,
-`ruby` nest deeper), an open select (end tags ignored but its own, nested selects stay open, raw text with a `<` hides the rest of the page, a `</template>`
-that closes a select holding a barrier hides it too), `Tree.adopt`. One function for the table modes: the mode is derived from the stack (`Tree.reset_mode`).
-Foreign content: a breakout start tag, `</p>`, `</br>` pop the foreign run and are read again."""
+only. Simpler than a browser, towards hiding MORE: no start-tag rules for `a`, `nobr`, `button`, headings, `option`, `form`, `ruby`, an open select (end tags
+ignored but its own, nested selects stay open, a raw text `<` hides the rest of the page, a `</template>` that closes a select holding a barrier hides it too,
+a cell tag ends it only past `reach`, a table in it is no select in a table, `</select>` needs scope), `Tree.adopt`. One function for the table modes (by
+`Tree.reset_mode`); a template keeps its own (`Node.tm`). Foreign: a breakout start tag, `</p>`, `</br>` pop the foreign run and are read again."""
 
 from __future__ import annotations
 
@@ -118,8 +118,7 @@ def after(t, k, n, a, sc):
 
 def m_text(t, k, n, a, sc):
     if k == "c": return t.text(n)
-    t.pop(); t.mode = t.orig                                         # the end tag of the raw text element (a start tag: the tokenizer was not raw)
-    k == "s" and t.process(k, n, a, sc)
+    t.pop(); t.mode = t.orig; k == "s" and t.process(k, n, a, sc)       # the end tag of the raw text element (a start tag: the tokenizer was not raw)
 
 # ---- tables
 def intable(t, k, n, a, sc):
@@ -129,6 +128,7 @@ def intable(t, k, n, a, sc):
         top = CTX.get(n, ("table",))
         while not (st[-1].ns == 0 and st[-1].name in (*top, "template", "html")): t.pop()
         cell and t.clear_fmt()                                       # close the cell / the caption (before a new td, th or caption pushes its marker)
+        if st[-1].name == "template" and not st[-1].keeps(n): return t.reset_mode()      # the template's mode ignores it (a caption in a cell lands here)
         if st[-1].name == "table" and n in ("col", "tr", "td", "th"): t.insert("colgroup" if n == "col" else "tbody", (), syn=True)
         if n in ("td", "th") and st[-1].name in SECTIONS: t.insert("tr", (), syn=True)
         (t.void if n == "col" else t.insert)(n, a)
@@ -173,7 +173,7 @@ def inselect(t, k, n, a, sc):
         elif n == "template": head(t, k, n, a, sc)
 
 def intemplate(t, k, n, a, sc):
-    (intable if t.stack[t.idx["template"][-1]].builds(k, n) else body)(t, k, n, a, sc)       # a table tag builds table parts until the template is in body mode
+    (intable if r else body)(t, k, n, a, sc) if (r := t.stack[t.idx["template"][-1]].builds(k, n)) is not None else None      # None: ignored by its mode
 
 # ---- foreign content
 def foreign_dispatch(cur, k, n) -> bool:

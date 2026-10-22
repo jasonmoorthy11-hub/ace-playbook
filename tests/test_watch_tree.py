@@ -439,3 +439,47 @@ def test_w21_a_nested_template_in_body_mode_of_its_own_ignores_its_cell_tag_so_t
 def test_w21_controls_a_cell_tag_before_any_other_start_tag_builds_a_cell_and_the_hidden_element_in_body_mode_is_cleared(html, expected):
     # a td in template mode pushes "in row" and a marker (the list ends [i, M_t]); `<i hidden>` is "any other start tag": body mode, the td is ignored
     shows_md(html, expected)
+
+
+# ------------------------------------------------------------------ wave 22: each template carries its own insertion mode, set once by its first non-head tag
+@pytest.mark.parametrize("html", [
+    "<template><tr></tr><i hidden><td></template>LEAK", "<template><td></td><i hidden><td></template>LEAK",
+    "<template><caption></caption><i hidden><td></template>LEAK", "<template><tbody></tbody><b hidden><tr><td></template>LEAK",
+    "<template><thead></thead><u hidden><th></template>LEAK",
+    "<table><tr><td><template><tr></tr><b hidden><td></template>LEAK</td></tr></table>", "<head><template><tr></tr><i hidden><td></template></head>LEAK",
+    "<select><template><tr></tr><i hidden><td></template></select>LEAK", "<template><td></td><svg><desc><i hidden></desc></svg><td></template>LEAK",
+    "<template><i hidden><template><tr></tr><b hidden><td></template></template>VIS"])
+def test_w22_a_template_that_a_table_tag_put_in_a_table_mode_stays_there_so_a_later_cell_tag_still_builds_and_pushes_its_marker(html):
+    # browser: the template's mode is set once, by its first start tag that is not an in-head name (`tr`: "in table body"); `i` is "anything else", read by the
+    # in-table rules with the template as target (a plain insert, the mode stays); the later td clears back to the table-body context and pushes a marker
+    hides(html)
+
+
+@pytest.mark.parametrize("html", [
+    "<p><i hidden></p><template><col><td></template>LEAK", "<p><i hidden></p><template><col><caption></template>LEAK",
+    "<p><i hidden></p><template><col><tr><td></template>LEAK", "<p><i hidden></p><template><col><table><td></template>LEAK",
+    "<p><i hidden></p><template><col><object></template>LEAK", "<p><i hidden></p><template><col><marquee></template>LEAK"])
+def test_w22_a_template_in_column_group_mode_ignores_everything_but_col_so_nothing_pushes_a_marker(html):
+    hides(html)            # "in column group", anything else: the current node is the template, not a colgroup, so the token is ignored
+
+
+@pytest.mark.parametrize("html", [
+    "<p><i hidden></p><template><tr></tr><caption></template>LEAK", "<p><i hidden></p><template><tr><caption></template>LEAK",
+    "<p><i hidden></p><template><td></td><caption></template>LEAK", "<p><i hidden></p><template><td><caption></template>LEAK",
+    "<p><i hidden></p><template><td></td><table><caption></template>LEAK"])
+def test_w22_a_table_structure_tag_the_templates_mode_ignores_builds_nothing_so_the_template_pop_clears_its_own_marker(html):
+    # table body: caption through thead are ignored when no tbody is in table scope; row: caption through tr when no tr is; a caption in a cell closes the
+    # cell and lands in row mode (`intable`, not `intemplate`); the template is a table-scope boundary. The list stays [i, M_t], `</template>` leaves [i]
+    hides(html)
+
+
+@pytest.mark.parametrize("html,expected", [
+    ("<p><i hidden></p><template><colgroup><td></template>VIS", "VIS"), ("<p><i hidden></p><template><tr></tr><table><td></template>VIS", "VIS"),
+    ("<p><i hidden></p><template><caption>x</template>VIS", "VIS"), ("<p><i hidden></p><template><tbody></tbody><caption></template>LEAK", "LEAK"),
+    ("<template><i hidden><td></template>VIS", "VIS"), ("<p><i hidden></p><template><td></td><span><td></template>LEAK", "LEAK"),
+    ("<template><tr></tr><i hidden><caption></template>LEAK", "LEAK")])
+def test_w22_controls_a_tag_the_mode_keeps_still_builds_and_the_second_cell_in_row_mode_pushes_a_marker(html, expected):
+    # a colgroup puts the template in "in table" (a td builds); a bare table is ignored in table body; a first-tag tbody puts it in "in table", where a
+    # caption builds; in row, the second td pushes a marker (the wave-21 body flag hid this although a browser shows it). The last world was listed in the
+    # Opus wave-12 finding 1 as hidden, but its caption is ignored in table body: the list is [M_t, i] and `</template>` clears both, so LEAK shows
+    shows_md(html, expected)

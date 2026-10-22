@@ -1152,11 +1152,14 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   select is no select in a table, `</select>` needs the select in scope, a furthest-block formatting element stays open, `a`, `nobr`,
   `button`, headings, `option` and `ruby` have no start-tag rules and `form` has no pointer (`</form>` pops only a current form), `colgroup`
   is read in the table mode, a closed `details` hides its summary too, and the scan variants hide a CDATA-wrapped HTML style a browser would show
-  as text. A template builds table parts for table-structure start tags until a start tag that is neither one of them nor an in-head name
-  (`base basefont bgsound link meta noframes script style template title`) makes it a body template for good (`Node.inbody`, `Node.builds`),
-  where they are ignored and push no cell marker, as in a browser (wave 21; routed to the table rules before, the template pop cleared that
-  marker and left its own, so a hidden formatting element opened before the template leaked:
-  `<p><i hidden></p><template><span><td></template>LEAK`). The cases the tree decides that the rule stack got wrong are the six Opus
+  as text. Each template carries its own insertion mode (`Node.tm`, `Node.builds`, `treewalk.FIRST`), set once by its first start tag that is not
+  an in-head name (`base basefont bgsound link meta noframes script style template title`) and never changed: `caption colgroup tbody tfoot thead`
+  give "table", `col` "colgroup", `tr` "tbody", `td th` "row", anything else "body". A table-structure tag its mode does not keep (`treewalk.KEEP`:
+  table keeps all of them, colgroup `col`, tbody `tr td th`, row `td th`, body none) is ignored and pushes no cell marker, `<table>` is ignored in
+  the table, tbody and row modes, and any other start tag in "colgroup" mode; a `<caption>` in a cell closes the cell and meets the same rule
+  (`intable`), as in a browser (waves 21 and 22; a table tag the mode ignores used to build a cell or caption whose marker took the template pop's
+  single clear and left the template's own, so a hidden formatting element opened before the template leaked:
+  `<p><i hidden></p><template><col><td></template>LEAK`). The cases the tree decides that the rule stack got wrong are the six Opus
   wave-7 worlds (BOM before the doctype, svg CDATA style, nearest-name end tag, `annotation-xml` encoding, self-closed integration
   points, frameset) and the older foster-parenting gap. In Markdown a `===`, `=` or `--` line with no paragraph open is paragraph text (the paragraph flag of
   `mdrules.scan` stays set); only a heading, a thematic break or a setext underline under an open paragraph ends it, and such a line inside

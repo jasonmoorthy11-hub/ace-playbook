@@ -187,10 +187,11 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   open stays open (over-hiding). FOSTER PARENTING is modelled: text and elements a table cannot hold (`<table hidden>X`, `<table><div>X`)
   are placed BEFORE the table, as a browser does, so what contains the table shows or hides them, not the table itself. The insertion
   modes (initial, before html, head, after head, body, text, table, caption, table body, row, cell, select, template, after body, after
-  after body) are derived from the stack; `colgroup` is read in the table mode, and a template routes its table tags to it and the rest
-  to the body (over-hiding). A `<table>` closes an open `<p>` only in standards mode, decided by the FIRST doctype alone: `<!DOCTYPE html>`
-  (optionally with `SYSTEM "about:legacy-compat"`) is standards; no doctype, a legacy (HTML 4, XHTML) one, or one after any tag or non-blank
-  text is quirks, where the table nests in the paragraph (fail closed: `<p hidden><table>X` keeps X hidden, also on a legacy-doctype page
+  after body) are derived from the stack; `colgroup` is read in the table mode, and each template carries its own mode (table, colgroup,
+  table body, row or body), set once by its first start tag that is not an in-head name, which decides the table-structure tags it builds
+  and the ones it ignores, as a browser does (`treewalk.KEEP`). A `<table>` closes an open `<p>` only in standards mode, decided by the FIRST
+  doctype alone: `<!DOCTYPE html>` (optionally with `SYSTEM "about:legacy-compat"`) is standards; no doctype, a legacy (HTML 4, XHTML) one, or one after
+  any tag or non-blank text is quirks, where the table nests in the paragraph (fail closed: `<p hidden><table>X` keeps X hidden, also on a legacy-doctype page
   that a browser reads in standards mode); a second doctype is ignored. `</template>` closes the template whatever lies in between (no
   scope check). A `<frameset>` that replaces the body shows nothing, and so does a `<template shadowrootmode=...>` whose host is `html`,
   `head` or the document; with another host it hides every child of that host, those before it too. Document-level hiding is modelled: an
@@ -249,8 +250,8 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   only over-hide). An unclosed `<style>` at the end of the page applies to the elements before it; the legacy `<!--` and `-->` tokens in
   a stylesheet are ignored as CSS does. Every `<style>` is parsed on its own, so an open block, string or comment never carries into the
   next sheet. Not modelled, and always on the side of hiding more: the start-tag rules of `a`, `nobr`, `button`, the headings, `option`,
-  `ruby` and `form` (they nest deeper; `</form>` pops only a current form) and the modes of `colgroup` and `template` beyond the routing
-  above.
+  `ruby` and `form` (they nest deeper; `</form>` pops only a current form) and the mode of `colgroup` beyond the routing above (the
+  template modes are modelled, not over-hidden: see the insertion modes above).
   The stylesheet is read in
   one linear pass over its braces (`cssscan.py`):
   braces, semicolons and comment openers inside a CSS
