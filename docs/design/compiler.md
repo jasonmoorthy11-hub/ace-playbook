@@ -1082,13 +1082,23 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   form, h1 to h6, header, hgroup, hr, main, menu, nav, ol, p, pre, search, section, summary, table, ul, xmp, li, dd, dt) pops an open `p`
   that is in button scope first, `li` pops an open `li` and `dd`/`dt` an open `dd`/`dt` (searching down through non-special elements and
   `address`, `div`, `p`), so the `</p>` of `<p>a<div hidden></p>X</div>` finds no `p` and pops nothing; each stack entry carries the
-  nearest such marks, so the check is O(1), and a hidden formatting element popped that way is re-opened. Document-level hiding is
+  nearest such marks, so the check is O(1), and a hidden formatting element popped that way is re-opened. Inside foreign content (`svg`,
+  `math`) nothing is implied: a sixth mark holds the first entry of the run of foreign elements that ends the stack, and only a breakout
+  start tag (the spec's list; `font` with `color`, `face` or `size`) pops that run, after which the rules above apply. The integration
+  points (`foreignObject`, `desc`, `title`, `mi`, `mo`, `mn`, `ms`, `mtext`, `annotation-xml`) end the run, are button-scope barriers,
+  stop the `li`/`dd` search and stop end tags in `end_ignored` as well. Document-level hiding is
   modelled: an `html` or `body` start tag, the first or a late one, that hides, or a `<style>` rule that hides `html`, `body` or `*`, makes
   the body empty; a `<template shadowrootmode=...>` hides every child of its host (those before it too), the whole document when it has
   no parent. The rules of `<style>` come from a first parser pass (`stylepass.style_text`): html.parser reads the page once with the same
   script rules as the second pass and collects the text of the REAL style elements, an unclosed one included, so a `<style` inside a
-  script string, comment, attribute, `<textarea>`, `<title>` or a custom element `<style-x>` hides no rule (it is skipped when the page
-  has no `<style`); `cssstyle.css_rules` then reads the braces in one linear pass. The text and tails inside
+  script string, comment, attribute, `<textarea>`, `<title>` or a custom element `<style-x>` hides no rule in this pass (it is skipped when
+  the page has no `<style`). `stylepass.style_rules` unions those rules with the ones of a plain linear scan for `<style ... </style`
+  (`scan_text`, fake openers included, so it can only add rules), because html.parser and a browser tokenize some pages differently (a
+  CDATA section, a bogus comment); `cssstyle.css_rules` reads the braces in one linear pass. Comments end where a browser ends them
+  (`<!-->`, `<!--->`, `-->`, `--!>`) on every patch release: `htmlrules.ScriptedParser.parse_comment` overrides the stdlib's (which pairs
+  an abrupt `<!-->` with a later `-->`) for both passes; the page is not rewritten, because `--!>` ends nothing in script data, an
+  attribute value or RCDATA. In Markdown a `===`, `=` or `--` line with no paragraph open is paragraph text (the paragraph flag of
+  `mdrules.scan` stays set); only a heading, a thematic break or a setext underline under an open paragraph ends it. The text and tails inside
   a child element of an XHTML feed field are HTML-escaped before the sanitizer sees them (only the field's own text stays raw), so an
   escaped closer there cannot close a hidden ancestor. The npm `latest` must be an ASCII version (`[0-9]+.[0-9]+.[0-9]+` with an optional
   `-` or `+` suffix of at most 40 `[0-9A-Za-z.-]`), else the fetch is a `parse` drop.

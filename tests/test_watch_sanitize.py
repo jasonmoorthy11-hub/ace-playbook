@@ -690,3 +690,138 @@ def test_a_stylesheet_is_scanned_in_linear_time_whatever_its_closed_or_unclosed_
     ("@a{@b{.h{display:none}}} .h2{x:y}", False), ("<!-- .h{display:none} -->", True), ("x;.h{display:none}", False)])
 def test_stylesheet_rules_read_in_one_pass_match_the_old_rule_reader(css, hidden):
     assert ("h" in cssstyle.css_rules(css)[0]) is hidden, css
+
+
+# ------------------------------------------------------------------ wave 7: foreign-content barriers, browser comment terminators, setext-aware paragraphs
+FOREIGN_HIDDEN = {                                           # the browser keeps LEAK inside the hidden element (no implied end tag in foreign content)
+    "svg-section": "<p hidden><svg><section></section>LEAK", "svg-nav": "<p hidden><svg><nav>x</nav>LEAK", "svg-form": "<p hidden><svg><g><form></form>LEAK",
+    "math-details": "<p hidden><math><mrow><details></details>LEAK", "math-header": "<p hidden><math><mrow></mrow><header></header>LEAK",
+    "svg-font-no-attr": "<p hidden><svg><font><section>x</section>LEAK", "svg-foreignobject-div": "<p hidden><svg><foreignObject><div></p>LEAK",
+    "math-mi-div": "<p hidden><math><mi><div></p>LEAK", "foreignobject-p-div": "<div hidden><svg><foreignObject><p>x<div></p>LEAK",
+    "foreignobject-end-div": "<div hidden><svg><foreignObject></div>LEAK", "desc-end-div": "<div hidden><svg><desc></div>LEAK",
+    "mi-end-div": "<div hidden><math><mi></div>LEAK", "annotation-xml": '<p hidden><math><annotation-xml encoding="text/html"><p>y</p>LEAK',
+    "nested-svg": "<p hidden><svg><foreignObject><svg><div></p>LEAK", "dd-in-foreignobject": "<dl><dd hidden><svg><foreignObject><dd>y</dd>LEAK",
+    "li-in-mi": "<ul><li hidden><math><mi><li>y</li>LEAK", "p-in-desc": "<p hidden><svg><desc><p>y</p>LEAK",
+}
+FOREIGN_SHOWN = {                                            # a breakout tag pops the foreign elements, then the normal rules close the hidden p / li
+    "<p hidden><svg><div></p>LEAK": "LEAK", "<p hidden><math><mi>x</mi><div></p>LEAK": "LEAK", "<p hidden><svg><rect/></svg><div></p>LEAK": "LEAK",
+    "<p hidden><svg><g></g></svg><section>x</section>LEAK": "x\nLEAK", "<p hidden><svg><font size=3><section>x</section>LEAK": "x\nLEAK",
+    "<p hidden><svg><font color=red><nav>x</nav>LEAK": "x\nLEAK", "<p hidden><svg><span></span><nav>x</nav>LEAK": "x\nLEAK",
+    "<ul><li hidden><svg><li>LEAK": "LEAK", "<p hidden><svg><g><p>x</p>LEAK": "x\nLEAK", "<p hidden><math><mrow><table></table>LEAK": "LEAK",
+    "<p hidden><svg><foreignObject>q</foreignObject></svg><div>LEAK": "LEAK", "<p hidden><svg/><div>LEAK": "LEAK",
+}
+
+
+@pytest.mark.parametrize("name", sorted(FOREIGN_HIDDEN))
+@pytest.mark.parametrize("markdown", [False, True])
+def test_no_implied_end_tag_happens_inside_foreign_content_or_past_its_integration_points(name, markdown):
+    assert "LEAK" not in strip_hidden(FOREIGN_HIDDEN[name], markdown=markdown), name
+    assert "LEAK" not in body_of(FOREIGN_HIDDEN[name]), name
+    assert "LEAK" not in md_body(FOREIGN_HIDDEN[name], "text/markdown"), name
+
+
+@pytest.mark.parametrize("html", sorted(FOREIGN_SHOWN))
+def test_a_breakout_tag_ends_the_foreign_content_and_then_the_normal_implied_rules_apply(html):
+    assert strip_hidden(html) == FOREIGN_SHOWN[html], html
+    assert body_of(html) == FOREIGN_SHOWN[html], html
+
+
+@pytest.fixture
+def old_comment_parser(monkeypatch):
+    """html.parser of an older 3.12 patch release: `<!-->`, `<!--->` and `--!>` do not end a comment (only `--\\s*>` does)."""
+    import _markupbase
+    from html.parser import HTMLParser
+    monkeypatch.setattr(HTMLParser, "parse_comment", _markupbase.ParserBase.parse_comment)
+
+
+COMMENT_ENDS = {"abrupt": "<!-->", "abrupt-dash": "<!--->", "bang": "<!-- x --!>", "bang-empty": "<!----!>", "bang-dashes": "<!-- x --!-->"}
+STYLED = "<style>.h{display:none}</style><p class=h>LEAK</p><p>OK</p><!-- later -->"           # the stdlib pairs an abrupt `<!-->` with a LATER `-->`
+
+
+@pytest.mark.parametrize("name", sorted(COMMENT_ENDS))
+@pytest.mark.parametrize("markdown", [False, True])
+def test_a_comment_ends_where_a_browser_ends_it_so_the_style_after_it_is_found(name, markdown, old_comment_parser):
+    html = f"{COMMENT_ENDS[name]} {STYLED}"
+    assert strip_hidden(html, markdown=markdown) == "OK", name
+    assert body_of(html) == "OK", name
+    assert md_body(html, "text/markdown") == "OK", name
+    assert sanitize.style_text(html) == ".h{display:none}", name
+
+
+@pytest.mark.parametrize("name", sorted(COMMENT_ENDS))
+def test_the_comment_terminators_hold_on_this_interpreter_too(name):
+    html = f"{COMMENT_ENDS[name]} {STYLED}"
+    assert strip_hidden(html) == "OK" and sanitize.style_text(html) == ".h{display:none}", name
+
+
+@pytest.mark.parametrize("html,shown", [("<!-->VIS<!-- -->", "VIS"), ("<!--->VIS<!-- -->", "VIS"), ("<!----!>VIS<!-- -->", "VIS"),
+                                        ("<!-- a --!>VIS<!-- -->", "VIS"), ("<!--x-->VIS<!-- -->", "VIS"), ("<!-- -- >VIS<!-- -->", "")])
+def test_an_abrupt_comment_end_is_not_paired_with_a_later_terminator(html, shown):
+    assert strip_hidden(html) == shown and body_of(html) == shown, html
+
+
+def test_a_comment_still_swallows_what_a_browser_swallows(old_comment_parser):
+    assert strip_hidden("a<!-- x --> b<!-- y --!> c") == "a b c"
+    assert strip_hidden("a<!-- <style>.h{display:none}</style> -->b<p class=h>LEAK</p>") == "ab"          # over-hiding: the regex scan reads it too
+    assert strip_hidden("<!-- <p>no</p> -- > <p>still in the comment</p> --><p>OK</p>") == "OK"
+
+
+def style_rules(src: str) -> tuple:
+    from ace_playbook.compile.watch import stylepass
+    return stylepass.style_rules(src)
+
+
+NO_RULES = (frozenset(), frozenset(), frozenset())
+
+
+def test_a_style_the_tokenizer_misses_is_found_by_the_regex_scan_and_applies():
+    page = "<![CDATA[ x > <style>.h{display:none}</style> ]]><p class=h>LEAK</p><p>OK</p>"             # a browser: a bogus comment ends at the first `>`
+    assert sanitize.style_text(page) == ""                                                            # the tokenizer reads a marked section to `]]>`
+    for text in (strip_hidden(page), body_of(page), md_body(page, "text/markdown")):
+        assert "LEAK" not in text and "OK" in text
+    assert "h" in style_rules(page)[0] and style_rules("<p>ok</p>") == NO_RULES
+
+
+def test_the_union_keeps_the_wave_6_cases_and_the_tokenizer_text():
+    assert sanitize.style_text('<script>x="<style>"</script><style>.h{display:none}</style>') == ".h{display:none}"
+    assert "h" in style_rules('<script>x="<style>"</script><style>.h{display:none}</style>')[0]
+    assert style_rules("<style-x>.h{display:none}</style-x>") == NO_RULES
+    assert style_rules("<style>.a{display:none}</style><p><style>.b{display:none}")[0] == {"a", "b"}
+    assert style_rules("<STYLE >.a{display:none}</STYLE ><style/>.b{display:none}</style/>")[0] == {"a", "b"}
+    assert style_rules("<style>.a{display:none}")[0] == {"a"} and style_rules("<style .a{display:none}")[0] == frozenset()
+
+
+def test_the_regex_style_scan_is_linear_too():
+    for page in ("<style>" * 150000, "<style " * 150000, "<style>x</style>" * 65000, "<style>}" + "</style><style>}" * 60000,
+                 "<![CDATA[>" + "<style>a</style>" * 60000):
+        timed(page, markdown=False)
+
+
+DEF_WITH_TAG = '[x]: /u "<div hidden>"\nLEAK\n'
+
+
+@pytest.mark.parametrize("marker", ["===", "=", "--", "=========="])
+def test_a_marker_line_with_no_paragraph_above_is_text_so_a_definition_after_it_is_not_one(marker):
+    from ace_playbook.compile.watch import mdrules
+    text = f"{marker}\n{DEF_WITH_TAG}"
+    assert "LEAK" not in strip_hidden(text, markdown=True), marker
+    for ctype in ("text/markdown", "text/plain", "text/html"):
+        assert "LEAK" not in md_body(text, ctype), (marker, ctype)
+    assert mdrules.scan(text)[1] == [], marker
+
+
+@pytest.mark.parametrize("above", ["---", "***", "- - -", "# head", "para\n===", "para\n---", "para\n=", "para\n-", "para\n--", "para\n\n"])
+def test_a_thematic_break_a_heading_or_a_real_setext_underline_ends_the_paragraph_so_the_definition_is_dropped(above):
+    from ace_playbook.compile.watch import mdrules
+    text = f"{above}\n{DEF_WITH_TAG}"
+    assert strip_hidden(text, markdown=True).endswith("LEAK"), above
+    for ctype in ("text/markdown", "text/plain"):
+        assert md_body(text, ctype).endswith("LEAK"), (above, ctype)
+    assert len(mdrules.scan(text)[1]) == 1, above
+
+
+def test_a_marker_line_after_a_blank_line_or_another_marker_line_is_paragraph_text():
+    from ace_playbook.compile.watch import mdrules
+    assert mdrules.scan('para\n\n===\n[x]: /u "t"\n')[1] == []
+    assert mdrules.scan('para\n===\n===\n[x]: /u "t"\n')[1] == []                    # the second `===` has no paragraph above it: text
+    assert mdrules.scan('para\n---\n---\n[x]: /u "t"\n')[1] != []                    # the second is a thematic break

@@ -24,7 +24,10 @@ newline inside, or a run of non-space characters with no `<` and balanced parent
 `'...'` or `(...)` of at most three lines and no blank line, and nothing else on the last line. The destination and the title may
 follow on the next line; any line after the first that a paragraph could not continue (a quote, a heading, a fence, a list item, a
 thematic break, a `<` at all) makes it no definition. A definition cannot start inside a paragraph, so the line after paragraph text
-stays. Whatever fails the rule is not dropped and keeps its HTML meaning: `[x]: /u <script>` hides to the closer, as a renderer
+stays. That paragraph is tracked as a renderer does: a heading, a thematic break (`---`, `***`) or a setext underline that has a paragraph
+above it ends it, but a `===`, `=` or `--` line with NO paragraph open is itself paragraph text and a definition after it is not one
+(fail closed: its tags keep their HTML meaning).
+Whatever fails the rule is not dropped and keeps its HTML meaning: `[x]: /u <script>` hides to the closer, as a renderer
 passes the tag through. Never "a definition and whatever goes on with it": a definition is at most a label, a destination and a
 title, each strictly valid.
 
@@ -60,7 +63,8 @@ TITLE = "|".join(_quoted(o, c) for o, c in (('"', '"'), ("'", "'"), ("(", ")")))
 DEFINITION = re.compile(rf" {{0,3}}\[(?![ \t]*\])(?:[^\[\]\\\n]|\\[^\n]){{1,999}}\]:[ \t]*(?:\r?\n[ \t]*)?{DESTINATION}"
                         rf"(?:(?:[ \t]+|[ \t]*\r?\n[ \t]*)(?:{TITLE}))?[ \t]*(?:\r?\n|\Z)")
 INTERRUPT = re.compile(r" {0,3}(?:<|>|#{1,6}(?:[ \t\r]|$)|`{3}|~{3}|[-*+_](?:[ \t\r]|$)|\d{1,9}[.)](?:[ \t\r]|$)|[-*_=]{2,}[ \t\r]*$)")
-ENDS_PARAGRAPH = re.compile(r" {0,3}(?:#{1,6}(?:[ \t\r]|$)|([-*_])(?:[ \t]*\1){2,}[ \t\r]*$|[=-]+[ \t\r]*$)")
+ENDS_PARAGRAPH = re.compile(r" {0,3}(?:#{1,6}(?:[ \t\r]|$)|([-*_])(?:[ \t]*\1){2,}[ \t\r]*$)")        # an ATX heading or a thematic break, whatever is above
+SETEXT = re.compile(r" {0,3}[=-]+[ \t\r]*$")                      # an underline ends a paragraph ONLY when one is open; else it is text (`===`, `--`)
 
 
 def _definition(text: str, start: int) -> int:
@@ -140,7 +144,7 @@ def scan(text: str) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
             para = False
         else:
             ranges.extend(_spans(line, start))
-            para = bool(line.strip()) and not ENDS_PARAGRAPH.match(line)
+            para = bool(line.strip()) and not ENDS_PARAGRAPH.match(line) and not (para and SETEXT.match(line))
     return ranges, drops
 
 

@@ -23,7 +23,10 @@ with no closer after it (`mdrules`); anywhere else the rules above apply as in H
 end of the input). Link reference definitions (`[x]: url "title"`) are not rendered: with `markdown` the strictly valid ones are dropped
 from the source (`mdrules`); `definitions=True` on an HTML page (`fetch` sets it for a Markdown source served as HTML) drops them from the
 VISIBLE text only, never from the raw markup. The rules of `<style>` come from a first parser pass over the real style elements
-(`stylepass.style_text`), the visible text from a second. The result is plain text, one non-empty line per block.
+(`stylepass.style_text`) UNIONED with a plain scan for `<style ... </style` (`stylepass.style_rules`: over-hiding, for pages that
+html.parser and a browser tokenize differently), the visible text from a second parser pass. A comment ends where a browser ends it
+(`<!-->`, `<!--->`, `-->`, `--!>`: `htmlrules.ScriptedParser`). Inside `<svg>` and `<math>` no implied end tag happens, except after a
+breakout tag (`treerules`). The result is plain text, one non-empty line per block.
 Stdlib only.
 """
 
@@ -32,10 +35,10 @@ from __future__ import annotations
 import re
 
 from .chars import control, invisible
-from .cssstyle import css_rules, style_hidden  # noqa: F401 - style_hidden is part of this module's surface
+from .cssstyle import style_hidden  # noqa: F401 - style_hidden is part of this module's surface
 from .htmlrules import BLOCK, FORMATTING, MAX_DEPTH, SKIP, VOID, ScriptedParser, ScriptState, TooDeep, end_ignored
 from .mdrules import drop_definitions, markdown_code_as_text
-from .stylepass import style_text  # noqa: F401 - style_text is part of this module's surface
+from .stylepass import style_rules, style_text  # noqa: F401 - style_text is part of this module's surface
 from .treerules import implied, marks
 
 SPACES = re.compile(r"[ \t\r\f\v\xa0]+")
@@ -85,7 +88,7 @@ class _Text(ScriptedParser):
                     or tag in self.tags or values.get("id", "").lower() in self.ids or self.classes & set(values.get("class", "").lower().split()))
 
     def handle_starttag(self, tag, attrs) -> None:
-        while not self.open.get("select") and (i := implied(self.stack[-1][4] if self.stack else None, tag)) is not None:
+        while not self.open.get("select") and (i := implied(self.stack[-1][4] if self.stack else None, tag, attrs)) is not None:
             self._pop(i)                                            # a select drops start tags: nothing is implied inside one
         own = self._own(tag, attrs)
         hid = self._hidden() or own
@@ -124,7 +127,7 @@ def strip_hidden(html: str, markdown: bool = False, definitions: bool | None = N
     defs = markdown if definitions is None else definitions
     src = markdown_code_as_text(html, markdown, markdown and defs)
     try:
-        rules = css_rules(style_text(src))
+        rules = style_rules(src)
         if ROOT_HIDING & rules[2]:
             return ""
         parser = _Text(rules)

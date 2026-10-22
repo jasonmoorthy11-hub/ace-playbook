@@ -7,13 +7,15 @@ a hidden element is involved the same rules apply and anything doubtful keeps th
   it. A block-level end tag (`</div>`, ...) is stopped by a scope barrier (`table td th caption object marquee applet template`); `</p>` also
   by `button`, `</li>` also by `ol` and `ul`; a table end tag by a nested `table` or `template`; every other end tag (`</span>`, `</b>`, ...)
   by any "special" element in between. An open `select` stops every end tag but its own (the in-select insertion mode drops them).
+  `INTEGRATION` (`foreignObject`, `desc`, `title`, `mi`, `mo`, `mn`, `ms`, `mtext`, `annotation-xml`) are scope barriers too.
 * `SKIP` holds the elements whose content a browser does not render as text, `select` (all its option text), `progress` and `meter`
   (fallback text) among them.
 * `ScriptState`: html.parser has no "script data double escaped" state, so `<script><!--<script></script>X</script>` would show X.
   The state machine of the HTML tokenizer is run over the script text instead: a `</script` seen in the double-escaped state does not
   close the element.
 * `ScriptedParser`: the html.parser subclass that both passes of `sanitize` (the style text of `stylepass`, the visible text) share, so
-  they tokenize alike: a slash on `<script/>` or `<style/>` is ignored and a double-escaped script keeps its next `</script` as text.
+  they tokenize alike: a slash on `<script/>` or `<style/>` is ignored, a double-escaped script keeps its next `</script` as text and a
+  comment ends at `<!-->`, `<!--->`, `-->` or `--!>`.
 * `MAX_DEPTH`: the open-element stack is capped; a document nested deeper is a parse failure (`TooDeep`), not a quadratic scan.
 """
 
@@ -29,7 +31,8 @@ SKIP = frozenset(("script style template noscript dialog svg math iframe object 
 FORMATTING = frozenset("a b big code em font i nobr s small strike strong tt u".split())
 BLOCK = frozenset("address article aside blockquote dd div dl dt fieldset figcaption figure footer form h1 h2 h3 h4 h5 h6 header "
                   "li main nav ol p pre section table tbody td tfoot th thead tr ul".split())
-BARRIERS = frozenset("applet caption html marquee object table td template th".split())
+INTEGRATION = frozenset("foreignobject desc title mi mo mn ms mtext annotation-xml".split())                  # foreign scope markers (see `treerules`)
+BARRIERS = frozenset("applet caption html marquee object table td template th".split()) | INTEGRATION
 TABLES = frozenset("table tbody tfoot thead tr td th caption colgroup".split())
 SPECIAL = frozenset(("address applet area article aside base basefont bgsound blockquote body br button caption center col colgroup dd "
                      "details dialog dir div dl dt embed fieldset figcaption figure footer form frame frameset h1 h2 h3 h4 h5 h6 head header "
@@ -37,6 +40,7 @@ SPECIAL = frozenset(("address applet area article aside base basefont bgsound bl
                      "p param plaintext pre script search section select source style summary table tbody td template textarea tfoot th "
                      "thead title tr track ul wbr xmp mi mo mn ms mtext foreignobject desc").split())
 EXTRA = {"p": frozenset(("button",)), "li": frozenset(("ol", "ul"))}                      # per-tag scope barriers beyond BARRIERS
+COMMENT_ABRUPT, COMMENT_END = re.compile(r"-?>"), re.compile(r"--!?>")
 SCRIPT_MARKS = re.compile(r"<!--->|<!-->|<!--|-->|<script(?=[\t\n\f\r />])|</script(?=[\t\n\f\r />])", re.I | re.A)
 
 
@@ -93,6 +97,21 @@ class ScriptedParser(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.script: ScriptState | None = None                    # the script-data state of the open <script>
         self.again = False                                        # a `</script` inside a double-escaped script: stay in script mode
+
+    def parse_comment(self, i, report=1):
+        """A comment ends where a browser ends it (`<!-->`, `<!--->`, `-->`, `--!>`) whatever the patch release of html.parser: older ones
+        read `<!-->` and `--!>` as comment text, so a `<style>` behind them was never found. Done here, not by rewriting the page, because
+        `--!>` is no terminator in script data, an attribute or RCDATA."""
+        raw = self.rawdata
+        if raw[i:i + 4] != "<!--":
+            raise AssertionError("unexpected call to parse_comment()")
+        m = COMMENT_ABRUPT.match(raw, i + 4)
+        end = m or COMMENT_END.search(raw, i + 4)
+        if not end:
+            return -1
+        if report:
+            self.handle_comment("" if m else raw[i + 4:end.start()])
+        return end.end()
 
     def handle_startendtag(self, tag, attrs) -> None:
         self.handle_starttag(tag, attrs)                            # a browser ignores the slash on a non-void element

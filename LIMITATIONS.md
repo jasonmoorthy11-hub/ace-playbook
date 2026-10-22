@@ -187,10 +187,23 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   selectors are NOT read. A `<template shadowrootmode=...>` hides every child of its host element, those before it too. A `<select>`
   hides ALL its option text (a browser shows the selected one), as do `<progress>` and `<meter>` fallbacks: over-hiding. Scope barriers:
   `</p>` is stopped by `button`, `</li>` by `ol` and `ul`, every end tag but `</select>` by an open `select` (no implied close happens
-  inside one either). The rules of `<style>` come from a first parser pass over the REAL style elements (html.parser with the same script
-  rules as the second pass), so a `<style` inside a script string, comment, attribute, `<textarea>`, `<title>` or a custom element
-  `<style-x>` hides no rule, and an unclosed `<style>` at the end of the page applies to the elements before it; the legacy `<!--` and
-  `-->` tokens in a stylesheet are ignored as CSS does. The stylesheet is read in one linear pass over its braces (blocks nested more
+  inside one either). Inside foreign content (`<svg>`, `<math>`) NO implied end tag happens: a start tag there is not processed by the HTML
+  rules, so `<p hidden><svg><section></section>X` keeps X hidden. Only a breakout tag (`b big blockquote body br center code dd div dl dt em
+  embed h1`..`h6 head hr i img li listing menu meta nobr ol p pre ruby s small span strong strike sub sup table tt u ul var`, and `font`
+  with `color`, `face` or `size`) pops the foreign elements first, up to the nearest HTML element or integration point, and then the
+  normal rules close the `<p>`/`<li>`. `foreignObject`, `desc`, `title`, `mi`, `mo`, `mn`, `ms`, `mtext` and `annotation-xml` (integration
+  points, taken in either namespace, `annotation-xml` always) hold HTML again but are scope barriers: nothing implied, and no end tag,
+  reaches past them (`<div hidden><svg><foreignObject></div>X` keeps X hidden). A self-closed `<svg/>` stays open here (over-hiding).
+  The tokenizer is html.parser's, not a browser's inside foreign content (`<style>`, `<script>`, `<title>` and CDATA sections of an
+  svg are read as in HTML: over-hiding at worst). A comment ends where a browser ends it, on every patch release of html.parser
+  (`<!-->`, `<!--->`, `-->`, `--!>`; the stdlib pairs an abrupt `<!-->` with a LATER `-->` and older releases ignore `--!>`):
+  `htmlrules.ScriptedParser.parse_comment`, so a `<style>` behind such a comment is found. The rules of `<style>` come from a first
+  parser pass over the REAL style elements (html.parser with the same script rules as the second pass) UNIONED with a plain scan for
+  `<style ... </style` (a rule found by either applies), so a page that html.parser and a browser tokenize differently (a CDATA section
+  or a bogus comment that ends at the first `>`) cannot hide a style. The scan reads fake `<style`s too (inside a script string,
+  comment, attribute, `<textarea>`, `<title>`): their simple hiding rules apply as well, which only hides MORE (a CSS sample in a
+  comment can hide the elements it names). An unclosed `<style>` at the end of the page applies to the elements before it; the legacy
+  `<!--` and `-->` tokens in a stylesheet are ignored as CSS does. The stylesheet is read in one linear pass over its braces (blocks nested more
   than 512 deep are skipped; the rules inside a closed at-rule are not read, as before). The first pass depends on html.parser reading
   `<textarea>` and `<title>` as RCDATA (Python 3.12.15 and later patch releases; an older 3.12 reads a `<style` in them as a tag, which
   can only add a spurious rule). A double-escaped script closes only at a `</script` followed by an HTML space, `/` or `>`.
@@ -213,7 +226,10 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   balanced parentheses), an optional title fully quoted (`"..."`, `'...'` or `(...)`) over at most three lines with no blank line, and
   nothing else on the last line; the destination and the title may be on the next lines, unless such a line starts a quote, heading,
   fence, list item, thematic break or contains a `<` at its start. A definition line right after paragraph text is not a definition (a
-  renderer shows it) and stays. Whatever fails the rule is left alone and read as HTML (`[x]: /u <script>` hides to its closer; so does
+  renderer shows it) and stays. A heading, a thematic break (`---`) or a setext underline under paragraph text ends the paragraph, but a
+  `===`, `=` or `--` line with NO paragraph open is itself paragraph text, so a definition after it stays too (its tags keep their HTML
+  meaning; a lone `-` is also read as text: over-hiding).
+  Whatever fails the rule is left alone and read as HTML (`[x]: /u <script>` hides to its closer; so does
   `[x]:` followed by a `<!--` or `<div hidden>` line), so a definition never swallows the lines after it. A definition with a label over
   more than one line, a title over more than three, or parentheses nested twice in the destination stays visible (a renderer hides it).
   A `md` source served as `text/html` loses its definition lines from the VISIBLE text only, after the markup is gone. A footnote
