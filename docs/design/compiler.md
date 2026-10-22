@@ -1120,7 +1120,10 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   in a table (a table, not a template, is the nearest below it: the tag is read again) and are ignored otherwise, as in body, so no cell marker is
   pushed outside the table modes. The table tags end the select past anything it holds, a hidden option or a foreign element too
   (`<table><tr><td><select><b hidden><td>VIS` shows VIS); an `applet`, `marquee` or `object` above the select makes that tag poison the rest
-  (`…<marquee><td>VIS`: nothing shows, a browser shows VIS: over-hide, the two readings' cell clears differ), and a table opened inside a
+  (`…<marquee><td>VIS`: nothing shows, a browser shows VIS: over-hide, the two readings' cell clears differ). `col` and `colgroup` split the
+  readings (the older "in select in table" step names neither and ignores them, the newer closes the cell) and hide the rest
+  (`<table><tr><td><select><col></td>VIS` shows nothing, Chrome shows VIS: over-hide, kept on purpose; `<table><tr><td><select><col>LEAK</table>`
+  shows LEAK in Chrome and is hidden here). A table opened inside a
   select is no select in a table (`<select><table><td
   hidden>x</td></table></select>VIS`: over-hide). `template_end` poisons the
   rest of the page when its pop closes a select, or a select nested in it, that `reach` rejects (the whole region above the first select over the
@@ -1155,7 +1158,8 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   Kept over-hides, each on purpose: a nested `select` stays open, a raw text a select holds with a `<` hides the rest of the page, the
   `input`, `keygen` and `textarea` enders are gated by `reach` (a table tag is not), a `</template>` that closes a select holding a barrier hides the
   rest of the page, a table opened inside a
-  select is no select in a table, `</select>` needs the select in scope, a furthest-block formatting element stays open, `a`, `nobr`,
+  select is no select in a table, `col` and `colgroup` in a select in a table hide the rest, `</select>` needs the select in scope, a
+  furthest-block formatting element stays open, `a`, `nobr`,
   `button`, headings, `option` and `ruby` have no start-tag rules and `form` has no pointer (`</form>` pops only a current form), `colgroup`
   is read in the table mode, a closed `details` hides its summary too, and the scan variants hide a CDATA-wrapped HTML style a browser would show
   as text. Each template carries its own insertion mode (`Node.tm`, `Node.builds`, `treewalk.FIRST`), set once by its first start tag that is not

@@ -612,3 +612,22 @@ def test_w26_kept_hidden_applet_marquee_or_object_above_the_select_poisons_the_r
     # only the newer reading inserts them, and each pushes a marker the older never has, so the close-the-cell clear differs: the rest hides (Chrome 152
     # shows LEAK for the marquee world: documented over-hide, as in wave 10 and 25)
     hides(html)
+
+
+# ------------------------------------------------------------------ wave 27 (Opus wave-17): col and colgroup split the two readings on a select in a table
+@pytest.mark.parametrize("html", [
+    "<table><tr><td><select><col>LEAK</table>", "<table><tr><td><select><colgroup>LEAK</table>",
+    "<table><caption><select><col>LEAK</table>", "<table><select><col>LEAK</table>"])
+def test_w27_a_col_or_colgroup_start_tag_in_a_select_in_a_table_hides_the_rest_because_the_two_readings_disagree(html):
+    # Chrome 152 (DOMParser) shows LEAK for all four (the cell closes, a colgroup opens, the text is foster-parented). The older "in select in table"
+    # step names no col or colgroup, so the select stays open and LEAK is its text: hidden. The readings split, so D-128 hides (over-hide, kept)
+    hides(html)
+
+
+def test_w27_controls_the_template_world_stays_hidden_and_the_new_over_hide_is_pinned():
+    # Chrome 152: '' for the template world (the cell clear hides it under both readings); "VIS" for the col world, which we hide on purpose (D-128)
+    hides("<p><i hidden></p><template><td><select><col></template>LEAK", "<table><tr><td><select><col></td>VIS</table>")
+
+
+def test_w27_control_without_a_col_the_cells_end_tag_ends_the_select_under_both_readings_so_the_text_shows():
+    shows_md("<table><tr><td><select></td>LEAK</table>", "LEAK")                      # Chrome 152: "LEAK" (foster-parented out of the table)

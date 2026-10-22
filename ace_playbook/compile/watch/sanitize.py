@@ -22,7 +22,8 @@ script closes at its next-but-one `</script`. Over-hides kept on purpose (`treem
 (it ends a select in a table), a nested `<select>` stays open, raw text a select holds that has a `<` hides the REST of the page, a `</template>` that closes
 a select holding a barrier hides the REST too, the adoption agency leaves an element with a furthest block open, an `applet`, `marquee` or `object`
 above a select makes a table tag that ends it poison the rest (after a template-closed select the next cell tag hides the rest), a table in a
-select is no select in a table, `</select>` needs scope. More than
+select is no select in a table, a `col` or `colgroup` in a select in a table hides the rest (the older reading ignores it, the newer closes the
+cell), `</select>` needs scope. More than
 `htmlrules.MAX_DEPTH` open elements raise `htmlrules.TooDeep` (a ValueError: a parse failure). Tag names are compared as written
 (`</x:div>` does not close `<div>`). `markdown=True` is for Markdown pages: a raw-text or content-hiding opener (`mdrules.RAW_TEXT`) is prose only in a
 code span that opens and closes on one plain line, or in a fenced block, outside HTML blocks and with no closer after it (`mdrules`); anywhere else the

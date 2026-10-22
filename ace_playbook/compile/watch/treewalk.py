@@ -72,10 +72,11 @@ class Node:
         """This open select is ended by `input` `keygen` `textarea` `select` (`reach` passed), a table start tag (`STRUCT`) or a table end tag (caption
         table tbody tfoot thead tr td th) that is in table scope while the select is in a table, past anything it holds; else the end tag is ignored. Pop
         it, reset the mode, read the token again (not `<select>`). A table tag of a select that `via_template` flagged (`tq`), or past an applet, marquee
-        or object (only the newer reading inserts them, each with a marker: the cell clears differ), poisons the rest."""
+        or object (only the newer reading inserts them, each with a marker: the cell clears differ), poisons the rest, as does `col` or `colgroup` (the older
+        step names neither and ignores them, the newer closes the cell: the readings split)."""
         if k == "e" and not (select_in_table(t) and t.in_scope(n, 3)): return
         up = any(e.ns == 0 and e.name in ("applet", "marquee", "object") for e in t.stack[t.idx["select"][-1] + 1:])
-        t.poisoned |= (k == "e" or n in STRUCT) and (self.tq or up)
+        t.poisoned |= ((k == "e" or n in STRUCT) and (self.tq or up)) or (k == "s" and n in ("col", "colgroup"))
         t.popto(t.idx["select"][-1]); t.reset_mode()
         n != "select" and t.process(k, n, a, sc)
 

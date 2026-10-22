@@ -1,9 +1,9 @@
-"""The insertion modes of the sanitizer's tree builder (HTML Standard) as functions `mode(t, k, n, a, sc)`: `t` the `Tree`, `k` the kind ("c" characters, "s"
-start tag, "e" end tag, "d" doctype), `n` its name (the data of "c"), `a` its attributes, `sc` self-closing. Stdlib only. Simpler than a browser, towards
-hiding MORE: no start-tag rules for `a`, `nobr`, `button`, headings, `option`, `form`, `ruby`, an open select (end tags ignored but its own and a table end tag
-in table scope, which ends a select in a table; nested selects stay open, a raw text `<` hides the rest, a `</template>` that closes a select holding a barrier
-hides it too, applet, marquee, object above it: its ending table tag hides the rest, a table in it is no select in a table, a cell tag after a template-closed
-select hides the rest, `</select>` needs scope), `Tree.adopt`. One function for the table modes (by `Tree.reset_mode`); a template keeps its own (`Node.tm`)."""
+"""The insertion modes of the sanitizer's tree builder as functions `mode(t, k, n, a, sc)`: `t` the `Tree`, `k` the kind ("c" characters, "s" start tag, "e" end
+tag, "d" doctype), `n` its name (the data of "c"), `a` its attributes, `sc` self-closing. Stdlib only. Simpler than a browser, hiding MORE: no start-tag rules
+for `a`, `nobr`, `button`, headings, `option`, `form`, `ruby`, an open select (end tags ignored but its own and a table end tag in table scope, ending a select
+in a table; nested selects stay open, a raw text `<` hides the rest, a `</template>` that closes a select holding a barrier hides it too, applet, marquee,
+object above it: its table tag hides the rest, a table in it is no select in a table, `col`/`colgroup` hide the rest, a cell tag after a template-closed select
+hides the rest, `</select>` needs scope), `Tree.adopt`. One function for the table modes (by `Tree.reset_mode`); a template keeps its own (`Node.tm`)."""
 
 from __future__ import annotations
 

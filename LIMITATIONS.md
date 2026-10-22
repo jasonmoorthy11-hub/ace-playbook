@@ -242,7 +242,9 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   still shows it, as `</select>` resets to the template mode first). A table-structure tag
   (start or end, the end tag in table scope) closes it past anything it holds (`<table><tr><td><select><b hidden><td>VIS` shows VIS); only an
   `applet`, `marquee` or `object` above the select makes that tag poison the rest, as only the newer reading inserts them, each with a marker, so
-  `…<marquee><td>VIS` shows nothing although a browser shows VIS (over-hide); a table opened inside a select is no select in a table, so
+  `…<marquee><td>VIS` shows nothing although a browser shows VIS (over-hide); `col` and `colgroup` in a select in a table split the
+  readings (the older step ignores them, the newer closes the cell) and hide the rest (`<table><tr><td><select><col></td>VIS` shows
+  nothing, Chrome shows VIS: over-hide, kept on purpose); a table opened inside a select is no select in a table, so
   `<select><table><td hidden>x</td></table></select>VIS` shows nothing (over-hide). A `</template>` that closes a select, or a select nested in it,
   holding a scope marker, a table, a foreign or a hiding element hides the rest of the page, because the two readings' formatting lists differ from
   there on: `<template><i hidden><select><table><tr></template>VIS` shows nothing although a browser shows VIS (over-hide; so does
