@@ -86,10 +86,14 @@ def fetch(url: str, *, expect: tuple[str, ...], store: dict, timeout: float = 20
             ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
             if ctype not in expect:
                 return _drop(url, "content-type " + (re.sub(r"[^\w/+.-]", "", ctype)[:60] or "missing"), now)
+            if (resp.headers.get("Content-Encoding") or "identity").strip().lower() not in ("identity", ""):
+                return _drop(url, "encoding", now)                            # urllib asks for none; a compressed body is not decoded here
             etag = resp.headers.get("ETag")
             raw = resp.read(cap + 1)
     except urllib.error.HTTPError as exc:
-        if exc.code == 304 and ent:
+        if exc.code == 304:
+            if not ent:
+                return _drop(url, "etag", now)                                # a 304 for a request that carried no validator
             ent["fetched_at"] = now
             return None
         return _drop(url, "redirect" if 300 <= exc.code < 400 else f"http {exc.code}", now)       # a 3xx that was not followed (too many hops)
@@ -101,9 +105,11 @@ def fetch(url: str, *, expect: tuple[str, ...], store: dict, timeout: float = 20
         return _drop(url, "too large", now)
     sha, text = hashlib.sha256(raw).hexdigest(), raw.decode("utf-8", "replace")
     if kind not in XML_KINDS:
-        text = strip_hidden(text) if kind in TEXT_KINDS or ctype in HTMLISH else plain(text)
+        text = (strip_hidden(text, markdown=ctype != "text/html") if kind in TEXT_KINDS or ctype in HTMLISH else plain(text))
     try:
         data = PARSERS[kind](text) if kind else None
+        if kind == "deprecations" and not data:
+            raise ValueError("no model rows")                                 # a table that stopped parsing is a failed fetch, not "no deprecations"
     except DTDRefused:
         return _drop(url, "xml", now)
     except (ValueError, TypeError, KeyError, SyntaxError):                    # includes json.JSONDecodeError and ElementTree.ParseError

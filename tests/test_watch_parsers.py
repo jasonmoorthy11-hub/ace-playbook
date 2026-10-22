@@ -55,7 +55,8 @@ def test_every_kind_drops_a_body_that_does_not_parse_or_is_the_wrong_shape(kind)
 def test_hidden_html_injection_in_feeds_and_pages_never_reaches_a_body_or_a_parsed_field():
     for kind, name, ctype in (("rss", "rss_hidden.xml", "application/rss+xml"), ("atom", "atom_ok.xml", "application/atom+xml"),
                               ("md", "doc_page.md", "text/markdown"), ("deprecations", "doc_page.md", "text/markdown")):
-        item = get(kind, fixture(name), ctype)
+        body = fixture(name) + (fixture("deprecations.md") if kind == "deprecations" else b"")          # a page with a table and a hidden block
+        item = get(kind, body, ctype)
         assert INJECTION not in json.dumps(item).lower() and "evil-model" not in json.dumps(item) and "curl" not in item["body"], kind
     rss = get("rss", fixture("rss_hidden.xml"), "application/rss+xml")
     assert rss["data"][0]["summary"] == "Subagents are useful. Zerowidth" and rss["data"][0]["title"] == "A harmless post about subagents"

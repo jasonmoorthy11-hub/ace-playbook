@@ -140,11 +140,14 @@ def test_a_redirect_to_the_same_host_that_now_resolves_to_a_private_address_is_d
     assert get("http://example.test/a", opener=op)["dropped"] == "redirect" and fake.asked == ["http://example.test/a"]
 
 
-def test_https_is_never_downgraded_to_http_on_the_same_host():
-    fake, op = chain({"https://example.test/a": (302, "http://example.test/b", b""), "http://example.test/b": (200, None, b"<p>x</p>")})
-    assert get("https://example.test/a", opener=op)["dropped"] == "redirect" and fake.asked == ["https://example.test/a"]
-    fake, op = chain({"http://example.test/a": (302, "https://example.test/b", b""), "https://example.test/b": (200, None, b"<p>up</p>")})
-    assert get("http://example.test/a", opener=op)["body"] == "up"                       # an upgrade to https on the same host is fine
+def test_the_scheme_and_the_port_must_stay_the_same():
+    for first, target in (("https://example.test/a", "http://example.test/b"), ("http://example.test/a", "https://example.test/b"),
+                          ("https://example.test/a", "https://example.test:8443/b"), ("http://example.test/a", "http://example.test:8080/b"),
+                          ("https://example.test:8443/a", "https://example.test/b"), ("https://example.test/a", "https://example.test:99999999/b")):
+        fake, op = chain({first: (302, target, b"")})
+        assert get(first, opener=op)["dropped"] == "redirect" and fake.asked == [first], (first, target)
+    fake, op = chain({"https://example.test/a": (302, "https://example.test:443/b", b""), "https://example.test:443/b": (200, None, b"<p>same</p>")})
+    assert get("https://example.test/a", opener=op)["body"] == "same"                      # the explicit default port is the same port
 
 
 def test_more_than_three_hops_is_dropped_and_two_are_fine():

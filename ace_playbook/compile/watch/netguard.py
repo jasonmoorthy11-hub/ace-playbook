@@ -1,5 +1,5 @@
 """Where the fetcher may connect (SSRF guard): never to a loopback, link-local, private, multicast, reserved or unspecified address, and a
-redirect is followed only to the SAME host, over http(s), at most MAX_HOPS times (and never from https down to http).
+redirect is followed only to the SAME host, scheme and port, at most MAX_HOPS times.
 
 `blocked_address(host)` checks an IP literal with `ipaddress` and resolves a name with `socket.getaddrinfo`, refusing when ANY answer is
 unsafe or the name does not resolve (fail closed). `open_url` is the default opener of `fetch`: `urllib.request` with `SameHost` installed.
@@ -15,6 +15,7 @@ import urllib.parse
 import urllib.request
 
 MAX_HOPS = 3
+_PORTS = {"http": 80, "https": 443}
 RESOLVE = socket.getaddrinfo                      # looked up at call time so tests can replace it
 
 
@@ -49,8 +50,12 @@ class SameHost(urllib.request.HTTPRedirectHandler):
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         old, new = urllib.parse.urlsplit(req.full_url), urllib.parse.urlsplit(newurl)
-        same = new.scheme in ("http", "https") and (new.hostname or "").lower() == (old.hostname or "").lower() and new.hostname
-        if not same or (old.scheme == "https" and new.scheme != "https") or blocked_address(new.hostname):
+        try:
+            same = (new.scheme == old.scheme and new.scheme in ("http", "https") and new.hostname and old.hostname and not new.username
+                    and new.hostname.lower() == old.hostname.lower() and (new.port or _PORTS[new.scheme]) == (old.port or _PORTS[old.scheme]))
+        except ValueError:                                                      # a port that is not a number
+            same = False
+        if not same or blocked_address(new.hostname):
             raise RedirectRefused(new.scheme)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 

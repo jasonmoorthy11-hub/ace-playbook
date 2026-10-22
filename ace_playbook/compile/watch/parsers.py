@@ -7,6 +7,7 @@ with a DOCTYPE or an ENTITY declaration is refused before parsing (entity expans
 
 from __future__ import annotations
 
+import html
 import json
 import re
 import xml.etree.ElementTree as ET
@@ -14,7 +15,7 @@ import xml.etree.ElementTree as ET
 from .sanitize import one_line
 
 VERSION = re.compile(r"\d+\.\d+\.\d+(?:[-+][\w.-]+)?")
-MODEL = re.compile(r"claude-[A-Za-z0-9][A-Za-z0-9._-]*")
+MODEL = re.compile(r"claude-[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?")
 SEPARATOR = re.compile(r"\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?")
 NONE_WORDS = ("", "n/a", "na", "-", "—", "none", "tbd", "tba", "null", "to be announced")
 MAX_ENTRIES = 100
@@ -38,10 +39,23 @@ def _kids(el: ET.Element, name: str) -> list[ET.Element]:
     return [c for c in el if _ln(c) == name]
 
 
+def _markup(el: ET.Element) -> str:
+    """The content of `el` as markup: text nodes as they are (an escaped `&lt;div hidden&gt;` is HTML a reader would render), child elements
+    as tags with their attributes (so `strip_hidden` sees an XHTML `<span style="display:none">` instead of a flattened string)."""
+    out = [el.text or ""]
+    for child in el:
+        if not isinstance(child.tag, str):                       # a comment or a processing instruction
+            out.append(child.tail or "")
+            continue
+        attrs = "".join(f' {k.rsplit("}", 1)[-1]}="{html.escape(v, quote=True)}"' for k, v in child.attrib.items())
+        out.append(f"<{_ln(child)}{attrs}>{_markup(child)}</{_ln(child)}>{child.tail or ''}")
+    return "".join(out)
+
+
 def _txt(el: ET.Element, *names: str, limit: int = 300) -> str:
     for name in names:
         for c in _kids(el, name):
-            t = one_line("".join(c.itertext()), limit)
+            t = one_line(_markup(c), limit)
             if t:
                 return t
     return ""
@@ -113,9 +127,11 @@ def parse_md(text: str) -> dict:
 
 
 def _cells(line: str) -> list[str]:
-    parts = line.strip().split("|")
-    return [re.sub(r"\s+", " ", re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", c)).replace("`", "").replace("*", "").strip()
-            for c in parts[1:-1 if line.rstrip().endswith("|") else None]]
+    text = line.strip()
+    parts = re.split(r"(?<!\\)\|", text)                         # an escaped pipe (`\|`) is cell text, not a column break
+    closed = text.endswith("|") and not text.endswith("\\|")
+    return [re.sub(r"\s+", " ", re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", c.replace("\\|", "|"))).replace("`", "").replace("*", "").strip()
+            for c in parts[1:-1 if closed else None]]
 
 
 def _roles(header: list[str]) -> dict[str, int]:
@@ -133,7 +149,7 @@ def _roles(header: list[str]) -> dict[str, int]:
 def parse_deprecations_md(text: str) -> list[dict]:
     """Rows `{model_id, deprecated, retires, successor, state, row}` of every Markdown table with a model column. Columns are found by
     their header words, in any order (model | state/status | deprecat* | retire* | replace*/recommended/successor); `N/A` and empty
-    cells are None; `row` is the table line verbatim (at most 400 characters). A cell naming several `claude-...` ids gives one row per id."""
+    cells are None; `row` is the table line verbatim (at most 400 characters). A model cell yields one row per `claude-...` id in it."""
     lines, rows, i = text.splitlines(), [], 0
     while i < len(lines) - 1:
         if not (lines[i].strip().startswith("|") and SEPARATOR.fullmatch(lines[i + 1].strip())):
@@ -145,7 +161,7 @@ def parse_deprecations_md(text: str) -> list[dict]:
                 cells = _cells(lines[j])
                 get = lambda role: (cells[roles[role]] if role in roles and roles[role] < len(cells) else "")  # noqa: E731
                 val = lambda role: None if get(role).lower() in NONE_WORDS else get(role)[:80]  # noqa: E731
-                for mid in MODEL.findall(get("model")) or ([get("model")[:80]] if get("model") else []):
+                for mid in MODEL.findall(get("model")):                          # only a `claude-...` id is a model id; "default" is not
                     rows.append({"model_id": mid, "deprecated": val("deprecated"), "retires": val("retires"), "successor": val("successor"),
                                  "state": val("state"), "row": lines[j].strip()[:400]})
             j += 1
