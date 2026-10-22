@@ -64,7 +64,7 @@ def test_the_script_is_executable_and_its_syntax_parses():
     assert os.access(SCRIPT, os.X_OK) and os.access(FAKE, os.X_OK)
     lib = ROOT / "hooks" / "brief_lib.sh"
     assert all(subprocess.run(["bash", "-n", str(f)]).returncode == 0 for f in (SCRIPT, lib)) and len(SCRIPT.read_text().splitlines()) <= 120
-    assert len(lib.read_text().splitlines()) <= 80 and os.path.exists(LOCKF)
+    assert len(lib.read_text().splitlines()) <= 80
 
 
 def test_a_forced_run_writes_page_json_ledger_and_state_with_private_modes(w):
@@ -209,18 +209,18 @@ def test_a_missing_config_is_a_one_line_failure(w):
     assert (p.returncode, p.stdout, p.stderr.strip().splitlines()[-1]) == (1, "", "brief: config")
 
 
-LOCKF = "/usr/bin/lockf"
+TAKE = "import fcntl,sys\nf = open(sys.argv[1], 'a')\nfcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"      # exit 1 when somebody holds it
 
 
 def free(w):
-    """True when the kernel lock on brief_dir/run.lockf can be taken at once (nobody holds it)."""
-    return subprocess.run([LOCKF, "-s", "-k", "-t", "0", str(w.dir / "run.lockf"), "true"]).returncode == 0
+    """True when the kernel lock on brief_dir/run.lockf can be taken at once (nobody holds it); tried in a child, so this process never holds it."""
+    return subprocess.run([sys.executable, "-I", "-c", TAKE, str(w.dir / "run.lockf")], stderr=subprocess.DEVNULL).returncode == 0
 
 
 def hold(w):
     """A process that holds the run lock (a live run), in its own session; returns it."""
     w.dir.mkdir(parents=True, exist_ok=True)
-    proc = subprocess.Popen([LOCKF, "-s", "-k", "-t", "0", str(w.dir / "run.lockf"), "sleep", "60"], start_new_session=True)
+    proc = subprocess.Popen([sys.executable, "-I", "-c", TAKE + "import time\ntime.sleep(60)", str(w.dir / "run.lockf")], start_new_session=True)
     for _ in range(50):
         if not free(w):
             return proc

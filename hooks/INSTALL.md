@@ -523,7 +523,8 @@ cannot be caught: it leaves the raw files, and the next run deletes them first t
 (`ACE_BRIEF_KEEP=1` keeps them, 0600, under `brief_dir/run`; the session transcript is
 never written, see Sessions above). `digest_clean.json` (summaries after the exclusions) stays there until the next run.
 
-**One run at a time.** `brief.sh` takes a kernel lock, `/usr/bin/lockf`, on `brief_dir/run.lockf` (an empty file that stays). The kernel
+**One run at a time.** `brief.sh` takes a kernel `flock` (python's `fcntl` on the inherited fd 9; the
+interpreter is `ACE_PYTHON`, else `python3`) on `brief_dir/run.lockf` (an empty file that stays). The kernel
 drops it when the last process holding it dies, a SIGKILL included, so there is no stale lock to take over; a live run, or a `claude` stage
 that outlived a killed script, is always respected: a second run exits 0 without a word. Each stage has a wall-clock limit,
 `ACE_BRIEF_STAGE_TIMEOUT` seconds (an integer of at least 1, else 600): a stage that runs longer gets SIGTERM, and SIGKILL after

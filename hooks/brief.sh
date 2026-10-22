@@ -15,8 +15,8 @@
 # Stage 1 does NOT pass --strict-mcp-config (the claude.ai connectors are account-level: strict mode shows 0 MCP servers) nor --setting-sources
 # (it drops the connectors too; probed 2026-10-22). Both stages pass --no-session-persistence (no transcript of the raw mail where the nightly
 # reflect sweep would find it) and --settings (disableAllHooks, the deny list). --tools, --allowedTools and --disallowedTools take a variadic
-# list, so the prompt always comes last, after a flag with a single value (--max-budget-usd). One run at a time: a kernel lock (lockf) on
-# brief_dir/run.lockf, released by the kernel when the run dies. Each stage has a wall-clock limit, ACE_BRIEF_STAGE_TIMEOUT seconds (600): TERM,
+# list, so the prompt always comes last, after a flag with a single value (--max-budget-usd). One run at a time: a kernel flock (python fcntl on
+# fd 9) on brief_dir/run.lockf, released by the kernel when the run dies. Each stage has a wall-clock limit, ACE_BRIEF_STAGE_TIMEOUT seconds (600): TERM,
 # then KILL after ACE_BRIEF_KILL_GRACE seconds (10); a stage also runs under its own perl alarm of both, so it dies when this script is killed.
 # Config: $ACE_PLAYBOOK_CONFIG (else the default file) via `python -m ace_playbook.compile.brief conf`. $ACE_BRIEF_CLAUDE names the claude
 # binary and $ACE_BRIEF_NOTIFIER the notifier (default terminal-notifier; tests inject fakes of both); $ACE_BRIEF_KEEP keeps the raw streams.
