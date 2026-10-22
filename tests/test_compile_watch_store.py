@@ -248,3 +248,37 @@ def test_ensure_refuses_a_symlinked_proposals_dir(tmp_path):
     (wd / "proposals").write_text("a file")
     with pytest.raises(store.UnsafeDir):
         store.ensure(wd)
+
+
+# ------------------------------------------------------------------ wave 5: odd store entries count as corrupt, a symlinked watch_dir is refused
+def test_a_proposals_path_that_is_a_file_and_a_decisions_log_that_is_a_directory_count_as_corrupt(tmp_path):
+    wd = tmp_path / "w"
+    wd.mkdir()
+    (wd / "proposals").write_text("a file")
+    cfg = cfgmod.Config(data_dir=tmp_path, watch_dir=wd)
+    f = summary.fields(cfg, NOW)
+    assert f["watch_corrupt"] == 1 and summary.block(f, NOW, lambda ts, now: "1h") == ["none  corrupt 1"]
+    (wd / "proposals").unlink()
+    (wd / "proposals").mkdir()
+    (wd / "decisions.jsonl").mkdir()
+    assert summary.fields(cfg, NOW)["watch_corrupt"] == 1
+    (wd / "decisions.jsonl").rmdir()
+    (wd / "decisions.jsonl").symlink_to(tmp_path / "nowhere")
+    assert summary.fields(cfg, NOW)["watch_corrupt"] == 1
+    (wd / "decisions.jsonl").unlink()
+    assert summary.fields(cfg, NOW)["watch_corrupt"] == 0
+
+
+def test_ensure_refuses_a_watch_dir_that_is_a_symlink_without_naming_a_path(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    with pytest.raises(store.UnsafeDir) as exc:
+        store.ensure(link)
+    assert str(tmp_path) not in str(exc.value) and list(real.iterdir()) == []
+    link.unlink()
+    link.symlink_to(tmp_path / "dangling")
+    with pytest.raises(store.UnsafeDir):
+        store.ensure(link)
+    assert not (tmp_path / "dangling").exists()

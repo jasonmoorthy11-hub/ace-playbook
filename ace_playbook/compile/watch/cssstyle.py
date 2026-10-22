@@ -10,7 +10,7 @@ alpha 0); a width or height of 1px or less (zero in any unit) with overflow hidd
 position absolute or fixed far off-screen; a far negative margin or text-indent. "Far" is -500px (or pt, or no unit), -20em, rem or ch,
 and -100%, vw or vh.
 
-`css_rules(css)` reads `<style>` text: only rules whose selector is a single `.class`, `#id` or `tag` and whose body hides count; rules
+`css_rules(css)` reads `<style>` text: only rules whose selector is a single `.class`, `#id`, `tag` or `*` and whose body hides count; rules
 inside at-rules (media queries) and every other selector (descendant, child, attribute, pseudo-class) are NOT handled, nor are external
 stylesheets (docs: LIMITATIONS.md).
 """
@@ -31,7 +31,7 @@ HEX_CLEAR = re.compile(r"#[0-9a-f]{3}0|#[0-9a-f]{6}00")
 FAR = {"px": 500, "pt": 500, "": 500, "em": 20, "rem": 20, "ch": 20, "vw": 100, "vh": 100, "%": 100}
 TINY = {"px": 1, "pt": 0.75, "em": 0.0625, "rem": 0.0625, "ex": 0.125, "ch": 0.125, "%": 6.25, "vw": 0.1, "vh": 0.1}
 RULE, AT_RULE = re.compile(r"([^{}]+)\{([^{}]*)\}"), re.compile(r"@[^{};]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}|@[^{};]*;")
-SIMPLE = re.compile(r"\.[\w-]+|#[\w-]+|[A-Za-z][\w-]*")
+SIMPLE = re.compile(r"\.[\w-]+|#[\w-]+|[A-Za-z][\w-]*|\*")
 
 
 def _unescape(m: re.Match) -> str:

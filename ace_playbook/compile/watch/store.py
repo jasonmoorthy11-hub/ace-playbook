@@ -5,9 +5,9 @@
 newest decision row, else the file's own `status`; `expired` once past `expires` while still open or queued. At most CAP proposals are
 open at once, leads excepted; the rest are `queued` and a `promoted` decision row opens them in ranking order when a slot frees.
 A file that cannot be read, is too deeply nested for the JSON reader, or has the wrong shape (`_shaped`) is skipped and counted
-(`scan_proposals`); a decision row of the wrong type is skipped; nothing a corrupt store holds raises out of a reader. `ensure` never
-changes the mode of a directory that exists and refuses a proposals folder that is a symlink (`UnsafeDir`).
-Stdlib, `.chars` and `.fsio` only: no network, so `summary.py` (imported by `status.py`) can use it.
+(`scan_proposals`, `summary`: so is a proposals folder or decisions log that is a link or the wrong kind); a decision row of the wrong type is
+skipped; nothing a corrupt store holds raises out of a reader. `ensure` never changes the mode of a directory that exists and refuses a
+watch directory or proposals folder that is a symlink (`UnsafeDir`). Stdlib, `.chars` and `.fsio` only: no network, so `summary.py` can use it.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from pathlib import Path
 
 from ...config import Config
 from .chars import control, invisible
-from .fsio import write_private
+from .fsio import odd, write_private
 
 CAP, KILL, PROPOSALS, DECISIONS, SEEN, INVENTORY = 5, "DISABLED", "proposals", "decisions.jsonl", "seen.json", "inventory.json"
 RANK = {"model_pin": 0, "version": 1, "docs": 2}                            # every other class (leads) ranks after these
@@ -48,13 +48,13 @@ class UnsafeDir(ValueError):
 
 def ensure(wd: Path) -> Path:
     """Create `wd` and `wd/proposals` (0700 when new; an existing directory keeps its mode) and return `wd`; UnsafeDir for a symlinked
-    or non-directory proposals folder."""
+    watch directory or a symlinked or non-directory proposals folder."""
     wd = Path(wd)
-    if not wd.is_dir():
+    if not wd.is_symlink() and not wd.is_dir():
         wd.mkdir(mode=0o700, parents=True, exist_ok=True)
     folder = wd / PROPOSALS
-    if folder.is_symlink() or (os.path.lexists(folder) and not folder.is_dir()):
-        raise UnsafeDir("the watch proposals folder is a symlink or not a directory")
+    if wd.is_symlink() or odd(folder, True):
+        raise UnsafeDir("the watch directory or its proposals folder is a symlink or not a directory")
     folder.mkdir(mode=0o700, exist_ok=True)
     return wd
 
@@ -84,7 +84,7 @@ def _shaped(rec: dict) -> bool:
 def scan_proposals(wd: Path) -> tuple[list[dict], int]:
     """(every readable, well-shaped proposal whose id matches its file name, oldest first; the number of `W-*.json` files skipped)."""
     folder = Path(wd) / PROPOSALS
-    out, bad = [], int(folder.is_symlink())                           # a symlinked folder reads as empty and is counted
+    out, bad = [], int(odd(folder, True))                             # a link or a file in the folder's place reads as empty and is counted
     try:
         paths = [] if bad else sorted(folder.glob("W-*.json"))
     except OSError:

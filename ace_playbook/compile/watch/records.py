@@ -44,11 +44,12 @@ def make_id(cls: str, target: str, sha: str, quote: str, model: str = "") -> str
 
 def quote_line(body: str, *prefer: str) -> str:
     """One line of `body`, stripped, at most 400 characters and unchanged by `clean`, so it is a verbatim substring of the body: the
-    first line that holds one of the `prefer` texts, else the first line. "" for an empty body."""
+    first line that holds one of the `prefer` texts, else the first line. "" for an empty body or when no line is clean (the record
+    that would carry it fails `check` and is dropped)."""
     lines = [ln for ln in (x.strip()[:400] for x in body.split("\n")) if ln]
     ok = [ln for ln in lines if clean(ln, 400) == ln]
     pick = next((ln for ln in ok if any(p and p in ln for p in prefer)), ok[0] if ok else None)
-    return pick if pick is not None else (clean(lines[0], 400) if lines else "")
+    return pick or ""
 
 
 def record(cls: str, title: str, ev: dict, hits: list[str], target: str, diff: str | None, verify: str, now: str) -> dict:

@@ -580,3 +580,30 @@ def test_quote_line_prefers_a_line_with_the_wanted_text_and_never_joins_lines():
     assert records.quote_line(body, "9.0.4") == '"stable": "9.0.4"' and records.quote_line(body, "nope") == "{"
     assert records.quote_line(body, "9.1.0") == '"latest": "9.1.0",' and records.quote_line("\n\n  hi  \n") == "hi"
     assert records.quote_line("a\tb\nc d\n") == "c d" and records.quote_line("") == "" and len(records.quote_line("x" * 900)) == 400
+
+
+# ------------------------------------------------------------------ wave 5: no clean line is no quote, and the body is checked
+def test_quote_line_is_empty_when_no_line_is_clean_and_such_a_record_is_dropped():
+    from ace_playbook.compile.watch import records
+    assert records.quote_line("a​b\nc\x07d\n") == "" and records.quote_line("a​b\nclean\n") == "clean"
+    ev = {"url": "https://example.test/x", "sha256": "0" * 64, "quote": "", "tier": 0}
+    rec = records.record("docs", "docs page changed: https://example.test/x", ev, [], "https://example.test/x", None, "claude --version", NOW)
+    assert records.check(rec) == "evidence"
+
+
+def test_candidates_check_every_quote_against_the_fetched_body_of_its_result():
+    res = dep(row())
+    assert [r["class"] for r in match.candidates(PINNED, [res], {}, {}, NOW)] == ["model_pin"]                    # no body known: shape only
+    quote = match.candidates(PINNED, [res], {}, {}, NOW)[0]["evidence"][0]["quote"]
+    assert [r["class"] for r in match.candidates(PINNED, [{**res, "body": "x\n" + quote + "\ny"}], {}, {}, NOW)] == ["model_pin"]
+    assert match.candidates(PINNED, [{**res, "body": "something else\n"}], {}, {}, NOW) == []
+
+
+def test_a_docs_quote_that_is_not_in_the_body_falls_back_to_the_first_clean_line():
+    url = "https://example.test/docs/x"
+    res = {"id": "d", "url": url, "kind": "md", "tier": 0, "sha256": "1" * 64, "prev_sha256": "2" * 64, "data": {}, "heading": "a b", "quote": "a",
+           "body": "a\nb"}
+    out = match.candidates({}, [res], {"docs": {url: ["k"]}}, {}, NOW)
+    assert [r["evidence"][0]["quote"] for r in out] == ["a"]
+    out = match.candidates({}, [{**res, "heading": "Title", "body": "# Title\nbody"}], {"docs": {url: ["k"]}}, {}, NOW)
+    assert [r["evidence"][0]["quote"] for r in out] == ["Title"]

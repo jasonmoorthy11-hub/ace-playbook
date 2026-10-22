@@ -49,7 +49,7 @@ def _result(src: dict, item: dict) -> dict:
     data = item["data"]
     return {"id": src["id"], "url": src["url"], "kind": src["kind"], "tier": src["tier"], "sha256": item["sha256"],
             "prev_sha256": item["prev_sha256"], "fetched_at": item["fetched_at"], "data": data, "quote": _quote(src, item),
-            "heading": data.get("heading", "") if src["kind"] == "md" else ""}
+            "body": item["body"], "heading": data.get("heading", "") if src["kind"] == "md" else ""}
 
 
 def _quote(src: dict, item: dict) -> str:

@@ -13,6 +13,12 @@ import secrets
 from pathlib import Path
 
 
+def odd(path: Path, directory: bool = False) -> bool:
+    """True when `path` is there (a dangling link included) but is a link or the wrong kind: a file where a directory belongs, or the reverse."""
+    path = Path(path)
+    return path.is_symlink() or (os.path.lexists(path) and not (path.is_dir() if directory else path.is_file()))
+
+
 def write_private(path: Path, text: str) -> None:
     path = Path(path)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")

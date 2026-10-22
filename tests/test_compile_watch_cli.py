@@ -308,6 +308,15 @@ def test_a_scan_with_a_symlinked_proposals_dir_is_exit_2_with_one_line(w, capsys
     assert list(elsewhere.iterdir()) == [] and w.calls == []
 
 
+def test_a_scan_with_a_symlinked_watch_dir_is_exit_2_with_one_line(w, capsys, tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    w.wd.symlink_to(real)
+    code, out, err = w.run(capsys, "scan")
+    assert code == 2 and err.startswith("error: ") and len(err.strip().splitlines()) == 1 and str(tmp_path) not in err
+    assert list(real.iterdir()) == [] and w.calls == []
+
+
 def test_a_future_sitemap_lastmod_is_not_remembered(w, capsys):
     w.run(capsys, "scan")
     w.pages[U["map"]] = (fixture("sitemap.xml").replace(b"2026-10-20", b"9999-12-31"), "application/xml")

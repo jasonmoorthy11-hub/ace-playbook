@@ -177,16 +177,29 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   hides what follows), an end tag a browser ignores because a scope barrier or a "special" element sits in between pops nothing when that
   would unhide text, and a double-escaped `<script><!--<script></script>` closes at its next-but-one `</script`. More than 512 open
   elements make the page a `parse` drop (`<p>`, `<li>` and `<td>` without end tags count: html.parser does not close them implicitly).
+  Document-level hiding is modelled: an `<html>` or `<body>` start tag (a late one too, a browser merges its attributes onto the root)
+  that hides, or a simple `<style>` rule that hides `html`, `body` or `*`, makes the whole body empty; `:root`, `html > body` and other
+  selectors are NOT read. A `<template shadowrootmode=...>` hides every child of its host element, those before it too. A `<select>`
+  hides ALL its option text (a browser shows the selected one), as do `<progress>` and `<meter>` fallbacks: over-hiding. Scope barriers:
+  `</p>` is stopped by `button`, `</li>` by `ol` and `ul`, every end tag but `</select>` by an open `select`. `<style>` text is read by a
+  linear scan; an opener with no closer ends it. A double-escaped script closes only at a `</script` followed by an HTML space, `/` or `>`.
   Markdown pages (every Content-Type but `text/html`) are read with the HTML rules, because their site renders raw HTML. A raw-text opener
   (`<script>`, `<style>`, `<title>`, `<textarea>`, `<xmp>`, `<noembed>`, `<noframes>`, `<iframe>`) is prose only when ALL hold: it sits in
-  an inline code span or a fenced code block; it is not inside an HTML block (a line that starts with `<tag`, `</tag`, `<!` or `<?` runs to
+  a fenced code block or in an inline code span that opens and closes on ONE line (a span that crosses a line is never trusted: a
+  heading, quote, list item, table cell or thematic break may cut it), that line starts with no block marker (`#`, `>`, `-`, `*`, `+`,
+  `|`, `1.`), has no backslash directly before a backtick and no `<` before the opening run, and the span holds no `|`; it is not inside an HTML
+  block (a line that starts with `<tag`, `</tag`, `<!` or `<?` runs to
   the next blank line, to its closing tag for `script`, `pre`, `style` and `textarea`, to `-->` for a comment, after any list or quote
   marker; a backtick inside a tag opens no span); and NO matching closer (`</script` for `<script`) follows it anywhere later in the input.
   Every other opener hides to its closer or to the end of the input, so a page that mentions `<script>` in code and later closes it, or does
   so inside a `<Note>` block, loses the text in between (hiding more is the safe direction). The detection is a CommonMark subset (no
-  indented code blocks, no link reference definitions, no nested quote or list handling beyond the marker prefix); an indented
-  `<script>` is read as markup. The defence is not the sanitizer alone: web text reaches a record only as a title or a 400-character
-  quote, never as a diff, a target or a command, and every model id must pass a strict pattern first.
+  indented code blocks, no nested quote or list handling beyond the marker prefix); an indented `<script>` is read as markup. Link
+  reference definitions (`[x]: url "title"`, `[//]: # (comment)`) are dropped, with a following title line and, for an incomplete one,
+  every line up to the next blank line; the same drop applies to a `md` source served as `text/html`, and a footnote or a definition
+  inside a paragraph is dropped too (over-hiding). NOT handled: image alt text and link titles in running text (`![alt](u)`,
+  `[a](u "title")`) stay in the text although a renderer shows them only on a failed image or a hover. The defence is not the sanitizer
+  alone: web text reaches a record only as a title or a 400-character quote, never as a diff, a target or a command, and every model id
+  must pass a strict pattern first. A `watch_dir` that is itself a symlink is refused (`compile watch scan` exits 2, no path in the message).
 
 ## Security and scrubbing
 

@@ -12,6 +12,7 @@ import re
 from ...canon import now_iso
 from ...config import Config
 from . import store
+from .fsio import odd
 
 STAMP = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ")
 TITLES = 3
@@ -31,6 +32,7 @@ def fields(cfg: Config, now: str | None = None) -> dict:
         scan = store.read_seen(wd).get("last_scan")
         real = sorted((p for p in live if p.get("class") != "lead"), key=store.rank_key)
         titles = [store.clean(p.get("title")) for p in real[:TITLES]]
+        bad += int(odd(wd / store.DECISIONS))                           # a decisions log that is a directory or a link drops every decision
         return {**out, "watch_open": len(real), "watch_leads": len(live) - len(real), "watch_titles": titles, "watch_corrupt": bad,
                 "watch_oldest": min((str(p.get("created")) for p in real), default=None), "watch_top": titles[0] if titles else None,
                 "watch_last_scan": scan if isinstance(scan, str) and STAMP.fullmatch(scan) else None}

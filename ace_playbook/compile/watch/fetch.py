@@ -106,7 +106,8 @@ def fetch(url: str, *, expect: tuple[str, ...], store: dict, timeout: float = 20
     sha, text = hashlib.sha256(raw).hexdigest(), raw.decode("utf-8", "replace")
     try:
         if kind not in XML_KINDS:
-            text = (strip_hidden(text, markdown=ctype != "text/html") if kind in TEXT_KINDS or ctype in HTMLISH else plain(text))
+            md = ctype != "text/html"
+            text = strip_hidden(text, markdown=md, definitions=md or kind == "md") if kind in TEXT_KINDS or ctype in HTMLISH else plain(text)
         data = PARSERS[kind](text) if kind else None
         if kind == "deprecations" and not data:
             raise ValueError("no model rows")                                 # a table that stopped parsing is a failed fetch, not "no deprecations"

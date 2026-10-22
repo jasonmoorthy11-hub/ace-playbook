@@ -1062,13 +1062,20 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   display none, visibility hidden or collapse, opacity below 0.1 (negative too), font-size below 1px, a box of 1px or less that clips,
   off-screen positions and far negative margins or text-indent (500px or 20em and beyond), `clip-path:inset()` at 50 % or more, any zero
   `scale` argument, a transparent `color` or `-webkit-text-fill-color`; also skipped are a closed `details`, `dialog`, `svg`, `math`, `iframe`,
-  `object`, `embed` and `head`. XML with a DTD or an ENTITY declaration is dropped (`xml`).
+  `object`, `embed`, `head`, `select` (all its option text), `progress` and `meter`. XML with a DTD or an ENTITY declaration is dropped (`xml`).
   Also: a `Content-Encoding` other than identity is dropped (`encoding`); a 304 for a URL with no stored validator is dropped (`etag`);
   a deprecations page that parses to no rows is a `parse` drop (never an empty table); the `md` kind is read in markdown mode
-  (the HTML rules, except that a raw-text opener is prose when it is in a code span or fenced block, outside every HTML block, and no
-  closer for it follows later: `mdrules.py`). The tree rules are fail closed (`htmlrules.py`): a slash on a non-void tag is ignored, an end
-  tag a browser ignores (a scope barrier or a "special" element in between) pops nothing when that would unhide text, a double-escaped
-  script closes at its next-but-one `</script`, and more than 512 open elements raise `TooDeep` (a `parse` drop). The text and tails inside
+  (the HTML rules, except that a raw-text opener is prose when it is in a fenced block or in a code span that opens and closes on ONE plain
+  line, outside every HTML block, and no closer for it follows later; a plain line has no block marker at its start, no backslash before a
+  backtick, no `<` before the opening run and no `|` inside the span; and link reference definitions, the `[//]: # (...)` idiom among them,
+  are dropped with their title lines: `mdrules.py`; a `md` source served as `text/html` still loses its definitions). The tree rules are
+  fail closed (`htmlrules.py`): a slash on a non-void tag is ignored, an end tag a browser ignores (a scope barrier or a "special" element in
+  between; `button` stops `</p>`, `ol` and `ul` stop `</li>`, an open `select` stops every end tag but its own) pops nothing when that
+  would unhide text, a double-escaped script closes at its next-but-one `</script` (HTML whitespace only, as the tokenizer reads it), and
+  more than 512 open elements raise `TooDeep` (a `parse` drop). Document-level hiding is modelled: an `html` or `body` start tag, the first
+  or a late one, that hides, or a `<style>` rule that hides `html`, `body` or `*`, makes the body empty; a `<template shadowrootmode=...>`
+  hides every child of its host (those before it too), the whole document when it has no parent. `<style>` text is found by a linear scan
+  (`sanitize.style_text`; the first opener without a closer ends it), so a 1 MiB page of openers costs milliseconds. The text and tails inside
   a child element of an XHTML feed field are HTML-escaped before the sanitizer sees them (only the field's own text stays raw), so an
   escaped closer there cannot close a hidden ancestor. The npm `latest` must be an ASCII version (`[0-9]+.[0-9]+.[0-9]+` with an optional
   `-` or `+` suffix of at most 40 `[0-9A-Za-z.-]`), else the fetch is a `parse` drop.
@@ -1110,8 +1117,8 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
 Record (design 4.3, exactly): `{id, created, class, elevated, title, evidence[{url, sha256, quote, tier}], inventory_hits, change{target, diff,
 diff_sha256}, verify, expires, status}`. `id` is `W-` plus the first 8 hex of sha256 of `class|target|evidence sha|quote` (with `|model id`
 appended when the code-made title names a model), so a re-scan dedupes; `title` is at most 120 characters and `quote` 400, both cleaned
-of control characters, and the quote is ONE line of the fetched body, verbatim (`records.quote_line`; `check(rec, body)` tests the
-substring); `verify` comes from a fixed template per
+of control characters, and the quote is ONE line of the fetched body, verbatim (`records.quote_line`, empty when no line is clean, which
+drops the record; `match.candidates` runs `check(rec, body)` with the body of the result that carries the sha256); `verify` comes from a fixed template per
 class (`grep -n "<model_id>" <path>`, `claude --version`, `curl -sI <url> | head -1`); a model id or successor taken from a page must match
 `[A-Za-z0-9][A-Za-z0-9._:-]{2,79}` before it reaches a diff or a command; `elevated` is false for every W1 class; `expires` is 30 days
 after `created`. Free text from the web appears in a record only as the title and the quote.
@@ -1124,8 +1131,9 @@ ETag and `fetched_at`; the parsed result of every source; per-source stamps for 
 inventory lead) while its source was read. Docs and feed-lead proposals are events and run to their expiry. At most five proposals are open
 (leads excepted); the rest are written `queued` and a `promoted` decision row opens them in ranking order (model_pin, version, docs) when a
 slot frees. A reader never raises on a corrupt store: JSON too deeply nested, bad UTF-8, a decision row of the wrong type and a proposal
-of the wrong shape are skipped, and the proposals skipped are counted in `status.json` as `watch_corrupt` (`corrupt N` in the digest block).
-`ensure` keeps the mode of a directory that exists and refuses a symlinked proposals folder (`compile watch scan` exits 2). With
+of the wrong shape are skipped, and the proposals skipped are counted in `status.json` as `watch_corrupt` (`corrupt N` in the digest block);
+a proposals path that is a file or a link and a `decisions.jsonl` that is a directory or a link count as one each.
+`ensure` keeps the mode of a directory that exists and refuses a symlinked `watch_dir` or proposals folder (`compile watch scan` exits 2). With
 `DISABLED` present `scan` prints `watch: disabled`, fetches nothing and writes nothing.
 
 `status.json` gains `watch_open`, `watch_leads`, `watch_oldest`, `watch_top`, `watch_titles` (up to three, ranked), `watch_disabled` and
