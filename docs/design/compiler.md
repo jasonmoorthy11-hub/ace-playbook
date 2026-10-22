@@ -1082,7 +1082,9 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   svg `<style>`, `<script>` or `<title>` is an element). `treebuild.py` (`Tree`, `build`) is the HTML Standard's tree builder in a
   simplified, fail closed form: the stack of open elements with indexes (HTML positions by name, foreign name counts, scope-marker
   positions for the default, list-item, button and table scopes, so a scope check and an end tag that names nothing open are O(1)), the
-  active formatting list with markers (pushed when a td, th, caption, applet, marquee, object or template opens, cleared when it closes),
+  active formatting list with markers (pushed when a td, th, caption, applet, marquee, object or template opens; cleared up to the last marker ONCE:
+  at the spec's close-the-cell and caption close for td, th and caption, at the pop of the template, at the own end tag for applet, marquee and
+  object, never per popped cell),
   Noah's Ark, `reconstruct` and a simplified `adopt` (a formatting element with a furthest block stays open: over-hiding), FOSTER PARENTING
   in `where`/`place` (what a table cannot hold goes before it), and the insertion mode derived from the stack (`reset_mode`). `treemodes.py`
   holds the modes as functions `mode(t, kind, name, attrs, selfclosing)`: initial, before html, before head, head, after head, body, text,
@@ -1108,7 +1110,10 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   A, the older, ignores start tags and keeps the tokenizer out of raw text; B, the newer and the one the visible text uses, inserts them
   and ignores every end tag but `option`, `optgroup`, `select` and `template`, keeps a nested `select` open, lets `input`, `keygen` and
   `textarea` pop the select only when `treemodes.reach` finds no template, table, integration point, foreign or hidden element above
-  it, and lets a raw text holding a `<` poison the rest of the page (`selraw`, `rawlt`, `poisoned`; `script` exempt). Document-level
+  it, and lets a raw text holding a `<` poison the rest of the page (`selraw`, `rawlt`, `poisoned`; `script` exempt). `</select>` needs the select
+  in scope under the newer reading, so an open select that held a scope marker or a formatting element hides the rest even after that element
+  closed (`<select><object></object></select>VIS`, `<select><b hidden></b></select>VIS`: a browser shows VIS under both readings, we hide:
+  over-hide, by the rule that every end tag is ignored but option, optgroup, select, template). Document-level
   hiding: an `html` or `body` start tag, the first or a late one, that hides, or a `<style>` rule that hides `html`, `body` or `*`, makes
   the body empty; a `<template shadowrootmode=...>` hides every child of its host (those before it too). THE STYLE PASS (`treestyle.py`,
   re-exported by `stylepass.py`): the sheet of a page is the child text of the `style` elements of the tree in any namespace (HTML: raw

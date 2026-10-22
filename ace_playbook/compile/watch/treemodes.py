@@ -123,20 +123,21 @@ def m_text(t, k, n, a, sc):
 # ---- tables
 def intable(t, k, n, a, sc):
     """in table, caption, table body, row and cell (the mode is derived from the stack after every structural change)."""
-    st, c = t.stack, t.stack[-1]
+    st, c, cell = t.stack, t.stack[-1], t.mode in ("caption", "cell")      # cell: closing the cell or the caption clears the formatting list ONCE
     if k == "s" and n in STRUCT:
         top = CTX.get(n, ("table",))
         while not (st[-1].ns == 0 and st[-1].name in (*top, "template", "html")): t.pop()
+        cell and t.clear_fmt()                                       # close the cell / the caption (before a new td, th or caption pushes its marker)
         if st[-1].name == "table" and n in ("col", "tr", "td", "th"): t.insert("colgroup" if n == "col" else "tbody", (), syn=True)
         if n in ("td", "th") and st[-1].name in SECTIONS: t.insert("tr", (), syn=True)
         (t.void if n == "col" else t.insert)(n, a)
         t.reset_mode()
     elif n == "table" and (k == "e" or (k == "s" and t.mode not in ("caption", "cell"))):      # a start tag in a cell or caption is read as body (nests)
-        if t.in_scope("table", 3): t.pop_to("table"); t.reset_mode(); k == "s" and t.process(k, n, a, sc)
+        if t.in_scope("table", 3): t.pop_to("table"); cell and t.clear_fmt(); t.reset_mode(); k == "s" and t.process(k, n, a, sc)
     elif k == "e" and n in ("caption", "colgroup", "tr", "td", "th", *SECTIONS):
-        if t.in_scope(n, 3): t.pop_to(n); t.reset_mode()
+        if t.in_scope(n, 3): t.pop_to(n); cell and t.clear_fmt(); t.reset_mode()
     elif k == "d" or (k == "e" and n in IGNORED): pass
-    elif t.mode in ("caption", "cell"): body(t, k, n, a, sc)
+    elif cell: body(t, k, n, a, sc)
     elif k == "c" and c.ns == 0 and c.name in ("table", "tbody", "template", "tfoot", "thead", "tr") and not n.strip(WS): t.text(n)
     elif n in ("style", "script", "template") and k != "c": head(t, k, n, a, sc)
     else:                                                            # anything else: foster parenting, read as body
@@ -184,8 +185,7 @@ def m_foreign(t, k, n, a, sc):
     st = t.stack
     if k == "c": t.text(n); t.ok = t.ok and not n.strip(WS + "\x00")                        # foreign NUL: U+FFFD, frameset-ok untouched
     elif k == "s" and not (n in BREAKOUT or (n == "font" and any(x in ("color", "face", "size") for x, _ in a))):
-        t.insert(n, a, st[-1].ns)
-        sc and t.pop()                                               # a self-closed foreign element is popped at once
+        t.insert(n, a, st[-1].ns); sc and t.pop()                    # a self-closed foreign element is popped at once
     elif k == "s" or (k == "e" and n in ("br", "p")):
         while st[-1].ns and st[-1].ip not in (1, 2): t.pop()
         MODES[t.mode](t, k, n, a, sc)                                # read again by the insertion mode (an HTML element or integration point is current)

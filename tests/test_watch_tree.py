@@ -276,3 +276,20 @@ def test_i6_controls_text_after_the_nul_turns_frameset_ok_off():
     shows_md("<div>\x00</div>x<frameset>VIS", "xVIS")
     shows_md("<div>\x00 </div>x<frameset>VIS", "xVIS")
     shows_md("<svg>\x00x</svg><frameset>VIS", "VIS")
+
+
+# ------------------------------------------------------------------ wave 16: the formatting list is cleared ONCE per cell / caption close / template end
+@pytest.mark.parametrize("html", [
+    "<template><i hidden><table><tr><td></template>LEAK", "<template><i hidden><table><caption></template>LEAK",
+    "<template><i hidden><table><tr><th>x</template>LEAK", "<template><i hidden><template><table><tr><td></template></template>LEAK",
+    "<template><i hidden><table><tr><td><select></template>LEAK", "<head><template><i hidden><table><tr><td></template>LEAK"])
+def test_w16_a_template_end_clears_the_formatting_list_once_not_once_per_popped_cell(html):
+    hides(html)                                                      # the list is [M_t, i, M_td]: only M_td goes, the hidden i is rebuilt
+
+
+@pytest.mark.parametrize("html,expected", [
+    ("<template><i hidden><table><tr><td><object></template>OVER", "OVER"),
+    ("<template><i hidden><table><caption>x</caption></table></template>VIS", "VIS"),
+    ("<template><i hidden><table><tr><td>x</td></tr></table></template>VIS", "VIS")])
+def test_w16_controls_a_cell_or_caption_that_closed_by_itself_clears_its_own_marker_once(html, expected):
+    shows_md(html, expected)

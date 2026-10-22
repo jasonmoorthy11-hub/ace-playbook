@@ -2,10 +2,10 @@
 read by the style pass (`treestyle`) and the visible-text walk (`treewalk`); the insertion modes are in `treemodes`. Stdlib only. `Tree` keeps the stack of
 open elements with indexes (`idx` HTML positions by name, `fcnt` foreign names, `mk` scope-marker positions per scope variant) so a scope check or an end
 tag that names nothing open costs O(1); inserts at the appropriate place (FOSTER PARENTING: what a table cannot hold goes before it); keeps the active
-formatting list (markers pushed on insert, cleared on pop of td, th, caption, template and at `</applet|marquee|object>`; Noah's Ark; `reconstruct`; simplified
-`adopt`). `relaxed`: an open select is read two ways, the older in-select mode ignores start tags (strict), the newer inserts them (relaxed, the visible
-text: a raw-text element a select holds that has a `<` hides the REST of the page, `selraw` `rawlt` `poisoned`); the style pass builds both. A stack past
-`MAX_DEPTH` is `TooDeep`."""
+formatting list (markers pushed on insert; the list is cleared up to the last marker ONCE: at the spec's close-the-cell and caption close (`treemodes.intable`),
+at the pop of the template and at `</applet|marquee|object>`, never per popped cell; Noah's Ark; `reconstruct`; simplified `adopt`). `relaxed`: an open select
+is read two ways, the older in-select mode ignores start tags (strict), the newer inserts them (relaxed, the visible text: a raw-text element a select holds
+that has a `<` hides the REST of the page, `selraw` `rawlt` `poisoned`); the style pass builds both. A stack past `MAX_DEPTH` is `TooDeep`."""
 
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ class Tree:
             self.fcnt[n.name] -= 1
         else:
             self.idx[n.name].pop()
-            if n.name in ("td", "th", "caption", "template"): self.clear_fmt()    # applet, marquee, object: only at their own end tag
+            if n.name == "template": self.clear_fmt()                # td, th, caption: at the close of the cell (`intable`); applet etc.: at the end tag
         for v in n.mask:
             self.mk[v].pop()
         return n

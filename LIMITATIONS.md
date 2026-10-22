@@ -224,7 +224,10 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   visible text uses the newer (the more hiding), and a page with a `<select` has its `<style>` sheets read in both and unioned. In it
   every end tag is ignored but `</option>`, `</optgroup>`, `</select>` and `</template>`; a nested `<select>` stays open; `<input>`,
   `<keygen>` and `<textarea>` end it only when nothing between the top and the select is a template, a table, an integration point, a
-  foreign element or a hidden element (`<div hidden><select><template><input></template></div>X` keeps X hidden). A raw-text element
+  foreign element or a hidden element (`<div hidden><select><template><input></template></div>X` keeps X hidden). `</select>` needs the select in
+  scope under the newer reading, so an open select that held a scope marker or a formatting element hides the rest even after that element closed
+  (`<select><object></object></select>VIS` and `<select><b hidden></b></select>VIS`: a browser shows VIS under both readings, we hide:
+  over-hide). A raw-text element
   opened in a select that holds a `<` poisons the rest of the document: nothing after it shows (over-hiding by design, not for `script`).
   The rules of `<style>` come from the TREE: the sheet of a page is the child text of its `style` elements in any namespace (an HTML one
   is raw text, comments included, as CSS reads them; an svg one is character data: a CDATA section counts, a comment does not, character
