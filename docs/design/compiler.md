@@ -1093,7 +1093,9 @@ Order W3 of the watcher and cockpit design (section 7, "The brief"). Not on the 
   `tools-audit <stream> --allow hooks/brief_allowed_tools.txt` (`compile/brief_audit.py`): any `mcp__` tool outside the allowlist in the
   stream's `system/init` `tools` list or in a `tool_use` block, or a stream with no init tool list at all, ends the run (exit 2, or 1 when
   nothing could be audited), appends a ledger row `{ts, stage, drift: [names]}` (names only), notifies "brief: tool drift, run refused"
-  without names, discards the digest and never starts stage 2. It detects, it cannot undo a call that already ran; (5)
+  without names, discards the digest and never starts stage 2. The audit fails closed: a non-blank stream line that is not a JSON object, or a
+  file over 50 MB (it is not truncated), counts as drift with the pseudo-name `unparseable`, and a raw scan of all the bytes for
+  `"name": "mcp__..."` adds the tool names a malformed line shows. It detects, it cannot undo a call that already ran; (5)
   `--no-session-persistence` on both stages (probed: no `.jsonl` transcript is written, only an
   empty `~/.claude/projects/<cwd slug>/memory/` directory, so the reflect sweep finds no raw mail); (6) `disableAllHooks` in
   `hooks/brief-settings.json`, which keeps the operator's own hooks out of the run. The PreToolUse guard (`hooks/brief_guard.py`, deny by

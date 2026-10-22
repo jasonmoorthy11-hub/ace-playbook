@@ -76,7 +76,7 @@ def config(tmp_path: Path, **kw) -> Path:
     return conf
 
 
-def stream(result_text: str = "ok", tools=("mcp__claude_ai_Gmail__search_threads",), five=0.08, seven=0.01, is_error=False, init_tools=()) -> str:
+def stream(result_text: str = "ok", tools=("mcp__claude_ai_Gmail__search_threads",), five=0.08, seven=0.01, is_error=False, init_tools=(), junk=True) -> str:
     """A stream-json file as `claude -p --output-format stream-json --verbose` prints it (the shapes seen in phase 0)."""
     window = {"status": "allowed", "unifiedWindows": {"five_hour": {"utilization": five, "resetsAt": 1}, "seven_day": {"utilization": seven, "resetsAt": 2}}}
     events = [{"type": "system", "subtype": "init", "tools": list(init_tools), "mcp_servers": []},
@@ -87,4 +87,4 @@ def stream(result_text: str = "ok", tools=("mcp__claude_ai_Gmail__search_threads
               {"type": "result", "subtype": "success", "is_error": is_error, "result": result_text, "total_cost_usd": 0.2424, "duration_ms": 20800,
                "num_turns": 5, "usage": {"input_tokens": 7, "cache_creation_input_tokens": 51891, "cache_read_input_tokens": 91229, "output_tokens": 2570},
                "modelUsage": {"claude-sonnet-5-5": {"costUSD": 0.2424}}}]
-    return "\n".join(json.dumps(e) for e in events) + "\nnot json\n"
+    return "\n".join(json.dumps(e) for e in events) + ("\nnot json\n" if junk else "\n")          # junk: a stray non-JSON line, as the readers tolerate

@@ -60,7 +60,8 @@ outbound channel. Its controls, in order:
    user settings (`mcp__claude_ai_Gmail`, `mcp__*`) such a tool is open to stage 1, a new Gmail write tool included. The operator must never
    keep such entries for Gmail, Calendar or Linear. After stage 1, `tools-audit` reads the stream's init tool list and its tool calls and
    refuses the run (exit 2, digest discarded, stage 2 never starts, ledger row with the tool names, notification without them) when an
-   `mcp__` tool outside the allowlist appears: it detects the drift, it cannot undo a call that already ran.
+   `mcp__` tool outside the allowlist appears: it detects the drift, it cannot undo a call that already ran. It fails closed: a stream line
+   that is not a JSON object, or a stream over 50 MB, is refused as `unparseable`, and a raw scan names tools a malformed line shows.
 5. `--no-session-persistence`: no transcript of the raw mail is written where the nightly reflect sweep reads (probed: only an empty
    per-directory folder appears).
 6. `disableAllHooks` in the settings file: the operator's own hooks (inject, citation ledger, holdout draws) do not run inside the brief.

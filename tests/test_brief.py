@@ -11,7 +11,7 @@ from functools import partial
 
 import pytest
 
-from ace_playbook.compile import brief, brief_excl, brief_render
+from ace_playbook.compile import brief, brief_audit as ba, brief_excl, brief_render
 
 from . import brief_support as bs
 from .test_statusline import ROOT
@@ -374,20 +374,20 @@ def audit(env, capsys, text):
 
 def test_a_clean_stream_passes_the_tool_audit_and_writes_no_row(env, capsys):
     init = ["ToolSearch", "mcp__claude_ai_Gmail__search_threads", "mcp__claude_ai_Linear__list_issues"]
-    assert audit(env, capsys, bs.stream(init_tools=init)) == (0, "", "", [])
+    assert audit(env, capsys, bs.stream(init_tools=init, junk=False)) == (0, "", "", [])
 
 
 @pytest.mark.parametrize("where", ["init", "call", "both"])
 def test_an_mcp_tool_outside_the_allowlist_in_the_init_list_or_a_call_is_drift(env, capsys, where):
     tools = (EXTRA,) if where in ("call", "both") else ()
     init = ("ToolSearch", EXTRA, "mcp__claude_ai_Gmail__search_threads") if where in ("init", "both") else ()
-    code, out, err, rows = audit(env, capsys, bs.stream(tools=tools, init_tools=init))
+    code, out, err, rows = audit(env, capsys, bs.stream(tools=tools, init_tools=init, junk=False))
     assert (code, out, err) == (2, "", "")          # names go to the ledger only; brief.sh prints the one-line reason
     assert len(rows) == 1 and rows[0]["drift"] == [EXTRA] and rows[0]["stage"] == "stage1" and rows[0]["ts"].endswith("Z")
 
 
 def test_a_non_mcp_tool_is_not_drift_and_a_bad_allow_file_fails(env, capsys, tmp_path):
-    assert audit(env, capsys, bs.stream(tools=("ToolSearch",), init_tools=["Bash", "Read"]))[0] == 0
+    assert audit(env, capsys, bs.stream(tools=("ToolSearch",), init_tools=["Bash", "Read"], junk=False))[0] == 0
     bad = tmp_path / "allow.txt"
     bad.write_text("mcp__x__read # note\n")
     code, out, err = run(capsys, "tools-audit", put(env, "s.jsonl", bs.stream()), "--allow", str(bad))
@@ -399,6 +399,30 @@ def test_a_non_mcp_tool_is_not_drift_and_a_bad_allow_file_fails(env, capsys, tmp
                                   {"type": "system", "subtype": "init", "tools": "mcp__x__y"}])
 def test_a_stream_without_a_usable_init_tool_list_is_not_audited_so_it_fails(env, capsys, init):
     assert audit(env, capsys, jsonl([init]))[0] == 1
+
+
+def test_a_garbage_line_makes_the_audit_refuse_and_a_blank_line_does_not(env, capsys):
+    clean = bs.stream(init_tools=["ToolSearch"], junk=False)
+    code, out, err, rows = audit(env, capsys, clean + "\n   \n")
+    assert (code, rows) == (0, [])
+    for bad in ("not json\n", "[1, 2]\n", '{"type": \n', "[" * 100_000 + "\n"):         # the last one also overflows the parser's recursion
+        code, out, err, rows = audit(env, capsys, clean + bad)
+        assert (code, out, err) == (2, "", "") and rows[-1]["drift"] == ["unparseable"] and rows[-1]["stage"] == "stage1", bad[:10]
+
+
+def test_an_mcp_tool_that_appears_only_in_a_malformed_line_is_refused_and_reported_by_name(env, capsys):
+    hidden = '{"type": "assistant", "message": {"content": [{"type": "tool_use", "name" :  "' + EXTRA + '", "input": {\n'
+    code, out, err, rows = audit(env, capsys, bs.stream(init_tools=["ToolSearch"], junk=False) + hidden)
+    assert (code, out, err) == (2, "", "") and rows[-1]["drift"] == sorted([EXTRA, "unparseable"])
+    allowed = '{"name": "mcp__claude_ai_Gmail__search_threads"\n'                       # an allowed name in a malformed line: still unparseable
+    assert audit(env, capsys, bs.stream(init_tools=["ToolSearch"], junk=False) + allowed)[3][-1]["drift"] == ["unparseable"]
+
+
+def test_an_oversized_stream_is_refused_not_truncated(env, capsys, monkeypatch):
+    monkeypatch.setattr(ba, "CAP", 1000)
+    tail = jsonl([{"type": "assistant", "message": {"content": [{"type": "tool_use", "name": EXTRA, "input": {"pad": "x" * 2000}}]}}])
+    code, out, err, rows = audit(env, capsys, bs.stream(init_tools=["ToolSearch"], junk=False) + tail)
+    assert (code, out, err) == (2, "", "") and "unparseable" in rows[-1]["drift"]
 
 
 def test_a_u2028_in_the_init_event_does_not_hide_an_extra_tool(env, capsys):

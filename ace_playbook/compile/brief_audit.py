@@ -17,6 +17,8 @@ from pathlib import Path
 
 NAME = re.compile(r"[A-Za-z0-9_.-]+")
 ASCII_WS = " \t\r\n\v\f"          # the same set `[[:space:]]` matches under LC_ALL=C in hooks/brief_lib.sh
+RAW_NAME = re.compile(r'"name"\s*:\s*"(mcp__[A-Za-z0-9_.-]+)"')
+CAP = 50_000_000                  # bytes of a stream that `events` reads; `drift` refuses a larger file instead of cutting it
 
 
 def jl(text: str):
@@ -29,7 +31,7 @@ def jl(text: str):
 
 def events(path) -> list:
     """The JSON objects of a stream-json file (one per "\\n"-terminated line; anything else is skipped)."""
-    return [e for e in map(jl, Path(path).read_bytes()[:50_000_000].decode("utf-8", "replace").split("\n")) if isinstance(e, dict)]
+    return [e for e in map(jl, Path(path).read_bytes()[:CAP].decode("utf-8", "replace").split("\n")) if isinstance(e, dict)]
 
 
 def tool_uses(evs: list) -> set:
@@ -52,14 +54,20 @@ def allowed_names(path) -> set:
 
 
 def drift(stream, allow) -> list:
-    """Sorted `mcp__` tool names that the init tool list or a tool_use block shows and the allowlist does not name. ValueError when the stream
-    has no init event with a `tools` list (nothing was audited, so nothing may pass)."""
-    ok, evs = allowed_names(allow), events(stream)
+    """Sorted `mcp__` tool names that the init tool list or a tool_use block shows and the allowlist does not name, plus `unparseable` when
+    the audit cannot vouch for the stream: a non-blank line that is not a JSON object (a malformed line could hide a call) or a file over CAP
+    bytes (it is not truncated). A raw scan of ALL the bytes for `"name": "mcp__..."` adds the names a malformed line shows. ValueError when
+    the stream is whole but has no init event with a `tools` list (nothing was audited, so nothing may pass)."""
+    ok, raw = allowed_names(allow), Path(stream).read_bytes()
+    text = raw.decode("utf-8", "replace")
+    parsed = [(ln, jl(ln)) for ln in text[:CAP].split("\n") if ln.strip()]
+    evs = [e for _, e in parsed if isinstance(e, dict)]
+    bad = len(raw) > CAP or len(evs) != len(parsed)
     inits = [e.get("tools") for e in evs if e.get("type") == "system" and e.get("subtype") == "init"]
-    if not inits or not all(isinstance(t, list) for t in inits):
+    if not bad and (not inits or not all(isinstance(t, list) for t in inits)):
         raise ValueError("no init")
-    seen = {t for tools in inits for t in tools if isinstance(t, str)} | tool_uses(evs)
-    return sorted(t for t in seen if t.startswith("mcp__") and t not in ok)
+    seen = {t for tools in inits if isinstance(tools, list) for t in tools if isinstance(t, str)} | tool_uses(evs) | set(RAW_NAME.findall(text))
+    return sorted({t for t in seen if t.startswith("mcp__") and t not in ok} | ({"unparseable"} if bad else set()))
 
 
 def append_row(path, row: dict) -> None:
