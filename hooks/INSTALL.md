@@ -480,7 +480,10 @@ same stream, so compare consecutive rows for the share of a week). `uv run pytho
 brief, the needs-you count, the ledger row count and the last cost of each stage.
 
 The raw streams of a run hold mail the exclusion list has not seen, so `brief.sh` deletes them when it exits, also on SIGTERM, SIGINT or
-SIGHUP, which also stop the `claude` child (`ACE_BRIEF_KEEP=1` keeps them, 0600, under `brief_dir/run`; the session transcript is
+SIGHUP (exit 143, 130 and 129), which also stop the running `claude` or python step at once (every step runs in the background and is
+waited for, so the signal is not deferred). A SIGKILL cannot be caught: it leaves the lock and the raw files, so the lock directory holds the
+owner's `pid`, the next run takes over a lock whose pid is dead (or that is older than 30 minutes) and deletes the raw files first thing
+(`ACE_BRIEF_KEEP=1` keeps them, 0600, under `brief_dir/run`; the session transcript is
 never written, see Sessions above). `digest_clean.json` (summaries after the exclusions) stays there until the next run.
 
 ## What the hooks write

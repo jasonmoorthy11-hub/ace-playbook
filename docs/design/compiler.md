@@ -1128,7 +1128,9 @@ metrics, report, status, seal or the detectors changed.
   input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens, five_hour_before/after, seven_day_before/after,
   duration_ms, num_turns, tools_called}`; the window fields come from the stream's `rate_limit_event` (`unifiedWindows.<window>.utilization`).
   Jason sets the share of a weekly window after a week of rows (D-97).
-- **Run control.** `brief.sh` takes a directory lock (one run at a time; a lock older than 30 minutes is stale), `due` runs under it, and a
+- **Run control.** `brief.sh` takes a directory lock holding the owner's `pid` (one run at a time; a lock older than 30 minutes, or one whose pid is dead
+  after a SIGKILL, is stale and taken over, and the raw files are purged right after the lock is taken), runs every step (the `claude` stages
+  and each python verb) in the background and waits for it so a SIGTERM, SIGINT or SIGHUP stops it at once (exit 143, 130, 129), `due` runs under it, and a
   failed stage leaves no `brief_state.json`, so the next wake retries. Triggers: Hammerspoon `systemDidWake` and `screensDidUnlock` (20 s
   delay) and a `RunAtLoad` LaunchAgent; `terminal-notifier` fires only when `needs_you` is non-empty.
 

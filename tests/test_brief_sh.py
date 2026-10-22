@@ -230,19 +230,90 @@ def alive(pid):
     return True
 
 
-@pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGINT])
-def test_a_signal_kills_the_claude_child_and_removes_the_raw_files_and_the_lock(w, sig):
-    proc = subprocess.Popen([str(SCRIPT), "--force"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=w.tmp,
-                            env={**w.env, "ACE_FAKE_SLEEP": "30"})
-    pidfile = w.fake / "pid_stage1"
-    for _ in range(100):
-        if pidfile.exists() and pidfile.read_text():
-            break
-        time.sleep(0.2)
-    pid = int(pidfile.read_text())
+def wait_for(path, tries=150):
+    for _ in range(tries):
+        if path.exists() and path.read_text():
+            return path.read_text()
+        time.sleep(0.1)
+    raise AssertionError(f"{path} never appeared")
+
+
+def start(w, **env):
+    return subprocess.Popen([str(SCRIPT), "--force"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=w.tmp, env={**w.env, **env})
+
+
+def raw_left(w):
+    return sorted(p.name for p in (w.dir / "run").iterdir() if p.name.startswith(("stage", "digest_raw", "brief_raw", "rl_", "res_")))
+
+
+@pytest.mark.parametrize("sig, code", [(signal.SIGTERM, 143), (signal.SIGINT, 130), (signal.SIGHUP, 129)])
+def test_a_signal_kills_the_claude_child_removes_the_raw_files_and_the_lock_and_exits_with_its_own_code(w, sig, code):
+    proc = start(w, ACE_FAKE_SLEEP="30")
+    pid = int(wait_for(w.fake / "pid_stage1"))
     assert alive(pid) and (w.dir / "run.lock").exists()
     proc.send_signal(sig)
     proc.communicate(timeout=30)
     time.sleep(0.5)
-    assert proc.returncode == 143 and not alive(pid) and not (w.dir / "run.lock").exists()
-    assert not [p for p in (w.dir / "run").iterdir() if p.name.startswith(("stage", "digest_raw"))]
+    assert proc.returncode == code and not alive(pid) and not (w.dir / "run.lock").exists()
+    assert raw_left(w) == []
+
+
+def slow_py(w, step):
+    """A python wrapper (ACE_BRIEF_PY): at the given brief verb it runs, under `uv run` like the real step, a python that records its pid and
+    sleeps 30 s; for every other verb it runs the real thing."""
+    script = w.tmp / "slowpy"
+    nap = f"import os, time; open('{w.tmp}/pystep.pid', 'w').write(str(os.getpid())); time.sleep(30)"
+    script.write_text(f'#!/bin/bash\nif [[ " $* " == *" {step} "* ]]; then exec uv run --quiet --project {ROOT} python -c "{nap}"; fi\n'
+                      f'exec uv run --quiet --project {ROOT} python "$@"\n')
+    script.chmod(0o755)
+    return str(script)
+
+
+@pytest.mark.parametrize("step", ["digest-apply", "extract", "ledger", "render", "state-mark"])
+def test_a_signal_during_a_python_step_is_not_deferred_until_the_step_ends(w, step):
+    proc = start(w, ACE_BRIEF_PY=slow_py(w, step))
+    pid = int(wait_for(w.tmp / "pystep.pid"))
+    assert alive(pid) and (w.dir / "run.lock").exists() and raw_left(w)             # raw mail is on disk while the step runs
+    began = time.monotonic()
+    proc.send_signal(signal.SIGTERM)
+    proc.communicate(timeout=15)
+    assert time.monotonic() - began < 8 and proc.returncode == 143                  # bash used to wait out the 30 s step before the trap ran
+    time.sleep(0.3)
+    assert not alive(pid) and not (w.dir / "run.lock").exists() and raw_left(w) == []
+
+
+def test_a_lock_left_by_a_sigkilled_run_is_taken_over_and_the_raw_files_it_left_are_purged(w):
+    proc = start(w, ACE_FAKE_SLEEP="30")
+    pid = int(wait_for(w.fake / "pid_stage1"))
+    assert (w.dir / "run.lock" / "pid").read_text().strip() == str(proc.pid)
+    proc.kill()
+    proc.communicate(timeout=30)
+    os.kill(pid, signal.SIGKILL)
+    assert (w.dir / "run.lock").exists() and "stage1.jsonl" in raw_left(w)             # what a SIGKILL leaves: the lock and the raw mail
+    (w.dir / "run" / "digest_raw.json").write_text("RAW-MAIL-FROM-THE-KILLED-RUN")
+    p = w.run("--force")
+    assert (p.returncode, p.stdout.splitlines()[-1]) == (0, "brief: ok, 1 need you") and (w.dir / "brief.html").exists()
+    assert raw_left(w) == [] and not (w.dir / "run.lock").exists()
+
+
+def test_a_lock_of_a_live_pid_is_respected_and_a_lock_of_a_dead_or_unreadable_pid_is_taken(w):
+    lock = w.dir / "run.lock"
+    lock.mkdir(parents=True)
+    (lock / "pid").write_text(str(os.getpid()))                                          # this test process is alive
+    assert (w.run("--force").returncode, w.ledger()) == (0, []) and lock.exists()
+    (lock / "pid").write_text("not-a-pid")                                               # unreadable and fresh: not provably dead, left alone
+    assert (w.run("--force").returncode, w.ledger()) == (0, []) and lock.exists()
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    (lock / "pid").write_text(str(dead.pid))
+    assert w.run("--force").returncode == 0 and len(w.ledger()) == 2 and not lock.exists()
+
+
+def test_raw_files_are_purged_right_after_the_lock_is_taken_even_with_keep(w):
+    run = w.dir / "run"
+    run.mkdir(parents=True)
+    for name in ("res_old.json", "rl_old.json", "stage1.old", "digest_raw.json"):
+        (run / name).write_text("OLD-RAW")
+    assert w.run("--force", ACE_BRIEF_KEEP="1").returncode == 0
+    assert not (run / "res_old.json").exists() and not (run / "rl_old.json").exists() and not (run / "stage1.old").exists()
+    assert (run / "res_stage1.json").exists() and (run / "digest_raw.json").read_text() != "OLD-RAW"
