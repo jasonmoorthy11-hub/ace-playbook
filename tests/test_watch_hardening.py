@@ -104,7 +104,7 @@ def test_change_target_and_titles_never_come_from_a_page(tmp_path):
     lead = match.leads([feed], {"lead_keywords": ["hooks"]}, NOW)[0]
     assert lead["change"]["target"] == "bsky-mirror" and "evil" not in json.dumps(lead["change"])
     sm = {"id": "sm", "url": "https://example.test/sitemap.xml", "kind": "sitemap", "tier": 0, "sha256": "d" * 64, "prev_sha256": None, "quote": "",
-          "heading": "", "data": {"https://docs.example.test/en/hooks/#frag": "2026-10-25"}}
+          "heading": "", "data": {"https://docs.example.test/en/hooks/#frag": "2026-10-22"}}
     mapping = {"docs": {"https://docs.example.test/en/hooks": ["k"]}}
     rec = match.docs({}, [sm], mapping, {"https://docs.example.test/en/hooks/#frag": "2026-10-01"}, NOW)[0]
     assert rec["title"] == "docs page changed: https://docs.example.test/en/hooks" and rec["change"]["target"] == "https://docs.example.test/en/hooks"
@@ -465,3 +465,118 @@ def test_markdown_pages_hide_a_bare_raw_text_opener_but_keep_one_in_code():
     rows = get(b"intro `<script>` code\n\n" + table)["data"]
     assert "claude-old-sonnet-20250101" in {r["model_id"] for r in rows}
     assert "SECRET" not in get(b"# T\n\n<div hidden>SECRET</div>\nvisible\n", kind="md")["body"]
+
+
+# ------------------------------------------------------------------ wave 4: version close, ids per model, superseded model pins, one-line quotes
+NPM = {"id": "npm", "url": "https://example.test/npm", "kind": "npm", "tier": 0, "sha256": "e" * 64, "prev_sha256": None,
+       "data": {"latest": "9.1.0", "stable": "9.0.4"}, "quote": '"latest": "9.1.0",', "heading": ""}
+
+
+@pytest.mark.parametrize("ver", ["garbage", "", "v?", "1.2", "claude", "٩.٠.١ (Claude Code)", "x"])
+def test_a_version_proposal_is_not_closed_by_a_claude_version_that_is_not_a_version(tmp_path, ver):
+    wd = wd_of(tmp_path)
+    put_pin(wd, [NPM], {"claude_version": "9.0.1", "targets": {}})
+    bad = {"claude_version": ver, "targets": {}}
+    out = reconcile.reconcile(wd, match.candidates(bad, [NPM], {}, {}, LATER), [NPM], LATER, False, bad)
+    assert out["closed"] == [] and state_of(wd, LATER) == {"version": "open"}
+
+
+TWO = HDR + "| claude-p-1, claude-p-2 | Deprecated | 2026-01-01 | 2026-06-01 | claude-q-1 |\n"
+BOTH = inv_of([[1, '"claude-p-1", "claude-p-2"']])
+
+
+def test_two_ids_in_one_model_cell_are_two_proposals_and_one_retirement_closes_only_its_own(tmp_path):
+    cands = match.candidates(BOTH, [dep(TWO)], {}, {}, NOW)
+    assert len(cands) == 2 and len({c["id"] for c in cands}) == 2 and all(match.check(c) is None for c in cands)
+    assert {pin.model_of(c) for c in cands} == {"claude-p-1", "claude-p-2"}
+    assert len({reconcile.key(c) for c in cands}) == 2
+    wd = wd_of(tmp_path)
+    put_pin(wd, [dep(TWO)], BOTH)
+    assert [s for _, s in store.statuses(wd, NOW)] == ["open", "open"]
+    only2 = inv_of([[1, '"claude-p-2"']])
+    out = reconcile.reconcile(wd, match.candidates(only2, [dep(TWO)], {}, {}, LATER), [dep(TWO)], LATER, False, only2)
+    closed = [c["id"] for c in cands if pin.model_of(c) == "claude-p-1"]
+    assert out["closed"] == closed and {pin.model_of(p): s for p, s in store.statuses(wd, LATER)} == {"claude-p-1": "auto-closed",
+                                                                                                         "claude-p-2": "open"}
+
+
+def test_the_record_id_names_the_model_only_when_the_title_does(tmp_path):
+    a, b = match.candidates(BOTH, [dep(TWO)], {}, {}, NOW)
+    assert a["evidence"][0]["quote"] == b["evidence"][0]["quote"] and a["id"] != b["id"]
+    plain = match.record("docs", "docs page changed: u", a["evidence"][0], ["k"], "u", None, "claude --version", NOW)
+    assert plain["id"] == match.make_id("docs", "u", a["evidence"][0]["sha256"], a["evidence"][0]["quote"])
+    assert match.make_id("model_pin", "t", "0" * 64, "q", "claude-p-1") != match.make_id("model_pin", "t", "0" * 64, "q", "claude-p-2")
+    forged = {**a, "id": match.make_id(a["class"], a["change"]["target"], a["evidence"][0]["sha256"], a["evidence"][0]["quote"])}
+    assert match.check(forged) == "id"
+
+
+def open_pins(wd, now=NOW):
+    return [p for p, s in store.statuses(wd, now) if p["class"] == "model_pin" and s == "open"]
+
+
+def test_editing_the_row_of_a_retiring_model_does_not_open_another_model_pin(tmp_path):
+    wd = wd_of(tmp_path)
+    put_pin(wd, [dep(row())], PINNED)
+    for edited in (row(retires="2026-06-01 (extended)"), row(deprecated="2026-02-02"), row(retires="2026-07-01")):
+        _, out = put_pin(wd, [dep(edited)], PINNED)
+        assert out["new"] == [] and out["closed"] == []
+    assert len(open_pins(wd)) == 1 and len(list((wd / "proposals").glob("W-*.json"))) == 1
+
+
+def test_a_changed_successor_opens_a_new_model_pin_and_closes_the_old_one_as_superseded(tmp_path):
+    wd = wd_of(tmp_path)
+    cands, _ = put_pin(wd, [dep(row())], PINNED)
+    _, out = put_pin(wd, [dep(row(succ="claude-q-2"))], PINNED)
+    assert out["closed"] == [cands[0]["id"]] and len(out["new"]) == 1 and out["new"][0]["status"] == "open"
+    assert [p["title"] for p in open_pins(wd)] == ["Replace claude-p-1 with claude-q-2 in t"]
+    note = [d for d in store.read_decisions(wd) if d["decision"] == "closed"]
+    assert [(d["id"], d["note"]) for d in note] == [(cands[0]["id"], "superseded")]
+    assert reconcile.key(cands[0]) == ("model_pin", "t", "claude-p-1", "claude-q-1")
+
+
+def test_old_duplicate_model_pins_from_row_edits_are_closed_keeping_the_newest(tmp_path):
+    wd = wd_of(tmp_path)
+    ids = []
+    for n, retires in enumerate(("2026-06-01", "2026-06-02", "2026-06-03")):
+        rec = match.candidates(PINNED, [dep(row(retires=retires))], {}, {}, f"2026-10-2{n}T00:00:00Z")[0]
+        store.write_proposal(wd, rec)
+        ids.append(rec["id"])
+    assert len(set(ids)) == 3 and len(open_pins(wd)) == 3
+    res = [dep(row(retires="2026-06-09"))]
+    out = reconcile.reconcile(wd, match.candidates(PINNED, res, {}, {}, NOW), res, NOW, False, PINNED)
+    assert sorted(out["closed"]) == sorted(ids[:2]) and out["new"] == [] and [p["id"] for p in open_pins(wd)] == [ids[2]]
+
+
+def test_a_dry_run_reports_the_superseded_ones_and_writes_nothing(tmp_path):
+    wd = wd_of(tmp_path)
+    cands, _ = put_pin(wd, [dep(row())], PINNED)
+    changed = [dep(row(succ="claude-q-2"))]
+    out = reconcile.reconcile(wd, match.candidates(PINNED, changed, {}, {}, NOW), changed, NOW, True, PINNED)
+    assert out["closed"] == [cands[0]["id"]] and store.read_decisions(wd) == [] and len(list((wd / "proposals").glob("W-*.json"))) == 1
+
+
+def test_the_quote_of_a_scanned_source_is_one_verbatim_line_of_its_body(w, capsys):
+    multi = b'{\n  "latest": "9.1.0",\n  "stable": "9.0.4"\n}\n'
+    w.pages[U["npm"]] = (multi, "application/json")
+    w.run(capsys, "scan")
+    ver = [p for p, _ in w.proposals() if p["class"] == "version"]
+    assert len(ver) == 1
+    quote = ver[0]["evidence"][0]["quote"]
+    assert "\n" not in quote and quote in multi.decode()
+
+
+def test_a_quote_must_be_a_substring_of_the_body_when_the_body_is_known():
+    rec = match.candidates(PINNED, [dep(row())], {}, {}, NOW)[0]
+    body = rec["evidence"][0]["quote"] + "\nmore\n"
+    assert match.check(rec) is None and match.check(rec, body) is None
+    assert match.check(rec, "something else\n") == "quote"
+    joined = {**rec, "evidence": [{**rec["evidence"][0], "quote": "a b"}]}
+    assert match.check(joined, "a\nb\n") == "quote"
+
+
+def test_quote_line_prefers_a_line_with_the_wanted_text_and_never_joins_lines():
+    from ace_playbook.compile.watch import records
+    body = '{\n  "latest": "9.1.0",\n  "stable": "9.0.4"\n}\n'
+    assert records.quote_line(body, "9.0.4") == '"stable": "9.0.4"' and records.quote_line(body, "nope") == "{"
+    assert records.quote_line(body, "9.1.0") == '"latest": "9.1.0",' and records.quote_line("\n\n  hi  \n") == "hi"
+    assert records.quote_line("a\tb\nc d\n") == "c d" and records.quote_line("") == "" and len(records.quote_line("x" * 900)) == 400

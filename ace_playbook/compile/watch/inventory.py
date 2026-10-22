@@ -2,8 +2,10 @@
 
 The private map file (`watch_inventory_map`) names the targets: `{"targets": {key: {"path": "~/...", "pattern": regex}}, "docs":
 {docs page url: [target key, ...]}, "lead_keywords": [...]}`. For each target the snapshot keeps ONLY the lines that match (with their
-line numbers) and the sha256 of each file, never a whole file; a file that is not there is `{"missing": true}`. `claude --version` is run
-(no shell, 10 s) only when `claude` is on PATH. `inventory.json` is 0600 in `watch_dir`. Imports `subprocess`, so it is off the hook path.
+line numbers) and the sha256 of each file, never a whole file; a file that is not there is `{"missing": true}`. At most `MAX_FILES` files
+per target are read (sorted by path); a target with more is marked `truncated` and `pin` makes a lead, never a diff, for it.
+`claude --version` is run (no shell, 10 s) only when `claude` is on PATH. `inventory.json` is 0600 in `watch_dir`. Imports `subprocess`, so it
+is off the hook path.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from .fsio import write_private
 from ...canon import now_iso
 from .store import INVENTORY, clean
 
-MAX_BYTES, MAX_LINES, MAX_LINE = 4 * 1024 * 1024, 100, 300
+MAX_BYTES, MAX_LINES, MAX_LINE, MAX_FILES = 4 * 1024 * 1024, 100, 300, 50
 KEY = re.compile(r"[A-Za-z0-9_.:-]{1,60}")
 
 
@@ -80,12 +82,14 @@ def claude_version(which=shutil.which, run=subprocess.run) -> str | None:
 
 
 def build(mapping: dict, now: str | None = None, which=shutil.which, run=subprocess.run) -> dict:
-    """The snapshot `{generated_at, claude_version, targets: {key: {files: {path: {sha256, lines} | {missing: true}}}}}`."""
+    """The snapshot `{generated_at, claude_version, targets: {key: {files: {path: {sha256, lines} | {missing: true}}, truncated?: true}}}`."""
     targets = {}
     for key, t in sorted(mapping["targets"].items()):
         rx, pattern = re.compile(t["pattern"]), os.path.expanduser(t["path"])
         found = sorted(p for p in glob.glob(pattern) if os.path.isfile(p))
-        targets[key] = {"files": {_display(p): _scan(p, rx) for p in found} or {_display(pattern): {"missing": True}}}
+        targets[key] = {"files": {_display(p): _scan(p, rx) for p in found[:MAX_FILES]} or {_display(pattern): {"missing": True}}}
+        if len(found) > MAX_FILES:
+            targets[key]["truncated"] = True
     return {"generated_at": now or now_iso(), "claude_version": claude_version(which, run), "targets": targets}
 
 

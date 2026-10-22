@@ -1050,8 +1050,8 @@ line carries that night's health), refreshes `status.json` for the status line a
 
 The watcher of design `2026-10-21-ace-watcher-and-cockpit` (phase 1, W1) is `compile/watch/`: a model-free configuration watcher that
 PROPOSES and never applies. It is the one network-using package of ace-playbook and is never on the hook path: `watch`, `fetch`,
-`inventory`, `match`, `store`, `summary` and the helper modules `chars`, `fsio`, `cssstyle`, `records`, `pin` and `reconcile` are in the
-`ABSENT` tuple of `tests/test_hook_conformance.py`. `status.py` imports only
+`inventory`, `match`, `store`, `summary` and the helper modules `chars`, `fsio`, `cssstyle`, `htmlrules`, `mdrules`, `records`, `pin` and
+`reconcile` are in the `ABSENT` tuple of `tests/test_hook_conformance.py`. `status.py` imports only
 `watch.summary` (a pure read, no network import); `__main__` imports the light `watch.cli`, which loads `scan`, `fetch` and `inventory` only
 when a scan runs (tested in `tests/test_compile_watch_cli.py`).
 
@@ -1059,13 +1059,21 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   checked before the body is read, a 1 MiB cap (`cap + 1` bytes read), http(s) only. Parsers for RSS, Atom, npm dist-tags, the
   deprecations table and sitemaps. `strip_hidden` keeps visible text only: no script, style, template, noscript, comment, `hidden`,
   `aria-hidden`, `inert`, zero-width or bidi characters, and inline styles read after normalisation (comments and CSS escapes removed):
-  display none, visibility hidden or collapse, opacity or font-size zero in any spelling, a zero clipped box, off-screen positions,
-  `clip-path:inset(100%)`, `scale(0)`, a transparent color; also skipped are a closed `details`, `dialog`, `svg`, `math`, `iframe`,
+  display none, visibility hidden or collapse, opacity below 0.1 (negative too), font-size below 1px, a box of 1px or less that clips,
+  off-screen positions and far negative margins or text-indent (500px or 20em and beyond), `clip-path:inset()` at 50 % or more, any zero
+  `scale` argument, a transparent `color` or `-webkit-text-fill-color`; also skipped are a closed `details`, `dialog`, `svg`, `math`, `iframe`,
   `object`, `embed` and `head`. XML with a DTD or an ENTITY declaration is dropped (`xml`).
   Also: a `Content-Encoding` other than identity is dropped (`encoding`); a 304 for a URL with no stored validator is dropped (`etag`);
   a deprecations page that parses to no rows is a `parse` drop (never an empty table); the `md` kind is read in markdown mode
-  (the HTML rules, except that a raw-text opener inside a code span or a fenced block is prose).
-  Helpers: `chars.py` (invisible and control characters, shared by the sanitizer, the store and the record cleaner), `cssstyle.py` (the
+  (the HTML rules, except that a raw-text opener is prose when it is in a code span or fenced block, outside every HTML block, and no
+  closer for it follows later: `mdrules.py`). The tree rules are fail closed (`htmlrules.py`): a slash on a non-void tag is ignored, an end
+  tag a browser ignores (a scope barrier or a "special" element in between) pops nothing when that would unhide text, a double-escaped
+  script closes at its next-but-one `</script`, and more than 512 open elements raise `TooDeep` (a `parse` drop). The text and tails inside
+  a child element of an XHTML feed field are HTML-escaped before the sanitizer sees them (only the field's own text stays raw), so an
+  escaped closer there cannot close a hidden ancestor. The npm `latest` must be an ASCII version (`[0-9]+.[0-9]+.[0-9]+` with an optional
+  `-` or `+` suffix of at most 40 `[0-9A-Za-z.-]`), else the fetch is a `parse` drop.
+  Helpers: `chars.py` (every Default_Ignorable_Code_Point, the format characters and the control characters, shared by the sanitizer, the
+  store and the record cleaner), `cssstyle.py` (the
   inline-style normaliser and the simple single-selector `<style>` rules; media queries, descendant or attribute selectors and external
   stylesheets are not handled, see LIMITATIONS.md), `fsio.py` (private atomic write with a unique O_EXCL temporary name, the scan lock).
 - `netguard.py`: the SSRF guard. A host that is, or resolves to, a loopback, link-local, private, multicast or reserved address is dropped
@@ -1073,19 +1081,26 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   URL, and is dropped (`redirect`) otherwise. The DNS answer can change between the check and the connect (rebinding); the address is checked
   before the connection, not on the connected socket, so that race stays.
 - `inventory.py`: the snapshot (`inventory.json`, 0600). Per target of the private map only the matching LINES with numbers plus the
-  file sha256; `{"missing": true}` for a missing file; `claude --version` only when `claude` is on PATH.
+  file sha256; `{"missing": true}` for a missing file; at most 50 files per target, a target with more is marked `truncated` and its
+  `model_pin` becomes a lead with no diff; `claude --version` only when `claude` is on PATH.
 - `match.py`: the rules. `model_pin` (a deprecated model id the inventory pins: a diff generated by code replacing it with the
   successor, else a `lead` with no diff titled "retirement with no successor named"), `version` (npm `latest` or `stable` newer than the
-  installed `claude`), `docs` (a mapped page's sitemap `lastmod` moved or its `.md` hash changed; a first sight is a baseline) and
+  installed `claude`), `docs` (a mapped page's sitemap `lastmod` moved, unless it is more than a day ahead of the scan, or its `.md` hash changed; a first
+  sight is a baseline, and a future `lastmod` is never remembered) and
   `lead` (a tier-1 feed entry with a `lead_keywords` term). `check` enforces the record shape, the caps, the id, the diff hash, the
   verify templates and "tier-1 evidence alone never carries a diff". `match.py` is the entry (`candidates`); the pieces are `records.py`
   (`record`, `make_id`, `check`), `pin.py` (the `model_pin` rule, `state`, `pinned`, `model_of`) and `reconcile.py` (below).
   `change.target` is never page text: it is an inventory key, a mapped docs URL, a source id or `claude_version`, and a docs title is
   built from the mapped URL. `inventory.py` splits files on `\n` (keeping `\r`) and sets a `truncated` flag on a file cut at the line cap;
   a `model_pin` whose target file is `truncated` (or too large, or has a cut or U+FFFD line) is written as a `lead` with no diff.
-- `reconcile.py`: what one scan does with its candidates. Dedupe keys: a `model_pin` or `version` proposal (and any other state-based
-  class) by (class, target, quote), i.e. the state it reports; a `docs` proposal by (class, target, evidence sha256), so a page that changes
-  again after a dismissal is new. A state-based proposal that expired or auto-closed while its trigger is still true gets a `reopened`
+- `reconcile.py`: what one scan does with its candidates. Dedupe keys: a `model_pin` by (class, target, model id, successor), so editing
+  the row of the deprecations table (a new date, "(extended)") opens nothing; a model_pin whose target and model a candidate also names
+  with another successor, and every older duplicate of the candidate's key, is closed with the note `superseded` when the candidate
+  opens; any other state-based class by (class, target, quote, model id), i.e. the state it reports, so two ids in one table cell stay two
+  proposals (the id of a record hashes the model id when its title names one); a `docs` proposal by (class, target, evidence sha256), so
+  a page that changes again after a dismissal is new. A `version` proposal auto-closes only when `claude --version` printed a real
+  version (`match._ver` finds `N.N.N`; garbage with exit 0 closes nothing). A state-based proposal that expired or auto-closed while
+  its trigger is still true gets a `reopened`
   decision row (its note is the new 30-day expiry; the proposal file is immutable) and counts toward the cap of five. A scan holds the
   exclusive `scan.lock` in `watch_dir` (a second scan prints `watch: scan running`, exit 0), and the `queue` command takes the same lock
   (blocking) for its rebalance.
@@ -1093,8 +1108,10 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   the digest block. `scan.py`, `cli.py`: `compile watch scan [--tier 0|1|all] [--dry-run] [--force]`, `status`, `queue [--limit N]`.
 
 Record (design 4.3, exactly): `{id, created, class, elevated, title, evidence[{url, sha256, quote, tier}], inventory_hits, change{target, diff,
-diff_sha256}, verify, expires, status}`. `id` is `W-` plus the first 8 hex of sha256 of `class|target|evidence sha|quote`, so a re-scan
-dedupes; `title` is at most 120 characters and `quote` 400, both cleaned of control characters; `verify` comes from a fixed template per
+diff_sha256}, verify, expires, status}`. `id` is `W-` plus the first 8 hex of sha256 of `class|target|evidence sha|quote` (with `|model id`
+appended when the code-made title names a model), so a re-scan dedupes; `title` is at most 120 characters and `quote` 400, both cleaned
+of control characters, and the quote is ONE line of the fetched body, verbatim (`records.quote_line`; `check(rec, body)` tests the
+substring); `verify` comes from a fixed template per
 class (`grep -n "<model_id>" <path>`, `claude --version`, `curl -sI <url> | head -1`); a model id or successor taken from a page must match
 `[A-Za-z0-9][A-Za-z0-9._:-]{2,79}` before it reaches a diff or a command; `elevated` is false for every W1 class; `expires` is 30 days
 after `created`. Free text from the web appears in a record only as the title and the quote.
@@ -1106,10 +1123,13 @@ ETag and `fetched_at`; the parsed result of every source; per-source stamps for 
 `status`; `expired` once past `expires`; `auto-closed` when a re-scan no longer produces a state-based trigger (model_pin, version, an
 inventory lead) while its source was read. Docs and feed-lead proposals are events and run to their expiry. At most five proposals are open
 (leads excepted); the rest are written `queued` and a `promoted` decision row opens them in ranking order (model_pin, version, docs) when a
-slot frees. With `DISABLED` present `scan` prints `watch: disabled`, fetches nothing and writes nothing.
+slot frees. A reader never raises on a corrupt store: JSON too deeply nested, bad UTF-8, a decision row of the wrong type and a proposal
+of the wrong shape are skipped, and the proposals skipped are counted in `status.json` as `watch_corrupt` (`corrupt N` in the digest block).
+`ensure` keeps the mode of a directory that exists and refuses a symlinked proposals folder (`compile watch scan` exits 2). With
+`DISABLED` present `scan` prints `watch: disabled`, fetches nothing and writes nothing.
 
 `status.json` gains `watch_open`, `watch_leads`, `watch_oldest`, `watch_top`, `watch_titles` (up to three, ranked), `watch_disabled` and
-`watch_last_scan`; the digest gains the `proposals` block (`open N  leads N  oldest <age>  last scan <age>` and up to three `- <title>`
+`watch_last_scan` and `watch_corrupt`; the digest gains the `proposals` block (`open N  leads N  oldest <age>  last scan <age>` and up to three `- <title>`
 lines, `none` or `disabled`); the status line ends with `watch N`. Nothing here touches `metrics.py`, `report.py`, `seal.py`, the detector
 files or the live measurement.
 

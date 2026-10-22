@@ -136,7 +136,7 @@ def test_unreadable_proposal_files_are_skipped(wd):
 def test_fields_of_a_missing_watch_dir_are_all_zero(tmp_path):
     cfg = cfgmod.Config(data_dir=tmp_path)
     assert summary.fields(cfg, NOW) == {"watch_open": 0, "watch_leads": 0, "watch_oldest": None, "watch_top": None, "watch_titles": [],
-                                        "watch_disabled": False, "watch_last_scan": None}
+                                        "watch_disabled": False, "watch_last_scan": None, "watch_corrupt": 0}
     assert not (tmp_path / "watch").exists()                              # a pure read creates nothing
 
 
@@ -167,3 +167,84 @@ def test_the_block_format(tmp_path):
     assert summary.block({**base, "watch_disabled": True}, NOW, age) == ["disabled"]
     assert summary.block({}, NOW, age) == ["none"]
     assert summary.block({**base, "watch_open": "x"}, NOW, age)[0].startswith("open 0  ")
+
+
+# ------------------------------------------------------------------ wave 4: corrupt stores never raise, ensure() is careful
+def test_deep_json_in_a_proposal_a_decision_row_or_the_seen_file_is_skipped_not_raised(tmp_path, wd):
+    store.write_proposal(wd, rec(1))
+    (wd / "proposals" / "W-0000dead.json").write_text("[" * 200000)
+    (wd / "decisions.jsonl").write_text("[" * 200000 + "\n" + json.dumps({"ts": NOW, "id": "W-00000001", "decision": "later", "note": ""}) + "\n")
+    (wd / "seen.json").write_text('{"a":' * 200000)
+    assert store.read_seen(wd) == {}
+    assert [p["id"] for p in store.load_proposals(wd)] == ["W-00000001"]
+    assert [d["decision"] for d in store.read_decisions(wd)] == ["later"]
+    f = summary.fields(cfgmod.Config(data_dir=tmp_path, watch_dir=wd), NOW)
+    assert (f["watch_open"], f["watch_corrupt"], f["watch_last_scan"]) == (1, 1, None)
+
+
+@pytest.mark.parametrize("bad", [
+    {"id": "W-0000cafe", "created": [1], "class": {"a": 1}, "expires": 5, "status": "open", "title": ["x"]},
+    {"id": "W-0000cafe", "created": NOW, "class": ["x"], "title": "t", "evidence": [], "change": {}},
+    {"id": "W-0000cafe", "created": NOW, "class": "docs", "title": 7, "evidence": [{}], "change": {"target": "t"}},
+    {"id": "W-0000cafe", "created": NOW, "class": "docs", "title": "t", "evidence": "x", "change": {"target": "t"}},
+    {"id": "W-0000cafe", "created": NOW, "class": "docs", "title": "t", "evidence": [{"quote": "q"}], "change": []},
+    {"id": "W-0000cafe", "created": None, "class": "docs", "title": "t"}, [1, 2], "text", 5])
+def test_a_proposal_of_the_wrong_shape_is_skipped_and_counted_and_fields_never_raise(tmp_path, wd, bad):
+    store.write_proposal(wd, rec(1))
+    (wd / "proposals" / "W-0000cafe.json").write_text(json.dumps(bad))
+    (wd / "decisions.jsonl").write_text(json.dumps({"id": "W-0000cafe", "decision": "reopened", "note": None}) + "\n"
+                                        + json.dumps({"id": "W-00000001", "decision": ["x"], "note": {}}) + "\n"
+                                        + json.dumps({"id": ["W-00000001"], "decision": "later"}) + "\n")
+    assert [p["id"] for p in store.load_proposals(wd)] == ["W-00000001"]
+    assert store.read_decisions(wd) == [{"id": "W-0000cafe", "decision": "reopened", "note": None}]
+    f = summary.fields(cfgmod.Config(data_dir=tmp_path, watch_dir=wd), NOW)
+    assert (f["watch_open"], f["watch_corrupt"]) == (1, 1)
+    assert summary.block(f, NOW, lambda ts, now: "1h")[0].endswith("corrupt 1")
+
+
+def test_a_symlinked_proposal_file_and_a_proposals_dir_that_is_a_file_count_as_corrupt(tmp_path, wd):
+    target = tmp_path / "elsewhere.json"
+    target.write_text(json.dumps(rec(2)))
+    (wd / "proposals" / "W-00000002.json").symlink_to(target)
+    assert store.load_proposals(wd) == [] and store.scan_proposals(wd)[1] == 1
+
+
+def test_fields_fall_back_to_zeros_when_the_store_raises_anything(tmp_path, wd, monkeypatch):
+    def boom(*a, **k):
+        raise TypeError("unhashable")
+
+    monkeypatch.setattr(store, "scan_proposals", boom)
+    f = summary.fields(cfgmod.Config(data_dir=tmp_path, watch_dir=wd), NOW)
+    assert (f["watch_open"], f["watch_leads"], f["watch_titles"], f["watch_corrupt"]) == (0, 0, [], 0)
+    monkeypatch.undo()
+    monkeypatch.setattr(store, "read_decisions", lambda wd: 1 / 0)
+    assert summary.fields(cfgmod.Config(data_dir=tmp_path, watch_dir=wd), NOW)["watch_open"] == 0
+
+
+def test_status_of_and_rank_key_tolerate_odd_types():
+    odd = {"id": "W-00000001", "class": {"a": 1}, "created": [1]}
+    assert store.rank_key(odd)[0] == 9
+    assert store.status_of({"id": "W-00000001", "expires": 5, "status": ["x"]}, [], NOW) == "open"
+
+
+def test_ensure_leaves_an_existing_directory_mode_alone_and_creates_a_missing_proposals_dir_0700(tmp_path):
+    wd = tmp_path / "w"
+    wd.mkdir(mode=0o755)
+    wd.chmod(0o755)
+    store.ensure(wd)
+    assert stat.S_IMODE(wd.stat().st_mode) == 0o755 and stat.S_IMODE((wd / "proposals").stat().st_mode) == 0o700
+
+
+def test_ensure_refuses_a_symlinked_proposals_dir(tmp_path):
+    wd = tmp_path / "w"
+    wd.mkdir()
+    other = tmp_path / "other"
+    other.mkdir()
+    (wd / "proposals").symlink_to(other)
+    with pytest.raises(store.UnsafeDir) as exc:
+        store.ensure(wd)
+    assert str(tmp_path) not in str(exc.value) and list(other.iterdir()) == []
+    (wd / "proposals").unlink()
+    (wd / "proposals").write_text("a file")
+    with pytest.raises(store.UnsafeDir):
+        store.ensure(wd)

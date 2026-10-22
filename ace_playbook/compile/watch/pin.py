@@ -11,14 +11,13 @@ from __future__ import annotations
 
 import re
 
-from .records import record, sh
+from .records import record, sh, title_model
 
 SAFE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{2,79}")
 MODEL_ID = re.compile(r"claude-[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?")
 NONE_WORDS = ("", "n/a", "na", "-", "none", "tbd", "to be announced")
 GONE = re.compile(r"(?:deprecated|retired)\b", re.I)                          # a model whose table says Active or Legacy is not retiring
 MAX_LINE = 300
-TITLE = re.compile(r"Replace (\S+) with \S+ in |retirement with no successor named: (\S+) \(")
 
 
 def boundary(token: str) -> re.Pattern:
@@ -55,8 +54,12 @@ def pinned(inv: dict, key: str, mid: str) -> bool:
 
 def model_of(rec: dict) -> str | None:
     """The model id a model_pin proposal or a retirement lead is about (read back from its code-made title)."""
-    m = TITLE.match(rec.get("title", "")) if isinstance(rec.get("title"), str) else None
-    return (m.group(1) or m.group(2)) if m else None
+    return title_model(rec.get("title"))[0] or None
+
+
+def successor_of(rec: dict) -> str:
+    """The successor a model_pin proposal replaces its model with, "" for a lead (read back from the code-made title)."""
+    return title_model(rec.get("title"))[1]
 
 
 def _lines(inv: dict, rx: re.Pattern) -> dict[str, dict[str, list]]:
@@ -87,7 +90,7 @@ def model_pin(inv: dict, results: list[dict], now: str) -> list[dict]:
         ev = {"url": m["res"]["url"], "sha256": m["res"]["sha256"], "quote": m["row"], "tier": m["res"]["tier"]}
         for key, files in sorted(_lines(inv, rx).items()):
             verify = f'grep -n "{mid}" ' + " ".join(sh(p) for p in sorted(files))
-            cut = any(f.get("truncated") or f.get("too_large") for f in inv["targets"][key]["files"].values())
+            cut = inv["targets"][key].get("truncated") or any(f.get("truncated") or f.get("too_large") for f in inv["targets"][key]["files"].values())
             whole = new and new != mid and not cut and all(len(str(t)) < MAX_LINE and "�" not in str(t) for ls in files.values() for _, t in ls)
             if whole:
                 out.append(record("model_pin", f"Replace {mid} with {new} in {key}", ev, [key], key, _diff(files, rx, new), verify, now))

@@ -9,7 +9,7 @@ from ace_playbook.compile.watch import match, store
 from .test_compile_digest import block
 from .test_compile_status import NOW, build, w  # noqa: F401 - w is a fixture
 
-KEYS = {"watch_open", "watch_leads", "watch_oldest", "watch_top", "watch_titles", "watch_disabled", "watch_last_scan"}
+KEYS = {"watch_open", "watch_leads", "watch_oldest", "watch_top", "watch_titles", "watch_disabled", "watch_last_scan", "watch_corrupt"}
 
 
 def put(w, n, cls, title, created="2026-10-18T00:00:00Z"):

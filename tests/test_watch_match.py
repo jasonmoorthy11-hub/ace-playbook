@@ -215,3 +215,30 @@ def test_check_rejects_records_outside_the_shape(mutate, why):
     r = match.candidates(inv(**{"settings.model": SETTINGS}), [DEPR()], {}, {}, NOW)[0]
     mutate(r)
     assert match.check(r) == why
+
+
+
+# ------------------------------------------------------------------ wave 4: a truncated target, a future lastmod
+def test_a_target_whose_glob_was_capped_gets_a_lead_and_no_diff():
+    full = {"claude_version": None, "targets": {"k": {"truncated": True, "files": {"~/a.json": {"sha256": "1" * 64, "lines": [[1, f'"{OLD}"']]}}}}}
+    recs = match.candidates(full, [DEPR()], {}, {}, NOW)
+    assert [(r["class"], r["change"]["diff"]) for r in recs] == [("lead", None)]
+
+
+def sitemap(lastmod, loc="https://docs.example.test/en/hooks", sha="d" * 64):
+    return {"id": "sm", "url": "https://example.test/sitemap.xml", "kind": "sitemap", "tier": 0, "sha256": sha, "prev_sha256": None, "quote": "",
+            "heading": "", "data": {loc: lastmod}}
+
+
+@pytest.mark.parametrize("lastmod,found", [("2026-10-25", False), ("2026-10-22", True), ("2026-10-22T23:59:59Z", True), ("2026-10-23", False),
+                                           ("9999-12-31", False), ("9999-12-31T00:00:00Z", False), ("2099-01-01", False), ("2026-10-21", True)])
+def test_a_sitemap_lastmod_more_than_a_day_ahead_is_ignored(lastmod, found):
+    mapping = {"docs": {"https://docs.example.test/en/hooks": ["k"]}}
+    out = match.docs({}, [sitemap(lastmod)], mapping, {"https://docs.example.test/en/hooks": "2026-10-01"}, NOW)
+    assert bool(out) is found
+
+
+def test_a_future_lastmod_is_not_remembered_so_it_cannot_mask_the_next_real_change():
+    assert match.plausible("2026-10-21", NOW) and match.plausible("2026-10-22", NOW) and not match.plausible("9999-12-31", NOW)
+    assert match.plausible("2026-10-22T23:59:59Z", NOW) and not match.plausible("2026-10-23T00:00:00Z", NOW) and not match.plausible("", NOW)
+    assert not match.plausible("soon", NOW)

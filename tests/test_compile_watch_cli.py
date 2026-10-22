@@ -118,12 +118,12 @@ def test_a_vanished_trigger_closes_the_proposal_by_a_decision_row(w, capsys):
 
 def test_docs_proposals_come_from_a_moved_lastmod_or_a_changed_page_hash(w, capsys):
     w.run(capsys, "scan")
-    w.pages[U["map"]] = (fixture("sitemap.xml").replace(b"2026-10-20", b"2026-10-25"), "application/xml")
+    w.pages[U["map"]] = (fixture("sitemap.xml").replace(b"2026-10-20", b"2026-10-21"), "application/xml")
     w.pages[U["page"]] = (fixture("doc_page.md") + b"\nA new paragraph.\n", "text/markdown")
     code, out, _ = w.run(capsys, "scan", "--force")
     docs = [p for p, _ in w.proposals() if p["class"] == "docs"]
     assert len(docs) == 2 and out.splitlines()[-1].startswith("watch: fetched 2, unchanged 3, dropped 0; new 2, closed 0")
-    assert sorted(d["evidence"][0]["quote"] for d in docs) == ["Hooks reference", "https://docs.example.test/en/hooks lastmod 2026-10-25"]
+    assert sorted(d["evidence"][0]["quote"] for d in docs) == ["Hooks reference", "https://docs.example.test/en/hooks lastmod 2026-10-21"]
     assert all(d["change"]["diff"] is None and d["inventory_hits"] == ["settings.model"] for d in docs)
     w.run(capsys, "scan", "--force")                                                             # an event: it does not vanish on the next scan
     assert all(s == "open" for p, s in w.proposals() if p["class"] == "docs")
@@ -289,3 +289,31 @@ def test_an_empty_queue_and_the_kill_file(tmp_path, capsys):
 def test_the_queue_through_main_refuses_without_a_terminal(w, capsys):
     code, out, err = w.run(capsys, "queue")
     assert code == 2 and "needs an interactive terminal" in err and os.path.exists(w.conf)
+
+
+# ------------------------------------------------------------------ wave 4: tier on the card, a symlinked proposals dir, a future lastmod
+def test_the_queue_card_prints_the_tier_number(tmp_path, capsys):
+    cfg, wd = seeded(tmp_path, 1)
+    run_queue(cfg, Script("q"))
+    assert "evidence: tier 0  https://example.test/d" in capsys.readouterr().out
+
+
+def test_a_scan_with_a_symlinked_proposals_dir_is_exit_2_with_one_line(w, capsys, tmp_path):
+    w.wd.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (w.wd / "proposals").symlink_to(elsewhere)
+    code, out, err = w.run(capsys, "scan")
+    assert code == 2 and err.startswith("error: ") and len(err.strip().splitlines()) == 1 and str(tmp_path) not in err
+    assert list(elsewhere.iterdir()) == [] and w.calls == []
+
+
+def test_a_future_sitemap_lastmod_is_not_remembered(w, capsys):
+    w.run(capsys, "scan")
+    w.pages[U["map"]] = (fixture("sitemap.xml").replace(b"2026-10-20", b"9999-12-31"), "application/xml")
+    w.run(capsys, "scan", "--force")
+    seen = store.read_seen(w.wd)
+    assert "9999-12-31" not in json.dumps(seen.get("lastmod", {}))
+    w.pages[U["map"]] = (fixture("sitemap.xml").replace(b"2026-10-20", b"2026-10-21"), "application/xml")
+    w.run(capsys, "scan", "--force")
+    assert any(p["class"] == "docs" for p, _ in w.proposals())

@@ -113,3 +113,21 @@ def test_the_example_map_is_valid_and_has_the_five_generic_keys():
     m = inventory.load_map(ROOT / "docs" / "watch" / "inventory_map.example.json")
     assert sorted(m["targets"]) == ["ace.pyproject", "agents.model", "hooks.model_flags", "lineup.reference", "settings.model"]
     assert os.path.sep in m["targets"]["agents.model"]["path"]
+
+
+# ------------------------------------------------------------------ wave 4: files per target are capped
+def test_a_glob_that_matches_thousands_of_files_keeps_fifty_and_marks_the_target_truncated(tmp_path):
+    d = tmp_path / "many"
+    d.mkdir()
+    for n in range(120):
+        (d / f"f{n:03d}.json").write_text('{"model": "claude-old-1"}\n')
+    inv = snap(mapping(tmp_path, k=("many/*", "claude-")))
+    target = inv["targets"]["k"]
+    assert len(target["files"]) == inventory.MAX_FILES == 50 and target["truncated"] is True
+    assert sorted(target["files"]) == sorted(str(d / f"f{n:03d}.json") for n in range(50))
+    assert len(json.dumps(inv)) < 20_000
+
+
+def test_a_target_within_the_cap_is_not_marked_truncated(tmp_path):
+    (tmp_path / "a.json").write_text("claude-x\n")
+    assert "truncated" not in snap(mapping(tmp_path, k=("a.json", "claude-")))["targets"]["k"]

@@ -51,7 +51,7 @@ def _card(p: dict, n: int, total: int) -> None:
     c = store.clean
     ev = p["evidence"][0]
     print(f"\n[{n}/{total}] {c(p['id'])}  {c(p['class'])}  created {c(p['created'])}  expires {c(p['expires'])}\n  title:    {c(p['title'])}\n"
-          f"  evidence: tier {c(ev['tier'])}  {c(ev['url'], 200)}\n  quote (untrusted text from the web): {c(ev['quote'], 400)}\n"
+          f"  evidence: tier {c(str(ev['tier']))}  {c(ev['url'], 200)}\n  quote (untrusted text from the web): {c(ev['quote'], 400)}\n"
           f"  hits:     {c(', '.join(map(str, p['inventory_hits'])) or 'none', 200)}\n  verify:   {c(p['verify'], 300)}\n  keys:     {CONTROL}")
     diff = p["change"]["diff"]
     if diff:

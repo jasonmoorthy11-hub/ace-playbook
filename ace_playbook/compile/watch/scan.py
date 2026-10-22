@@ -19,6 +19,7 @@ from ...config import Config
 from . import fetch as fetchmod
 from . import fsio, inventory, match, store
 from .reconcile import reconcile  # noqa: F401 - tests call scan.reconcile
+from .records import quote_line
 
 PERIOD = {"daily": 86400, "weekly": 7 * 86400}
 FMT = "%Y-%m-%dT%H:%M:%SZ"
@@ -47,8 +48,14 @@ def _due(src: dict, seen: dict, now: str, force: bool) -> bool:
 def _result(src: dict, item: dict) -> dict:
     data = item["data"]
     return {"id": src["id"], "url": src["url"], "kind": src["kind"], "tier": src["tier"], "sha256": item["sha256"],
-            "prev_sha256": item["prev_sha256"], "fetched_at": item["fetched_at"], "data": data, "quote": item["body"][:400],
+            "prev_sha256": item["prev_sha256"], "fetched_at": item["fetched_at"], "data": data, "quote": _quote(src, item),
             "heading": data.get("heading", "") if src["kind"] == "md" else ""}
+
+
+def _quote(src: dict, item: dict) -> str:
+    """One verbatim line of the body (`records.quote_line`): the npm line that carries a version, the first line of anything else."""
+    data = item["data"]
+    return quote_line(item["body"], *(v for v in data.values() if isinstance(v, str)) if src["kind"] == "npm" else ())
 
 
 def collect(sources: list[dict], seen: dict, now: str, force: bool, opener=None) -> tuple[list[dict], list[str], dict]:
@@ -89,7 +96,10 @@ def run(cfg: Config, tier: str = "all", dry_run: bool = False, force: bool = Fal
         raise ConfigError(str(exc)) from None
     lock = None
     if not dry_run:
-        store.ensure(wd)
+        try:
+            store.ensure(wd)
+        except store.UnsafeDir as exc:
+            raise ConfigError(str(exc)) from None
         lock = fsio.lock(wd)                                      # one scan at a time: a second one stops here
         if lock is None:
             return ["watch: scan running"]
@@ -101,7 +111,7 @@ def run(cfg: Config, tier: str = "all", dry_run: bool = False, force: bool = Fal
         out = reconcile(wd, match.candidates(inv, results, mapping, before, now), results, now, dry_run, inv)
         mapped = {match.norm(u) for u in mapping["docs"]}
         seen.setdefault("lastmod", {}).update({loc: lm for r in results if r["kind"] == "sitemap" for loc, lm in r["data"].items()
-                                               if match.norm(loc) in mapped and lm})
+                                               if match.norm(loc) in mapped and match.plausible(lm, now)})
         seen["last_scan"] = now
         if not dry_run:
             inventory.write(wd, inv)

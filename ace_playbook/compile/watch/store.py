@@ -4,6 +4,9 @@
 `digest.append_log`), `seen.json` and `inventory.json` (0600, atomic) and the kill file `DISABLED`. The current status of a proposal is its
 newest decision row, else the file's own `status`; `expired` once past `expires` while still open or queued. At most CAP proposals are
 open at once, leads excepted; the rest are `queued` and a `promoted` decision row opens them in ranking order when a slot frees.
+A file that cannot be read, is too deeply nested for the JSON reader, or has the wrong shape (`_shaped`) is skipped and counted
+(`scan_proposals`); a decision row of the wrong type is skipped; nothing a corrupt store holds raises out of a reader. `ensure` never
+changes the mode of a directory that exists and refuses a proposals folder that is a symlink (`UnsafeDir`).
 Stdlib, `.chars` and `.fsio` only: no network, so `summary.py` (imported by `status.py`) can use it.
 """
 
@@ -39,12 +42,21 @@ def watch_dir(cfg: Config) -> Path:
     return Path(cfg.watch_dir) if cfg.watch_dir else Path(cfg.data_dir) / "watch"
 
 
+class UnsafeDir(ValueError):
+    """The proposals folder is a symlink or a file in the way: nothing is written through it (the message names no path)."""
+
+
 def ensure(wd: Path) -> Path:
-    """Create `wd` and `wd/proposals` (0700) and return `wd`."""
-    for d in (Path(wd), Path(wd) / PROPOSALS):
-        if not d.is_dir():
-            d.mkdir(mode=0o700, parents=True, exist_ok=True)
-    return Path(wd)
+    """Create `wd` and `wd/proposals` (0700 when new; an existing directory keeps its mode) and return `wd`; UnsafeDir for a symlinked
+    or non-directory proposals folder."""
+    wd = Path(wd)
+    if not wd.is_dir():
+        wd.mkdir(mode=0o700, parents=True, exist_ok=True)
+    folder = wd / PROPOSALS
+    if folder.is_symlink() or (os.path.lexists(folder) and not folder.is_dir()):
+        raise UnsafeDir("the watch proposals folder is a symlink or not a directory")
+    folder.mkdir(mode=0o700, exist_ok=True)
+    return wd
 
 
 def disabled(wd: Path) -> bool:
@@ -56,18 +68,39 @@ def _json(path: Path) -> object:
         if path.is_symlink() or not path.is_file():
             return None
         return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):                       # ValueError covers bad UTF-8 and bad JSON
         return None
 
 
-def load_proposals(wd: Path) -> list[dict]:
-    """Every readable proposal whose id matches its file name, oldest first."""
-    out = []
-    for path in sorted((Path(wd) / PROPOSALS).glob("W-*.json")):
+def _shaped(rec: dict) -> bool:
+    """The fields that every reader of a proposal indexes, with the types it expects (a record from `records.record` has them all)."""
+    ev, ch = rec.get("evidence"), rec.get("change")
+    return (all(isinstance(rec.get(k), str) for k in ("class", "created", "title", "expires", "verify"))
+            and isinstance(rec.get("inventory_hits"), list) and isinstance(ev, list) and bool(ev)
+            and all(isinstance(e, dict) and all(isinstance(e.get(k), str) for k in ("url", "sha256", "quote")) and "tier" in e for e in ev)
+            and isinstance(ch, dict) and isinstance(ch.get("target"), str) and "diff" in ch)
+
+
+def scan_proposals(wd: Path) -> tuple[list[dict], int]:
+    """(every readable, well-shaped proposal whose id matches its file name, oldest first; the number of `W-*.json` files skipped)."""
+    folder = Path(wd) / PROPOSALS
+    out, bad = [], int(folder.is_symlink())                           # a symlinked folder reads as empty and is counted
+    try:
+        paths = [] if bad else sorted(folder.glob("W-*.json"))
+    except OSError:
+        paths, bad = [], 1
+    for path in paths:
         rec = _json(path)
-        if ID.fullmatch(path.stem) and isinstance(rec, dict) and rec.get("id") == path.stem:
+        if ID.fullmatch(path.stem) and isinstance(rec, dict) and rec.get("id") == path.stem and _shaped(rec):
             out.append(rec)
-    return sorted(out, key=lambda p: (str(p.get("created")), p["id"]))
+        else:
+            bad += 1
+    return sorted(out, key=lambda p: (p["created"], p["id"])), bad
+
+
+def load_proposals(wd: Path) -> list[dict]:
+    """Every readable, well-shaped proposal whose id matches its file name, oldest first."""
+    return scan_proposals(wd)[0]
 
 
 def write_proposal(wd: Path, rec: dict) -> bool:
@@ -111,9 +144,9 @@ def read_decisions(wd: Path) -> list[dict]:
     for line in text.splitlines():
         try:
             row = json.loads(line)
-        except ValueError:
+        except (ValueError, RecursionError):
             continue
-        if isinstance(row, dict) and ID.fullmatch(str(row.get("id"))) and row.get("decision") in WORDS:
+        if isinstance(row, dict) and ID.fullmatch(str(row.get("id"))) and isinstance(row.get("decision"), str) and row["decision"] in WORDS:
             out.append(row)
     return out
 
@@ -136,7 +169,7 @@ def statuses(wd: Path, now: str) -> list[tuple[dict, str]]:
 
 
 def rank_key(p: dict) -> tuple:
-    return (RANK.get(p.get("class"), 9), str(p.get("created")), p.get("id"))
+    return (RANK.get(p.get("class") if isinstance(p.get("class"), str) else "", 9), str(p.get("created")), str(p.get("id")))
 
 
 def open_count(rows: list[tuple[dict, str]]) -> int:
