@@ -98,7 +98,7 @@ class _Text(ScriptedParser):
         """A raw-text element (not `script`: a select hands it to the in-head rules, no browser ignores it) opened in an open select is the one
         place the two browser readings differ: one ignores the start tag, so the raw text is markup there. When it closes with a `<` in its text
         the rest of the document stays hidden (`poisoned`): the other reading may have opened a hidden element that no later tag here closes."""
-        raw = not self.in_foreign() and elem != "script" and bool(self.open.get("select"))
+        raw = not self.in_foreign() and elem != "script" and bool(self.open.get("select"))     # a select is popped by its end tag or an ender only
         super().set_cdata_mode(elem, **kw)
         self.raw_select, self.raw_lt = raw, False
 

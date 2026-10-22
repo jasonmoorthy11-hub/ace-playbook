@@ -6,7 +6,7 @@ a hidden element is involved the same rules apply and anything doubtful keeps th
 * `end_ignored(stack, i)`: the end tag that targets `stack[i]` pops nothing when it would unhide something and an element in between stops
   it. A block-level end tag (`</div>`, ...) is stopped by a scope barrier (`table td th caption object marquee applet template`); `</p>` also
   by `button`, `</li>` also by `ol` and `ul`; a table end tag by a nested `table` or `template`; every other end tag (`</span>`, `</b>`, ...)
-  by any "special" element in between. An open `select` stops every end tag but its own (the in-select insertion mode drops them).
+  by any "special" element in between. An open `select` stops every end tag below it but its own, hidden or not (the in-select mode drops them).
   `INTEGRATION` (`foreignObject`, `desc`, `title`, `mi`, `mo`, `mn`, `ms`, `mtext`, `annotation-xml`) are scope barriers too, but their OWN
   end tag is an "any other end tag": made in foreign content it is ignored when ANY HTML element is above it (the HTML walk reaches the
   integration point, which is special and never an HTML element with that name), `<svg><desc><span hidden><b></desc></svg>X` keeps X hidden;
@@ -62,12 +62,14 @@ def end_ignored(stack: list, i: int) -> bool:
     """True when the end tag for `stack[i]` (entries are `[tag, hidden, own]`) pops nothing, because a browser would ignore it and
     popping would unhide the text of an element that is still open."""
     above = stack[i + 1:]
-    if not above or not (stack[i][1] or any(e[1] for e in above)):
+    if not above:
         return False
     names = {e[0] for e in above}
-    tag = stack[i][0]
     if "select" in names:
-        return True
+        return True                         # in-select mode ignores every end tag but option, optgroup, select and template: hidden or not
+    if not (stack[i][1] or any(e[1] for e in above)):
+        return False
+    tag = stack[i][0]
     if tag in INTEGRATION and i and stack[i - 1][4][5] >= 0 and any(e[4][5] < 0 for e in above):
         return True                         # a foreign integration point with an HTML element above it: the HTML walk meets a special element
     if tag in TABLES:

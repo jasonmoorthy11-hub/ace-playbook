@@ -719,3 +719,33 @@ def test_overlapping_style_openers_are_capped_and_the_page_fails_closed():
             strip_hidden(page)
     assert len(stylepass.scan_sheets("<style>" * 3 + "x" * 1_000_000)) == 3
     assert len(stylepass.scan_sheets("<style>x</style>" * 5000)) == 5000                           # sheets that do not overlap are not counted
+
+
+# ------------------------------------------------------------------ wave 13: an end tag below an open select pops nothing, whatever is hidden
+def stack_entry(tag: str, hidden: bool = False) -> list:
+    return [tag, hidden, hidden, 0, (0, 0, 0, 0, 0, -1)]
+
+
+@pytest.mark.parametrize("tag", ["div", "p", "span", "b", "table", "td", "template", "li", "a"])
+def test_an_end_tag_below_an_open_select_pops_nothing_even_when_nothing_is_hidden(tag):
+    # spec, "in select": every end tag but optgroup, option, select and template is ignored; the guard no longer relies on the select being hidden
+    from ace_playbook.compile.watch.htmlrules import end_ignored
+    assert end_ignored([stack_entry(tag), stack_entry("select")], 0)
+    assert end_ignored([stack_entry(tag), stack_entry("select"), stack_entry("option")], 0)
+    assert not end_ignored([stack_entry("select"), stack_entry("option")], 0) and not end_ignored([stack_entry("select")], 0)
+    assert not end_ignored([stack_entry(tag), stack_entry("b")], 0) and not end_ignored([stack_entry(tag)], 0)
+
+
+SELECT_OPEN_WORLDS = ["<select><div></div>{r}", "<div><select></div>{r}", "<p><select></p>{r}", "<b><select></b>{r}", "<span><select><option></span>{r}",
+                      "<select><option></option></p>{r}", "<select><option></div>{r}", "<table><td><select></td>{r}", "<table><select></table>{r}",
+                      "<select><optgroup><option></optgroup>{r}", "<svg><select></svg>{r}", "<select><svg></svg>{r}", "<select><select>{r}",
+                      "<div hidden><select><option></div>{r}", "<select><template></select>{r}", "<template><select></template>{r}"]
+
+
+@pytest.mark.parametrize("tag", ["xmp", "iframe", "noscript", "style", "title"])
+@pytest.mark.parametrize("opener", SELECT_OPEN_WORLDS)
+def test_a_raw_text_tag_after_a_non_select_end_tag_is_still_read_in_the_select_whichever_way_the_browser_reads_it(opener, tag):
+    # the browser's in-select mode ignored the end tag, so the select is still open and `<tag>` is ignored there: the rest of the page stays hidden
+    for tail in (f"<{tag}></select><div hidden></{tag}><input>LEAK</div>", f"<{tag}></select><div hidden></{tag}></select>LEAK",
+                 f"<{tag}/></select><div hidden></{tag}><keygen>LEAK</div>"):
+        assert leak_free(opener.format(r=tail)), (opener, tail)
