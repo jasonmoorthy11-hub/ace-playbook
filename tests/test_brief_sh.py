@@ -237,6 +237,7 @@ def test_a_held_lock_exits_quietly_and_a_run_proceeds_once_it_is_released(w):
     finally:
         os.killpg(holder.pid, signal.SIGKILL)
         holder.wait()
+        holder.stdout.close()
     assert w.run("--force").returncode == 0 and len(w.ledger()) == 2 and free(w)
 
 
@@ -245,7 +246,7 @@ def test_a_failing_lock_step_is_a_one_line_failure_never_a_silent_skip(w):
     p = w.run("--force", ACE_PYTHON=str(w.tmp / "no-such-python"))
     assert (p.returncode, p.stdout, p.stderr.strip().splitlines()[-1]) == (1, "", "brief: lock") and not w.ledger()
     shim = w.tmp / "python-without-fd9"
-    shim.write_text(f'#!/bin/bash\nexec 9>&-\nexec {sys.executable} "$@"\n')
+    shim.write_text(f'#!/bin/bash\nexec 9>&-\nexec "{sys.executable}" "$@"\n')
     shim.chmod(0o755)
     p = w.run("--force", ACE_PYTHON=str(shim))
     assert (p.returncode, p.stdout, p.stderr.strip().splitlines()[-1]) == (1, "", "brief: lock") and not w.ledger() and free(w)
