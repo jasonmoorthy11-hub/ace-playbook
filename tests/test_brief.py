@@ -172,30 +172,42 @@ def test_the_exclusion_code_has_no_nested_quantifier_heuristic_and_compiles_only
     assert "NESTED" not in src and src.count("re.compile(") == 1 and "re.escape(" in src
 
 
+def slow(pidfile):
+    def hang(lists, mail):
+        pidfile.write_text(str(os.getpid()))
+        time.sleep(60)
+    return hang
+
+
 def test_a_hung_exclusion_child_is_killed_and_the_run_refuses(env, capsys, monkeypatch):
-    monkeypatch.setattr(brief_excl, "child_argv", lambda: [sys.executable, "-I", "-c", "import time; time.sleep(60)"])
+    monkeypatch.setattr(brief_excl, "filter_mail", slow(env / "child.pid"))                    # the child inherits the slow function
     monkeypatch.setattr(brief_excl, "TIMEOUT", 0.5)
     os.environ["ACE_PLAYBOOK_CONFIG"] = str(bs.config(env, brief_exclusions=str(bs.exclusions(env / "ex.json"))))
     start = time.monotonic()
     code, out, err = run(capsys, "digest-apply", put(env, "d.json", bs.digest()))
     assert (code, out) == (2, "") and "schema: exclusions" in err and time.monotonic() - start < 10
     assert not (env / "brief" / "digest_clean.json").exists()
+    pid = int((env / "child.pid").read_text())
+    assert pid != os.getpid()
+    with pytest.raises(ProcessLookupError):                                                     # the child is gone, not left running
+        os.kill(pid, 0)
 
 
-@pytest.mark.parametrize("body", ["raise SystemExit(7)", "print('not json')", "print('[1]')", "print('{}')", "print(open(0).read())"])
-def test_a_failing_or_garbling_exclusion_child_never_lets_the_digest_through(env, capsys, monkeypatch, body):
-    monkeypatch.setattr(brief_excl, "child_argv", lambda: [sys.executable, "-I", "-c", body])
+def crash(lists, mail):
+    os._exit(7)
+
+
+def boom(lists, mail):
+    raise RuntimeError(bs.MARKER)
+
+
+@pytest.mark.parametrize("fn", [crash, boom, lambda lists, mail: {}, lambda lists, mail: "x", lambda lists, mail: [1],
+                                lambda lists, mail: mail + mail])
+def test_a_failing_or_garbling_exclusion_child_never_lets_the_digest_through(env, capsys, monkeypatch, fn):
+    monkeypatch.setattr(brief_excl, "filter_mail", fn)
     os.environ["ACE_PLAYBOOK_CONFIG"] = str(bs.config(env, brief_exclusions=str(bs.exclusions(env / "ex.json"))))
-    code, _, err = run(capsys, "digest-apply", put(env, "d.json", bs.digest()))
-    assert code == 2 and "schema: exclusions" in err and not (env / "brief" / "digest_clean.json").exists()
-
-
-def test_the_exclusion_module_runs_alone_under_python_dash_I():
-    child = [sys.executable, "-I", str(ROOT / "ace_playbook" / "compile" / "brief_excl.py")]
-    payload = {"ex": {"drop_senders": ["zzz"]}, "mail": [mail("1", sender="a zzz"), mail("2")]}
-    p = subprocess.run(child, input=json.dumps(payload), capture_output=True, text=True, timeout=30)
-    assert p.returncode == 0 and [m["thread_id"] for m in json.loads(p.stdout)] == ["2"]
-    assert subprocess.run(child, input="[", capture_output=True, text=True, timeout=30).returncode == 2
+    code, out, err = run(capsys, "digest-apply", put(env, "d.json", bs.digest()))
+    assert code == 2 and "schema: exclusions" in err and bs.MARKER not in out + err and not (env / "brief" / "digest_clean.json").exists()
 
 
 def test_a_configured_but_missing_or_unparseable_exclusions_file_fails_closed(env, capsys):

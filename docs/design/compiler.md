@@ -1105,9 +1105,9 @@ metrics, report, status, seal or the detectors changed.
   over 200 characters, more than 500 in a list, unknown key or mode) refuses the run.
   **D-116:** entries are LITERAL substrings (a string, or `{"starts": ...}` / `{"contains": ...}`), each `re.escape`d, case-insensitive,
   joined by `|`; the nested-quantifier heuristic is gone (it missed `(a|aa)+$`, `((a+))+$`, `(a?){30}a{30}`, `.*.*.*.*x` and more). The
-  matching (`compile/brief_excl.py`, stdlib only) runs in a child process (`python3 -I`) killed after 10 s; a timeout, a crash or odd
-  output refuses the run (exit 2) and the digest never passes through. Sender and subject are capped at 200 and 300 characters before
-  matching.
+  matching (`compile/brief_excl.py`, stdlib only) runs in a forked child process (`multiprocessing`; `subprocess` is banned in
+  `compile/`) killed after 10 s; a timeout, a crash or odd output refuses the run (exit 2) and the digest never passes through. Sender and
+  subject are capped at 200 and 300 characters before matching.
 - **D-110 (amendment to the design's "morning skill as the renderer").** No model writes HTML that is served. The morning skill's layout and
   tokens are reproduced by code, `brief_render.render`, from the validated brief JSON: day-date line, serif headline (`Fraunces, Georgia,
   serif`, system stack, no embedded font), a terrain polyline whose elevation comes from each act's load (an open day is still water; one clay

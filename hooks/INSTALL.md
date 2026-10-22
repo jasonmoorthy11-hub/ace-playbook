@@ -417,9 +417,9 @@ An entry is a string (found anywhere in the field) or a one-key object, `{"start
 `{"contains": "text"}`. It is always plain text: `.`, `*`, `(` and `^` mean themselves (every entry is `re.escape`d), so no entry can
 backtrack. A thread whose sender matches `drop_senders` or whose subject matches `drop_subjects` is removed from the digest; one whose
 sender matches `drop_bodies_from` stays as sender and subject only (its summary is emptied). An empty entry, an entry over 200 characters,
-more than 500 entries in a list, an unknown key or mode, or an unreadable file stops the run. The matching runs in a child process
-(`python3 -I`) that is killed after 10 seconds; a timeout or any failure of the child also stops the run (exit 2), and the digest never
-passes through. Sender and subject are capped at 200 and 300 characters before matching. The lists apply to mail only, not to calendar
+more than 500 entries in a list, an unknown key or mode, or an unreadable file stops the run. The matching runs in a forked child
+process (`multiprocessing`) that is killed after 10 seconds; a timeout or any failure of the child also stops the run (exit 2), and the
+digest never passes through. Sender and subject are capped at 200 and 300 characters before matching. The lists apply to mail only, not to calendar
 titles or issues.
 
 **Triggers.**
