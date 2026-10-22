@@ -1051,7 +1051,8 @@ line carries that night's health), refreshes `status.json` for the status line a
 The watcher of design `2026-10-21-ace-watcher-and-cockpit` (phase 1, W1) is `compile/watch/`: a model-free configuration watcher that
 PROPOSES and never applies. It is the one network-using package of ace-playbook and is never on the hook path: `watch`, `fetch`,
 `inventory`, `match`, `store`, `summary` and the helper modules `chars`, `fsio`, `cssstyle`, `cssscan`, `htmlrules`, `mdrules`,
-`stylepass`, `treerules`, `records`, `pin` and `reconcile` are in the `ABSENT` tuple of `tests/test_hook_conformance.py`. `status.py` imports only
+`stylepass`, `treebuild`, `treemodes`, `treestyle`, `treewalk`, `records`, `pin` and `reconcile` are in the `ABSENT` tuple of
+`tests/test_hook_conformance.py`. `status.py` imports only
 `watch.summary` (a pure read, no network import); `__main__` imports the light `watch.cli`, which loads `scan`, `fetch` and `inventory` only
 when a scan runs (tested in `tests/test_compile_watch_cli.py`).
 
@@ -1073,61 +1074,73 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   destination, an optional title of at most three lines, nothing else on the last line, no line after the first that a paragraph could
   not continue, and never right after paragraph text. Anything else stays and keeps its HTML meaning, so `[x]: /u <script>` hides to its
   closer and the HTML start is checked before any definition continuation: `mdrules.py`; for a `md` source served as `text/html` the
-  strictly valid definition lines are dropped from the VISIBLE text after `strip_hidden`, never from the raw markup). The tree rules are
-  fail closed (`htmlrules.py`, `treerules.py`): a slash on a non-void tag is ignored, an end tag a browser ignores (a scope barrier or a
-  "special" element in between; `button` stops `</p>`, `ol` and `ul` stop `</li>`, an open `select` stops every end tag but its own) pops
-  nothing when that would unhide text, a double-escaped script closes at its next-but-one `</script` (HTML whitespace only, as the
-  tokenizer reads it), and more than 512 open elements raise `TooDeep` (a `parse` drop). Implied end tags are modelled: a start tag of
-  the `p`-closing set (address, article, aside, blockquote, center, details, dialog, dir, div, dl, fieldset, figcaption, figure, footer,
-  form, h1 to h6, header, hgroup, hr, main, menu, nav, ol, p, pre, search, section, summary, table, ul, xmp, li, dd, dt) pops an open `p`
-  that is in button scope first, `li` pops an open `li` and `dd`/`dt` an open `dd`/`dt` (searching down through non-special elements and
-  `address`, `div`, `p`), so the `</p>` of `<p>a<div hidden></p>X</div>` finds no `p` and pops nothing; each stack entry carries the
-  nearest such marks, so the check is O(1), and a hidden formatting element popped that way is re-opened. Inside foreign content (`svg`,
-  `math`) nothing is implied: a sixth mark holds the first entry of the run of foreign elements that ends the stack, and only a breakout
-  start tag (the spec's list; `font` with `color`, `face` or `size`), or an end tag `</p>` or `</br>`, pops that run (`treerules.breakout`,
-  `_Text.handle_endtag`, `_Styles.handle_endtag`), after which the rules above apply. Every entry also carries its NAMESPACE (0 html, 1 svg,
-  2 math) and its integration kind (0 none, 1 HTML, 2 MathML text, 3 `annotation-xml` without an HTML encoding): the integration points
-  are decided by namespace (svg `foreignObject`, `desc`, `title`; math `mi`, `mo`, `mn`, `ms`, `mtext`, `annotation-xml` with `encoding`
-  `text/html` or `application/xhtml+xml`; `mglyph` and `malignmark` under a math text point stay math, an `<svg>` under `annotation-xml`
-  is svg), end the run and make their children HTML; the same names in the other namespace are ordinary foreign elements. The
-  namespace-blind `INTEGRATION` set remains only for the button-scope barriers, the `li`/`dd` search and `end_ignored`. Document-level hiding is
-  modelled: an `html` or `body` start tag, the first or a late one, that hides, or a `<style>` rule that hides `html`, `body` or `*`, makes
-  the body empty; a `<template shadowrootmode=...>` hides every child of its host (those before it too), the whole document when it has
-  no parent. The rules of `<style>` come from a first parser pass (`stylepass.style_text`): html.parser reads the page once with the same
-  script rules as the second pass and collects the text of the REAL style elements, an unclosed one included, so a `<style` inside a
-  script string, comment, attribute, `<textarea>`, `<title>` or a custom element `<style-x>` hides no rule in this pass (it is skipped when
-  the page has no `<style`). `stylepass.style_rules` unions those rules with the ones of a plain linear scan for `<style ... </style`
-  (`scan_text`, fake openers included, so it can only add rules), because html.parser and a browser tokenize some pages differently (a
-  CDATA section in svg, a bogus comment); `cssstyle.css_rules` reads the braces in one linear pass (`cssscan.py`: braces, semicolons and
+  strictly valid definition lines are dropped from the VISIBLE text after `strip_hidden`, never from the raw markup).
+  The sanitizer builds ONE HTML tree and two consumers read it (no `_Text`/`_Styles` pair, no rule stack). `htmlrules.py` is the
+  tokenizer side: html.parser as the tokenizer (`ScriptedParser`: comment endings, the double-escaped script state `ScriptState`, `<![CDATA[`,
+  a slash on a start tag kept in `selfclosing`), the element sets, `OPS` (what a start tag of the simple kind does in the body) and
+  `TreeParser`, which feeds the tree and lets IT decide raw text (`Tree.raw`: only an HTML element enters raw text, RCDATA or noscript; an
+  svg `<style>`, `<script>` or `<title>` is an element). `treebuild.py` (`Tree`, `build`) is the HTML Standard's tree builder in a
+  simplified, fail closed form: the stack of open elements with indexes (HTML positions by name, foreign name counts, scope-marker
+  positions for the default, list-item, button and table scopes, so a scope check and an end tag that names nothing open are O(1)), the
+  active formatting list with markers (pushed when a td, th, caption, applet, marquee, object or template opens, cleared when it closes),
+  Noah's Ark, `reconstruct` and a simplified `adopt` (a formatting element with a furthest block stays open: over-hiding), FOSTER PARENTING
+  in `where`/`place` (what a table cannot hold goes before it), and the insertion mode derived from the stack (`reset_mode`). `treemodes.py`
+  holds the modes as functions `mode(t, kind, name, attrs, selfclosing)`: initial, before html, before head, head, after head, body, text,
+  one function for the table family (table, caption, table body, row, cell, colgroup), select, template, after body, after after body, and
+  `m_foreign` for foreign content. A frameset that replaces the body, or a `<template shadowrootmode>` whose host is `html`, `head` or the
+  document, sets `Tree.dead` (nothing is shown); `Tree.hb` records every `html`/`body` start tag (a hiding one hides the page). Past 512
+  open elements the build raises `TooDeep` (a `parse` drop). The two consumers: `treewalk.visible` (iterative; an element hides when
+  `own_attrs` says so or a style rule matches its tag, class or id; `br` and `hr` print a blank, blocks a line, the nodes the builder made up
+  print none) and `treestyle` (below). The rules that matter: a block start tag of the `p`-closing set (address, article, aside,
+  blockquote, center, details, dialog, dir, div, dl, fieldset, figcaption, figure, footer, form, h1 to h6, header, hgroup, hr, main, menu,
+  nav, ol, p, pre, search, section, summary, table, ul, xmp, li, dd, dt) closes an open `p` in button scope first, and a `table` only in
+  standards mode; `li` and `dd`/`dt` close their kind; `button` stops `</p>`, `ol` and `ul` stop `</li>`, an end tag past a special
+  element pops nothing, `</template>` pops to the template whatever lies between. The quirks decision is the FIRST doctype alone
+  (`htmlrules.STANDARDS`: `<!DOCTYPE html>` with an optional `SYSTEM "about:legacy-compat"`; none, a late, legacy or later one is quirks,
+  fail closed). Foreign content: `foreign_dispatch` decides per token whether the HTML modes or `m_foreign` read it (at an HTML integration
+  point only a start tag or characters go to the HTML modes, at a MathML text point all but `mglyph`/`malignmark` and `<svg>` at
+  `annotation-xml`); a breakout start tag (the spec's list, `font` with `color`, `face` or `size`), `</p>` and `</br>` pop the foreign run
+  and are read again by the mode (not by `process`, which would loop); any other foreign end tag walks down the stack by name; a foreign
+  element written self-closed is popped at once, an integration point too. Every node carries its NAMESPACE (0 html, 1 svg, 2 math) and its
+  integration kind `ip` (0 none, 1 HTML: svg `foreignObject`, `desc`, `title` and `annotation-xml` whose `encoding`, trimmed and lower
+  cased, is `text/html` or `application/xhtml+xml`; 2 MathML text: `mi`, `mo`, `mn`, `ms`, `mtext`; 3 `annotation-xml` without an HTML
+  encoding); `htmlrules.special(node)` asks the special category by namespace. An open select is built in two readings (`Tree.relaxed`):
+  A, the older, ignores start tags and keeps the tokenizer out of raw text; B, the newer and the one the visible text uses, inserts them
+  and ignores every end tag but `option`, `optgroup`, `select` and `template`, keeps a nested `select` open, lets `input`, `keygen` and
+  `textarea` pop the select only when `treemodes.reach` finds no template, table, integration point, foreign or hidden element above
+  it, and lets a raw text holding a `<` poison the rest of the page (`selraw`, `rawlt`, `poisoned`; `script` exempt). Document-level
+  hiding: an `html` or `body` start tag, the first or a late one, that hides, or a `<style>` rule that hides `html`, `body` or `*`, makes
+  the body empty; a `<template shadowrootmode=...>` hides every child of its host (those before it too). THE STYLE PASS (`treestyle.py`,
+  re-exported by `stylepass.py`): the sheet of a page is the child text of the `style` elements of the tree in any namespace (HTML: raw
+  text; svg: character data, a CDATA section counts, a comment does not, character references are decoded), `style_sheets(src, tree)`,
+  with a `<select` also from the second reading; it is UNIONED with `scan_sheets`, a plain linear scan that starts a sheet at EVERY
+  `<style` opener (fake openers included, so it can only add rules), ends its start tag at the first `>` and at the first `>` outside a
+  quoted value (`TAG_REST`) and, through `variants`, also reads each scanned sheet with the CDATA markers removed, with the references
+  decoded and with tags and comments dropped (applied to scanned sheets only). More than `MAX_OVERLAP` (1000) openers inside another
+  sheet or `MAX_SCAN_CHARS` (4 MiB) of scanned text is a `TooDeep` parse drop. There is no nearest-name end-tag matching in the style
+  pass any more. `cssstyle.css_rules` reads the braces in one linear pass (`cssscan.py`: braces, semicolons and
   comment openers inside CSS strings, escapes and unquoted `url(...)` (the ident matched after escape decoding: `\75rl(`, `u\72l(`) do not
   count, nor do they inside a `(` or `[` simple block (a `blocks` stack of closers in `cssscan.rules`; unclosed blocks swallow the rest); a
   rule with nested blocks is read with them cut out and the nested rules on their own; a rule open at the end applies; CSS escapes in a
   selector are decoded and the list splits on unescaped commas only). `<![CDATA[` (any `<![`) is a bogus comment that ends at the first `>`
-  in HTML content, a real section to `]]>` whenever the current node is NOT an HTML element: the top element is in the svg or math
-  namespace, a member of a foreign run or an integration point itself (`ScriptedParser.parse_html_declaration` and `foreign()`;
-  `_support_cdata` is off so the EOF path agrees);
-  `noscript` is raw text in both passes (`CDATA_CONTENT_ELEMENTS`, also for `<noscript/>`) and stays in the skipped set, but only in HTML content:
-  `ScriptedParser.set_cdata_mode` skips EVERY raw-text, RCDATA and noscript name when `in_foreign()` holds (the element
-  just pushed is in the svg or math namespace); inside an open select the mode is entered too, and `_Text.set_cdata_mode` hides the rest
-  of the document once a raw text holding a `<` closes there (both browser readings, over-hiding; `script` exempt). `input`, `keygen`, `textarea` and `select`
-  pop the select (`SELECT_ENDERS`, `_Text._select_to_end`) only when no template, table, integration point, foreign or self-hidden element
-  is above it. `_Text` and `_Styles` answer `foreign()` and `in_foreign()` from their stack of `(tag, treerules marks)`; the style pass
-  matches an end tag by the nearest name (no scope rules, an approximation the plain scan backs up). `stylepass` parses each `<style>` sheet
-  alone (`style_sheets` reads a page with a `<select` both ways; `scan_sheets` starts a sheet at every `<style` opener, capped, and ends
-  its start tag at the first `>` and at the first `>` outside a quoted attribute value, `TAG_REST`; that work is counted against
-  `MAX_SCAN_CHARS`, so a page of pathological start tags is a `TooDeep` parse drop, fail closed).
-  `end_ignored` ignores the end tag of a foreign integration point with any HTML element above it. A leading byte order mark is dropped
-  (`fetch` decodes `utf-8-sig`, `strip_hidden` removes a U+FEFF): it would make the page quirks mode. In Markdown the `<` of every tag
-  that raw-texts or hides its content (`mdrules.RAW_TEXT`: the raw-text names plus noscript, details, select, svg, math, template, object,
-  dialog, canvas, video, audio, datalist, head, rp, progress, meter) is escaped inside a trusted code span or fence.
-  `handle_startendtag` enters raw-text mode for every `CDATA_CONTENT_ELEMENTS` name (`<xmp/>`, `<iframe/>`, `<noembed/>`,
-  `<noframes/>`), for the RCDATA ones (`<textarea/>`, `<title/>`) and `<plaintext/>`: a browser ignores the slash.
-  `treerules.implied(..., standards)` lets a `<table>` close an open `<p>` only in standards mode: `_Text.handle_decl` takes it from a FIRST
-  `<!DOCTYPE html>` (optionally `SYSTEM "about:legacy-compat"`) before any tag or non-blank text; none, a late, legacy or second doctype is
-  quirks (fail closed). Comments end where a browser ends them
-  (`<!-->`, `<!--->`, `-->`, `--!>`) on every patch release: `htmlrules.ScriptedParser.parse_comment` overrides the stdlib's (which pairs
-  an abrupt `<!-->` with a later `-->`) for both passes; the page is not rewritten, because `--!>` ends nothing in script data, an
-  attribute value or RCDATA. In Markdown a `===`, `=` or `--` line with no paragraph open is paragraph text (the paragraph flag of
+  in HTML content, a real section to `]]>` whenever the current node is NOT an HTML element (`ScriptedParser.parse_html_declaration`,
+  `foreign()`; `_support_cdata` is off so the EOF path agrees). `noscript` is raw text (`CDATA_CONTENT_ELEMENTS`, also for `<noscript/>`)
+  and stays in the skipped set, but only in HTML content. `handle_startendtag` enters raw-text mode for every `CDATA_CONTENT_ELEMENTS` name
+  (`<xmp/>`, `<iframe/>`, `<noembed/>`, `<noframes/>`), for the RCDATA ones (`<textarea/>`, `<title/>`) and `<plaintext/>`: a browser
+  ignores the slash. Comments end where a browser ends them (`<!-->`, `<!--->`, `-->`, `--!>`) on every patch release:
+  `htmlrules.ScriptedParser.parse_comment` overrides the stdlib's (which pairs an abrupt `<!-->` with a later `-->`) for the one pass;
+  the page is not rewritten, because `--!>` ends nothing in script data, an attribute value or RCDATA. A leading byte order mark is
+  dropped in ONE place: `fetch` decodes `utf-8-sig`, as the Encoding Standard strips one BOM before the tokenizer; `strip_hidden` removes
+  none, so a U+FEFF that remains is a character token in the initial mode and the page is quirks, as in a browser. In Markdown the `<` of
+  every tag that raw-texts or hides its content (`mdrules.RAW_TEXT`: the raw-text names plus noscript, details, select, svg, math,
+  template, object, dialog, canvas, video, audio, datalist, head, rp, progress, meter) is escaped inside a trusted code span or fence.
+  Kept over-hides, each on purpose: a nested `select` stays open, a raw text a select holds with a `<` hides the rest of the page, the
+  select enders are gated by `reach`, a furthest-block formatting element stays open, `a`, `nobr`, `button`, headings, `option` and
+  `ruby` have no start-tag rules and `form` has no pointer (`</form>` pops only a current form), `colgroup` is read in the table mode
+  and a template routes table tags there and the rest to the body, a closed `details` hides its summary too, and the scan variants hide
+  a CDATA-wrapped HTML style a browser would show as text. The cases the tree decides that the rule stack got wrong are the six Opus
+  wave-7 worlds (BOM before the doctype, svg CDATA style, nearest-name end tag, `annotation-xml` encoding, self-closed integration
+  points, frameset) and the older foster-parenting gap. In Markdown a `===`, `=` or `--` line with no paragraph open is paragraph text (the paragraph flag of
   `mdrules.scan` stays set); only a heading, a thematic break or a setext underline under an open paragraph ends it, and such a line inside
   a quote or a list item is a lazy continuation, not an underline (the `cont` flag: set by a `>` or list-marker line, a bare marker (`-`,
   `1.`) included unless a lone `-` underlines the paragraph above it, kept over blank and

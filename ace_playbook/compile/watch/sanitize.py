@@ -1,40 +1,30 @@
 """Visible text only (design 4.1: about 70 % of real injections hide in non-rendered HTML, so nothing but visible text goes on).
 
-`strip_hidden(html)` drops the content of `<script>`, `<style>`, `<template>`, `<noscript>`, `<head>`, `<title>`, `<dialog>`, `<svg>`,
-`<math>`, `<iframe>`, `<object>`, `<embed>`, `<canvas>`, `<audio>`, `<video>`, `<datalist>`, `<noembed>`, `<noframes>`, `<rp>`, `<select>`
-(all its option text), `<progress>`, `<meter>`, a `<details>` without `open`, comments, any element (and its whole subtree) that carries `hidden`,
-`inert`, `popover`, `aria-hidden="true"` or an inline
-style that hides (`cssstyle.style_hidden`), any element matched by a SIMPLE hiding rule of a `<style>` block (a single `.class`, `#id` or
-`tag`, names compared without case; media queries, descendant selectors and external stylesheets are not handled), and every invisible
-character (`chars.invisible`: all Unicode format characters, tag characters, variation selectors and the blank fillers). An element that
-is never closed stays hidden to the end of the input (fail closed); a formatting element closed implicitly by an outer end tag is re-opened
-hidden, as a browser's adoption agency would. A slash on a non-void tag (`<div hidden/>`, `<script/>`) is ignored, as a browser ignores it.
-Implied end tags are modelled (`treerules`): a block start tag closes an open `<p>`, `<li>` closes `<li>`, `<dd>`/`<dt>` close `<dd>`/`<dt>`,
-before the new element is pushed, so the later `</p>` of `<p>a<div hidden></p>X</div>` pops nothing. Document-level hiding is
-modelled: an `<html>` or `<body>` start tag, the first or a late one (a browser merges its attributes onto the root), that hides, or a
-`<style>` rule that hides `html`, `body` or `*`, makes the whole result "". A `<template shadowrootmode=...>` makes its host element hide
-all its children (they are unslotted), those before it included; at the top level the host is the document.
-An end tag that a browser ignores (a scope barrier or a special element in between, see `htmlrules`) pops nothing when that would unhide
-text; a script that is double-escaped (`<!--<script>`) closes at its next-but-one `</script`. More than `htmlrules.MAX_DEPTH` open elements
-raise `htmlrules.TooDeep` (a ValueError: the page is a parse failure). Tag names are compared as written (`</x:div>` does not close
-`<div>`: a browser ignores it); the inline-XML children of a feed arrive with local names already. `markdown=True` is for Markdown pages:
-a raw-text or content-hiding opener (`mdrules.RAW_TEXT`) is prose only in a code span that opens and closes on one plain line, or in a
-fenced block, outside HTML blocks and
-with no closer after it (`mdrules`); anywhere else the rules above apply as in HTML (a bare `<script>` hides to its closer, or to the
-end of the input). Link reference definitions (`[x]: url "title"`) are not rendered: with `markdown` the strictly valid ones are dropped
-from the source (`mdrules`); `definitions=True` on an HTML page (`fetch` sets it for a Markdown source served as HTML) drops them from the
-VISIBLE text only, never from the raw markup. The rules of `<style>` come from a first parser pass over the real style elements
-(`stylepass.style_text`) UNIONED with a plain scan for `<style ... </style` (`stylepass.style_rules`: over-hiding, for pages that
-html.parser and a browser tokenize differently), the visible text from a second parser pass. A comment ends where a browser ends it
-(`<!-->`, `<!--->`, `-->`, `--!>`: `htmlrules.ScriptedParser`); so does `<![CDATA[` in HTML content: a bogus comment that ends at the
-first `>` (a real section to `]]>` whenever the current node is not an HTML element: svg, math or an integration point), and `<noscript>`
-is raw text in HTML content, as in a browser with scripting on (an ordinary element in svg or math, outside an integration point, where
-the integration points are decided by namespace: `treerules`); a slash on any raw-text element (`<xmp/>`, ...) is ignored. A raw-text element in an
-open `<select>` (a browser may ignore its start tag there, so the raw text is markup) that holds a `<` hides the REST of the document once
-it closes (over-hiding: `set_cdata_mode`; `script` is exempt, the in-head rules take it in a select). Inside `<svg>` and
-`<math>` no implied end tag happens, except after a breakout tag or `</p>`/`</br>` (`treerules`). A `<table>` closes an open `<p>` only in standards mode, which
-is a FIRST doctype `html` (`<!DOCTYPE html>`, optionally with `SYSTEM "about:legacy-compat"`) before any tag or text; a late, legacy or
-second doctype, or none, is quirks mode (fail closed); a leading byte order mark is dropped. The result is plain text, one non-empty line per block.
+`strip_hidden(html)` builds ONE HTML5-style tree of the page (`treebuild`, the insertion modes of `treemodes`: implied elements, scope, foster
+parenting of table content, foreign content by namespace, template, frameset, select) and reads it twice: the style sheets (`treestyle`) and the
+visible text (`treewalk`). It drops the content of `<script>`, `<style>`, `<template>`, `<noscript>`, `<head>`, `<title>`, `<dialog>`, `<svg>`,
+`<math>`, `<iframe>`, `<object>`, `<embed>`, `<canvas>`, `<audio>`, `<video>`, `<datalist>`, `<noembed>`, `<noframes>`, `<rp>`, `<select>` (all its
+option text), `<progress>`, `<meter>`, a `<details>` without `open`, comments, any element (and its whole subtree) that carries `hidden`, `inert`,
+`popover`, `aria-hidden="true"` or an inline style that hides (`cssstyle.style_hidden`), any element matched by a SIMPLE hiding rule of a `<style>`
+block (a single `.class`, `#id` or `tag`, names compared without case; media queries, descendant selectors and external stylesheets are not
+handled), and every invisible character (`chars.invisible`: all Unicode format characters, tag characters, variation selectors and the blank
+fillers). An element that is never closed stays hidden to the end of the input (fail closed). Because the tree is a browser's, an end tag that a
+browser ignores (a scope marker or a special element in between) pops nothing, `</p>` finds no `p` after `<p>a<div hidden></p>`, a formatting element
+closed by an outer end tag is re-opened (hidden, if it was), and a table's text and elements land before the table (`<p hidden><table>X` keeps X in the
+hidden `p` unless the page is in standards mode, which is a FIRST doctype `<!DOCTYPE html>`, optionally with `SYSTEM "about:legacy-compat"`; any other
+doctype or none is quirks mode, fail closed). The byte order mark is dropped in ONE place (`fetch` decodes with `utf-8-sig`): a remaining U+FEFF is a
+character token and makes the page quirks, as in a browser. Document-level hiding: an `<html>` or `<body>` start tag, the first or a late one, that
+hides, or a `<style>` rule that hides `html`, `body` or `*`, makes the whole result ""; a `<frameset>` that replaces the body does too (nothing
+renders); a `<template shadowrootmode=...>` hides every child of its host (those before it too), the whole document when its host is the document.
+`<![CDATA[` is a bogus comment to the first `>` in HTML content and a real section whenever the current node is not an HTML element (svg, math, an
+integration point); a slash on a non-void HTML tag is ignored; `<noscript>` is raw text in HTML content (a browser with scripting on); a double-escaped
+script closes at its next-but-one `</script`. Over-hides kept on purpose (`treemodes`): an open `select` ignores end tags, a nested `<select>` stays
+open, raw text a select holds that has a `<` hides the REST of the page, the adoption agency leaves an element with a furthest block open. More than
+`htmlrules.MAX_DEPTH` open elements raise `htmlrules.TooDeep` (a ValueError: the page is a parse failure). Tag names are compared as written
+(`</x:div>` does not close `<div>`). `markdown=True` is for Markdown pages: a raw-text or content-hiding opener (`mdrules.RAW_TEXT`) is prose only in a
+code span that opens and closes on one plain line, or in a fenced block, outside HTML blocks and with no closer after it (`mdrules`); anywhere else the
+rules above apply as in HTML. Link reference definitions (`[x]: url "title"`) are not rendered: with `markdown` the strictly valid ones are dropped from
+the source; `definitions=True` on an HTML page drops them from the VISIBLE text only. The result is plain text, one non-empty line per block.
 Stdlib only.
 """
 
@@ -44,149 +34,34 @@ import re
 
 from .chars import control, invisible
 from .cssstyle import style_hidden  # noqa: F401 - style_hidden is part of this module's surface
-from .htmlrules import BARRIERS, BLOCK, FORMATTING, MAX_DEPTH, SELECT_ENDERS, SKIP, VOID, ScriptedParser, ScriptState, TooDeep, end_ignored
+from .htmlrules import TooDeep
 from .mdrules import drop_definitions, markdown_code_as_text
-from .stylepass import style_rules, style_text  # noqa: F401 - style_text is part of this module's surface
-from .treerules import implied, marks
+from .treebuild import build
+from .treestyle import style_rules, style_text  # noqa: F401 - style_text is part of this module's surface
+from .treewalk import visible
 
 SPACES = re.compile(r"[ \t\r\f\v\xa0]+")
-STANDARDS = re.compile(r"doctype[\t\n\f\r ]+html(?:[\t\n\f\r ]+system[\t\n\f\r ]+(?:\"about:legacy-compat\"|'about:legacy-compat'))?[\t\n\f\r ]*", re.I)
 ROOT_HIDING = frozenset(("html", "body", "*"))
 
 
 def plain(text: str) -> str:
     """`text` without invisible characters and without control characters other than newline and tab (U+2028/2029 become newlines)."""
-    return "".join("\n" if c in "\u2028\u2029" else c for c in text if not invisible(c) and not control(c))
-
-
-class _Text(ScriptedParser):
-    def __init__(self, rules: tuple) -> None:
-        super().__init__()
-        self.stack: list[list] = []                                # [tag, hidden: it or an ancestor is, hidden: it is, out index, treerules marks]
-        self.out: list[str] = []
-        self.open: dict[str, int] = {}                             # tag -> how many are on the stack: an end tag with none is skipped in O(1)
-        self.classes, self.ids, self.tags = rules
-        self.dead = False                                         # the document itself is hidden (html/body) or a shadow host: no text at all
-        self.standards, self.fresh = False, True                  # standards mode (a leading `<!DOCTYPE html>`, else quirks); nothing but blanks seen yet
-        self.raw_select, self.raw_lt, self.poisoned = False, False, False       # a raw-text element is open in a select; it held a `<`; hide to EOF
-
-    def _push(self, tag: str, hid: bool, own: bool, attrs: list | tuple = ()) -> None:
-        self.stack.append([tag, hid, own, len(self.out), marks(self.stack[-1][4] if self.stack else None, tag, len(self.stack), attrs)])
-        self.open[tag] = self.open.get(tag, 0) + 1
-
-    def _pop(self, i: int) -> None:
-        """Pop `stack[i:]` (for an end tag, or implied by a start tag). A hidden formatting element popped from above `stack[i]` is re-opened."""
-        popped, tag = self.stack[i + 1:], self.stack[i][0]
-        for e in self.stack[i:]:
-            self.open[e[0]] -= 1
-        del self.stack[i:]
-        if tag == "script":
-            self.script = None
-        for t, hid, own, _, _ in popped:                            # `<b><i hidden></b>X</i>`: the browser re-opens the hidden <i> around X
-            if t in FORMATTING and hid:
-                self._push(t, self._hidden() or own, own)
-        self.out.append("\n" if tag in BLOCK and not self._hidden() else "")
-
-    def _hidden(self) -> bool:
-        return bool(self.stack) and self.stack[-1][1]
-
-    def foreign(self) -> bool:
-        return bool(self.stack) and self.stack[-1][4][6] != 0       # the top element is in the svg or math namespace (an integration point too)
-
-    def set_cdata_mode(self, elem, **kw) -> None:
-        """A raw-text element (not `script`: a select hands it to the in-head rules, no browser ignores it) opened in an open select is the one
-        place the two browser readings differ: one ignores the start tag, so the raw text is markup there. When it closes with a `<` in its text
-        the rest of the document stays hidden (`poisoned`): the other reading may have opened a hidden element that no later tag here closes."""
-        raw = not self.in_foreign() and elem != "script" and bool(self.open.get("select"))     # a select is popped by its end tag or an ender only
-        super().set_cdata_mode(elem, **kw)
-        self.raw_select, self.raw_lt = raw, False
-
-    def _select_to_end(self) -> int | None:
-        """The stack index of the open select that an `<input>`, `<keygen>`, `<textarea>` or `<select>` start tag ends, else None: only when
-        the select is the current insertion context, i.e. nothing above it is a scope marker (`template`, a table, an integration point), a
-        foreign element or hidden by itself (the browser does not reach the select from there; popping a hidden ancestor would be a leak)."""
-        if not self.open.get("select"):
-            return None
-        i = next(i for i in range(len(self.stack) - 1, -1, -1) if self.stack[i][0] == "select")
-        return i if all(e[0] not in BARRIERS and e[4][6] == 0 and not e[2] for e in self.stack[i + 1:]) else None
-
-    def handle_decl(self, decl) -> None:
-        """Only the FIRST doctype, before any tag or text, and only `html` (with an optional legacy-compat SYSTEM id) is standards mode; a
-        late, a legacy or a second doctype leaves (or makes) it quirks, where a `<table>` does not close a `<p>` (fail closed)."""
-        self.standards = self.fresh and STANDARDS.fullmatch(decl) is not None
-        self.fresh = False
-
-    def _own(self, tag: str, attrs: list) -> bool:
-        names = {k for k, _ in attrs}
-        values = {k: (v or "") for k, v in reversed(attrs)}
-        aria = any((v or "").strip().lower() == "true" for k, v in attrs if k == "aria-hidden")       # a repeated attribute: any copy counts
-        return bool(tag in SKIP or (tag == "details" and "open" not in names) or names & {"hidden", "inert", "popover"} or aria
-                    or any(style_hidden(v or "") for k, v in attrs if k == "style")
-                    or tag in self.tags or values.get("id", "").lower() in self.ids or self.classes & set(values.get("class", "").lower().split()))
-
-    def handle_starttag(self, tag, attrs) -> None:
-        self.fresh = False
-        if tag in SELECT_ENDERS and (i := self._select_to_end()) is not None:       # these end the select first (a nested select stays open)
-            self._pop(i)
-        while not self.open.get("select") and (i := implied(self.stack[-1][4] if self.stack else None, tag, attrs, self.standards)) is not None:
-            self._pop(i)                                            # a select drops start tags: nothing is implied inside one
-        own = self._own(tag, attrs)
-        hid = self._hidden() or own
-        self.dead = self.dead or (own and tag in ("html", "body"))
-        if tag in VOID:
-            self.out.append(" " if not hid and tag in ("br", "hr") else "")
-            return
-        if tag == "template" and {"shadowrootmode", "shadowroot"} & {k for k, _ in attrs}:       # a declarative shadow root: the host's children are unslotted
-            if self.stack:
-                self.stack[-1][1] = True
-                del self.out[self.stack[-1][3]:]
-            else:
-                self.dead = True
-        self._push(tag, hid, own, attrs)
-        if len(self.stack) > MAX_DEPTH:
-            raise TooDeep("nesting too deep")
-        if tag == "script":
-            self.script = ScriptState()
-        self.out.append("\n" if tag in BLOCK and not hid else "")
-
-    def handle_endtag(self, tag) -> None:
-        self.fresh = False
-        if self.raw_select:                                         # the end tag of the raw-text element opened in a select
-            self.raw_select, self.poisoned = False, self.poisoned or self.raw_lt
-        if tag in ("p", "br") and self.stack and self.stack[-1][4][5] >= 0:      # in foreign content `</p>` and `</br>` break out of the run
-            self._pop(self.stack[-1][4][5])
-        if self.script_stays_open(tag) or not self.open.get(tag):
-            return
-        i = next(i for i in range(len(self.stack) - 1, -1, -1) if self.stack[i][0] == tag)
-        if not end_ignored(self.stack, i):
-            self._pop(i)
-
-    def handle_data(self, data) -> None:
-        super().handle_data(data)
-        self.fresh = self.fresh and not data.strip(" \t\n\f\r")
-        self.raw_lt = self.raw_lt or (self.raw_select and "<" in data)
-        if not self._hidden() and not self.poisoned:
-            self.out.append(data)
+    return "".join("\n" if c in "  " else c for c in text if not invisible(c) and not control(c))
 
 
 def strip_hidden(html: str, markdown: bool = False, definitions: bool | None = None) -> str:
     """The visible text of `html` (see the module docstring); "" when the parser gives up; TooDeep (ValueError) past MAX_DEPTH."""
     defs = markdown if definitions is None else definitions
-    src = markdown_code_as_text(html.removeprefix("\ufeff"), markdown, markdown and defs)           # a browser drops a leading byte order mark
+    src = markdown_code_as_text(html, markdown, markdown and defs)
     try:
-        rules = style_rules(src)
-        if ROOT_HIDING & rules[2]:
-            return ""
-        parser = _Text(rules)
-        parser.feed(src)
-        parser.close()
+        tree = build(src)
+        rules = style_rules(src, tree)
+        text = "" if ROOT_HIDING & rules[2] else visible(tree, rules)
     except TooDeep:
         raise
     except Exception:                                               # a parser fault must never let raw markup through
         return ""
-    if parser.dead:
-        return ""
-    lines = (SPACES.sub(" ", plain("".join(parser.out))).split("\n"))
+    lines = (SPACES.sub(" ", plain(text)).split("\n"))
     text = "\n".join(s for s in (ln.strip() for ln in lines) if s)
     return text if markdown or not defs else drop_definitions(text)
 

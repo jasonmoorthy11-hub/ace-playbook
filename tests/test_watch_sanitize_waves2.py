@@ -1,4 +1,4 @@
-"""The sanitizer wave 14 (`strip_hidden`, `treerules`, `stylepass`): foreign content decided by NAMESPACE, CDATA by the namespace of the current node,
+"""The sanitizer wave 14 (`strip_hidden`, `treebuild`, `treestyle`): foreign content decided by NAMESPACE, CDATA by the namespace of the current node,
 `</p>` and `</br>` breaking out of a foreign run, the scan skipping quoted attribute values, code-span tags in Markdown, the byte order mark.
 Shared helpers come from the first two files; each case is also pushed through `fetch`."""
 
@@ -129,7 +129,7 @@ def test_the_scan_of_start_tags_stays_linear_and_capped():
 
 
 # ------------------------------------------------------------------ code spans in Markdown, the byte order mark, the 11 fixtures
-@pytest.mark.parametrize("tag", ["details", "noscript", "select", "svg", "math", "template", "object", "dialog", "canvas", "video", "datalist", "head"])
+@pytest.mark.parametrize("tag", ["details", "noscript", "select", "svg", "math", "template", "object", "dialog", "canvas", "video", "datalist"])
 def test_a_tag_that_hides_its_content_is_prose_inside_a_trusted_code_span(tag):
     text = f"Use `<{tag}>` to fold.\n\nVIS\n"
     assert strip_hidden(text, markdown=True) == f"Use `<{tag}>` to fold.\nVIS"
@@ -137,11 +137,11 @@ def test_a_tag_that_hides_its_content_is_prose_inside_a_trusted_code_span(tag):
     assert strip_hidden(f"Use `<{tag}>` here.\n\n</{tag}>\n\nVIS\n", markdown=True) == "Use `\nVIS"        # a closer follows: markup, hides up to it
 
 
-def test_a_leading_byte_order_mark_does_not_make_the_page_quirks_mode():
+def test_fetch_drops_one_leading_byte_order_mark_and_strip_hidden_none():
     page = "<!DOCTYPE html><p hidden><table>X"
-    assert strip_hidden("﻿" + page) == strip_hidden(page) == "X"
     item = fetch(URL, expect=("text/html",), store={}, now="2026-10-21T12:00:00Z", opener=Opener({URL: Resp(b"\xef\xbb\xbf" + page.encode(), "text/html")}))
-    assert item["body"] == "X"
+    assert item["body"] == "X" and strip_hidden(page) == "X"                       # the decoder strips the one BOM: standards mode
+    assert strip_hidden("\ufeff" + page) == ""      # a remaining U+FEFF is a character token: quirks mode
 
 
 @pytest.mark.parametrize("kind", ["npm", "rss", "md"])

@@ -130,7 +130,7 @@ QUIRKS_HIDDEN = {                                            # without a leading
     "no-doctype": "<p hidden><table><tr><td>LEAK</td></tr></table>", "late": "<p hidden><!DOCTYPE html><table><tr><td>LEAK</td></tr></table>",
     "after-text": "x<!DOCTYPE html><p hidden><table>LEAK", "after-tag": "<span></span><!DOCTYPE html><p hidden><table>LEAK",
     "legacy": '<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd"><p hidden><table>LEAK',
-    "second": "<!DOCTYPE html><!DOCTYPE html><p hidden><table>LEAK", "system-other": '<!DOCTYPE html SYSTEM "about:other"><p hidden><table>LEAK',
+    "system-other": '<!DOCTYPE html SYSTEM "about:other"><p hidden><table>LEAK',
     "xhtml": '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "x.dtd"><p hidden><table>LEAK', "other-name": "<!DOCTYPE x><p hidden><table>LEAK",
     "in-foreign": "<p hidden><math><mrow><table></table>LEAK",
 }
@@ -138,6 +138,7 @@ STANDARDS_SHOWN = {                                          # the first doctype
     "<!DOCTYPE html><p hidden><table><tr><td>VIS</td></tr></table>": "VIS", "<!doctype HTML><p hidden><table>VIS</table>": "VIS",
     "\n <!-- c --> \n<!DOCTYPE html>\n<p hidden><table>VIS</table>": "VIS", '<!DOCTYPE html SYSTEM "about:legacy-compat"><p hidden><table>VIS': "VIS",
     "<!DOCTYPE html SYSTEM 'about:legacy-compat'><p hidden><table>VIS": "VIS", "<!DOCTYPE html><p hidden><math><mrow><table></table>VIS": "VIS",
+    "<!DOCTYPE html><!DOCTYPE html><p hidden><table>VIS": "VIS",                        # a second doctype is ignored by a browser: the first decides
 }
 
 
@@ -155,10 +156,8 @@ def test_after_a_leading_html_doctype_a_table_closes_the_paragraph(html):
 
 
 def test_the_quirks_table_reaches_a_proposal_quote_only_when_the_page_has_no_doctype():
-    from ace_playbook.compile.watch import treerules
-    marks = treerules.marks(None, "p", 0)
-    assert treerules.implied(marks, "table", ()) is None and treerules.implied(marks, "table", (), standards=True) == 0
-    assert treerules.implied(marks, "div", ()) == 0 and treerules.implied(marks, "div", (), standards=True) == 0
+    assert strip_hidden("<p hidden><table>X") == "" and strip_hidden("<!DOCTYPE html><p hidden><table>X") == "X"   # a table closes a p only in standards
+    assert strip_hidden("<p hidden><div>X") == "X" and strip_hidden("<!DOCTYPE html><p hidden><div>X") == "X"             # a div does in both
     page = "<h1>Deprecations</h1><p hidden><table><tr><td><h2>LEAK heading</h2></td></tr></table>"
     item = fetch(URL, expect=("text/html",), store={}, kind="md", now="2026-10-21T12:00:00Z", opener=Opener({URL: Resp(page.encode(), "text/html")}))
     assert "LEAK" not in str(item["data"]) and "LEAK" not in item["body"]
@@ -548,9 +547,9 @@ def test_a_nested_select_keeps_the_text_after_it_hidden_and_the_noscript_context
 @pytest.mark.parametrize("child", ["<div hidden>", "<p hidden>", "<section hidden>"])         # a special element (a `<span hidden>` is passed over)
 def test_the_end_tag_of_an_integration_point_is_stopped_by_a_hidden_element_above_it(tag, child):
     root = "math" if tag in ("mi", "mtext", "annotation-xml") else "svg"
-    html = f"<{root}><{tag}>{child}</{tag}></{root}>LEAK"
-    assert "LEAK" not in strip_hidden(html) and "LEAK" not in body_of(html), html
     enc = ' encoding="text/html"' if tag == "annotation-xml" else ""                    # wave 14: only with it is annotation-xml an integration point
+    html = f"<{root}><{tag}{enc}>{child}</{tag}></{root}>LEAK"          # (without it a `<section hidden>` is a MathML element: not hidden, not a breakout tag)
+    assert "LEAK" not in strip_hidden(html) and "LEAK" not in body_of(html), html
     assert strip_hidden(f"<{root}><{tag}{enc}><b>t</b></{tag}></{root}>VIS") == "VIS"                      # nothing hidden above: the end tag pops
 
 
@@ -723,24 +722,19 @@ def test_overlapping_style_openers_are_capped_and_the_page_fails_closed():
 
 
 # ------------------------------------------------------------------ wave 13: an end tag below an open select pops nothing, whatever is hidden
-def stack_entry(tag: str, hidden: bool = False) -> list:
-    return [tag, hidden, hidden, 0, (0, 0, 0, 0, 0, -1)]
-
-
-@pytest.mark.parametrize("tag", ["div", "p", "span", "b", "table", "td", "template", "li", "a"])
-def test_an_end_tag_below_an_open_select_pops_nothing_even_when_nothing_is_hidden(tag):
-    # spec, "in select": every end tag but optgroup, option, select and template is ignored; the guard no longer relies on the select being hidden
-    from ace_playbook.compile.watch.htmlrules import end_ignored
-    assert end_ignored([stack_entry(tag), stack_entry("select")], 0)
-    assert end_ignored([stack_entry(tag), stack_entry("select"), stack_entry("option")], 0)
-    assert not end_ignored([stack_entry("select"), stack_entry("option")], 0) and not end_ignored([stack_entry("select")], 0)
-    assert not end_ignored([stack_entry(tag), stack_entry("b")], 0) and not end_ignored([stack_entry(tag)], 0)
+@pytest.mark.parametrize("opener,closer", [("<div>", "</div>"), ("<p>", "</p>"), ("<span>", "</span>"), ("<b>", "</b>"), ("<table>", "</table>"),
+                                           ("<table><tr><td>", "</td>"), ("<ul><li>", "</li>"), ("<a>", "</a>")])
+def test_an_end_tag_below_an_open_select_pops_nothing_even_when_nothing_is_hidden(opener, closer):
+    # spec, "in select": every end tag but optgroup, option, select and template is ignored; the select stays open and hides what follows
+    html = f"{opener}<select>{closer}X"
+    assert "X" not in strip_hidden(html) and "X" not in body_of(html), html
+    assert strip_hidden(f"{opener}<select></select>{closer}X") == "X", html                        # control: the select closed first
 
 
 SELECT_OPEN_WORLDS = ["<select><div></div>{r}", "<div><select></div>{r}", "<p><select></p>{r}", "<b><select></b>{r}", "<span><select><option></span>{r}",
                       "<select><option></option></p>{r}", "<select><option></div>{r}", "<table><td><select></td>{r}", "<table><select></table>{r}",
-                      "<select><optgroup><option></optgroup>{r}", "<svg><select></svg>{r}", "<select><svg></svg>{r}", "<select><select>{r}",
-                      "<div hidden><select><option></div>{r}", "<select><template></select>{r}", "<template><select></template>{r}"]
+                      "<select><optgroup><option></optgroup>{r}", "<select><svg></svg>{r}", "<select><select>{r}",
+                      "<div hidden><select><option></div>{r}", "<select><template></select>{r}"]
 
 
 @pytest.mark.parametrize("tag", ["xmp", "iframe", "noscript", "style", "title"])

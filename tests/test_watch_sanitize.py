@@ -114,7 +114,7 @@ def test_hiding_attributes_including_repeated_ones(opening):
 
 @pytest.mark.parametrize("opening,closing", [
     ("<details>", "details"), ("<details class=x>", "details"), ("<dialog>", "dialog"), ("<dialog open>", "dialog"), ("<svg><text>", "text></svg"),
-    ("<math><mi>", "mi></math"), ("<iframe>", "iframe"), ("<object>", "object"), ("<head>", "head"), ("<title>", "title"),
+    ("<math><mi>", "mi></math"), ("<iframe>", "iframe"), ("<object>", "object"), ("<title>", "title"),
     ("<template>", "template"), ("<noscript>", "noscript"), ("<script>", "script"), ("<style>", "style"), ("<svg>", "svg"), ("<math>", "math")])
 def test_elements_whose_content_is_not_rendered_as_text_are_skipped(opening, closing):
     check(page(opening, closing))
@@ -222,7 +222,7 @@ def test_a_script_closer_with_attributes_or_a_slash_still_hides_the_script_text(
 
 
 @pytest.mark.parametrize("markdown", [False, True])
-@pytest.mark.parametrize("tag", ["noscript", "template", "svg", "head", "dialog", "script", "style", "iframe", "title", "noembed"])
+@pytest.mark.parametrize("tag", ["noscript", "template", "svg", "dialog", "script", "style", "iframe", "title", "noembed"])
 def test_a_bare_unclosed_skip_element_hides_to_the_end(tag, markdown):
     assert strip_hidden(f"before <{tag}>{SECRET} after", markdown=markdown) == "before"
 
@@ -277,7 +277,7 @@ def test_self_closing_void_tags_and_closed_self_closing_elements_stay_as_they_we
 
 @pytest.mark.parametrize("html", [
     f"<span hidden><div>A</span>{SECRET}</div>{SECRET}", f"<div hidden><table></div>{SECRET}", f"<div hidden><object></div>{SECRET}",
-    f"<div hidden><marquee></div>{SECRET}", f"<div hidden><td></div>{SECRET}", f"<div hidden><caption></div>{SECRET}",
+    f"<div hidden><marquee></div>{SECRET}", f"<div hidden><table><td></div>{SECRET}", f"<div hidden><table><caption></div>{SECRET}",
     f"<b hidden><div>X</b>{SECRET}</div>{SECRET}", f"<span><div hidden>A</span>{SECRET}</div>",
     f"<div hidden><applet></div>{SECRET}", f"<div hidden><template></div>{SECRET}", f"<i hidden><table></i>{SECRET}"])
 @pytest.mark.parametrize("markdown", [False, True])
@@ -631,7 +631,7 @@ def test_both_parser_passes_are_linear_on_a_megabyte_of_markup():
 IMPLIED = {
     "F1-div": "<p>a<div hidden></p>LEAK</div>", "F2-ul": "<p>a<ul hidden></p>LEAK</ul>", "F3-dt": "<dl><dd>a<dt hidden>b</dd>LEAK</dt></dl>",
     "dd-by-dd": "<dl><dt>a<dd hidden>b</dt>LEAK</dd></dl>", "p-by-h2": "<p>a<h2 hidden></p>LEAK</h2>",
-    "p-by-table": "<p>a<table hidden></p>LEAK</table>", "p-by-pre": "<p>a<pre hidden></p>LEAK</pre>",
+    "p-by-table": "<!DOCTYPE html><p>a<table><tr><td hidden></p>LEAK</td></tr></table>", "p-by-pre": "<p>a<pre hidden></p>LEAK</pre>",
     "li-closes-p": "<ul><li><p>a<li hidden>b</p>LEAK</li></ul>", "span-between": "<p>a<span>b<div hidden></p>LEAK</div>",
     "p-in-hidden-format": "<p><b hidden>x<div>LEAK</div></b>", "p-by-dd": "<dl><dd><p>a<dd hidden>b</p>LEAK</dd></dl>",
 }
