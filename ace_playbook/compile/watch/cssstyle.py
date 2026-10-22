@@ -2,11 +2,13 @@
 
 `style_hidden(css)` normalises first (CSS comments removed, CSS escapes such as `\\3A` decoded, NUL removed, lower-cased, `!important`
 dropped, whitespace collapsed, property names stripped of all whitespace) and then reads each declaration: display:none; visibility
-hidden or collapse; content-visibility:hidden; zoom:0; opacity or font-size zero in any spelling or unit (also `calc(0px)`); the `font`
-shorthand with a zero size; `clip:rect(0,0,0,0)`; clip-path inset(100%) or circle(0); transform scale(0) or a far translate; a
-transparent color (`transparent`, rgb/rgba/hsl/hsla with alpha 0 in the comma or the slash syntax, `#rgba` and `#rrggbbaa` with alpha 0); a
-zero width or height with overflow hidden or clip; position absolute or fixed far off-screen; text-indent far negative. "Far" is -1000px
-(or pt, or no unit) and -100em, rem, ch, %, vw or vh.
+hidden or collapse; content-visibility:hidden; zoom:0; opacity below 0.1 (negative too; 10 % in percent); font-size zero in any unit
+or below 1px (6.25 % and 0.0625em are 1px); the `font` shorthand with a zero size; `clip:rect(0,0,0,0)`; clip-path circle(0) or an inset()
+with any side at 50 % or more; transform (or `scale`) with ANY zero scale argument, or a far translate; a transparent `color` or
+`-webkit-text-fill-color` (`transparent`, rgb/rgba/hsl/hsla with alpha 0 in the comma or the slash syntax, `#rgba` and `#rrggbbaa` with
+alpha 0); a width or height of 1px or less (zero in any unit) with overflow hidden or clip (the WordPress screen-reader-text box);
+position absolute or fixed far off-screen; a far negative margin or text-indent. "Far" is -500px (or pt, or no unit), -20em, rem or ch,
+and -100%, vw or vh.
 
 `css_rules(css)` reads `<style>` text: only rules whose selector is a single `.class`, `#id` or `tag` and whose body hides count; rules
 inside at-rules (media queries) and every other selector (descendant, child, attribute, pseudo-class) are NOT handled, nor are external
@@ -19,13 +21,15 @@ import re
 
 CSS_COMMENT, CSS_ESCAPE = re.compile(r"/\*.*?(?:\*/|$)", re.S), re.compile(r"\\([0-9a-fA-F]{1,6})[ \t\r\n\f]?|\\(.)", re.S)
 NUMBER = re.compile(r"([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)([a-z%]*)")
-SCALE0 = re.compile(r"scale(?:3d|x|y)?\((?:0+(?:\.0*)?|\.0+)[,)]")
+SCALE = re.compile(r"scale(?:3d|x|y|z)?\(([^)]*)\)")
+INSET = re.compile(r"inset\(([^)]*)\)")
 TRANSLATE = re.compile(r"translate(?:x|y|3d)?\(([^)]*)\)")
 CLIP0 = re.compile(r"rect\(0(?:px)?[ ,]0(?:px)?[ ,]0(?:px)?[ ,]0(?:px)?\)")
 FONT0 = re.compile(r"(?:^| )0(?:\.0*)?(?:px|pt|em|rem|%|ex|ch|vw|vh)?(?:/| |$)")
 COLOR_FN = re.compile(r"(?:rgb|rgba|hsl|hsla)\((.*)\)")
 HEX_CLEAR = re.compile(r"#[0-9a-f]{3}0|#[0-9a-f]{6}00")
-FAR = {"px": 1000, "pt": 1000, "": 1000, "em": 100, "rem": 100, "ch": 100, "vw": 100, "vh": 100, "%": 100}
+FAR = {"px": 500, "pt": 500, "": 500, "em": 20, "rem": 20, "ch": 20, "vw": 100, "vh": 100, "%": 100}
+TINY = {"px": 1, "pt": 0.75, "em": 0.0625, "rem": 0.0625, "ex": 0.125, "ch": 0.125, "%": 6.25, "vw": 0.1, "vh": 0.1}
 RULE, AT_RULE = re.compile(r"([^{}]+)\{([^{}]*)\}"), re.compile(r"@[^{};]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}|@[^{};]*;")
 SIMPLE = re.compile(r"\.[\w-]+|#[\w-]+|[A-Za-z][\w-]*")
 
@@ -49,7 +53,35 @@ def _zero(value: str) -> bool:
 
 def _far(value: str) -> bool:
     n = _num(value.strip())
-    return n is not None and n[0] <= -FAR.get(n[1], 1000)
+    return n is not None and n[0] <= -FAR.get(n[1], 500)
+
+
+def _faint(value: str) -> bool:
+    """opacity below 0.1 (a negative one is clamped to 0)."""
+    n = _num(value)
+    return n is not None and n[1] in ("", "%") and n[0] / (100 if n[1] == "%" else 1) < 0.1
+
+
+def _tiny(value: str) -> bool:
+    """A font size of zero in any unit, or below 1px."""
+    n = _num(value)
+    return n is not None and (n[0] == 0 or 0 <= n[0] < TINY.get(n[1], 0))
+
+
+def _flat(value: str) -> bool:
+    """A box side of 1px or less (zero in any unit)."""
+    n = _num(value)
+    return n is not None and (n[0] == 0 or (n[1] == "px" and n[0] <= 1))
+
+
+def _inset(value: str) -> bool:
+    """A clip-path inset() with a side at 50 % or more: nothing of the box is left."""
+    for m in INSET.finditer(value):
+        for arg in m.group(1).split(" round ")[0].replace(",", " ").split():
+            n = _num(arg)
+            if n is not None and n[1] == "%" and n[0] >= 50:
+                return True
+    return False
 
 
 def _clear(value: str) -> bool:
@@ -76,10 +108,12 @@ def _declarations(style: str) -> list[tuple[str, str]]:
 def _hides(k: str, v: str) -> bool:
     return bool(
         (k == "display" and v == "none") or (k == "visibility" and v in ("hidden", "collapse")) or (k == "content-visibility" and v == "hidden")
-        or (k == "opacity" and _zero(v.rstrip("%"))) or (k in ("font-size", "zoom") and _zero(v)) or (k == "font" and FONT0.search(v))
-        or (k == "clip" and CLIP0.search(v)) or (k == "clip-path" and v.startswith(("inset(100%", "circle(0")))
-        or (k == "transform" and (SCALE0.search(v) or any(_far(a) for m in TRANSLATE.finditer(v) for a in m.group(1).split(","))))
-        or (k == "color" and _clear(v)) or (k == "text-indent" and _far(v.split(" ")[0])))
+        or (k == "opacity" and _faint(v)) or (k == "zoom" and _zero(v)) or (k == "font-size" and _tiny(v)) or (k == "font" and FONT0.search(v))
+        or (k == "clip" and CLIP0.search(v)) or (k == "clip-path" and (v.startswith("circle(0") or _inset(v)))
+        or (k == "transform" and (any(_zero(a) for m in SCALE.finditer(v) for a in m.group(1).split(","))
+                                  or any(_far(a) for m in TRANSLATE.finditer(v) for a in m.group(1).split(","))))
+        or (k == "scale" and any(_zero(a) for a in v.split(" "))) or (k.startswith("margin") and any(_far(a) for a in v.split(" ")))
+        or (k in ("color", "-webkit-text-fill-color") and _clear(v)) or (k == "text-indent" and _far(v.split(" ")[0])))
 
 
 def style_hidden(style: str) -> bool:
@@ -89,17 +123,17 @@ def style_hidden(style: str) -> bool:
         return True
     clipped = any(k.startswith("overflow") and v in ("hidden", "clip") for k, v in decls)
     away = any(k == "position" and v in ("absolute", "fixed") for k, v in decls)
-    return (clipped and any(k in ("width", "height", "max-width", "max-height") and _zero(v) for k, v in decls)) or (
+    return (clipped and any(k in ("width", "height", "max-width", "max-height") and _flat(v) for k, v in decls)) or (
         away and any(k in ("left", "top", "right", "bottom") and _far(v) for k, v in decls))
 
 
 def css_rules(css: str) -> tuple[frozenset, frozenset, frozenset]:
-    """(classes, ids, tags) named by the simple hiding rules of `css`."""
+    """(classes, ids, tags) named by the simple hiding rules of `css`, lower-cased (quirks mode matches class and id names without case)."""
     classes, ids, tags = set(), set(), set()
     for selectors, body in RULE.findall(AT_RULE.sub("", CSS_COMMENT.sub("", css))):
         if not style_hidden(body):
             continue
         for sel in (s.strip() for s in selectors.split(",")):
             if SIMPLE.fullmatch(sel):
-                (classes if sel[0] == "." else ids if sel[0] == "#" else tags).add(sel[1:] if sel[0] in ".#" else sel.lower())
+                (classes if sel[0] == "." else ids if sel[0] == "#" else tags).add(sel[1:].lower() if sel[0] in ".#" else sel.lower())
     return frozenset(classes), frozenset(ids), frozenset(tags)

@@ -92,8 +92,8 @@ def test_links_that_are_not_http_are_dropped_from_entries():
 def test_npm_dist_tags():
     assert parsers.parse_npm_dist_tags(fixture("npm_tags.json").decode()) == {"stable": "9.0.4", "latest": "9.1.0"}
     assert parsers.parse_npm_dist_tags('{"latest": "9.1.0"}') == {"stable": None, "latest": "9.1.0"}
-    assert parsers.parse_npm_dist_tags('{"latest": "9.1.0; rm -x", "stable": "1.2.3"}') == {"stable": "1.2.3", "latest": None}
-    for bad in ("[]", "{}", '{"latest": 5}', "nope"):
+    assert parsers.parse_npm_dist_tags('{"latest": "9.1.0", "stable": "not a version"}') == {"stable": None, "latest": "9.1.0"}
+    for bad in ("[]", "{}", '{"latest": 5}', "nope", '{"latest": "9.1.0; rm -x", "stable": "1.2.3"}', '{"stable": "1.2.3"}'):
         with pytest.raises(ValueError):
             parsers.parse_npm_dist_tags(bad)
 
@@ -157,3 +157,40 @@ def test_every_deprecations_row_is_a_verbatim_substring_of_the_fetched_body():
     assert all(r["row"] in item["body"] for r in item["data"])
     item = get("rss", fixture("rss_ok.xml"), "application/xml")
     assert all(e["title"] in item["body"] for e in item["data"])
+
+
+# ------------------------------------------------------------------ wave 4: escaped text inside XHTML children, ASCII versions
+ATOM_ENTRY = ('<feed xmlns="http://www.w3.org/2005/Atom"><entry><id>x</id><title>T</title><updated>2026-10-01</updated>'
+              '<content type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">%s</div></content></entry></feed>')
+
+
+@pytest.mark.parametrize("inner", [
+    '<span hidden="">&lt;/span&gt; SECRETTEXT</span>', '<span style="display:none">&lt;/span&gt;SECRETTEXT</span>',
+    '<span hidden="">&lt;/div&gt;&lt;p&gt; SECRETTEXT &lt;/p&gt;</span>', '<div hidden=""><b>&lt;/div&gt; SECRETTEXT</b></div>',
+    '<span hidden="">x<b>y</b>&lt;/span&gt;SECRETTEXT</span>'])
+def test_xhtml_text_inside_a_child_element_cannot_close_its_hidden_ancestor_with_an_escaped_tag(inner):
+    summary = parsers.parse_atom(ATOM_ENTRY % f"vis {inner} tail")[0]["summary"]
+    assert "SECRETTEXT" not in summary and summary.startswith("vis")
+
+
+def test_xhtml_child_text_is_escaped_once_and_the_roots_own_text_stays_raw():
+    entry = parsers.parse_atom(ATOM_ENTRY % "a <b>x &amp; y &lt;i&gt; z</b> tail")[0]
+    assert entry["summary"] == "a x & y <i> z tail"
+    rss = '<rss><channel><item><title>t</title><description>&lt;div hidden&gt;SECRETTEXT&lt;/div&gt;seen</description></item></channel></rss>'
+    assert parsers.parse_rss(rss)[0]["summary"] == "seen"
+    rss = '<rss><channel><item><title>A &lt;script/&gt;SECRETTEXT</title></item></channel></rss>'
+    assert "SECRETTEXT" not in parsers.parse_rss(rss)[0]["title"]
+
+
+@pytest.mark.parametrize("latest", ["1.2.3-ignore_previous_instructions_é", "1.2.3-é", "١.٢.٣", "1.2.3-" + "a" * 41, "next",
+                                    "1.2.3_x", "1.2.3-a b", "1.2.3\n", "1.2.3-Ａ"])
+def test_an_npm_latest_that_is_not_an_ascii_version_is_a_parse_drop(latest):
+    body = json.dumps({"latest": latest, "stable": "1.0.0"}).encode()
+    with pytest.raises(ValueError):
+        parsers.parse_npm_dist_tags(body.decode())
+    assert get("npm", body, "application/json") == {"url": URL, "fetched_at": NOW, "dropped": "parse"}
+
+
+@pytest.mark.parametrize("latest", ["1.2.3", "10.20.30-beta.1", "1.2.3+build5", "1.2.3-" + "a" * 40, "0.0.1-rc.1"])
+def test_an_ascii_version_passes(latest):
+    assert parsers.parse_npm_dist_tags(json.dumps({"latest": latest}))["latest"] == latest

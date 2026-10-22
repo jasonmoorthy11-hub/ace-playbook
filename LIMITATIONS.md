@@ -165,19 +165,28 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   not on the connected socket, so a DNS-rebinding race remains: a name that resolves to a public address at the check and to a private one at
   the connect is not caught.
 - Watcher, sanitizer coverage: `strip_hidden` reads inline `style` attributes and simple single-selector `<style>` rules (a tag, `.class` or
-  `#id` rule, no combinators). Media queries, descendant, child and attribute selectors, `@import` and external stylesheets are NOT handled, so
-  text hidden that way is read as visible. These cases are undetectable by this design or are visible by design, and are not removed:
-  `font-size:.001` (and other tiny non-zero sizes), `opacity:.001`, `left` or `top` offsets on an element without `position`, `text-indent`
-  variants such as `-99em`, `<font size=0>`, white-on-white or any low-contrast colour pair, `var()` indirection in a style value, the content
-  of `<textarea>`, `<plaintext>` and `<xmp>` (kept as text), and the odd comment spellings (`<!->` and similar) that browsers treat differently
-  from the parser. Markdown pages (every Content-Type but `text/html`) are read with the HTML rules, because their site renders raw HTML: a
-  raw-text opener (`<script>`, `<style>`, `<title>`, `<textarea>`, `<xmp>`, `<noembed>`, `<noframes>`, `<iframe>`) is prose only inside an
-  inline code span or a fenced code block, and anywhere else it hides to its closer or to the end of the input. The code-span and fence
-  detection is a small CommonMark subset: inside a raw HTML block (for example after `<p>` with no blank line) a renderer reads backticks
-  as plain text, so a `<script>` between backticks there is read as prose by the sanitizer but as a real tag by the renderer, and the text
-  after it that the renderer hides is kept (an undetected gap). End tags are matched by the name as written, so `</x:div>` does not close
-  `<div>`, as in a browser. The defence is not the sanitizer alone: web text reaches a record only as a title or a 400-character quote,
-  never as a diff, a target or a command, and every model id must pass a strict pattern first.
+  `#id` rule, no combinators; class and id names match without case, as in quirks mode). Media queries, descendant, child and attribute
+  selectors, `@import` and external stylesheets are NOT handled, so text hidden that way is read as visible. The inline rules hide opacity
+  below 0.1, font-size below 1px, any zero scale argument, far negative margins, offsets and text-indent (500px or 20em and beyond),
+  `clip-path:inset(50%)` and wider, a transparent `color` or `-webkit-text-fill-color`, and a box of 1px or less with overflow hidden (the
+  WordPress screen-reader-text). These cases are undetectable by this design or are visible by design, and are not removed: `left` or `top`
+  offsets on an element without `position`, `<font size=0>`, white-on-white or any low-contrast colour pair, a size or opacity just above
+  the thresholds, `var()` indirection in a style value, the content of `<textarea>`, `<plaintext>` and `<xmp>` (kept as text), and the odd
+  comment spellings (`<!->` and similar) that browsers treat differently from the parser. End tags are matched by the name as written, so
+  `</x:div>` does not close `<div>`, as in a browser. The tree rules are fail closed: a slash on a non-void tag is ignored (`<div hidden/>`
+  hides what follows), an end tag a browser ignores because a scope barrier or a "special" element sits in between pops nothing when that
+  would unhide text, and a double-escaped `<script><!--<script></script>` closes at its next-but-one `</script`. More than 512 open
+  elements make the page a `parse` drop (`<p>`, `<li>` and `<td>` without end tags count: html.parser does not close them implicitly).
+  Markdown pages (every Content-Type but `text/html`) are read with the HTML rules, because their site renders raw HTML. A raw-text opener
+  (`<script>`, `<style>`, `<title>`, `<textarea>`, `<xmp>`, `<noembed>`, `<noframes>`, `<iframe>`) is prose only when ALL hold: it sits in
+  an inline code span or a fenced code block; it is not inside an HTML block (a line that starts with `<tag`, `</tag`, `<!` or `<?` runs to
+  the next blank line, to its closing tag for `script`, `pre`, `style` and `textarea`, to `-->` for a comment, after any list or quote
+  marker; a backtick inside a tag opens no span); and NO matching closer (`</script` for `<script`) follows it anywhere later in the input.
+  Every other opener hides to its closer or to the end of the input, so a page that mentions `<script>` in code and later closes it, or does
+  so inside a `<Note>` block, loses the text in between (hiding more is the safe direction). The detection is a CommonMark subset (no
+  indented code blocks, no link reference definitions, no nested quote or list handling beyond the marker prefix); an indented
+  `<script>` is read as markup. The defence is not the sanitizer alone: web text reaches a record only as a title or a 400-character
+  quote, never as a diff, a target or a command, and every model id must pass a strict pattern first.
 
 ## Security and scrubbing
 

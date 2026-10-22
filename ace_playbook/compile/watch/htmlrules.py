@@ -1,0 +1,76 @@
+"""The HTML tree rules behind `sanitize`: element sets, which end tags a browser ignores, the double-escaped `<script>`. Stdlib only.
+
+A browser ignores an end tag whose element is not "in scope", and `sanitize` must never show text that a browser would still hide, so when
+a hidden element is involved the same rules apply and anything doubtful keeps the text hidden (fail closed):
+
+* `end_ignored(stack, i)`: the end tag that targets `stack[i]` pops nothing when it would unhide something and an element in between stops
+  it. A block-level end tag (`</div>`, `</p>`, ...) is stopped by a scope barrier (`table td th caption object marquee applet template`);
+  a table end tag by a nested `table` or `template`; every other end tag (`</span>`, `</b>`, ...) by any "special" element in between.
+* `ScriptState`: html.parser has no "script data double escaped" state, so `<script><!--<script></script>X</script>` would show X.
+  The state machine of the HTML tokenizer is run over the script text instead: a `</script` seen in the double-escaped state does not
+  close the element.
+* `MAX_DEPTH`: the open-element stack is capped; a document nested deeper is a parse failure (`TooDeep`), not a quadratic scan.
+"""
+
+from __future__ import annotations
+
+import re
+
+MAX_DEPTH = 512
+VOID = frozenset("area base br col embed hr img input link meta param source track wbr".split())
+SKIP = frozenset(("script style template noscript dialog svg math iframe object embed head title meta link canvas audio video datalist "
+                  "noembed noframes rp").split())
+FORMATTING = frozenset("a b big code em font i nobr s small strike strong tt u".split())
+BLOCK = frozenset("address article aside blockquote dd div dl dt fieldset figcaption figure footer form h1 h2 h3 h4 h5 h6 header "
+                  "li main nav ol p pre section table tbody td tfoot th thead tr ul".split())
+BARRIERS = frozenset("applet caption html marquee object table td template th".split())
+TABLES = frozenset("table tbody tfoot thead tr td th caption colgroup".split())
+SPECIAL = frozenset(("address applet area article aside base basefont bgsound blockquote body br button caption center col colgroup dd "
+                     "details dialog dir div dl dt embed fieldset figcaption figure footer form frame frameset h1 h2 h3 h4 h5 h6 head header "
+                     "hgroup hr html iframe img input keygen li link listing main marquee menu meta nav noembed noframes noscript object ol "
+                     "p param plaintext pre script search section select source style summary table tbody td template textarea tfoot th "
+                     "thead title tr track ul wbr xmp mi mo mn ms mtext foreignobject desc").split())
+SCRIPT_MARKS = re.compile(r"<!--->|<!-->|<!--|-->|<script(?=[\s/>])|</script(?=[\s/>])", re.I)
+
+
+class TooDeep(ValueError):
+    """More than MAX_DEPTH open elements: `strip_hidden` gives up and `fetch` drops the page as `parse`."""
+
+
+def end_ignored(stack: list, i: int) -> bool:
+    """True when the end tag for `stack[i]` (entries are `[tag, hidden, own]`) pops nothing, because a browser would ignore it and
+    popping would unhide the text of an element that is still open."""
+    above = stack[i + 1:]
+    if not above or not (stack[i][1] or any(e[1] for e in above)):
+        return False
+    names = {e[0] for e in above}
+    tag = stack[i][0]
+    if tag in TABLES:
+        return bool(names & {"table", "template"})
+    return bool(names & (BARRIERS if tag in SPECIAL else SPECIAL))
+
+
+class ScriptState:
+    """The script-data states of the HTML tokenizer: `data`, `escaped` (after `<!--`) and `double` (after `<!--` and `<script`)."""
+
+    def __init__(self) -> None:
+        self.state = "data"
+
+    def feed(self, text: str) -> None:
+        for m in SCRIPT_MARKS.finditer(text):
+            tok = m.group().lower()
+            if tok == "<!--":
+                self.state = "escaped" if self.state == "data" else self.state
+            elif tok in ("<!--->", "<!-->", "-->"):
+                self.state = "data"
+            elif tok == "<script" and self.state == "escaped":
+                self.state = "double"
+            elif tok == "</script" and self.state == "double":
+                self.state = "escaped"
+
+    def closes(self) -> bool:
+        """A `</script` has just been read: True when it ends the element, False (and the state drops to `escaped`) in the double state."""
+        if self.state == "double":
+            self.state = "escaped"
+            return False
+        return True

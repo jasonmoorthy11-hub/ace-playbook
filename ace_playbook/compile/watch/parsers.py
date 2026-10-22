@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 
 from .sanitize import one_line
 
-VERSION = re.compile(r"\d+\.\d+\.\d+(?:[-+][\w.-]+)?")
+VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]{1,40})?", re.ASCII)       # ASCII only: it reaches titles and status.json
 MODEL = re.compile(r"claude-[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?")
 SEPARATOR = re.compile(r"\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?")
 NONE_WORDS = ("", "n/a", "na", "-", "—", "none", "tbd", "tba", "null", "to be announced")
@@ -40,10 +40,12 @@ def _kids(el: ET.Element, name: str) -> list[ET.Element]:
 
 
 def _markup(el: ET.Element) -> str:
-    """The content of `el` as markup: text nodes as they are (an escaped `&lt;div hidden&gt;` is HTML a reader would render), child elements
-    as tags with their attributes (so `strip_hidden` sees an XHTML `<span style="display:none">` instead of a flattened string). The walk keeps
-    its own stack: a document nested thousands of levels deep must not reach the recursion limit."""
+    """The content of `el` as markup: the text of `el` itself as it is (an escaped `&lt;div hidden&gt;` is HTML a reader would render), child
+    elements as tags with their attributes (so `strip_hidden` sees an XHTML `<span style="display:none">` instead of a flattened string).
+    Text and tails inside a child element are HTML-escaped: they are literal text in XHTML, and an escaped `&lt;/span&gt;` there must not
+    close a hidden ancestor. The walk keeps its own stack: a document nested thousands of levels deep must not reach the recursion limit."""
     out, walk, closers = [el.text or ""], [iter(el)], []
+    esc = lambda text, depth: text if depth == 1 else html.escape(text, quote=False)  # noqa: E731 - depth 1: the tail of a child of `el`
     while walk:
         child = next(walk[-1], None)
         if child is None:
@@ -51,11 +53,11 @@ def _markup(el: ET.Element) -> str:
             if closers:
                 out.append(closers.pop())
         elif not isinstance(child.tag, str):                     # a comment or a processing instruction
-            out.append(child.tail or "")
+            out.append(esc(child.tail or "", len(walk)))
         else:
             attrs = "".join(f' {k.rsplit("}", 1)[-1]}="{html.escape(v, quote=True)}"' for k, v in child.attrib.items())
-            out.append(f"<{_ln(child)}{attrs}>{child.text or ''}")
-            closers.append(f"</{_ln(child)}>{child.tail or ''}")
+            out.append(f"<{_ln(child)}{attrs}>{html.escape(child.text or '', quote=False)}")
+            closers.append(f"</{_ln(child)}>{esc(child.tail or '', len(walk))}")
             walk.append(iter(child))
     return "".join(out)
 
@@ -103,14 +105,14 @@ def parse_atom(xml: str) -> list[dict]:
 
 
 def parse_npm_dist_tags(text: str) -> dict:
-    """`{stable, latest}` from the registry's dist-tags JSON; a value that is not a version is None; ValueError when both are."""
+    """`{stable, latest}` from the registry's dist-tags JSON. `latest` must be an ASCII version (`VERSION`), else ValueError (a parse
+    drop); a `stable` that is not a version is None."""
     raw = json.loads(text)
     if not isinstance(raw, dict):
         raise ValueError("not an object")
-    tags = {k: raw[k] if isinstance(raw.get(k), str) and VERSION.fullmatch(raw[k]) else None for k in ("stable", "latest")}
-    if tags["stable"] is None and tags["latest"] is None:
-        raise ValueError("no version tags")
-    return tags
+    if not (isinstance(raw.get("latest"), str) and VERSION.fullmatch(raw["latest"])):
+        raise ValueError("no version in latest")
+    return {k: raw[k] if isinstance(raw.get(k), str) and VERSION.fullmatch(raw[k]) else None for k in ("stable", "latest")}
 
 
 def parse_sitemap(xml: str) -> dict:

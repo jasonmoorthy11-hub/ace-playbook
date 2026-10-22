@@ -41,15 +41,26 @@ HIDING_STYLES = [
     "text-indent:-100em", "text-indent:-9999px", "text-indent:-100%", "text-indent:-100vw", "position:absolute;left:-100em",
     "position:absolute;top:-100rem", "position:fixed;right:-100vw", "position:absolute;bottom:-100%", "transform:translateX(-9999px)",
     "transform:translate(-100em,0)", "dis\nplay:none", "display\x00:none",
+    # wave 4: cheap hides (negative or tiny opacity, any zero scale argument, far margins, half-inset clip-path, text-fill, tiny boxes)
+    "opacity:-1", "opacity:-0.5", "opacity:0.05", "opacity:0.01", "opacity:9%", "opacity:-5%", "font-size:0.5px", "font-size:.001px",
+    "font-size:0.01em", "font-size:5%", "font-size:0.5pt", "transform:scale(1,0)", "transform:scale(0,1)", "transform:scaleY(0)",
+    "transform:scale(1,1,0)", "transform:scale3d(1,0,1)", "scale:0", "scale:1 0", "margin-left:-9999px", "margin-top:-5000px",
+    "margin:0 0 0 -9999px", "margin-inline-start:-9999px", "clip-path:inset(50%)", "clip-path:inset(10% 60%)", "clip-path:inset(0 0 99%)",
+    "-webkit-text-fill-color:transparent", "-webkit-text-fill-color:rgba(0,0,0,0)", "text-indent:-501px", "text-indent:-21em",
+    "text-indent:-500px", "position:absolute;left:-600px", "transform:translateX(-600px)", "transform:translate(-99em,0)",
+    "position:absolute;left:-99em", "text-indent:-99em", "width:1px;height:1px;overflow:hidden", "height:1px;overflow:clip",
+    "border:0;clip:rect(1px,1px,1px,1px);clip-path:inset(50%);height:1px;margin:-1px;overflow:hidden;padding:0;position:absolute;width:1px",
+    "clip:rect(1px,1px,1px,1px);overflow:hidden;height:1px;width:1px;position:absolute",
 ]
-KEEPING_STYLES = ["opacity:0.5", "opacity:1", "opacity:0.01", "font-size:0.9em", "font-size:12px", "font-size:1px", "display:block", "display:inline",
+KEEPING_STYLES = ["opacity:0.5", "opacity:1", "opacity:0.1", "opacity:10%", "margin-left:-10px", "margin:-1px", "margin-left:-499px",
+                  "text-indent:-499px", "text-indent:-19em", "font-size:0.9em", "font-size:12px", "font-size:1px", "display:block", "display:inline",
                   "visibility:visible", "width:0", "overflow:hidden", "width:100px;overflow:hidden", "position:absolute;left:10px",
                   "position:absolute;left:-10px", "position:relative;left:-9999px", "left:-9999px", "clip-path:inset(10%)",
                   "transform:scale(1)", "transform:scale(0.5)", "transform:scale(0.05)", "color:red", "color:rgba(0,0,0,0.5)", "color:#000",
                   "color:#fff8", "text-indent:-10px", "text-indent:2em", "", "garbage", "display", ":none", "display:;",
                   "clip:rect(1px,1px,1px,1px)", "clip:auto", "font:12px/0 serif", "font:12px serif", "font-size:calc(1px)", "color:rgb(0 0 0 / 0.5)",
-                  "color:rgba(1,2,3,0.1)", "color:hsl(0 0% 0%)", "content-visibility:auto", "zoom:1", "text-indent:-99em", "position:absolute;left:-99em",
-                  "transform:translateX(-10px)", "transform:translate(-99em,0)"]
+                  "color:rgba(1,2,3,0.1)", "color:hsl(0 0% 0%)", "content-visibility:auto", "zoom:1", "position:absolute;left:-19em",
+                  "transform:translateX(-10px)", "transform:translate(-19em,0)", "width:2px;overflow:hidden", "height:2px;overflow:hidden"]
 
 
 def body_of(html: str) -> str:
@@ -240,3 +251,146 @@ def test_markdown_openers_are_prose_only_inside_code_spans_and_fences():
 
 def test_a_non_raw_text_skip_opener_in_a_code_span_still_hides_to_the_end():
     assert strip_hidden(f"use `<noscript>` {SECRET}", markdown=True) == "use `"
+
+
+# ------------------------------------------------------------------ wave 4: self-closing tags, scope barriers, double-escaped script, markdown
+def md_body(text: str, ctype: str = "text/markdown", kind: str = "md") -> str:
+    item = fetch(URL, expect=(ctype,), store={}, kind=kind, now="2026-10-21T12:00:00Z", opener=Opener({URL: Resp(text.encode(), ctype)}))
+    return item["body"] if item and "body" in item else ""
+
+
+@pytest.mark.parametrize("html", [
+    f"<p>ok</p><div hidden/>{SECRET}", f"<span style='display:none'/>{SECRET}", f"<p>ok</p><script/>{SECRET}</script>", f"<style/>{SECRET}</style>",
+    f"<p>ok</p><script />{SECRET}", f"<template/>{SECRET}", f"<noscript/>{SECRET}", f"<div aria-hidden='true'/>{SECRET}",
+    f"<div hidden/>{SECRET}</div>VISIBLE"])
+@pytest.mark.parametrize("markdown", [False, True])
+def test_a_slash_on_a_non_void_tag_is_ignored_like_a_browser_does(html, markdown):
+    assert SECRET not in strip_hidden(html, markdown=markdown)
+
+
+def test_self_closing_void_tags_and_closed_self_closing_elements_stay_as_they_were():
+    assert strip_hidden("a<br/>b") == "a b" and strip_hidden("a<hr/>b") == "a b" and strip_hidden("a<img src=x/>b") == "ab"
+    assert strip_hidden("<p>a</p><div hidden/>H</div>VISIBLE") == "a\nVISIBLE"
+
+
+@pytest.mark.parametrize("html", [
+    f"<span hidden><div>A</span>{SECRET}</div>{SECRET}", f"<div hidden><table></div>{SECRET}", f"<div hidden><object></div>{SECRET}",
+    f"<div hidden><marquee></div>{SECRET}", f"<div hidden><td></div>{SECRET}", f"<div hidden><caption></div>{SECRET}",
+    f"<b hidden><div>X</b>{SECRET}</div>{SECRET}", f"<span><div hidden>A</span>{SECRET}</div>",
+    f"<div hidden><applet></div>{SECRET}", f"<div hidden><template></div>{SECRET}", f"<i hidden><table></i>{SECRET}"])
+@pytest.mark.parametrize("markdown", [False, True])
+def test_an_end_tag_that_a_browser_ignores_does_not_unhide_text(html, markdown):
+    assert SECRET not in strip_hidden(html, markdown=markdown)
+
+
+@pytest.mark.parametrize("html,shown", [
+    ("<div hidden><p>x</div>VISIBLE", "VISIBLE"), ("<div hidden><ul><li>x</ul></div>VISIBLE", "VISIBLE"),
+    ("<table><tr><td hidden>x</table>VISIBLE", "VISIBLE"), ("<span hidden><b>x</span>VISIBLE", "VISIBLE"),
+    ("<div hidden><span>x</span></div>VISIBLE", "VISIBLE"), ("<b hidden><i>x</b>VISIBLE", "VISIBLE")])
+def test_an_end_tag_with_only_formatting_or_implied_end_elements_in_between_still_closes(html, shown):
+    assert strip_hidden(html) == shown
+
+
+@pytest.mark.parametrize("markdown", [False, True])
+def test_a_double_escaped_script_is_hidden_to_its_next_but_one_closer(markdown):
+    assert strip_hidden(f"<script><!--<script></script>{SECRET}</script>VISIBLE", markdown=markdown) == "VISIBLE"
+    assert strip_hidden(f"<script><!--<script ></script>{SECRET}</SCRIPT >VISIBLE", markdown=markdown) == "VISIBLE"
+    assert SECRET not in strip_hidden(f"<script><!--<script></script>{SECRET}", markdown=markdown)               # no second closer: to the end
+    assert strip_hidden("<script>a</script>VISIBLE", markdown=markdown) == "VISIBLE"
+    assert strip_hidden("<script><!--<script>--></script>VISIBLE", markdown=markdown) == "VISIBLE"                # `-->` leaves the escape
+    assert strip_hidden("<script><!-- x --></script>VISIBLE", markdown=markdown) == "VISIBLE"
+    assert strip_hidden("<script><script></script>VISIBLE", markdown=markdown) == "VISIBLE"                       # no `<!--`: an ordinary script
+
+
+def test_a_double_escaped_script_does_not_swallow_the_next_script():
+    assert strip_hidden(f"<script><!--<script></script></script>VISIBLE<script>{SECRET}</script>DONE") == "VISIBLEDONE"
+
+
+def test_the_element_stack_depth_is_capped_and_the_document_is_a_parse_drop():
+    deep = "<b>" * 600 + "x"
+    with pytest.raises(ValueError):
+        strip_hidden(deep)
+    assert strip_hidden("<b>" * 500 + "x") == "x"
+    item = fetch(URL, expect=("text/html",), store={}, kind="md", now="2026-10-21T12:00:00Z", opener=Opener({URL: Resp(deep.encode(), "text/html")}))
+    assert item == {"url": URL, "fetched_at": "2026-10-21T12:00:00Z", "dropped": "parse"}
+
+
+def test_a_flood_of_unmatched_end_tags_is_fast():
+    import time
+    t0 = time.monotonic()
+    with pytest.raises(ValueError):
+        strip_hidden("<b>" * 20000 + "</i>" * 20000)
+    assert time.monotonic() - t0 < 1.5
+
+
+def test_unmatched_end_tags_below_the_depth_cap_are_skipped_without_a_scan():
+    import time
+    t0 = time.monotonic()
+    assert strip_hidden("<b>" * 500 + "</i>" * 250000) == ""
+    assert strip_hidden("<div hidden>" * 400 + "</span>" * 100000 + "X") == ""
+    assert time.monotonic() - t0 < 4
+
+
+MD_LEAKS = {
+    "e2": f"# Page\n\n<p>\n`<script>`\n{SECRET}\n</script>\n</p>\n",
+    "e4": f'# Page\n\n<a title="`"><script>`{SECRET} </script>\n',
+    "f1": f"# Page\n\n<div>\n```\n<script>\n```\n{SECRET}\n</script>\n</div>\n",
+    "e1": f"<div hidden>\n`<script>`{SECRET}\n</div>\n\nmore `x` text\n</script>tail",
+    "e5": f"para `<script>` x\n\n{SECRET}\n</script>\nafter",
+    "tilde": f"<div>\n~~~\n<style>\n~~~\n{SECRET}\n</style>\n</div>",
+    "inline-tag": f'text <a title="`"><script>`{SECRET}</script>',
+    "two-spans": f"`a` and `<script>` and `b`\n\n{SECRET}\n</script>",
+    "span-then-closer-in-code": f"use `<script>` {SECRET} and `</script>` end",
+    "html-block-open-no-closer": f"<div>\n`<script>` {SECRET}\n",
+    "html-block-list": f"- <div>\n  `<script>` {SECRET}\n",
+    "quote-block": f"> <div>\n> `<script>` {SECRET}\n",
+    "pre-block-blank-line": f"<pre>\n\n`<script>` {SECRET}\n</pre>",
+}
+
+
+@pytest.mark.parametrize("name", sorted(MD_LEAKS))
+def test_markdown_never_shows_the_text_of_a_raw_text_opener_that_has_a_closer_or_sits_in_an_html_block(name):
+    text = MD_LEAKS[name]
+    assert SECRET not in strip_hidden(text, markdown=True), name
+    for ctype in ("text/markdown", "text/plain"):
+        assert SECRET not in md_body(text, ctype), (name, ctype)
+
+
+@pytest.mark.parametrize("text,shown", [
+    ("use `<script>` here\n\nvisible text", "use `<script>` here\nvisible text"),
+    ("intro\n```html\n<script>\n```\nvisible text", "intro\n```html\n<script>\n```\nvisible text"),
+    ("`<style>` then `<title>`\n\nvisible", "`<style>` then `<title>`\nvisible"),
+    ("<div>fine</div>\n\nuse `<script>` tag\n\nvisible", "fine\nuse `<script>` tag\nvisible"),
+    ("<div>\n\n</div>\n\nuse `<script>`\n\nvisible", "use `<script>`\nvisible"),
+    ("<div>a</div>\n\n`<script>` shown", "a\n`<script>` shown")])
+def test_markdown_code_with_no_closer_after_it_is_still_prose(text, shown):
+    assert strip_hidden(text, markdown=True) == shown
+
+
+def test_markdown_html_blocks_hide_a_code_span_opener_even_without_a_closer():
+    assert "hidden" not in strip_hidden("<div>\n`<script>` hidden", markdown=True)
+    assert strip_hidden("<!--\n\n`<script>` x\n-->\nafter", markdown=True) == "after"
+
+
+def test_html_content_type_is_not_markdown_gated_by_these_rules():
+    assert SECRET not in md_body(MD_LEAKS["e2"], "text/html")
+    assert SECRET not in md_body(MD_LEAKS["f1"], "text/html")
+
+
+# ------------------------------------------------------------------ wave 4: css rules, class case, default-ignorable characters
+@pytest.mark.parametrize("css,html", [
+    (".X{display:none}", f"<div class='x'>{SECRET}</div>"), (".x{display:none}", f"<div class='X'>{SECRET}</div>"),
+    ("#Hid{display:none}", f"<div id='hid'>{SECRET}</div>"), (".a{opacity:-1}", f"<div class='a'>{SECRET}</div>"),
+    (".sr{clip:rect(1px,1px,1px,1px);height:1px;overflow:hidden;position:absolute;width:1px}", f"<div class='sr'>{SECRET}</div>")])
+def test_style_block_classes_and_ids_match_case_insensitively_like_quirks_mode(css, html):
+    gone(f"<style>{css}</style>{html}")
+
+
+def test_every_default_ignorable_code_point_is_invisible():
+    from ace_playbook.compile.watch.chars import invisible
+    ranges = [(0xAD, 0xAD), (0x34F, 0x34F), (0x61C, 0x61C), (0x115F, 0x1160), (0x17B4, 0x17B5), (0x180B, 0x180F), (0x200B, 0x200F),
+              (0x202A, 0x202E), (0x2060, 0x206F), (0x3164, 0x3164), (0xFE00, 0xFE0F), (0xFEFF, 0xFEFF), (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8),
+              (0x1BCA0, 0x1BCA3), (0x1D173, 0x1D17A), (0xE0000, 0xE0FFF)]
+    missed = [hex(c) for a, b in ranges for c in range(a, b + 1) if not invisible(chr(c)) or sanitize.plain(f"a{chr(c)}b") != "ab"]
+    assert missed == []
+    assert sanitize.plain("price 1− 2") == "price 1− 2"
