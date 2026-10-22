@@ -1155,7 +1155,8 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   as text. A template builds table parts for table-structure start tags until a start tag that is neither one of them nor an in-head name
   (`base basefont bgsound link meta noframes script style template title`) makes it a body template for good (`Node.inbody`, `Node.builds`),
   where they are ignored and push no cell marker, as in a browser (wave 21; routed to the table rules before, the template pop cleared that
-  marker and left its own, so a hidden formatting element opened before the template leaked: `<p><i hidden></p><template><span><td></template>LEAK`). The cases the tree decides that the rule stack got wrong are the six Opus
+  marker and left its own, so a hidden formatting element opened before the template leaked:
+  `<p><i hidden></p><template><span><td></template>LEAK`). The cases the tree decides that the rule stack got wrong are the six Opus
   wave-7 worlds (BOM before the doctype, svg CDATA style, nearest-name end tag, `annotation-xml` encoding, self-closed integration
   points, frameset) and the older foster-parenting gap. In Markdown a `===`, `=` or `--` line with no paragraph open is paragraph text (the paragraph flag of
   `mdrules.scan` stays set); only a heading, a thematic break or a setext underline under an open paragraph ends it, and such a line inside
