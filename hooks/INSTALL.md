@@ -369,7 +369,7 @@ differs; `compile report` then prints the synthetic table apart from the private
 **Status.** `python3 -m ace_playbook.compile status` prints one screen (measurement day, per proposal fires over eligible sessions, tp/fp/unlabelled,
 precision, a verdict, the label queue, heartbeat ages, hook cost against 200 ms, notes) and writes `data_dir/status.json` (0600; `--out PATH` elsewhere,
 `--json` prints it). It reads only; the `heartbeat` block shows when the hook, the offline scan and the nightly run last worked.
-`python3 -m ace_playbook.compile digest [--since ISO]` prints the same data as six blocks. `hooks/nightly_sweep.py` runs it quietly after the
+`python3 -m ace_playbook.compile digest [--since ISO]` prints the same data as seven blocks. `hooks/nightly_sweep.py` runs it quietly after the
 sweep (`digest` in its JSON report), refreshes `status.json` and appends one line `{ts, report_sha256, queue, notes}` to `data_dir/digest.log`
 (0600); in an offline dry run it writes neither. Check `digest.log` for a line per night: a missing night means the sweep did not run.
 `python3 -m ace_playbook.compile dashboard [--days N] [--out PATH]` renders the same data as one self-contained HTML page (`data_dir/dashboard.html`,
@@ -388,6 +388,53 @@ of `generated_at` (`N+` when the queue, capped at 50 oldest first, is shorter th
 only when the approvals, demotions and labels chains all are. `heartbeat` is the age of the last hook row. Without a readable `status.json` it prints
 `<model> | ctx <pct>% | ace: no status file`. It runs one `python3 -I -S` (stdlib only, about 15 ms) and exits 0 on any error.
 The numbers are as fresh as `status.json`, which `compile status` and the nightly digest rewrite.
+The line ends with `watch N`: the open watcher proposals (`watch_open`, leads excluded), or `watch -` when `status.json` has no such count.
+
+## Watch (the configuration watcher)
+
+`python3 -m ace_playbook.compile watch scan|status|queue` watches the sources you list for changes that touch what your setup pins (a model
+id that is being retired, a newer Claude Code, a docs page you depend on) and stores inert proposals. It calls no model, applies nothing and
+writes only inside its own directory. It is the one part of ace-playbook that uses the network, and it is never on a hook path.
+
+1. Copy the two examples to a private place outside the checkout and edit them: `docs/watch/sources.example.json` (the source list: `id`,
+   `url`, `kind` rss|atom|npm|deprecations|sitemap|md, `tier` 0 or 1, `cadence` daily|weekly) and `docs/watch/inventory_map.example.json`
+   (`targets`: a file or glob and a regex per key; `docs`: a docs page URL and the target keys it concerns; `lead_keywords`). The snapshot
+   keeps only the lines that match a target's regex, never whole files. Tier 0 sources are first-party; tier 1 sources can only ever yield leads.
+2. Name them in your config (all three keys are paths; `watch_dir` defaults to `<data_dir>/watch`, created 0700):
+
+   ```json
+   {"watch_sources": "~/.config/ace-playbook/watch_sources.json", "watch_inventory_map": "~/.config/ace-playbook/inventory_map.json",
+    "watch_dir": "~/.local/share/ace-playbook/watch"}
+   ```
+3. `compile watch scan` fetches the sources that are due (tier 0 daily, tier 1 weekly, by the stamps in `seen.json`; `--force` ignores the
+   cadence, `--tier 0|1|all` picks, `--dry-run` fetches and matches but writes nothing), rebuilds `inventory.json` and prints one line per
+   new proposal and a summary line. It exits 0 except for a configuration error or a store write failure (an `OSError` on `watch_dir`,
+   printed as its type only): both exit 2. A scan holds an exclusive lock on `<watch_dir>/scan.lock`; a second scan that starts meanwhile
+   prints `watch: scan running` and exits 0 without doing anything. Run it by hand or from a scheduler of your own; nothing is installed for
+   you. For the terminal run, set `ACE_PLAYBOOK_CONFIG` in your shell profile (the same file the hooks and the status line read), or the
+   watcher looks at the default config file. `compile watch status` prints the open count, leads, oldest, last scan and up to three titles.
+   `compile watch queue [--limit N]` (terminal only) walks the open proposals oldest first: `1` accept, `2` dismiss (a note is required),
+   `3` later, `q` quit. A decision is recorded in `decisions.jsonl`; nothing is changed on your machine. At most five proposals are open at
+   once (leads excepted); the rest wait as `queued`.
+4. Kill switch: `touch <watch_dir>/DISABLED`. While it exists `scan` prints `watch: disabled` and fetches and writes nothing; remove it to resume.
+
+The count also reaches `status.json` (`watch_open` and friends), the `proposals` block of `compile digest` and the status line (`watch N`).
+
+**Menu bar (SwiftBar).** `brew install --cask swiftbar` is your step (SwiftBar asks for a plugin folder on first launch). Then link the plugin
+into that folder; the `.5m.` in the file name is its 5-minute refresh, and the plugin needs the executable bit:
+
+```sh
+ln -s "$ACE_PLAYBOOK_HOME/hooks/swiftbar/ace.5m.sh" "$HOME/Library/Application Support/SwiftBar/Plugins/ace.5m.sh"
+```
+
+Use the folder SwiftBar shows in its preferences if you chose another. The title is `● ok`, `◐ needs you` (open proposals or unlabelled
+fires) or `○ stale` (`status.json` missing or older than 36 hours); the menu lists the ACE and Watch lines, up to three proposal titles,
+`Open panel` (the `dashboard.html` in your data dir) and `Review queue`, which opens a terminal running
+`uv run --directory <repo> python -m ace_playbook.compile watch queue` (`uv` must be on that terminal's PATH). The button runs the plugin
+itself with the argument `queue` (`ace.5m.sh queue`), which opens that terminal; the menu items are plain text, never interpreted as emoji,
+symbols or ANSI. The plugin finds your checkout
+from its own location (through the symlink), or from `ACE_PLAYBOOK_REPO`; the config is found as for the status line (`ACE_PLAYBOOK_CONFIG`,
+else the default file; `ACE_PYTHON` picks the interpreter). It reads `status.json` only, prints a one-line fallback on any error and exits 0.
 
 ## 8. Brief on wake (optional, read-only)
 

@@ -25,6 +25,9 @@ class Config:
     api_key_path: Path | None = None
     engagements_path: Path | None = None
     chain_key_path: Path | None = None  # the HMAC key of the approvals and demotions chains; None unless the config file names it
+    watch_dir: Path | None = None  # the watcher's private store (docs/design/compiler.md 8.x Watch); None means data_dir/watch
+    watch_sources: Path | None = None  # JSON list of sources read by `compile watch scan` (hooks/INSTALL.md, Watch)
+    watch_inventory_map: Path | None = None  # JSON map of the pinned lines and docs pages that matter to this setup (private)
     fold_key_separators: bool = False
     model: str = "claude-haiku-5-5"
     api_url: str = "https://api.anthropic.com/v1/messages"
@@ -120,7 +123,8 @@ class Config:
         return self.path("reflect.log")
 
 
-_PATH_FIELDS = {"data_dir", "transcripts_root", "api_key_path", "engagements_path", "chain_key_path", "brief_dir", "brief_exclusions"}
+_PATH_FIELDS = {"data_dir", "transcripts_root", "api_key_path", "engagements_path", "chain_key_path", "brief_dir", "brief_exclusions",
+                "watch_dir", "watch_sources", "watch_inventory_map"}
 
 
 def from_dict(raw: dict[str, Any]) -> Config:

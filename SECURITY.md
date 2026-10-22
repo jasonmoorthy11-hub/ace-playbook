@@ -37,6 +37,13 @@ of the lesson store, and the settings and hooks of the agent that consumes it.
    block only a proposal the operator promoted to block mode after the observe/warn ladder (see
    docs/design/compiler.md; amended 2026-10-19). No hook calls the API; only the reflector does,
    with no tools, from a path-configured key that is never logged.
+   `compile watch` (the watcher) is the one network-using module; it is not on the hook path and the conformance test asserts that.
+   The watcher's own limits (see LIMITATIONS.md, "Watcher"): in W1 it fetches as the operator, in the same process that reads the matched
+   `~/.claude` lines and runs `claude --version`; there is no `acewatch` user and no egress allowlist until W2. Its SSRF guard drops private,
+   loopback, link-local and metadata addresses before a request and follows a redirect only to the same scheme, host and port (at most three
+   hops, no userinfo), but it checks the address before the connection, not on the connected socket, so a DNS-rebinding race remains. Its
+   sanitizer handles inline styles and simple single-selector `<style>` rules only (not media queries, descendant or attribute selectors, or
+   external stylesheets). Web text is never a diff, a target or a command; it appears only as a title or a quote.
 6. **Reflector prompt** tells the model to ignore instructions inside tool results. This is the
    weakest control and is not relied on.
 

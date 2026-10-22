@@ -107,10 +107,11 @@ appends hash-chained demotions that only ever lower a proposal's mode and that t
 `python3 -m ace_playbook.compile status [--json] [--out PATH]` is the operator's one screen: measurement day, per-proposal fires, labels,
 precision with a Wilson interval (`INSUFFICIENT` below five labels), the label queue, a heartbeat and a verdict per proposal. It is built
 from the same dict as `compile report --json`, writes `status.json` (0600) and shows nothing to a model.
-`compile digest [--since ISO]` prints the same data as six short blocks (status, needs you, detectors, health, changes, next); the nightly
+`compile digest [--since ISO]` prints the same data as seven short blocks (status, needs you, detectors, health, proposals, changes, next); the nightly
 sweep runs it quietly and appends one line to `digest.log`, so a night without a digest shows.
 `compile dashboard [--days N] [--out PATH]` renders the same status as one self-contained HTML page (no script, no network; `dashboard.html`, 0600).
 `hooks/statusline.sh` is an optional Claude Code status-line command: one line from `status.json` (approved, unlabelled fires in the last 24 h, unlabelled total, chains, heartbeat).
+`compile watch scan|status|queue` is the model-free configuration watcher: inert proposals from sources you list, nothing applied (hooks/INSTALL.md, Watch).
 
 `hooks/brief.sh` is an optional, read-only "brief on wake": a local HTML page rendered by code from your calendar, mail and issues
 ([INSTALL.md](hooks/INSTALL.md) section 8).

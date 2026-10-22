@@ -32,6 +32,14 @@ def hermetic_config(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_real_dns(monkeypatch):
+    """The watcher's address guard resolves host names; no test may reach a real resolver. Every name answers with one public address
+    (a test of the guard replaces `netguard.RESOLVE` itself)."""
+    from ace_playbook.compile.watch import netguard
+    monkeypatch.setattr(netguard, "RESOLVE", lambda host, port, *a, **k: [(2, 1, 6, "", ("93.184.216.34", 0))])
+
+
+@pytest.fixture(autouse=True)
 def fake_notifier(tmp_path_factory, monkeypatch):
     """`hooks/brief_lib.sh` notify runs $ACE_BRIEF_NOTIFIER (else `terminal-notifier` from the PATH, /opt/homebrew/bin included): every test
     gets a recording fake, so no run of brief.sh from a test can open the operator's real notification. Yields the log of its argv."""

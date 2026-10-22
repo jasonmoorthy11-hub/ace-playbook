@@ -1,11 +1,11 @@
 #!/bin/bash
 # Claude Code status-line command: stdin is the status-line JSON; prints ONE line,
-#   <model> | ctx <pct>% | ace approved N  unlab24h N  unlabelled N  chains ok|BROKEN  heartbeat <age>
+#   <model> | ctx <pct>% | ace approved N  unlab24h N  unlabelled N  chains ok|BROKEN  heartbeat <age>  watch N
 # or `<model> | ctx <pct>% | ace: no status file` when status.json is missing or unreadable. approved = proposals in mode
 # observe/warn/block; unlab24h = unlabelled queue rows stamped within 24 h of generated_at, `N+` when the queue
 # (50 rows, oldest first) is shorter than queue_total; unlabelled = queue_total; heartbeat = age of last_hook_row against the clock.
 # status.json is found like the other hooks do: $ACE_PLAYBOOK_CONFIG (else the default config file), its data_dir. One
-# `python3 -I -S` with stdlib json only: no package import, no uv, no network. Always exits 0.
+# `python3 -I -S` with stdlib json only: no package import, no uv, no network. watch = watch_open, `-` if missing. Always exits 0.
 PY="${ACE_PYTHON:-python3}"
 "$PY" -I -S -c '
 import calendar, json, math, os, sys, time, unicodedata
@@ -53,7 +53,8 @@ gen = ts(s.get("generated_at"))
 fires = sum(1 for r in q if gen is not None and isinstance(r, dict) and (ts(r.get("ts")) or 0) > gen - 86400)
 approved = sum(1 for p in sub(s, "proposals").values() if isinstance(p, dict) and p.get("mode") in ("observe", "warn", "block"))
 ok = all(sub(sub(s, "measurement"), "chains").get(k) == "ok" for k in ("approvals", "demotions", "labels"))
-print("%s ace approved %d  unlab24h %d%s  unlabelled %d  chains %s  heartbeat %s" % (head, approved, fires, "+" if total > len(q) else "",
-      total, "ok" if ok else "BROKEN", age(ts(sub(s, "heartbeat").get("last_hook_row")), int(time.time()))))
+print("%s ace approved %d  unlab24h %d%s  unlabelled %d  chains %s  heartbeat %s  watch %s" % (head, approved, fires, "+" if total > len(q) else "",
+      total, "ok" if ok else "BROKEN", age(ts(sub(s, "heartbeat").get("last_hook_row")), int(time.time())),
+      wo if isinstance(wo := s.get("watch_open"), int) and not isinstance(wo, bool) and 0 <= wo < 10 ** 6 else "-"))
 ' 2>/dev/null || echo "ace: status line unavailable"
 exit 0

@@ -153,6 +153,176 @@ dir and writes only `status.json`, `digest.log` and `dashboard.html` there (0600
 is rendered by Claude Code outside the context window, and nothing is injected. A stale `status.json` shows stale numbers until
 the next `compile status` or nightly; the heartbeat tile reports the staleness rather than hiding it.
 
+- Watcher (W1, `compile watch`): proposals are rule-matched by plain code, no model reads a source. Model-pin diffs are generated from
+  a template over the matched inventory lines (the page's successor id replaces the pinned id, nothing else); a docs proposal says only
+  that a mapped page changed (its sitemap `lastmod` moved or its `.md` hash differs), not what changed; version and lead proposals have
+  no diff. The first scan of a page or sitemap entry is a baseline and proposes nothing. Docs and feed-lead proposals are events and run
+  to their 30-day expiry; model-pin and version proposals close themselves when their trigger vanishes, and are reopened (a `reopened`
+  decision row with a new 30-day expiry) if the trigger comes back after they expired or closed. Nothing is applied by the watcher.
+- Watcher, trust boundary: W1 fetches as the operator, in the same process that reads the matched `~/.claude` lines and runs
+  `claude --version`. There is no separate `acewatch` user and no egress allowlist until W2, so a fetch that is fooled (a redirect the guard
+  misjudges, a rebinding answer) runs with the operator's network and file reach. The SSRF guard checks the address before the connection,
+  not on the connected socket, so a DNS-rebinding race remains: a name that resolves to a public address at the check and to a private one at
+  the connect is not caught.
+- Watcher, sanitizer coverage: `strip_hidden` reads inline `style` attributes and simple single-selector `<style>` rules (a tag, `.class` or
+  `#id` rule, no combinators; class and id names match without case, as in quirks mode). Media queries, descendant, child and attribute
+  selectors, `@import` and external stylesheets are NOT handled, so text hidden that way is read as visible. The inline rules hide opacity
+  below 0.1, font-size below 1px, any zero scale argument, far negative margins, offsets and text-indent (500px or 20em and beyond),
+  `clip-path:inset(50%)` and wider, a transparent `color` or `-webkit-text-fill-color`, and a box of 1px or less with overflow hidden (the
+  WordPress screen-reader-text). These cases are undetectable by this design or are visible by design, and are not removed: `left` or `top`
+  offsets on an element without `position`, `<font size=0>`, white-on-white or any low-contrast colour pair, a size or opacity just above
+  the thresholds, `var()` indirection in a style value, the content of `<textarea>`, `<plaintext>` and `<xmp>` (kept as text), and the odd
+  comment spellings (`<!->` and similar) that browsers treat differently from the parser. End tags are matched by the name as written, so
+  `</x:div>` does not close `<div>`, as in a browser.
+  The sanitizer builds ONE HTML tree (the HTML Standard's tree construction, simplified: `treebuild`, `treemodes`) and reads it twice, for the
+  visible text (`treewalk`) and for the rules of `<style>` (`treestyle`). Every simplification is fail closed: it hides MORE, never less. The
+  stack of open elements keeps the scope barriers: `</p>` is stopped by `button`, `</li>` by `ol` and `ul`, an end tag by a "special"
+  element in between (it pops nothing when that would unhide text), and an end tag that names nothing in scope is ignored. A slash on a
+  non-void HTML tag is ignored (`<div hidden/>` hides what follows). More than 512 open elements make the page a `parse` drop (`<td>`, `<tr>`,
+  `<option>`, `<h1>`..`<h6>` and `<a>` without end tags count: they nest deeper here than in a browser, which only hides more). Implied end
+  tags are modelled where a missing one would unhide text: a block start tag (`div`, `ul`, `table`, `h1`, `hr`, `pre`, ... the `p`-closing
+  set) closes an open `<p>` in button scope, `<li>` closes an open `<li>`, `<dd>`/`<dt>` close an open `<dd>`/`<dt>`, and the table elements
+  close their open predecessors, so `<p>a<div hidden></p>X</div>` keeps X hidden. The active formatting elements (`b`, `i`, `font`, ...) are
+  reconstructed after a block closes them, with Noah's Ark and a simplified adoption agency: a formatting element whose furthest block is
+  open stays open (over-hiding). FOSTER PARENTING is modelled: text and elements a table cannot hold (`<table hidden>X`, `<table><div>X`)
+  are placed BEFORE the table, as a browser does, so what contains the table shows or hides them, not the table itself. The insertion
+  modes (initial, before html, head, after head, body, text, table, caption, table body, row, cell, select, template, after body, after
+  after body) are derived from the stack; `colgroup` is read in the table mode, and each template carries its own mode (table, colgroup,
+  table body, row or body), set once by its first start tag that is not an in-head name, which decides the table-structure tags it builds
+  and the ones it ignores, as a browser does, a select in a table, tbody or row template included (`treewalk.KEEP`; a template closed inside
+  that select splits the two readings, see the select entry). A `<table>` closes an open
+  `<p>` only in standards mode, decided by the FIRST doctype alone: `<!DOCTYPE html>` (optionally with
+  `SYSTEM "about:legacy-compat"`) is standards; no doctype, a legacy (HTML 4, XHTML) one, or one after
+  any tag or non-blank text is quirks, where the table nests in the paragraph (fail closed: `<p hidden><table>X` keeps X hidden, also on a legacy-doctype page
+  that a browser reads in standards mode); a second doctype is ignored. `</template>` closes the template whatever lies in between (no
+  scope check). A `<frameset>` that replaces the body shows nothing, and so does a `<template shadowrootmode=...>` whose host is `html`,
+  `head` or the document; with another host it hides every child of that host, those before it too. Document-level hiding is modelled: an
+  `<html>` or `<body>` start tag (a late or repeated one too: a browser merges its attributes onto the root) that hides, or a simple
+  `<style>` rule that hides `html`, `body` or `*`, makes the whole body empty; `:root`, `html > body` and other selectors are NOT read. A
+  `<select>` hides ALL its option text (a browser shows the selected one), as do `<progress>` and `<meter>` fallbacks, and a closed
+  `<details>` hides its whole subtree, the summary included: over-hiding. The text of `<svg>` and `<math>` is never shown.
+  Inside foreign content (`<svg>`, `<math>`) NO implied end tag happens: a start tag there is not processed by the HTML rules, so
+  `<p hidden><svg><section></section>X` keeps X hidden. Only a breakout tag (`b big blockquote body br center code dd div dl dt em embed
+  h1`..`h6 head hr i img li listing menu meta nobr ol p pre ruby s small span strong strike sub sup table tt u ul var`, and `font` with
+  `color`, `face` or `size`) pops the foreign elements first, up to the nearest HTML element or integration point, and then the HTML rules
+  apply; so do the end tags `</p>` and `</br>` (`<svg></p><q hidden></svg>X` keeps X hidden: the `</svg>` is then ignored). Every element
+  has a NAMESPACE (html, svg, math) and the integration points are decided by it: in svg `foreignObject`, `desc`, `title`; in math `mi`,
+  `mo`, `mn`, `ms`, `mtext`, and `annotation-xml` whose `encoding` (ASCII case folded, NOT trimmed) is `text/html` or `application/xhtml+xml`
+  (any other `annotation-xml` is an ordinary math element, but its `<svg>` child is svg). Their children are HTML again (`mglyph` and
+  `malignmark` under a math text point stay math). The same names in the OTHER namespace (svg `mi`, math `title`, ...) are ordinary foreign
+  elements: a raw-text tag there is an element, and `<p` breaks out. Nothing implied, and no end tag, reaches past an integration point
+  (`<div hidden><svg><foreignObject></div>X` keeps X hidden). A foreign element written self-closed (`<svg/>`, `<desc/>`, `<mi/>`) is
+  popped at once, an integration point too, as in a browser, so nothing after `<svg hidden/>` is hidden by it; the end tag of a foreign
+  element is found by a walk down the stack by name and is ignored when an HTML element is above an integration point (`<svg><desc><span
+  hidden><b></desc></svg>X` keeps X hidden). The tokenizer is html.parser's, not a browser's, and the builder steers it: only an HTML
+  element enters raw text or RCDATA (an svg `<style>`, `<script>` or `<title>` is an element). `<![CDATA[` (and every other `<![`) is a
+  bogus comment that ends at the FIRST `>` in HTML content, as in a browser, whatever the patch release of html.parser; whenever the
+  current node is NOT an HTML element (an `svg` or `math` element or an integration point itself) it is a real section that runs to `]]>`
+  and its text is character data (`htmlrules.ScriptedParser.parse_html_declaration`). `<noscript>` is raw text, as in a browser with
+  scripting on, so `<div hidden><noscript></div>X</noscript>` keeps X hidden (a browser with scripting off would show it, the rarer
+  reader). A slash on a raw-text element (`<xmp/>`, `<iframe/>`, `<noembed/>`, `<noframes/>`, `<textarea/>`, `<title/>`, `<plaintext/>`) is
+  ignored, as on `<script/>`. A double-escaped `<script><!--<script></script>` closes at its next-but-one `</script`. A comment ends where
+  a browser ends it, on every patch release of html.parser (`<!-->`, `<!--->`, `-->`, `--!>`): `htmlrules.ScriptedParser.parse_comment`.
+  An open `<select>` is read in TWO ways because browsers differ: the older ignores start tags in it, the newer inserts them. The
+  visible text uses the newer (the more hiding), and a page with a `<select` has its `<style>` sheets read in both and unioned. In it
+  every end tag is ignored but `</option>`, `</optgroup>`, `</select>`, `</template>` and, when the select is in a table and the tag is in table scope,
+  `</caption>`, `</table>`, `</tbody>`, `</tfoot>`, `</thead>`, `</tr>`, `</td>` and `</th>`, which end it (as a browser's "in select in table" rule does,
+  past anything the select holds, a hidden option or a foreign element too; the cell's marker clears there, so a hidden element opened before a
+  template is rebuilt only as in a browser; an `applet`, `marquee` or `object` above the select poisons the rest, see below); a nested
+  `<select>` stays open; `<input>`,
+  `<keygen>` and `<textarea>` end it only when nothing between the top and the select is a template, a table, an integration point, a
+  foreign element or a hidden element (`<div hidden><select><template><input></template></div>X` keeps X hidden). `</select>` needs the select in
+  scope under the newer reading, so an open select that held a scope marker or a formatting element hides the rest even after that element closed
+  (`<select><object></object></select>VIS` and `<select><b hidden></b></select>VIS`: a browser shows VIS under both readings, we hide:
+  over-hide). Table-structure start tags inside a select close the select when it was opened in a table or in a template whose mode is table,
+  tbody or row, and are ignored otherwise. A template closed inside a select that is in a table only through its template puts the older reading
+  back in "in select" (its reset meets the template before any table), which ignores the next cell tag, while the newer reading (Chrome) ends the
+  select there: the readings split, so that cell tag hides the rest (`<template><tr></tr><i hidden><select><template><td></template><td></template>LEAK`:
+  Chrome shows LEAK, we hide it under the two-reading rule: over-hide, kept on purpose; `…<select><template><td></template></select><td></template>LEAK`
+  still shows it, as `</select>` resets to the template mode first). A table-structure tag
+  (start or end, the end tag in table scope) closes it past anything it holds (`<table><tr><td><select><b hidden><td>VIS` shows VIS); only an
+  `applet`, `marquee` or `object` above the select makes that tag poison the rest, as only the newer reading inserts them, each with a marker, so
+  `…<marquee><td>VIS` shows nothing although a browser shows VIS (over-hide); `col` and `colgroup` in a select in a table split the
+  readings (the older step ignores them, the newer closes the cell) and hide the rest (`<table><tr><td><select><col></td>VIS` shows
+  nothing, Chrome shows VIS: over-hide, kept on purpose); a table opened inside a select is no select in a table, so
+  `<select><table><td hidden>x</td></table></select>VIS` shows nothing (over-hide). A `</template>` that closes a select, or a select nested in it,
+  holding a scope marker, a table, a foreign or a hiding element hides the rest of the page, because the two readings' formatting lists differ from
+  there on: `<template><i hidden><select><table><tr></template>VIS` shows nothing although a browser shows VIS (over-hide; so does
+  `…<select><table><select></template>VIS`). A raw-text element
+  opened in a select that holds a `<` poisons the rest of the document: nothing after it shows (over-hiding by design, not for `script`).
+  The rules of `<style>` come from the TREE: the sheet of a page is the child text of its `style` elements in any namespace (an HTML one
+  is raw text, comments included, as CSS reads them; an svg one is character data: a CDATA section counts, a comment does not, character
+  references are decoded), so a `<style` inside a script string, comment, attribute, `<textarea>`, `<title>` or `<style-x>` adds no rule
+  from the tree. That set is UNIONED with a plain scan for `<style ... </style` that starts a sheet at EVERY `<style` opener (fake ones
+  too, and those inside another sheet) and reads each scanned sheet also with CDATA markers removed, with character references decoded and
+  with tags and comments dropped, so a page that html.parser and a browser tokenize differently cannot hide a style. The scan can only
+  add rules, which only hides MORE (a CSS sample in a comment can hide the elements it names; an HTML `<style><![CDATA[.h{display:none}]]>`
+  is hidden although a browser shows that text). Its start tag ends at the first `>` AND at the first `>` outside a quoted attribute
+  value, a sheet for each; more than 1000 openers inside another sheet or 4 MiB of overlapping sheet text make the page a `parse` drop
+  (fail closed). The style pass no longer matches an end tag by the nearest name: the builder's scope rules decide what a `</style>`,
+  `</svg>` or `</desc>` closes (the nearest-name approximation of the older style pass could also MISS a sheet a browser applies, not
+  only over-hide). An unclosed `<style>` at the end of the page applies to the elements before it; the legacy `<!--` and `-->` tokens in
+  a stylesheet are ignored as CSS does. Every `<style>` is parsed on its own, so an open block, string or comment never carries into the
+  next sheet. Not modelled, and always on the side of hiding more: the start-tag rules of `a`, `nobr`, `button`, the headings, `option`,
+  `ruby` and `form` (they nest deeper; `</form>` pops only a current form) and the mode of `colgroup` beyond the routing above (the
+  template modes are modelled, not over-hidden: see the insertion modes above).
+  The stylesheet is read in
+  one linear pass over its braces (`cssscan.py`):
+  braces, semicolons and comment openers inside a CSS
+  string (`content:"{"`), after a backslash or in an unquoted `url(...)` (the ident is recognised after escape decoding: `\75rl(`, `u\72l(`,
+  `\55RL(`) do not count; nor do braces and semicolons inside a `(` or `[` simple block (`foo(})`; nested blocks close in order, an unclosed
+  one swallows the rest, comments are stripped first so `foo(/*)` opens a comment); a rule with nested blocks is read with the
+  nested blocks cut out of its body and the nested rules are read on their own as well (over-hiding: a browser matches them only inside the
+  parent); a rule or block still open at the end is closed there, as a browser does (`.h{display:none` applies); CSS escapes in a selector are
+  decoded (`.\68` is `.h`, `#\69 ` is `#i`) and a selector list is split on unescaped commas only (`.a\,b` is the one class `a,b`).
+  Blocks nested more than 512 deep are skipped; the rules inside a closed at-rule are not read, as before. The tree depends on html.parser reading
+  `<textarea>` and `<title>` as RCDATA (Python 3.12.15 and later patch releases; an older 3.12 reads a `<style` in them as a tag, which
+  can only add a spurious rule). A double-escaped script closes only at a `</script` followed by an HTML space, `/` or `>`.
+  A leading byte order mark is dropped in ONE place, `fetch` (it decodes `utf-8-sig`, as the Encoding Standard strips one BOM before the
+  tokenizer sees the page). `strip_hidden` removes none: a U+FEFF that remains (a second BOM, or one inside a Markdown page) is a
+  character token in the initial insertion mode, so the page is in quirks mode, as it would be in a browser. A BOM before `<!DOCTYPE
+  html>` that `fetch` did not strip therefore does NOT keep the page in standards mode.
+  Markdown pages (every Content-Type but `text/html`) are read with the HTML rules, because their site renders raw HTML. A raw-text or
+  content-hiding opener (`<script>`, `<style>`, `<title>`, `<textarea>`, `<xmp>`, `<noembed>`, `<noframes>`, `<iframe>`, and since wave 14 also
+  `<noscript>`, `<details>`, `<select>`, `<svg>`, `<math>`, `<template>`, `<object>`, `<dialog>`, `<canvas>`, `<video>`, `<audio>`,
+  `<datalist>`, `<head>`, `<rp>`, `<progress>`, `<meter>`) is prose only when ALL hold: it sits in
+  a fenced code block or in an inline code span that opens and closes on ONE line (a span that crosses a line is never trusted: a
+  heading, quote, list item, table cell or thematic break may cut it), that line starts with no block marker (`#`, `>`, `-`, `*`, `+`,
+  `|`, `1.`), has no backslash directly before a backtick and no `<` before the opening run, and the span holds no `|`; it is not inside an HTML
+  block (a line that starts with `<tag`, `</tag`, `<!` or `<?` runs to
+  the next blank line, to its closing tag for `script`, `pre`, `style` and `textarea`, to `-->` for a comment, after any list or quote
+  marker; a backtick inside a tag opens no span); and NO matching closer (`</script` for `<script`) follows it anywhere later in the input.
+  Every other opener hides to its closer or to the end of the input, so a page that mentions `<script>` in code and later closes it, or does
+  so inside a `<Note>` block, loses the text in between (hiding more is the safe direction). The detection is a CommonMark subset (no
+  indented code blocks, no nested quote or list handling beyond the marker prefix); an indented `<script>` is read as markup. A fence
+  that does not start at the left margin (an indent of 1 to 3 spaces, as inside a list item, which ends the fence with the item) is
+  never trusted as code: its lines keep their HTML meaning, so a `<script>` in a code sample inside a list item hides to its closer or
+  the end of the page (fail closed; the price is lost text on pages that show HTML samples inside lists). Link
+  reference definitions (`[x]: url "title"`, `[//]: # (comment)`) are dropped ONLY when strictly valid per CommonMark: the label on one
+  line, `:`, a destination (`<...>` with no `<`, `>` or newline inside, or non-space characters with no `<` and at most one level of
+  balanced parentheses), an optional title fully quoted (`"..."`, `'...'` or `(...)`) over at most three lines with no blank line, and
+  nothing else on the last line; the destination and the title may be on the next lines, unless such a line starts a quote, heading,
+  fence, list item, thematic break or contains a `<` at its start. A definition line right after paragraph text is not a definition (a
+  renderer shows it) and stays. A heading, a thematic break (`---`) or a setext underline under paragraph text ends the paragraph, but a
+  `===`, `=` or `--` line with NO paragraph open is itself paragraph text, so a definition after it stays too (its tags keep their HTML
+  meaning; a lone `-` is also read as text: over-hiding). The same holds INSIDE a quote or a list item: there such a line is a lazy
+  continuation of the paragraph, never a setext underline (`> foo` then `===`), so the definition after it stays. The container flag is set
+  by a `>` or a list-marker line (a bare marker such as `-` or `1.` too: it opens an empty item, so `-` then an indented line then `===` is lazy
+  text; a lone `-` right under a paragraph is still its underline), kept over blank and indented lines and cleared by an unindented
+  non-marker line after a blank line, or by an
+  unindented heading or thematic break (a thematic break such as `> foo` then `---` still ends the paragraph); it is not a full CommonMark
+  container parse and errs towards "still inside" (fail closed).
+  Whatever fails the rule is left alone and read as HTML (`[x]: /u <script>` hides to its closer; so does
+  `[x]:` followed by a `<!--` or `<div hidden>` line), so a definition never swallows the lines after it. A definition with a label over
+  more than one line, a title over more than three, or parentheses nested twice in the destination stays visible (a renderer hides it).
+  A `md` source served as `text/html` loses its definition lines from the VISIBLE text only, after the markup is gone. A footnote
+  definition (`[^1]: text`) is dropped like a link definition (CommonMark has no footnotes; GitHub shows them).
+  NOT handled: image alt text and link titles in running text (`![alt](u)`, `[a](u "title")`) stay in the text although a renderer
+  shows them only on a failed image or a hover. The defence is not the sanitizer alone: web text reaches a record only as a title or a
+  400-character quote, never as a diff, a target or a command, and every model id must pass a strict pattern first. A `watch_dir` that is
+  itself a symlink is refused (`compile watch scan` exits 2, no path in the message) and counts as one corrupt entry, so the status tile
+  reads `none  corrupt 1`.
+
 ## Security and scrubbing
 
 Secret scanners have measured recall well below 100% (31 to 88% in one comparison, 36.6% for the

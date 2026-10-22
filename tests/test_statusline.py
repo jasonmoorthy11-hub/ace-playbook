@@ -59,7 +59,7 @@ INPUT = {"model": {"display_name": "Fable 5.1"}, "context_window": {"used_percen
 def test_the_exact_line(w, tmp_path):
     s = write_status(w)
     assert s["queue_total"] == 3 and len(s["queue"]) == 3
-    assert line(tmp_path, INPUT, w.conf) == "Fable 5.1 | ctx 42% | ace approved 2  unlab24h 2  unlabelled 3  chains ok  heartbeat 2h"
+    assert line(tmp_path, INPUT, w.conf) == "Fable 5.1 | ctx 42% | ace approved 2  unlab24h 2  unlabelled 3  chains ok  heartbeat 2h  watch 0"
 
 
 def test_the_retired_queue_count_and_awaiting_scan_leave_the_line_alone(w, tmp_path):
@@ -68,7 +68,7 @@ def test_the_retired_queue_count_and_awaiting_scan_leave_the_line_alone(w, tmp_p
         s["agreement"]["awaiting_scan"] = 9
     s = write_status(w, edit)
     assert s["queue_retired"] == 7
-    assert line(tmp_path, INPUT, w.conf) == "Fable 5.1 | ctx 42% | ace approved 2  unlab24h 2  unlabelled 3  chains ok  heartbeat 2h"
+    assert line(tmp_path, INPUT, w.conf) == "Fable 5.1 | ctx 42% | ace approved 2  unlab24h 2  unlabelled 3  chains ok  heartbeat 2h  watch 0"
 
 
 def test_a_broken_chain_and_a_retired_proposal(w, tmp_path):
@@ -76,7 +76,7 @@ def test_a_broken_chain_and_a_retired_proposal(w, tmp_path):
         s["measurement"]["chains"]["labels"] = "broken:5"
         next(iter(s["proposals"].values()))["mode"] = "disabled"
     write_status(w, edit)
-    assert line(tmp_path, INPUT, w.conf).endswith("ace approved 1  unlab24h 2  unlabelled 3  chains BROKEN  heartbeat 2h")
+    assert line(tmp_path, INPUT, w.conf).endswith("ace approved 1  unlab24h 2  unlabelled 3  chains BROKEN  heartbeat 2h  watch 0")
 
 
 def test_warn_and_block_count_as_approved(w, tmp_path):
@@ -95,7 +95,26 @@ def test_a_truncated_queue_marks_the_24_hour_count_as_a_floor(w, tmp_path):
 
 def test_no_hook_row_yet_says_never(w, tmp_path):
     write_status(w, lambda s: s["heartbeat"].update(last_hook_row=None))
-    assert line(tmp_path, INPUT, w.conf).endswith("heartbeat never")
+    assert line(tmp_path, INPUT, w.conf).endswith("heartbeat never  watch 0")
+
+
+def test_the_watch_field_is_the_open_count_and_a_dash_when_missing_or_not_a_count(w, tmp_path):
+    write_status(w, lambda s: s.update(watch_open=3))
+    assert line(tmp_path, INPUT, w.conf) == "Fable 5.1 | ctx 42% | ace approved 2  unlab24h 2  unlabelled 3  chains ok  heartbeat 2h  watch 3"
+    write_status(w, lambda s: s.pop("watch_open"))                                       # a status.json from before the watcher
+    assert line(tmp_path, INPUT, w.conf).endswith("heartbeat 2h  watch -")
+    for odd in ("3", None, True, -1, 2.5, [1], {"a": 1}, 10 ** 400):
+        write_status(w, lambda s, odd=odd: s.update(watch_open=odd))
+        assert line(tmp_path, INPUT, w.conf).endswith("heartbeat 2h  watch -"), odd
+
+
+def test_the_watch_field_comes_from_the_real_store(w, tmp_path):
+    from ace_playbook.compile.watch import match, store
+    ev = {"url": "https://example.test/d", "sha256": "1" * 64, "quote": "q", "tier": 0}
+    store.ensure(store.watch_dir(w.cfg))
+    store.write_proposal(store.watch_dir(w.cfg), match.record("docs", "t", ev, ["k"], "k", None, "claude --version", stamp(timedelta())))
+    write_status(w, lambda s: s.update(watch_open=build(w)["watch_open"]))
+    assert line(tmp_path, INPUT, w.conf).endswith("heartbeat 2h  watch 1")
 
 
 def test_a_missing_or_unreadable_status_file(w, tmp_path):

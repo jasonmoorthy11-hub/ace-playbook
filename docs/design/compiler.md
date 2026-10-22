@@ -1029,8 +1029,9 @@ restart point, section 7.3): a warn or block promotion does not move it, and nei
 they are equal at all times and a promotion never moves either.
 The queue (`queue`, `queue_total`) lists the fired rows
 that no human `tp`/`fp` covers; the fires of retired proposals are not listed but counted in `queue_retired` (`label --queue --all` offers
-them). `compile digest [--since ISO] [--days N]` (`compile/digest.py`) renders the same dict as six
-plain-text blocks: `status` (protocol `shadow-v1`, report hash, day, keyed, chains), `needs you` (the label queue and the command to
+them). `compile digest [--since ISO] [--days N]` (`compile/digest.py`) renders the same dict as seven
+plain-text blocks (the seventh, `proposals`, is the watcher's, see "8.x Watch (as built)"): `status` (protocol `shadow-v1`, report hash,
+day, keyed, chains), `needs you` (the label queue and the command to
 work it), `detectors` (the status table), `health` (silent detectors, stale heartbeats over 36 hours, a spike when a proposal has at
 least 3 rows today and more than 3 times its daily mean over the window, chain notes), `changes` (approvals and demotions after
 `--since`, default the last digest logged, else 24 hours) and `next` (week-one date, and for each proposal still short of the 14 days
@@ -1042,7 +1043,211 @@ line carries that night's health), refreshes `status.json` for the status line a
 | Surface | Entry | Shows |
 |---|---|---|
 | Dashboard | `compile dashboard [--days N] [--out PATH]` | one static HTML file (0600) from `status.build`: day, tiles, table, Wilson bars |
-| Status line | `hooks/statusline.sh` (Claude Code `statusLine`) | one line from `status.json`: approved, unlab24h, unlabelled, chains, heartbeat |
+| Status line | `hooks/statusline.sh` (Claude Code `statusLine`) | one line from `status.json`: approved, unlab24h, unlabelled, chains, heartbeat, watch |
+| Menu bar | `hooks/swiftbar/ace.5m.sh` (SwiftBar, 5-minute refresh) | glyph (ok / needs you / stale), counts, three proposal titles, two buttons |
+
+### 8.x Watch (as built)
+
+The watcher of design `2026-10-21-ace-watcher-and-cockpit` (phase 1, W1) is `compile/watch/`: a model-free configuration watcher that
+PROPOSES and never applies. It is the one network-using package of ace-playbook and is never on the hook path: `watch`, `fetch`,
+`inventory`, `match`, `store`, `summary` and the helper modules `chars`, `fsio`, `cssstyle`, `cssscan`, `htmlrules`, `mdrules`,
+`stylepass`, `treebuild`, `treemodes`, `treestyle`, `treewalk`, `records`, `pin` and `reconcile` are in the `ABSENT` tuple of
+`tests/test_hook_conformance.py`. `status.py` imports only
+`watch.summary` (a pure read, no network import); `__main__` imports the light `watch.cli`, which loads `scan`, `fetch` and `inventory` only
+when a scan runs (tested in `tests/test_compile_watch_cli.py`).
+
+- `fetch.py`, `parsers.py`, `sanitize.py`: tier-0 fetchers. Conditional GET (ETag, sha256 against `seen.json`), a Content-Type allow-list
+  checked before the body is read, a 1 MiB cap (`cap + 1` bytes read), http(s) only. Parsers for RSS, Atom, npm dist-tags, the
+  deprecations table and sitemaps. `strip_hidden` keeps visible text only: no script, style, template, noscript, comment, `hidden`,
+  `aria-hidden`, `inert`, zero-width or bidi characters, and inline styles read after normalisation (comments and CSS escapes removed):
+  display none, visibility hidden or collapse, opacity below 0.1 (negative too), font-size below 1px, a box of 1px or less that clips,
+  off-screen positions and far negative margins or text-indent (500px or 20em and beyond), `clip-path:inset()` at 50 % or more, any zero
+  `scale` argument, a transparent `color` or `-webkit-text-fill-color`; also skipped are a closed `details`, `dialog`, `svg`, `math`, `iframe`,
+  `object`, `embed`, `head`, `select` (all its option text), `progress` and `meter`. XML with a DTD or an ENTITY declaration is dropped (`xml`).
+  Also: a `Content-Encoding` other than identity is dropped (`encoding`); a 304 for a URL with no stored validator is dropped (`etag`);
+  a deprecations page that parses to no rows is a `parse` drop (never an empty table); the `md` kind is read in markdown mode
+  (the HTML rules, except that a raw-text opener is prose when it is in a fenced block or in a code span that opens and closes on ONE plain
+  line, outside every HTML block, and no closer for it follows later; a plain line has no block marker at its start, no backslash before a
+  backtick, no `<` before the opening run and no `|` inside the span, and a fence counts only when it starts at the left margin: an
+  indented fence may sit in a list item, which ends it, so its lines keep their HTML meaning; link reference definitions, the
+  `[//]: # (...)` idiom among them, are dropped ONLY when strictly valid per CommonMark: `mdrules.DEFINITION`, a label on one line, a
+  destination, an optional title of at most three lines, nothing else on the last line, no line after the first that a paragraph could
+  not continue, and never right after paragraph text. Anything else stays and keeps its HTML meaning, so `[x]: /u <script>` hides to its
+  closer and the HTML start is checked before any definition continuation: `mdrules.py`; for a `md` source served as `text/html` the
+  strictly valid definition lines are dropped from the VISIBLE text after `strip_hidden`, never from the raw markup).
+  The sanitizer builds ONE HTML tree and two consumers read it (no `_Text`/`_Styles` pair, no rule stack). `htmlrules.py` is the
+  tokenizer side: html.parser as the tokenizer (`ScriptedParser`: comment endings, the double-escaped script state `ScriptState`, `<![CDATA[`,
+  a slash on a start tag kept in `selfclosing`), the element sets, `OPS` (what a start tag of the simple kind does in the body) and
+  `TreeParser`, which feeds the tree and lets IT decide raw text (`Tree.raw`: only an HTML element enters raw text, RCDATA or noscript; an
+  svg `<style>`, `<script>` or `<title>` is an element). `treebuild.py` (`Tree`, `build`) is the HTML Standard's tree builder in a
+  simplified, fail closed form: the stack of open elements with indexes (HTML positions by name, foreign name counts, scope-marker
+  positions for the default, list-item, button and table scopes, so a scope check and an end tag that names nothing open are O(1)), the
+  active formatting list with markers (pushed when a td, th, caption, applet, marquee, object or template opens; cleared up to the last marker ONCE:
+  at the spec's close-the-cell and caption close for td, th and caption, at the pop of the template, at the own end tag for applet, marquee and
+  object, never per popped cell),
+  Noah's Ark, `reconstruct` and a simplified `adopt` (a formatting element with a furthest block stays open: over-hiding), FOSTER PARENTING
+  in `where`/`place` (what a table cannot hold goes before it), and the insertion mode derived from the stack (`reset_mode`). `treemodes.py`
+  holds the modes as functions `mode(t, kind, name, attrs, selfclosing)`: initial, before html, before head, head, after head, body, text,
+  one function for the table family (table, caption, table body, row, cell, colgroup), select, template, after body, after after body, and
+  `m_foreign` for foreign content. A frameset that replaces the body, or a `<template shadowrootmode>` whose host is `html`, `head` or the
+  document, sets `Tree.dead` (nothing is shown); `Tree.hb` records every `html`/`body` start tag (a hiding one hides the page). Past 512
+  open elements the build raises `TooDeep` (a `parse` drop). The two consumers: `treewalk.visible` (iterative; an element hides when
+  `own_attrs` says so or a style rule matches its tag, class or id; `br` and `hr` print a blank, blocks a line, the nodes the builder made up
+  print none) and `treestyle` (below). The rules that matter: a block start tag of the `p`-closing set (address, article, aside,
+  blockquote, center, details, dialog, dir, div, dl, fieldset, figcaption, figure, footer, form, h1 to h6, header, hgroup, hr, main, menu,
+  nav, ol, p, pre, search, section, summary, table, ul, xmp, li, dd, dt) closes an open `p` in button scope first, and a `table` only in
+  standards mode; `li` and `dd`/`dt` close their kind; `button` stops `</p>`, `ol` and `ul` stop `</li>`, an end tag past a special
+  element pops nothing, `</template>` pops to the template whatever lies between. The quirks decision is the FIRST doctype alone
+  (`htmlrules.STANDARDS`: `<!DOCTYPE html>` with an optional `SYSTEM "about:legacy-compat"`; none, a late, legacy or later one is quirks,
+  fail closed). Foreign content: `foreign_dispatch` decides per token whether the HTML modes or `m_foreign` read it (at an HTML integration
+  point only a start tag or characters go to the HTML modes, at a MathML text point all but `mglyph`/`malignmark` and `<svg>` at
+  `annotation-xml`); a breakout start tag (the spec's list, `font` with `color`, `face` or `size`), `</p>` and `</br>` pop the foreign run
+  and are read again by the mode (not by `process`, which would loop); any other foreign end tag walks down the stack by name; a foreign
+  element written self-closed is popped at once, an integration point too. Every node carries its NAMESPACE (0 html, 1 svg, 2 math) and its
+  integration kind `ip` (0 none, 1 HTML: svg `foreignObject`, `desc`, `title` and `annotation-xml` whose `encoding`, lower cased and NOT
+  trimmed, is `text/html` or `application/xhtml+xml`; 2 MathML text: `mi`, `mo`, `mn`, `ms`, `mtext`; 3 `annotation-xml` without an HTML
+  encoding); `htmlrules.special(node)` asks the special category by namespace. An open select is built in two readings (`Tree.relaxed`):
+  A, the older, ignores start tags and keeps the tokenizer out of raw text; B, the newer and the one the visible text uses, inserts them
+  and ignores every end tag but `option`, `optgroup`, `select`, `template` and the table ones (`caption`, `table`, `tbody`, `tfoot`, `thead`, `tr`, `td`,
+  `th`: in table scope they end a select in a table past anything it holds, the browser's "in select in table" step), keeps a nested `select` open,
+  lets `input`,
+  `keygen` and `textarea` pop the select only when `treemodes.reach` finds no template, table, integration point, foreign or hidden element above
+  it, and lets a raw text holding a `<` poison the rest of the page (`selraw`, `rawlt`, `poisoned`; `script` exempt). `</select>` needs the select
+  in scope under the newer reading, so an open select that held a scope marker or a formatting element hides the rest even after that element
+  closed (`<select><object></object></select>VIS`, `<select><b hidden></b></select>VIS`: a browser shows VIS under both readings, we hide:
+  over-hide, by the rule that every end tag is ignored but option, optgroup, select, template and the table end tags of a select in a table).
+  Table-structure start tags (`caption`, `col`, `colgroup`, `tbody`, `td`, `tfoot`, `th`, `thead`, `tr`) in a select close the select when it was opened
+  in a table (a table, not a template, is the nearest below it: the tag is read again) and are ignored otherwise, as in body, so no cell marker is
+  pushed outside the table modes. The table tags end the select past anything it holds, a hidden option or a foreign element too
+  (`<table><tr><td><select><b hidden><td>VIS` shows VIS); an `applet`, `marquee` or `object` above the select makes that tag poison the rest
+  (`…<marquee><td>VIS`: nothing shows, a browser shows VIS: over-hide, the two readings' cell clears differ). `col` and `colgroup` split the
+  readings (the older "in select in table" step names neither and ignores them, the newer closes the cell) and hide the rest
+  (`<table><tr><td><select><col></td>VIS` shows nothing, Chrome shows VIS: over-hide, kept on purpose; `<table><tr><td><select><col>LEAK</table>`
+  shows LEAK in Chrome and is hidden here). A table opened inside a
+  select is no select in a table (`<select><table><td
+  hidden>x</td></table></select>VIS`: over-hide). `template_end` poisons the
+  rest of the page when its pop closes a select, or a select nested in it, that `reach` rejects (the whole region above the first select over the
+  template is read; the readings' formatting lists differ there:
+  `<template><i hidden><select><table><tr></template>VIS` and `<template><i hidden><select><table><select></template>VIS` show nothing, a browser
+  shows VIS: over-hide). Document-level
+  hiding: an `html` or `body` start tag, the first or a late one, that hides, or a `<style>` rule that hides `html`, `body` or `*`, makes
+  the body empty; a `<template shadowrootmode=...>` hides every child of its host (those before it too). THE STYLE PASS (`treestyle.py`,
+  re-exported by `stylepass.py`): the sheet of a page is the child text of the `style` elements of the tree in any namespace (HTML: raw
+  text; svg: character data, a CDATA section counts, a comment does not, character references are decoded), `style_sheets(src, tree)`,
+  with a `<select` also from the second reading; it is UNIONED with `scan_sheets`, a plain linear scan that starts a sheet at EVERY
+  `<style` opener (fake openers included, so it can only add rules), ends its start tag at the first `>` and at the first `>` outside a
+  quoted value (`TAG_REST`) and, through `variants`, also reads each scanned sheet with the CDATA markers removed, with the references
+  decoded and with tags and comments dropped (applied to scanned sheets only). More than `MAX_OVERLAP` (1000) openers inside another
+  sheet or `MAX_SCAN_CHARS` (4 MiB) of scanned text is a `TooDeep` parse drop. There is no nearest-name end-tag matching in the style
+  pass any more. `cssstyle.css_rules` reads the braces in one linear pass (`cssscan.py`: braces, semicolons and
+  comment openers inside CSS strings, escapes and unquoted `url(...)` (the ident matched after escape decoding: `\75rl(`, `u\72l(`) do not
+  count, nor do they inside a `(` or `[` simple block (a `blocks` stack of closers in `cssscan.rules`; unclosed blocks swallow the rest); a
+  rule with nested blocks is read with them cut out and the nested rules on their own; a rule open at the end applies; CSS escapes in a
+  selector are decoded and the list splits on unescaped commas only). `<![CDATA[` (any `<![`) is a bogus comment that ends at the first `>`
+  in HTML content, a real section to `]]>` whenever the current node is NOT an HTML element (`ScriptedParser.parse_html_declaration`,
+  `foreign()`; `_support_cdata` is off so the EOF path agrees). `noscript` is raw text (`CDATA_CONTENT_ELEMENTS`, also for `<noscript/>`)
+  and stays in the skipped set, but only in HTML content. `handle_startendtag` enters raw-text mode for every `CDATA_CONTENT_ELEMENTS` name
+  (`<xmp/>`, `<iframe/>`, `<noembed/>`, `<noframes/>`), for the RCDATA ones (`<textarea/>`, `<title/>`) and `<plaintext/>`: a browser
+  ignores the slash. Comments end where a browser ends them (`<!-->`, `<!--->`, `-->`, `--!>`) on every patch release:
+  `htmlrules.ScriptedParser.parse_comment` overrides the stdlib's (which pairs an abrupt `<!-->` with a later `-->`) for the one pass;
+  the page is not rewritten, because `--!>` ends nothing in script data, an attribute value or RCDATA. A leading byte order mark is
+  dropped in ONE place: `fetch` decodes `utf-8-sig`, as the Encoding Standard strips one BOM before the tokenizer; `strip_hidden` removes
+  none, so a U+FEFF that remains is a character token in the initial mode and the page is quirks, as in a browser. In Markdown the `<` of
+  every tag that raw-texts or hides its content (`mdrules.RAW_TEXT`: the raw-text names plus noscript, details, select, svg, math,
+  template, object, dialog, canvas, video, audio, datalist, head, rp, progress, meter) is escaped inside a trusted code span or fence.
+  Kept over-hides, each on purpose: a nested `select` stays open, a raw text a select holds with a `<` hides the rest of the page, the
+  `input`, `keygen` and `textarea` enders are gated by `reach` (a table tag is not), a `</template>` that closes a select holding a barrier hides the
+  rest of the page, a table opened inside a
+  select is no select in a table, `col` and `colgroup` in a select in a table hide the rest, `</select>` needs the select in scope, a
+  furthest-block formatting element stays open, `a`, `nobr`,
+  `button`, headings, `option` and `ruby` have no start-tag rules and `form` has no pointer (`</form>` pops only a current form), `colgroup`
+  is read in the table mode, a closed `details` hides its summary too, and the scan variants hide a CDATA-wrapped HTML style a browser would show
+  as text. Each template carries its own insertion mode (`Node.tm`, `Node.builds`, `treewalk.FIRST`), set once by its first start tag that is not
+  an in-head name (`base basefont bgsound link meta noframes script style template title`) and never changed: `caption colgroup tbody tfoot thead`
+  give "table", `col` "colgroup", `tr` "tbody", `td th` "row", anything else "body". A table-structure tag its mode does not keep (`treewalk.KEEP`:
+  table keeps all of them, colgroup `col`, tbody `tr td th`, row `td th`, body none) is ignored and pushes no cell marker, `<table>` is ignored in
+  the table, tbody and row modes, and any other start tag in "colgroup" mode; a `<caption>` in a cell closes the cell and meets the same rule
+  (`intable`), as in a browser (waves 21 and 22; a table tag the mode ignores used to build a cell or caption whose marker took the template pop's
+  single clear and left the template's own, so a hidden formatting element opened before the template leaked:
+  `<p><i hidden></p><template><col><td></template>LEAK`). A select opened in a template whose mode is table, tbody or row counts as in a table
+  (wave 23, `htmlrules.select_in_table`): its cell tag ends the select and pushes the marker, so `<template><tr></tr><i hidden><select><td></template>LEAK`
+  hides. A template closed inside such a select puts the older reading back in "in select" (wave 24, `Node.via_template`): it ignores the next cell tag
+  while the newer reading (Chrome) ends the select, so that tag poisons the rest (the two-reading rule, D-128):
+  `…<select><template><td></template><td></template>LEAK` is shown by Chrome and hidden here, an over-hide kept on purpose; `</select>` before the cell
+  tag keeps it shown. The cases the tree decides that the rule stack got wrong are the six Opus
+  wave-7 worlds (BOM before the doctype, svg CDATA style, nearest-name end tag, `annotation-xml` encoding, self-closed integration
+  points, frameset) and the older foster-parenting gap. In Markdown a `===`, `=` or `--` line with no paragraph open is paragraph text (the paragraph flag of
+  `mdrules.scan` stays set); only a heading, a thematic break or a setext underline under an open paragraph ends it, and such a line inside
+  a quote or a list item is a lazy continuation, not an underline (the `cont` flag: set by a `>` or list-marker line, a bare marker (`-`,
+  `1.`) included unless a lone `-` underlines the paragraph above it, kept over blank and
+  indented lines, cleared by an unindented non-marker line after a blank line or by an unindented heading or thematic break). The text and tails inside
+  a child element of an XHTML feed field are HTML-escaped before the sanitizer sees them (only the field's own text stays raw), so an
+  escaped closer there cannot close a hidden ancestor. The npm `latest` must be an ASCII version (`[0-9]+.[0-9]+.[0-9]+` with an optional
+  `-` or `+` suffix of at most 40 `[0-9A-Za-z.-]`), else the fetch is a `parse` drop.
+  Helpers: `chars.py` (every Default_Ignorable_Code_Point, the format characters and the control characters, shared by the sanitizer, the
+  store and the record cleaner), `cssstyle.py` (the
+  inline-style normaliser and the simple single-selector `<style>` rules, with the legacy `<!--` and `-->` tokens ignored; media queries,
+  descendant or attribute selectors and external stylesheets are not handled, see LIMITATIONS.md), `cssscan.py` (the string-, escape- and
+  url-aware brace scanner, comment stripper, nested-block reader and selector decoder that `cssstyle` uses), `fsio.py` (private atomic
+  write with a unique O_EXCL temporary name, the scan lock).
+- `netguard.py`: the SSRF guard. A host that is, or resolves to, a loopback, link-local, private, multicast or reserved address is dropped
+  (`address`) before any request; a redirect is followed only to the same scheme, host and port, at most three hops, with no userinfo in the
+  URL, and is dropped (`redirect`) otherwise. The DNS answer can change between the check and the connect (rebinding); the address is checked
+  before the connection, not on the connected socket, so that race stays.
+- `inventory.py`: the snapshot (`inventory.json`, 0600). Per target of the private map only the matching LINES with numbers plus the
+  file sha256; `{"missing": true}` for a missing file; at most 50 files per target, a target with more is marked `truncated` and its
+  `model_pin` becomes a lead with no diff; `claude --version` only when `claude` is on PATH.
+- `match.py`: the rules. `model_pin` (a deprecated model id the inventory pins: a diff generated by code replacing it with the
+  successor, else a `lead` with no diff titled "retirement with no successor named"), `version` (npm `latest` or `stable` newer than the
+  installed `claude`), `docs` (a mapped page's sitemap `lastmod` moved, unless it is more than a day ahead of the scan, or its `.md` hash changed; a first
+  sight is a baseline, and a future `lastmod` is never remembered) and
+  `lead` (a tier-1 feed entry with a `lead_keywords` term). `check` enforces the record shape, the caps, the id, the diff hash, the
+  verify templates and "tier-1 evidence alone never carries a diff". `match.py` is the entry (`candidates`); the pieces are `records.py`
+  (`record`, `make_id`, `check`), `pin.py` (the `model_pin` rule, `state`, `pinned`, `model_of`) and `reconcile.py` (below).
+  `change.target` is never page text: it is an inventory key, a mapped docs URL, a source id or `claude_version`, and a docs title is
+  built from the mapped URL. `inventory.py` splits files on `\n` (keeping `\r`) and sets a `truncated` flag on a file cut at the line cap;
+  a `model_pin` whose target file is `truncated` (or too large, or has a cut or U+FFFD line) is written as a `lead` with no diff.
+- `reconcile.py`: what one scan does with its candidates. Dedupe keys: a `model_pin` by (class, target, model id, successor), so editing
+  the row of the deprecations table (a new date, "(extended)") opens nothing; a model_pin whose target and model a candidate also names
+  with another successor, and every older duplicate of the candidate's key, is closed with the note `superseded` when the candidate
+  opens; any other state-based class by (class, target, quote, model id), i.e. the state it reports, so two ids in one table cell stay two
+  proposals (the id of a record hashes the model id when its title names one); a `docs` proposal by (class, target, evidence sha256), so
+  a page that changes again after a dismissal is new. A `version` proposal auto-closes only when `claude --version` printed a real
+  version (`match._ver` finds `N.N.N`; garbage with exit 0 closes nothing). A state-based proposal that expired or auto-closed while
+  its trigger is still true gets a `reopened`
+  decision row (its note is the new 30-day expiry; the proposal file is immutable) and counts toward the cap of five. A scan holds the
+  exclusive `scan.lock` in `watch_dir` (a second scan prints `watch: scan running`, exit 0), and the `queue` command takes the same lock
+  (blocking) for its rebalance.
+- `store.py`: `watch_dir` (config key, default `data_dir/watch`, 0700) and everything in it. `summary.py`: the `status.json` fields and
+  the digest block. `scan.py`, `cli.py`: `compile watch scan [--tier 0|1|all] [--dry-run] [--force]`, `status`, `queue [--limit N]`.
+
+Record (design 4.3, exactly): `{id, created, class, elevated, title, evidence[{url, sha256, quote, tier}], inventory_hits, change{target, diff,
+diff_sha256}, verify, expires, status}`. `id` is `W-` plus the first 8 hex of sha256 of `class|target|evidence sha|quote` (with `|model id`
+appended when the code-made title names a model), so a re-scan dedupes; `title` is at most 120 characters and `quote` 400, both cleaned
+of control characters, and the quote is ONE line of the fetched body, verbatim (`records.quote_line`, empty when no line is clean, which
+drops the record; `match.candidates` runs `check(rec, body)` with the body of the result that carries the sha256); `verify` comes from a fixed template per
+class (`grep -n "<model_id>" <path>`, `claude --version`, `curl -sI <url> | head -1`); a model id or successor taken from a page must match
+`[A-Za-z0-9][A-Za-z0-9._:-]{2,79}` before it reaches a diff or a command; `elevated` is false for every W1 class; `expires` is 30 days
+after `created`. Free text from the web appears in a record only as the title and the quote.
+
+Store files, all under `watch_dir` and nowhere else: `proposals/W-*.json` (0600, written once, never replaced), `decisions.jsonl`
+(append-only, 0600, O_APPEND, flock: `{ts, id, decision: accepted|dismissed|later|closed|promoted|reopened, note}`), `seen.json` (per-URL sha256,
+ETag and `fetched_at`; the parsed result of every source; per-source stamps for the daily or weekly cadence; sitemap `lastmod` baselines;
+`last_scan`), `inventory.json` and the kill file `DISABLED`. The status of a proposal is its newest decision row, else the file's own
+`status`; `expired` once past `expires`; `auto-closed` when a re-scan no longer produces a state-based trigger (model_pin, version, an
+inventory lead) while its source was read. Docs and feed-lead proposals are events and run to their expiry. At most five proposals are open
+(leads excepted); the rest are written `queued` and a `promoted` decision row opens them in ranking order (model_pin, version, docs) when a
+slot frees. A reader never raises on a corrupt store: JSON too deeply nested, bad UTF-8, a decision row of the wrong type and a proposal
+of the wrong shape are skipped, and the proposals skipped are counted in `status.json` as `watch_corrupt` (`corrupt N` in the digest block);
+a proposals path that is a file or a link, a `decisions.jsonl` that is a directory or a link, and a `watch_dir` that is a link count as one
+each (the last so that the tile says `none  corrupt 1`, not a bare `none`, while every scan exits 2).
+`ensure` keeps the mode of a directory that exists and refuses a symlinked `watch_dir` or proposals folder (`compile watch scan` exits 2). With
+`DISABLED` present `scan` prints `watch: disabled`, fetches nothing and writes nothing.
+
+`status.json` gains `watch_open`, `watch_leads`, `watch_oldest`, `watch_top`, `watch_titles` (up to three, ranked), `watch_disabled` and
+`watch_last_scan` and `watch_corrupt`; the digest gains the `proposals` block (`open N  leads N  oldest <age>  last scan <age>` and up to three `- <title>`
+lines, `none` or `disabled`); the status line ends with `watch N`. Nothing here touches `metrics.py`, `report.py`, `seal.py`, the detector
+files or the live measurement.
 
 ### Seal (as built, not executed)
 

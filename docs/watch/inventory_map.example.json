@@ -1,0 +1,14 @@
+{
+  "targets": {
+    "settings.model": {"path": "~/.claude/settings.json", "pattern": "\"model\""},
+    "agents.model": {"path": "~/.claude/agents/*.md", "pattern": "^model:"},
+    "hooks.model_flags": {"path": "~/.claude/hooks/*.sh", "pattern": "--model"},
+    "lineup.reference": {"path": "~/notes/claude-lineup.md", "pattern": "claude-"},
+    "ace.pyproject": {"path": "~/src/ace-playbook/pyproject.toml", "pattern": "python"}
+  },
+  "docs": {
+    "https://code.claude.com/docs/en/hooks": ["settings.model", "hooks.model_flags"],
+    "https://code.claude.com/docs/en/settings": ["settings.model"]
+  },
+  "lead_keywords": ["subagent", "hooks", "claude code", "context engineering"]
+}
