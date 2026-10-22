@@ -23,6 +23,8 @@ def rm_fires(cmd):
     return fires_for(cmd).get("rm_rf_nonscratch") == 1
 
 
+TIME_BUDGET = 0.5   # seconds per hostile input: ≈ 0.03 s on a 2024 Mac, 0.12 s seen on the CI runner (≥ 3× headroom over CI, D-147 rule)
+
 SLOW_INPUTS = {
     "unterminated-dq-with-escapes": '"' + '\\"' * 32767,
     "heredoc-32k-delimiter": "<<" + "a" * 32768,
