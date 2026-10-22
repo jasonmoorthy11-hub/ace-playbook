@@ -46,7 +46,7 @@ def link_ok(url) -> bool:
 
 def _clean(text: str, cap: int) -> str:
     text = "".join(" " if c in "\n\r\t" else c for c in text)
-    return "".join(c for c in text if unicodedata.category(c) not in ("Cc", "Cf", "Zl", "Zp")).strip()[:cap].rstrip()
+    return "".join(c for c in text if unicodedata.category(c) not in ("Cc", "Cf", "Cs", "Zl", "Zp")).strip()[:cap].rstrip()
 
 
 def _val(v, t, path: str):

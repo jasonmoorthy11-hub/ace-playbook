@@ -23,7 +23,7 @@ take_lock() {   # $1 brief_dir. One run at a time: a kernel flock(2) (taken with
   exec 9>> "$1/run.lockf" || fail "cannot open the lock file"
   "${ACE_PYTHON:-python3}" -I -c 'import fcntl,sys
 try: fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)
-except BlockingIOError: sys.exit(75)'; local rc=$?
+except BlockingIOError: sys.exit(75)' 2> /dev/null; local rc=$?      # stderr off: a failure is ONE line, `brief: lock`, never a traceback
   [ "$rc" -eq 0 ] && return 0
   [ "$rc" -eq 75 ] && exit 0
   fail "lock"
@@ -53,7 +53,8 @@ wait_stage() {   # $1 stage name: wait for the background step in CHILD under th
   [ -e "$RUN/timed_out" ] || return "$rc"
   rm -f "$RUN/timed_out"; py timeout-mark "$1" || true; return 124
 }
-notify() {   # $1 message, $2 optional page to open. $ACE_BRIEF_NOTIFIER names the notifier (tests inject a fake; it is never looked up on the PATH)
+notify() {   # $1 message, $2 optional page to open. $ACE_BRIEF_NOTIFIER names the notifier
+  # (tests inject a fake; empty means unset, and the default terminal-notifier comes from the PATH)
   local n="${ACE_BRIEF_NOTIFIER:-terminal-notifier}"
   command -v "$n" > /dev/null 2>&1 || return 0
   "$n" -title "ACE brief" -message "$1" ${2:+-open "$2"} > /dev/null 2>&1 9>&- || true

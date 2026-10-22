@@ -23,6 +23,7 @@
 # stdout/stderr carry counts and one-line reasons, never mail content. A signal: the children get TERM, then KILL after the same grace.
 set -u -o pipefail
 umask 077
+[ "$#" -eq 0 ] || { [ "$#" -eq 1 ] && [ "$1" = "--force" ]; } || { echo "brief: usage: brief.sh [--force]" >&2; exit 2; }      # nothing else is accepted
 HOOKS=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P) && REPO=$(dirname "$HOOKS") || exit 1
 export ACE_PLAYBOOK_REPO="$REPO" PATH="$PATH:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"      # launchd/Hammerspoon start with a bare PATH
 CLAUDE_BIN="${ACE_BRIEF_CLAUDE:-claude}"

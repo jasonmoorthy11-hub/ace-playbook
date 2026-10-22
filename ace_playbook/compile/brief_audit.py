@@ -12,10 +12,13 @@ returns mail content. Stdlib only.
 
 from __future__ import annotations
 
+import argparse
 import fcntl
 import json
+import math
 import os
 import re
+import sys
 from pathlib import Path
 
 NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*")
@@ -33,6 +36,20 @@ def jl(text: str):
         return json.loads(text)
     except (ValueError, RecursionError):
         return None
+
+
+def num(v):
+    """An int (never a bool, any size) or a finite float, else None: JSON `Infinity` and `NaN` parse to floats and must not reach a ledger
+    row. Only a float goes through math.isfinite: it raises OverflowError for an int beyond float range."""
+    return v if type(v) is int or (type(v) is float and math.isfinite(v)) else None
+
+
+class OneLineParser(argparse.ArgumentParser):
+    """argparse whose usage errors are ONE stderr line `brief: usage: ...` and exit 2 (the default prints the usage block first)."""
+
+    def error(self, message):
+        print(f"brief: usage: {self.prog}: {' '.join(message.split())}", file=sys.stderr)       # argv text may hold a newline: still ONE line
+        sys.exit(2)
 
 
 def events(path) -> list:

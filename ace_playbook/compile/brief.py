@@ -7,7 +7,6 @@ prints mail content. Exit: 0 ok, 1 error (type name only), 2 refused (schema, ex
 
 from __future__ import annotations
 
-import argparse
 import json
 import re
 import sys
@@ -19,7 +18,7 @@ from ..atomic import write_private
 from . import brief_audit as ba, brief_excl, brief_render as br
 
 FMT, STATE, LEDGER = "%Y-%m-%dT%H:%M:%SZ", "brief_state.json", "brief_ledger.jsonl"
-_jl = ba.jl
+_jl, _num = ba.jl, ba.num
 
 
 def read_json(path):
@@ -54,10 +53,6 @@ def _dir(cfg) -> Path:
 
 def _dump(obj) -> str:
     return json.dumps(obj, indent=1, ensure_ascii=False, sort_keys=True) + "\n"
-
-
-def _num(v):
-    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
 
 def _util(event, window: str):
@@ -126,11 +121,12 @@ def cmd_ledger(cfg, a) -> int:
     res = res if isinstance(res, dict) else {}
     tokens = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")
     use, models = (res.get(k) if isinstance(res.get(k), dict) else {} for k in ("usage", "modelUsage"))
-    row = {"ts": _now(), "stage": a.stage, "model": ",".join(sorted(k for k in models if isinstance(k, str) and ba.NAME.fullmatch(k)))[:100] or "unknown",
+    names = sorted(k for k in models if isinstance(k, str) and ba.NAME.fullmatch(k))[:5]       # each name is cut BEFORE the join: a long one hides no other
+    row = {"ts": _now(), "stage": a.stage, "model": ",".join(k[:40] for k in names) or "unknown",
            "cost_usd": _num(res.get("total_cost_usd")), **{k: _num(use.get(k)) for k in tokens},
            **{f"{w}_{t}": _util(ev, w) for w in ("five_hour", "seven_day") for t, ev in (("before", before), ("after", after))},
            "duration_ms": _num(res.get("duration_ms")), "num_turns": _num(res.get("num_turns")),
-           "tools_called": [t for t in (res.get("_tools_called") or []) if isinstance(t, str) and len(t) <= 100 and ba.NAME.fullmatch(t)][:50],
+           "tools_called": sorted(t for t in (res.get("_tools_called") or []) if isinstance(t, str) and len(t) <= 100 and ba.NAME.fullmatch(t))[:50],
            "unknown_tools": res["_unknown_tools"] if type(res.get("_unknown_tools")) is int and res["_unknown_tools"] >= 0 else 0}
     ba.append_row(_dir(cfg) / LEDGER, row)
 
@@ -142,7 +138,7 @@ def cmd_tools_audit(cfg, a) -> int:
     print(json.dumps(r["summary"]))
     if not r["drift"]:
         return 0
-    ba.append_row(_dir(cfg) / LEDGER, {"ts": _now(), "stage": "stage1", "drift": r["drift"][:50], "unknown_tools": r["unknown"]})
+    ba.append_row(_dir(cfg) / LEDGER, {"ts": _now(), "stage": "stage1", "drift": sorted(r["drift"])[:50], "unknown_tools": r["unknown"]})
     return 2
 
 
@@ -162,7 +158,8 @@ def cmd_status(cfg, a) -> int:
     state = read_json(d / STATE)
     state = state if isinstance(state, dict) else {}
     rows = [r for r in map(_jl, (d / LEDGER).read_text(errors="replace").split("\n") if (d / LEDGER).is_file() else []) if isinstance(r, dict)]
-    costs = ", ".join(f"{s} ${c}" for s, c in sorted({r.get("stage"): r.get("cost_usd") for r in rows if "cost_usd" in r}.items(), key=str))
+    by_stage = {str(r.get("stage"))[:20]: r.get("cost_usd") for r in rows if "cost_usd" in r}      # str(): a list or object stage must not be a dict key
+    costs = ", ".join(f"{s} ${c}" for s, c in sorted(by_stage.items(), key=str))
     print(f"last brief: {state.get('last_brief', 'never')}\nneeds you: {state.get('needs_you_count', 0)}\nledger rows: {len(rows)}")
     print(f"last stage costs: {costs or 'none'}")
 
@@ -179,7 +176,7 @@ VERBS = {"due": ["--force"], "digest-apply": ["src", "--out"], "render": ["src"]
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m ace_playbook.compile.brief")
+    ap = ba.OneLineParser(prog="python -m ace_playbook.compile.brief")
     sub = ap.add_subparsers(dest="verb", required=True)
     for verb, names in VERBS.items():
         p = sub.add_parser(verb)

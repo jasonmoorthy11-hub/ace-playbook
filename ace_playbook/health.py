@@ -62,8 +62,9 @@ def _describe(exc: BaseException) -> str:
 
 
 def record(cfg: Config, ok: bool, error: str = "", now: float | None = None,
-           exc: BaseException | None = None) -> None:
-    """Write the outcome of one sweep run. Swallows every error, including a failing str(exc)."""
+           exc: BaseException | None = None, notes: list[str] | None = None) -> None:
+    """Write the outcome of one sweep run. Swallows every error, including a failing str(exc). `notes` (the nightly's optional check lines,
+    nightly_notes.collect) is stored under "notes" as a list of str, each at most 80 characters; none (or empty) leaves the record as it was."""
     try:
         if exc is not None:
             error = _describe(exc)
@@ -71,7 +72,8 @@ def record(cfg: Config, ok: bool, error: str = "", now: float | None = None,
         _write_private(health_path(cfg), {
             "last_run": stamp, "ok": bool(ok),
             "consecutive_failures": 0 if ok else failures(cfg) + 1,
-            "last_error": "" if ok else scrub_error(error, tuple(cfg.deny_terms))})
+            "last_error": "" if ok else scrub_error(error, tuple(cfg.deny_terms)),
+            **({"notes": [n[:80] for n in notes if isinstance(n, str)]} if notes else {})})
     except Exception:  # noqa: BLE001 - health writing must not change the sweep's outcome
         pass
 
