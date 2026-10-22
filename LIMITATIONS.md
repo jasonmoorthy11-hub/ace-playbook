@@ -227,7 +227,9 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   visible text uses the newer (the more hiding), and a page with a `<select` has its `<style>` sheets read in both and unioned. In it
   every end tag is ignored but `</option>`, `</optgroup>`, `</select>`, `</template>` and, when the select is in a table and the tag is in table scope,
   `</caption>`, `</table>`, `</tbody>`, `</tfoot>`, `</thead>`, `</tr>`, `</td>` and `</th>`, which end it (as a browser's "in select in table" rule does,
-  past `reach`; the cell's marker clears there, so a hidden element opened before a template is not rebuilt); a nested `<select>` stays open; `<input>`,
+  past anything the select holds, a hidden option or a foreign element too; the cell's marker clears there, so a hidden element opened before a
+  template is rebuilt only as in a browser; an `applet`, `marquee` or `object` above the select poisons the rest, see below); a nested
+  `<select>` stays open; `<input>`,
   `<keygen>` and `<textarea>` end it only when nothing between the top and the select is a template, a table, an integration point, a
   foreign element or a hidden element (`<div hidden><select><template><input></template></div>X` keeps X hidden). `</select>` needs the select in
   scope under the newer reading, so an open select that held a scope marker or a formatting element hides the rest even after that element closed
@@ -237,9 +239,10 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   back in "in select" (its reset meets the template before any table), which ignores the next cell tag, while the newer reading (Chrome) ends the
   select there: the readings split, so that cell tag hides the rest (`<template><tr></tr><i hidden><select><template><td></template><td></template>LEAK`:
   Chrome shows LEAK, we hide it under the two-reading rule: over-hide, kept on purpose; `…<select><template><td></template></select><td></template>LEAK`
-  still shows it, as `</select>` resets to the template mode first). A cell tag closes
-  it only when nothing above the select hides itself or is a scope marker, so `<table><tr><td><select><b hidden><td>VIS` and `…<marquee><td>VIS` show
-  nothing although a browser shows VIS (over-hide); a table opened inside a select is no select in a table, so
+  still shows it, as `</select>` resets to the template mode first). A table-structure tag
+  (start or end, the end tag in table scope) closes it past anything it holds (`<table><tr><td><select><b hidden><td>VIS` shows VIS); only an
+  `applet`, `marquee` or `object` above the select makes that tag poison the rest, as only the newer reading inserts them, each with a marker, so
+  `…<marquee><td>VIS` shows nothing although a browser shows VIS (over-hide); a table opened inside a select is no select in a table, so
   `<select><table><td hidden>x</td></table></select>VIS` shows nothing (over-hide). A `</template>` that closes a select, or a select nested in it,
   holding a scope marker, a table, a foreign or a hiding element hides the rest of the page, because the two readings' formatting lists differ from
   there on: `<template><i hidden><select><table><tr></template>VIS` shows nothing although a browser shows VIS (over-hide; so does

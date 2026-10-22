@@ -20,8 +20,9 @@ renders); a `<template shadowrootmode=...>` hides every child of its host (those
 integration point); a slash on a non-void HTML tag is ignored; `<noscript>` is raw text in HTML content (a browser with scripting on); a double-escaped
 script closes at its next-but-one `</script`. Over-hides kept on purpose (`treemodes`): an open `select` ignores end tags but a table end tag in table scope
 (it ends a select in a table), a nested `<select>` stays open, raw text a select holds that has a `<` hides the REST of the page, a `</template>` that closes
-a select holding a barrier hides the REST too, the adoption agency leaves an element with a furthest block open, a cell tag ends a select only past `reach`
-(after a template-closed select the next cell tag hides the rest), a table in a select is no select in a table, `</select>` needs scope. More than
+a select holding a barrier hides the REST too, the adoption agency leaves an element with a furthest block open, an `applet`, `marquee` or `object`
+above a select makes a table tag that ends it poison the rest (after a template-closed select the next cell tag hides the rest), a table in a
+select is no select in a table, `</select>` needs scope. More than
 `htmlrules.MAX_DEPTH` open elements raise `htmlrules.TooDeep` (a ValueError: a parse failure). Tag names are compared as written
 (`</x:div>` does not close `<div>`). `markdown=True` is for Markdown pages: a raw-text or content-hiding opener (`mdrules.RAW_TEXT`) is prose only in a
 code span that opens and closes on one plain line, or in a fenced block, outside HTML blocks and with no closer after it (`mdrules`); anywhere else the

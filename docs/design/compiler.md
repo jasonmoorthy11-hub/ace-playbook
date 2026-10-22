@@ -1109,7 +1109,8 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   encoding); `htmlrules.special(node)` asks the special category by namespace. An open select is built in two readings (`Tree.relaxed`):
   A, the older, ignores start tags and keeps the tokenizer out of raw text; B, the newer and the one the visible text uses, inserts them
   and ignores every end tag but `option`, `optgroup`, `select`, `template` and the table ones (`caption`, `table`, `tbody`, `tfoot`, `thead`, `tr`, `td`,
-  `th`: in table scope they end a select in a table past `reach`, the browser's "in select in table" step), keeps a nested `select` open, lets `input`,
+  `th`: in table scope they end a select in a table past anything it holds, the browser's "in select in table" step), keeps a nested `select` open,
+  lets `input`,
   `keygen` and `textarea` pop the select only when `treemodes.reach` finds no template, table, integration point, foreign or hidden element above
   it, and lets a raw text holding a `<` poison the rest of the page (`selraw`, `rawlt`, `poisoned`; `script` exempt). `</select>` needs the select
   in scope under the newer reading, so an open select that held a scope marker or a formatting element hides the rest even after that element
@@ -1117,8 +1118,10 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   over-hide, by the rule that every end tag is ignored but option, optgroup, select, template and the table end tags of a select in a table).
   Table-structure start tags (`caption`, `col`, `colgroup`, `tbody`, `td`, `tfoot`, `th`, `thead`, `tr`) in a select close the select when it was opened
   in a table (a table, not a template, is the nearest below it: the tag is read again) and are ignored otherwise, as in body, so no cell marker is
-  pushed outside the table modes. The cell tags are gated by `reach` too (`<table><tr><td><select><b hidden><td>VIS`, `…<marquee><td>VIS`: nothing
-  shows, a browser shows VIS: over-hide), and a table opened inside a select is no select in a table (`<select><table><td
+  pushed outside the table modes. The table tags end the select past anything it holds, a hidden option or a foreign element too
+  (`<table><tr><td><select><b hidden><td>VIS` shows VIS); an `applet`, `marquee` or `object` above the select makes that tag poison the rest
+  (`…<marquee><td>VIS`: nothing shows, a browser shows VIS: over-hide, the two readings' cell clears differ), and a table opened inside a
+  select is no select in a table (`<select><table><td
   hidden>x</td></table></select>VIS`: over-hide). `template_end` poisons the
   rest of the page when its pop closes a select, or a select nested in it, that `reach` rejects (the whole region above the first select over the
   template is read; the readings' formatting lists differ there:
@@ -1150,7 +1153,8 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   every tag that raw-texts or hides its content (`mdrules.RAW_TEXT`: the raw-text names plus noscript, details, select, svg, math,
   template, object, dialog, canvas, video, audio, datalist, head, rp, progress, meter) is escaped inside a trusted code span or fence.
   Kept over-hides, each on purpose: a nested `select` stays open, a raw text a select holds with a `<` hides the rest of the page, the
-  select enders are gated by `reach`, a `</template>` that closes a select holding a barrier hides the rest of the page, a table opened inside a
+  `input`, `keygen` and `textarea` enders are gated by `reach` (a table tag is not), a `</template>` that closes a select holding a barrier hides the
+  rest of the page, a table opened inside a
   select is no select in a table, `</select>` needs the select in scope, a furthest-block formatting element stays open, `a`, `nobr`,
   `button`, headings, `option` and `ruby` have no start-tag rules and `form` has no pointer (`</form>` pops only a current form), `colgroup`
   is read in the table mode, a closed `details` hides its summary too, and the scan variants hide a CDATA-wrapped HTML style a browser would show

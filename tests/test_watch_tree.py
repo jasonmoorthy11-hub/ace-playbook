@@ -333,10 +333,9 @@ def test_w18_a_table_inside_a_select_is_not_a_select_in_a_table_so_its_hidden_ce
     hides(html)                                                      # the two readings disagree (the cell hides the rest / the select closes): fail closed
 
 
-@pytest.mark.parametrize("html", [
-    "<i hidden><select><table><td></select>LEAK", "<table><tr><td><select><b hidden><td>VIS", "<table><tr><td><select><b hidden><tr>VIS"])
-def test_w18_guards_a_table_inside_a_select_or_a_hiding_element_above_it_keeps_the_rest_hidden(html):
-    hides(html)                                                      # the cell tag is ignored (b hides itself), the select stays open: over-hide, fail closed
+@pytest.mark.parametrize("html", ["<i hidden><select><table><td></select>LEAK"])
+def test_w18_guards_a_table_inside_a_select_above_a_hiding_element_keeps_the_rest_hidden(html):
+    hides(html)                       # `<table><tr><td><select><b hidden><td>VIS` showed nothing here (a `reach` over-hide): cured in wave 26 (a control)
 
 
 @pytest.mark.parametrize("html,expected", [
@@ -576,4 +575,40 @@ def test_w25_controls_the_end_tag_cures_the_over_hides_and_the_flag_never_fires_
 @pytest.mark.parametrize("html", [P25 + "<td><select><marquee></td></template>LEAK", P25 + "<td><select></select></td></template>LEAK"])
 def test_w25_kept_hidden_a_barrier_in_the_select_is_the_region_poison_and_a_select_end_tag_first_resets_to_the_template_mode(html):
     # the marquee world shows LEAK in Chrome: it stays hidden here as the documented wave-19/20 two-reading over-hide (`reach` fails, the tag is ignored)
+    hides(html)
+
+
+# ------------------------------------------------------------------ wave 26 (Opus wave-16): the end-the-select step is not gated by `reach`
+Q26, R26 = "<p><i hidden></p><template>", "<p><i hidden></p><table><tr><td>"
+
+
+@pytest.mark.parametrize("html", [
+    Q26 + "<td><select><option hidden></td></option></template>LEAK", Q26 + "<td><select><optgroup hidden></td></optgroup></template>LEAK",
+    Q26 + "<td><select><svg></td></svg></template>LEAK", Q26 + "<td><select><span hidden></td></select></template>LEAK",
+    Q26 + "<tr><td><select><option hidden></tr></option></template>LEAK", Q26 + "<caption><select><option hidden></caption></option></template>LEAK",
+    R26 + "<select><option hidden></td></option></select>LEAK</table>", R26 + "<select><span hidden></td></select>LEAK</table>",
+    R26 + "<select><svg></td></svg></select>LEAK</table>",
+    "<p><i hidden></p><table><caption><select><option hidden></caption></option></select>LEAK</table>",
+    Q26 + "<td><select><option hidden><tr></option></template>LEAK", R26 + "<select><span hidden><tr></select>LEAK</table>"])
+def test_w26_a_hidden_option_span_or_foreign_element_in_the_select_does_not_stop_a_table_tag_from_ending_it(html):
+    # Chrome 152 (DOMParser): '' for all twelve, under both readings. "In select in table": a start tag caption..tr, or an end tag caption table tbody
+    # tfoot thead tr td th in table scope, pops to the select and resets the mode whatever lies above it, so the cell's marker clears at the cell's end
+    hides(html)
+
+
+@pytest.mark.parametrize("html,expected", [
+    ("<table><tr><td><select><span hidden></td></select>VIS</table>", "VIS"), ("<table><tr><td><select><b hidden><td>VIS", "VIS"),
+    ("<table><tr><td><select><b hidden><tr>VIS", "VIS"), ("<table hidden><select></table>VIS", "VIS"), ("<table><select></table>VIS", "VIS")])
+def test_w26_controls_the_cured_wave_18_over_hide_and_the_real_table_select_worlds_show(html, expected):
+    # Chrome 152 shows the span, `<b hidden><td>` and both table worlds (`<b hidden><tr>` is the same step, not run in a browser): a cell tag ends the
+    # select past a hidden element (the wave-18 over-hide is cured); a select foster-parented out of a table is ended by `</table>` (in table scope)
+    shows_md(html, expected)
+
+
+@pytest.mark.parametrize("html", [Q26 + "<td><select><marquee></td></template>LEAK", Q26 + "<td><select><object></td></template>LEAK",
+                                  Q26 + "<td><select><applet></td></template>LEAK", Q26 + "<td><select><marquee><tr></template>LEAK",
+                                  R26 + "<select><object></td></select>LEAK</table>"])
+def test_w26_kept_hidden_applet_marquee_or_object_above_the_select_poisons_the_rest_under_the_two_reading_rule(html):
+    # only the newer reading inserts them, and each pushes a marker the older never has, so the close-the-cell clear differs: the rest hides (Chrome 152
+    # shows LEAK for the marquee world: documented over-hide, as in wave 10 and 25)
     hides(html)
