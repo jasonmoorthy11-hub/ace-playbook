@@ -255,11 +255,13 @@ def _dotted(node):
 
 
 def test_compile_sources_never_spawn_or_eval_or_touch_the_network():
-    banned_mods = {"subprocess", "socket", "urllib", "http", "ssl", "sqlite3", "requests", "ctypes", "pty"}
+    banned_mods = {"subprocess", "socket", "urllib", "http", "ssl", "sqlite3", "requests", "ctypes", "pty", "multiprocessing"}
     banned_calls = {"eval", "exec", "compile", "__import__", "os.system", "os.popen", "os.spawnl", "os.execv",
                     "os.execvp", "os.execl", "os.fork"}
+    exempt = frozenset({("brief_excl.py", "multiprocessing")})      # D-116: the brief's exclusion match runs in a killable child; nothing else may
     files = sorted(COMPILE_DIR.glob("*.py"))
     assert {p.name for p in files} >= {"__init__.py", "events.py", "shell.py", "detectors.py", "catalogue.py", "state.py"}
+    importers = set()
     for path in files:
         for node in ast.walk(ast.parse(path.read_text())):
             if isinstance(node, ast.Import):
@@ -268,9 +270,12 @@ def test_compile_sources_never_spawn_or_eval_or_touch_the_network():
                 mods = {(node.module or "").split(".")[0]} if node.level == 0 else set()
             else:
                 mods = set()
-            assert not (mods & banned_mods), (path.name, mods)
+            hit = {m for m in mods & banned_mods if (path.name, m) not in exempt}
+            assert not hit, (path.name, hit)
+            importers |= {(path.name, m) for m in mods & banned_mods}
             if isinstance(node, ast.Call):
                 assert _dotted(node.func) not in banned_calls, (path.name, _dotted(node.func))
+    assert importers == set(exempt)           # the exemption is exactly one named file, and it is still used (a stale exemption fails here)
 
 
 def test_compile_files_stay_within_the_line_budget():
