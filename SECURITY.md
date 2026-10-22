@@ -43,15 +43,26 @@ of the lesson store, and the settings and hooks of the agent that consumes it.
 ## The brief on wake (optional)
 
 `hooks/brief.sh` is a read-only principal: it may read private data (calendar, mail, Linear) and has no write tool, no send and no
-outbound channel, under three independent controls: `--allowedTools` from an explicit list (`hooks/brief_allowed_tools.txt`), a PreToolUse
-hook (`hooks/brief_guard.py`) that is deny-by-default (any tool, connector or built-in, not named on that list is denied) and fails closed
-on any error, and a settings deny list. Stage 1 loads only `--tools ToolSearch` as a built-in (no file or shell tool exists in it) and
-emits a JSON digest; code applies the private exclusion list; stage 2 has no tools (`--tools "" --strict-mcp-config`) and sees only the
-cleaned digest. Stage 1 cannot use `--strict-mcp-config`: the claude.ai connectors are account-level and cannot be named in an mcp-config
-file (phase 0: strict mode showed zero MCP servers), so strict mode would remove the only data sources and the allowlist, the hook and
-the deny list gate the connector tools instead. Everything gathered is treated as data, never instructions. No model
-writes HTML that is served: the model emits JSON, validated and capped by code, and code renders the page with every field escaped, a
-`default-src 'none'` CSP, no script and no external resource (D-110). Every call passes an explicit model and runs without
+outbound channel. Three controls, each doing a different job:
+
+1. **Scope.** Stage 1 loads only `--tools ToolSearch` as a built-in (no file or shell tool exists in it) and `--allowedTools` names the
+   read tools from `hooks/brief_allowed_tools.txt`. This narrows what the model is offered and pre-approves; it is not the enforcement.
+2. **The guard** (`hooks/brief_guard.py`, a PreToolUse hook): the hard control. It is deny-by-default (any tool, connector or built-in,
+   not named on the allowlist is denied) and fails closed on any parse, read or other error. One gap is outside our code: Claude Code
+   treats a hook that exceeds its timeout as non-blocking, so the timeout is 30 seconds (a cold `python3` on wake) and the settings
+   command ends in `|| exit 2` so a crash, though not a timeout, blocks.
+3. **The deny lists**, the backstop for connector writes: `hooks/brief_denied_tools.txt` is passed as `--disallowedTools` and repeated in
+   the settings file's `permissions.deny` (with the built-in file, shell and web tools). It names every write tool of the three servers the
+   brief reads by full name and every other connector as a whole server; a test keeps the two lists equal.
+
+Stage 1 emits a JSON digest and code applies the private exclusion list; stage 2 has no tools (`--tools "" --strict-mcp-config`) and sees
+only the cleaned digest. Stage 1 cannot use `--strict-mcp-config`: the claude.ai connectors are account-level and cannot be named in an
+mcp-config file (phase 0: strict mode showed zero MCP servers), so strict mode would remove the only data sources. Both stages pass
+`--no-session-persistence` (no transcript of raw mail where the nightly reflect sweep reads) and `--setting-sources project,local` (no
+user hook runs inside the brief). Everything gathered is treated as data, never instructions. No model writes HTML that is served: the
+model emits JSON, validated and capped by code, and code renders the page with every field escaped, a `default-src 'none'` CSP, no script
+and no external resource (D-110). A link is an outbound channel, so a `url` survives validation only on `mail.google.com`,
+`calendar.google.com` or `linear.app` (https, exact host, no userinfo, no port). Every call passes an explicit model and runs without
 `ANTHROPIC_API_KEY`. None of this is on the hook path; the brief runs `claude -p`, which is the one network use, and only on your login.
 
 ## Planned, not implemented

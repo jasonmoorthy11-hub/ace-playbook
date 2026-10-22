@@ -3,18 +3,21 @@
 
 Reads $ACE_FAKE_DIR: digest.json (the stage 1 answer), brief.json (the stage 2 answer); writes argv_<stage>.json, env_<stage>.json and
 stdin_stage2.txt there so the test can see what the script passed. $ACE_FAKE_FAIL = stage1 | stage2 makes that stage exit 1 with an error
-result; $ACE_FAKE_FENCE wraps the answer in a ```json fence. Synthetic data only.
+result; $ACE_FAKE_SLEEP sleeps first (and pid_<stage> records the pid); $ACE_FAKE_FENCE wraps the answer in a ```json fence. Synthetic data only.
 """
 
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 argv = sys.argv[1:]
 stage = "stage2" if "--tools" in argv and argv[argv.index("--tools") + 1] == "" else "stage1"
 root = Path(os.environ["ACE_FAKE_DIR"])
 (root / f"argv_{stage}.json").write_text(json.dumps(argv))
+(root / f"pid_{stage}").write_text(str(os.getpid()))
+time.sleep(float(os.environ.get("ACE_FAKE_SLEEP", "0")))
 (root / f"env_{stage}.json").write_text(json.dumps({"has_api_key": "ANTHROPIC_API_KEY" in os.environ, "has_claudecode": "CLAUDECODE" in os.environ,
                                                     "repo": os.environ.get("ACE_PLAYBOOK_REPO"), "cwd": os.getcwd()}))
 stdin = sys.stdin.read() if stage == "stage2" else ""

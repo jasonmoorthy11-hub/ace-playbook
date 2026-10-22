@@ -88,10 +88,27 @@ def test_hard_mode_exits_2_with_the_reason_on_stderr_and_nothing_on_stdout():
 def test_the_settings_file_parses_wires_the_guard_to_every_tool_and_denies_writes():
     s = json.loads((ROOT / "hooks" / "brief-settings.json").read_text())
     (entry,) = s["hooks"]["PreToolUse"]
-    assert entry["matcher"] == "" and entry["hooks"][0]["type"] == "command" and entry["hooks"][0]["timeout"] == 5
+    assert entry["matcher"] == "" and entry["hooks"][0]["type"] == "command" and entry["hooks"][0]["timeout"] == 30   # cold python3
     cmd = entry["hooks"][0]["command"]
     assert cmd.startswith('python3 -I -S "$ACE_PLAYBOOK_REPO/hooks/brief_guard.py"') and cmd.endswith("|| exit 2")   # a crash blocks too
-    assert s["permissions"]["deny"] == ["Bash", "Edit", "Write", "WebFetch", "WebSearch", "Agent", "Read", "Glob", "Grep", "LS",
-                                        "NotebookRead", "MultiEdit", "NotebookEdit", "Task"]
+    builtin = ["Bash", "Edit", "Write", "WebFetch", "WebSearch", "Agent", "Read", "Glob", "Grep", "LS", "NotebookRead", "MultiEdit",
+               "NotebookEdit", "Task"]
+    denied = [ln.strip() for ln in (ROOT / "hooks" / "brief_denied_tools.txt").read_text().splitlines() if ln.strip() and ln[0] != "#"]
+    assert s["permissions"]["deny"] == builtin + denied              # the settings list is the built-ins plus the data file, in order
+
+
+def test_the_connector_deny_list_names_every_write_tool_of_the_three_servers_and_whole_other_servers():
+    denied = [ln.strip() for ln in (ROOT / "hooks" / "brief_denied_tools.txt").read_text().splitlines() if ln.strip() and ln[0] != "#"]
+    for name in ("Gmail__send_message", "Gmail__reply", "Gmail__forward", "Gmail__trash_thread", "Gmail__create_draft", "Gmail__update_draft",
+                 "Google_Calendar__create_event", "Google_Calendar__update_event", "Google_Calendar__delete_event",
+                 "Google_Calendar__respond_to_event", "Linear__save_issue", "Linear__save_comment", "Linear__delete_comment",
+                 "Linear__merge_diff", "Linear__share_issue", "Linear__mark_notification", "Linear__prepare_attachment_upload"):
+        assert f"mcp__claude_ai_{name}" in denied, name
+    for server in ("Google_Drive", "Slack", "Canva", "Claude_Docs", "Microsoft_365", "rey_robin"):
+        assert f"mcp__claude_ai_{server}" in denied
+    allowed = set(names())
+    assert not allowed & set(denied) and len(denied) == len(set(denied))                      # nothing allowed is also denied
+    verbs = ("send", "create", "update", "delete", "save", "reply", "forward", "trash", "label", "mark", "merge", "share")
+    assert not [n for n in allowed if n.startswith("mcp__") and any(v in n.rsplit("__", 1)[1] for v in verbs)]
     load = "import json,sys; json.load(open(sys.argv[1]))"
     assert subprocess.run(["python3", "-I", "-S", "-c", load, str(ROOT / "hooks/brief-settings.json")]).returncode == 0

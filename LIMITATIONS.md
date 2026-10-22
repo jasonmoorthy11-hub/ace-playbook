@@ -166,9 +166,12 @@ the long-token lint partly covers and nothing measures.
 
 The brief's Hammerspoon trigger (`hooks/hammerspoon/ace.lua`) has no test here: no Lua interpreter is installed on the build machine, so the
 file is checked as text and reviewed by eye, and the LaunchAgent template is only `plutil -lint`ed. The brief's tool allowlist does not shrink
-the prompt: every connector's tool definitions still load, about 140k cached input tokens per stage-1 run (phase-0 measurement), and the
-operator's own SessionStart hooks fire inside the scheduled `claude -p` runs. The window figures in its ledger are one reading per stream, so a
-single run cannot show its own cost in plan share; only the trend over consecutive rows does.
+the prompt: every connector's tool definitions still load, about 140k cached input tokens per stage-1 run (phase-0 measurement); a probe of a
+Haiku run that loaded them all showed 248k cache-creation tokens ($0.25-equivalent) on a cold cache, so the connector definitions, not the
+model, dominate stage-1 cost. The operator's user hooks are kept out with `--setting-sources project,local` (the connectors still load). Isolating
+with a private `CLAUDE_CONFIG_DIR` does not work: credentials are bound to the config dir, so a fresh one is "Not logged in". A hook that
+exceeds its timeout is non-blocking in Claude Code, which the guard cannot prevent (the deny lists are the backstop). The window figures in its
+ledger are one reading per stream, so a single run cannot show its own cost in plan share; only the trend over consecutive rows does.
 
 ## Platform assumptions
 

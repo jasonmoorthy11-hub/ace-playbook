@@ -414,8 +414,10 @@ Run it by hand first: `hooks/brief.sh --force` (it needs `uv` and a logged-in `c
 ```
 
 A thread whose sender matches `drop_senders` or whose subject matches `drop_subjects` is removed from the digest; one whose sender
-matches `drop_bodies_from` stays as sender and subject only (its summary is emptied). A bad regex or an unreadable file stops the run.
-The lists apply to mail only, not to calendar titles or issues.
+matches `drop_bodies_from` stays as sender and subject only (its summary is emptied). A bad regex, a pattern longer than 200 characters,
+a pattern with a quantified group that itself holds a quantifier (`(a+)+`, refused as a catastrophic-backtracking heuristic, not a proof)
+or an unreadable file stops the run. Sender and subject are capped at 200 and 300 characters before matching. The lists apply to mail
+only, not to calendar titles or issues.
 
 **Triggers.**
 
@@ -443,10 +445,22 @@ launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.example.ace-b
 
 Remove it with `launchctl bootout "gui/$(id -u)/com.example.ace-brief"`, delete the `dofile` line and `brew uninstall` what you added.
 
-**What phase 0 measured.** Your own `~/.claude` hooks fire inside every `claude -p` run (six SessionStart events per probe), so the
-scheduled job inherits them. `--allowedTools` does not shrink the prompt: all connector tool definitions still load, about 140k cached
-input tokens per stage-1 run (about 52k created plus 91k read in the measured run); stage 2 loads none. The model was seen calling only
-the allowed tools.
+**What phase 0 measured.** Your own `~/.claude` hooks fire inside every plain `claude -p` run (six SessionStart events per probe), so
+`brief.sh` passes `--setting-sources project,local`: the claude.ai connectors still load (probed: 9 MCP servers, 328 tools) and no user
+hook fires; `--settings` still adds the brief's own guard. `--allowedTools` does not shrink the prompt: all connector tool definitions
+still load, about 140k cached input tokens per stage-1 run (about 52k created plus 91k read in the measured run); stage 2 loads none.
+The model was seen calling only the allowed tools.
+
+**Sessions.** Both stages pass `--no-session-persistence`, so no session transcript is written: without it Claude Code would store every
+raw mail result under `~/.claude/projects/` where the nightly reflect sweep reads transcripts. Probed: a run creates only an empty
+`~/.claude/projects/<cwd slug>/memory/` directory and no `.jsonl` (the empty directory is harmless).
+
+**Tool scope.** Stage 1 passes `--tools ToolSearch` (no built-in file or shell tool loads), `--allowedTools` from
+`hooks/brief_allowed_tools.txt`, and `--disallowedTools` from `hooks/brief_denied_tools.txt` (the connector write tools by full name and
+the other connectors as whole servers; `hooks/brief-settings.json` repeats the list in `permissions.deny` and a test keeps them equal).
+It cannot use `--strict-mcp-config`, because the claude.ai connectors are account-level and cannot be named in an mcp-config file.
+Links on the page are limited to `mail.google.com`, `calendar.google.com` and `linear.app` (constant `LINK_HOSTS` in
+`compile/brief_render.py`): a link is an outbound channel, so any other URL in the brief is dropped.
 
 **Ledger.** Each stage appends one line to `brief_ledger.jsonl` (0600): `ts`, `stage`, `model`, `cost_usd` (list-price equivalent; the
 subscription is not billed per run), the four token counts, `duration_ms`, `num_turns`, `tools_called`, and the plan windows read from
@@ -454,8 +468,9 @@ the stream's `rate_limit_event`: `five_hour_before/after` and `seven_day_before/
 same stream, so compare consecutive rows for the share of a week). `uv run python -m ace_playbook.compile.brief status` prints the last
 brief, the needs-you count, the ledger row count and the last cost of each stage.
 
-The raw streams of a run hold mail the exclusion list has not seen, so `brief.sh` deletes them when it exits (`ACE_BRIEF_KEEP=1` keeps
-them, 0600, under `brief_dir/run`). `digest_clean.json` (summaries after the exclusions) stays there until the next run.
+The raw streams of a run hold mail the exclusion list has not seen, so `brief.sh` deletes them when it exits, also on SIGTERM, SIGINT or
+SIGHUP, which also stop the `claude` child (`ACE_BRIEF_KEEP=1` keeps them, 0600, under `brief_dir/run`; the session transcript is
+never written, see Sessions above). `digest_clean.json` (summaries after the exclusions) stays there until the next run.
 
 ## What the hooks write
 

@@ -58,11 +58,13 @@ def test_strings_are_capped_and_stripped_of_control_characters():
 
 
 def test_non_https_urls_become_null_and_whitespace_urls_too():
-    for url in ("javascript:alert(1)", "http://x.example", "data:text/html,x", "HTTPS://x.example", "https://x.example/a b", "https://x\n.example", 7):
+    bad = ("javascript:alert(1)", "http://x.example", "data:text/html,x", "HTTPS://x.example", "https://linear.app/a b", "https://linear.app\n/x",
+           "https://x.example/a", 7)
+    for url in bad:
         item = {**bs.brief()["needs_you"][0], "url": url}
         assert brief_render.validate_brief(bs.brief(needs_you=[item]))["needs_you"][0]["url"] is None
-    item = {**bs.brief()["needs_you"][0], "url": "https://x.example/a?b=1"}
-    assert brief_render.validate_brief(bs.brief(needs_you=[item]))["needs_you"][0]["url"] == "https://x.example/a?b=1"
+    item = {**bs.brief()["needs_you"][0], "url": "https://linear.app/a?b=1"}
+    assert brief_render.validate_brief(bs.brief(needs_you=[item]))["needs_you"][0]["url"] == "https://linear.app/a?b=1"
 
 
 @pytest.mark.parametrize("bad", [
@@ -115,10 +117,15 @@ def test_digest_apply_refuses_a_bad_digest_with_exit_2_and_writes_nothing(env, c
     assert (code, out) == (2, "") and err.startswith("brief: schema:") and not (env / "brief" / "digest_clean.json").exists()
 
 
-LONG = '{"drop_senders": ["' + "a" * 301 + '"]}'
+LONG = '{"drop_senders": ["' + "a" * 201 + '"]}'
+NESTED = ["(a+)+$", "^(a*)*b", "(x+x+)+y", "(.*a){3}+", "(ab*)*"]
 
 
-@pytest.mark.parametrize("ex", ['{"drop_senders": ["("]}', '{"drop_senders": "x"}', '{"drop_other": []}', '{"drop_subjects": [1]}', "[]", LONG])
+BAD_EXCLUSIONS = ['{"drop_senders": ["("]}', '{"drop_senders": "x"}', '{"drop_other": []}', '{"drop_subjects": [1]}', "[]", LONG,
+                  *(json.dumps({"drop_subjects": [n]}) for n in NESTED)]
+
+
+@pytest.mark.parametrize("ex", BAD_EXCLUSIONS)
 def test_a_bad_exclusions_file_fails_closed(env, capsys, ex):
     os.environ["ACE_PLAYBOOK_CONFIG"] = str(bs.config(env, brief_exclusions=put(env, "ex.json", ex)))
     code, _, err = run(capsys, "digest-apply", put(env, "d.json", bs.digest()))

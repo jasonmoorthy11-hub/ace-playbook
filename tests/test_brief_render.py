@@ -1,6 +1,8 @@
 """`compile/brief_render.py`: the page is written by code from validated JSON; nothing the model or a mail wrote can become markup."""
 
 import re
+
+import pytest
 from html.parser import HTMLParser
 
 from ace_playbook.compile import brief_render as R
@@ -18,7 +20,7 @@ def sample(**kw):
             "acts": [{"range": "9:30 AM – 1 PM", "sentence": "Three meetings back to back."},
                      {"range": "1 – 3:30 PM", "sentence": "One review, then quiet."},
                      {"range": "3:30 PM onward", "sentence": "The rest is yours."}],
-            "needs_you": [item(url="https://example.com/thread/1")], "resolved": [item(title="Venue booked")], **kw}
+            "needs_you": [item(url="https://mail.google.com/mail/u/0/#inbox/abc")], "resolved": [item(title="Venue booked")], **kw}
 
 
 def injection():
@@ -26,8 +28,8 @@ def injection():
     return {"generated_at": s, "day_class": s, "headline": s,
             "acts": [{"range": s, "sentence": s, "load": s} for _ in range(3)],
             "needs_you": [{"title": s, "sentence": s, "source": s, "url": "javascript:alert(1)"},
-                          {"title": s, "sentence": s, "source": s, "url": 'https://x.example/a"onmouseover="alert(1)'},
-                          {"title": s, "sentence": s, "source": s, "url": "https://x.example/ok?q=1&r=<b>"}],
+                          {"title": s, "sentence": s, "source": s, "url": 'https://mail.google.com/a"onmouseover="alert(1)'},
+                          {"title": s, "sentence": s, "source": s, "url": "https://linear.app/ok?q=1&r=<b>"}],
             "resolved": [{"title": s, "sentence": s, "source": s, "url": "data:text/html,<script>alert(1)</script>"}]}
 
 
@@ -64,7 +66,7 @@ def test_every_string_field_is_escaped_and_no_markup_survives():
 def test_javascript_and_data_urls_are_dropped_and_only_https_links_are_written():
     p = parsed(R.render(injection()))
     hrefs = [v for tag, k, v in p.attrs if tag == "a" and k == "href"]
-    assert hrefs == ['https://x.example/a"onmouseover="alert(1)', "https://x.example/ok?q=1&r=<b>"]   # the parser unescapes: one attribute each
+    assert hrefs == ['https://mail.google.com/a"onmouseover="alert(1)', "https://linear.app/ok?q=1&r=<b>"]   # unescaped by the parser: one attribute each
     assert all(h.startswith("https://") for h in hrefs)
     assert [v for tag, k, v in p.attrs if tag == "a" and k == "rel"] == ["noopener noreferrer"] * 2
     assert not [a for a in p.attrs if a[1] in ("src", "srcset", "action", "formaction")]
@@ -76,7 +78,7 @@ def test_the_csp_meta_is_present_with_no_script_no_button_no_external_resource()
     assert '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'">' in page
     p = parsed(page)
     assert not {"script", "button", "form", "input", "iframe", "link", "img", "object", "embed", "base"} & set(p.tags)
-    assert "://" not in re.sub(r'href="https://example\.com/thread/1"', "", page)        # the one link is the only URL on the page
+    assert "://" not in re.sub(r'href="https://mail\.google\.com/mail/u/0/#inbox/abc"', "", page)        # the one link is the only URL on the page
     assert "@font-face" not in page and "url(" not in page and "@import" not in page and "base64" not in page
 
 
@@ -98,7 +100,7 @@ def test_the_layout_follows_the_skill():
         assert want in page
     assert page.count('class="act"') == 3 and page.count("<polyline") == 1 and page.count('class="accent"') == 1
     assert page.index("Needs attention") < page.index("Resolved") and page.index("Wednesday") < page.index("<h1>")
-    assert '<a href="https://example.com/thread/1" rel="noopener noreferrer">in your inbox</a>' in page
+    assert '<a href="https://mail.google.com/mail/u/0/#inbox/abc" rel="noopener noreferrer">in your inbox</a>' in page
 
 
 def test_an_empty_day_renders_the_calm_line_in_place_of_both_lists():
@@ -119,3 +121,29 @@ def test_the_terrain_is_flat_on_an_open_day_and_climbs_on_a_heavy_one():
 
 def test_a_date_that_does_not_parse_is_left_out():
     assert 'class="date"' not in R.render(sample(generated_at="tomorrow-ish"))
+
+
+AT = chr(64)          # spelled out so the scrubber does not read the userinfo URLs as addresses
+OFF_LIST = ["https://evil.example/c?d=SUBJECTS", "https://evil" + AT + "mail.google.com/", "https://mail.google.com:443/",
+            "https://mail.google.com.evil.example/",
+            "https://mail.google.com\\" + AT + "evil.example/", "https://MAIL.google.com/", "http://mail.google.com/", "https://example.com/thread/1",
+            "https://mail.google.com" + AT + "evil.example/", "https://xmail.google.com/", "https://linear.app.evil.example/"]
+
+
+def test_a_url_off_the_host_allowlist_renders_no_link_even_if_it_reaches_the_renderer_unvalidated():
+    assert R.LINK_HOSTS == ("mail.google.com", "calendar.google.com", "linear.app")
+    for url in OFF_LIST:
+        raw = sample(needs_you=[item(url=url)], resolved=[])
+        assert "<a " not in R.render(raw), url                                           # render() re-checks, it does not trust the validator
+        assert R.validate_brief(raw)["needs_you"][0]["url"] is None, url
+    for url in ("https://mail.google.com/mail/u/0/#inbox/x", "https://calendar.google.com/calendar/event?eid=1", "https://linear.app/team/issue/ENG-1"):
+        assert R.validate_brief(sample(needs_you=[item(url=url)]))["needs_you"][0]["url"] == url
+
+
+def test_the_csp_meta_comes_right_after_the_charset_and_list_lengths_refuse_instead_of_truncating():
+    page = R.render(sample())
+    assert page.index("<head>") + 6 == page.index('<meta charset="utf-8">') and page.index('<meta charset="utf-8"><meta http-equiv="Content-Security') > 0
+    assert R.validate_brief(sample(needs_you=[item()] * 25))["needs_you"][0]["title"]
+    for bad in (sample(needs_you=[item()] * 26), sample(resolved=[item()] * 26), sample(acts=sample()["acts"] * 2)):
+        with pytest.raises(R.SchemaError):
+            R.validate_brief(bad)

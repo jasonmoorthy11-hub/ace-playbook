@@ -23,12 +23,20 @@ DIGEST = {"generated_at": ("s", 40),
                                 "replied": "b", "summary": ("s", 300)}),
           "issues": ("l", 60, 0, {"id": ("s", 40), "title": ("s", 200), "state": ("s", 60), "due": ("n", 40)})}
 BRIEF = {"generated_at": ("s", 40), "day_class": ("e", CLASSES), "headline": ("s", 140),
-         "acts": ("l", 3, 3, {"range": ("s", 60), "sentence": ("s", 200), "load": ("o", CLASSES)}),
-         "needs_you": ("l", 20, 0, ITEM), "resolved": ("l", 20, 0, ITEM)}
+         "acts": ("l", 3, 3, {"range": ("s", 60), "sentence": ("s", 200), "load": ("o", CLASSES)}, True),         # True: more than max refuses
+         "needs_you": ("l", 25, 0, ITEM, True), "resolved": ("l", 25, 0, ITEM, True)}
+# A link is an outbound channel (a crafted URL can carry mail text to a host), so only these hosts may be linked: https, the exact host,
+# no userinfo, no port; anything else is nulled at validation and never rendered as a link.
+LINK_HOSTS = ("mail.google.com", "calendar.google.com", "linear.app")
+LINK = re.compile(r"https://(?:%s)(?:[/?#][^\s\x00-\x1f\x7f]*)?" % "|".join(re.escape(h) for h in LINK_HOSTS))
 
 
 class SchemaError(ValueError):
     """Refused; the message is a field path or a short reason, never content."""
+
+
+def link_ok(url) -> bool:
+    return isinstance(url, str) and LINK.fullmatch(url) is not None
 
 
 def _clean(text: str, cap: int) -> str:
@@ -51,9 +59,9 @@ def _val(v, t, path: str):
         return v
     if kind == "o":
         return v if text and v in t[1] else None
-    if kind == "u":       # https only, no whitespace or control characters, else null
-        return v if text and v.startswith("https://") and len(v) <= t[1] and not re.search(r"[\s\x00-\x1f\x7f]", v) else None
-    if kind == "l" and isinstance(v, list) and len(v) >= t[2]:
+    if kind == "u":
+        return v if link_ok(v) and len(v) <= t[1] else None
+    if kind == "l" and isinstance(v, list) and t[2] <= len(v) <= (t[1] if len(t) > 4 else len(v)):
         return [_obj(x, t[3], f"{path}[{i}]") for i, x in enumerate(v[:t[1]])]
     raise SchemaError(path)
 
@@ -151,7 +159,7 @@ def _source(item: dict) -> str:
     source, url = esc(item.get("source", "")), item.get("url")
     if not source:
         return ""
-    if isinstance(url, str) and url.startswith("https://"):
+    if link_ok(url):
         return f'<p class="src"><a href="{esc(url)}" rel="noopener noreferrer">{source}</a></p>'
     return f'<p class="src">{source}</p>'
 
@@ -170,8 +178,8 @@ def render(brief: dict) -> str:
     needs, done = list(brief.get("needs_you") or []), list(brief.get("resolved") or [])
     lists = _list("Needs attention", needs) + _list("Resolved", done) or f'<p class="calm">{CALM}</p>'
     date = f'<p class="date">{esc(_date(brief.get("generated_at")))}</p>' if _date(brief.get("generated_at")) else ""
-    return (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
-            f'<meta http-equiv="Content-Security-Policy" content="{CSP}"><meta name="color-scheme" content="light dark">'
+    return (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="{CSP}">'
+            f'<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark">'
             f"<title>Morning brief</title><style>{CSS}</style></head><body>"
             f'<div class="top"><div class="in">{date}<h1>{esc(brief.get("headline", ""))}</h1>{terrain(loads)}'
             f'<div class="acts">{"".join(_act(a) for a in acts)}</div></div></div>'

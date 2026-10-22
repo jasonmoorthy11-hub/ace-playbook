@@ -10,21 +10,25 @@ if ok and type(local_config) == "table" and type(local_config.brief_script) == "
   script = local_config.brief_script
 end
 
-local running = false
+-- The task and the timer live in module-level (global) variables: Hammerspoon collects an hs.task or hs.timer nothing refers to, which
+-- would silently kill a run or cancel the 20 s delay.
+ace_brief_task = nil
+ace_brief_timer = nil
 
 local function run_brief()
-  if running then return end
-  running = true
-  local task = hs.task.new("/bin/bash", function(code, _out, err)
-    running = false
+  if ace_brief_task and ace_brief_task:isRunning() then return end
+  ace_brief_task = hs.task.new("/bin/bash", function(code, _out, err)
     if code ~= 0 then print("ace brief: exit " .. tostring(code) .. " " .. tostring(err)) end
   end, { script })
-  task:setEnvironment({ HOME = home, PATH = "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:" .. home .. "/.local/bin" })
-  if not task:start() then running = false end
+  ace_brief_task:setEnvironment({ HOME = home, PATH = "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:" .. home .. "/.local/bin" })
+  ace_brief_task:start()
 end
 
 -- the network is not up the instant the lid opens
-local function soon() hs.timer.doAfter(20, run_brief) end
+local function soon()
+  if ace_brief_timer then ace_brief_timer:stop() end
+  ace_brief_timer = hs.timer.doAfter(20, run_brief)
+end
 
 ace_brief_watcher = hs.caffeinate.watcher.new(function(event)
   if event == hs.caffeinate.watcher.systemDidWake or event == hs.caffeinate.watcher.screensDidUnlock then soon() end

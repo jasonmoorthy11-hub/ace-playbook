@@ -22,6 +22,7 @@ from . import brief_render as br
 
 FMT, STATE, LEDGER = "%Y-%m-%dT%H:%M:%SZ", "brief_state.json", "brief_ledger.jsonl"
 EXCLUSIONS = ("drop_senders", "drop_subjects", "drop_bodies_from")
+NESTED = re.compile(r"\([^()]*[+*][^()]*\)\s*[+*{]")      # a quantified group holding a quantifier, e.g. (a+)+: catastrophic backtracking
 
 
 def _jl(text: str):
@@ -46,7 +47,8 @@ def apply_exclusions(cfg, digest: dict) -> dict:
     Any problem with the exclusions file refuses (nothing is written without the list applied)."""
     raw = json.loads(Path(cfg.brief_exclusions).read_text(encoding="utf-8")) if cfg.brief_exclusions else {}
     if not isinstance(raw, dict) or set(raw) - set(EXCLUSIONS) or not all(
-            isinstance(raw.get(k, []), list) and all(isinstance(p, str) and len(p) <= 300 for p in raw.get(k, [])) for k in EXCLUSIONS):
+            isinstance(raw.get(k, []), list) and all(isinstance(p, str) and len(p) <= 200 and not NESTED.search(p)
+                                                     for p in raw.get(k, [])) for k in EXCLUSIONS):
         raise br.SchemaError("exclusions")
     try:
         ex = {k: [re.compile(p, re.IGNORECASE) for p in raw.get(k, [])] for k in EXCLUSIONS}

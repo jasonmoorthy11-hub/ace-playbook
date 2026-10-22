@@ -2,6 +2,7 @@
 
 import json
 import os
+import signal
 import stat
 import subprocess
 import time
@@ -92,6 +93,10 @@ def test_the_two_stages_get_exactly_the_flags_the_design_names(w):
     assert "-p" in one and flag(one, "--allowedTools") == ",".join(allowed) and flag(one, "--model") == "claude-sonnet-5-5"
     assert flag(one, "--settings") == str(ROOT / "hooks" / "brief-settings.json") and flag(one, "--output-format") == "stream-json"
     assert "--verbose" in one and flag(one, "--max-turns") == "12" and flag(one, "--max-budget-usd") == "1.0"
+    denied = [ln for ln in (ROOT / "hooks" / "brief_denied_tools.txt").read_text().splitlines() if ln and not ln.startswith("#")]
+    assert flag(one, "--disallowedTools") == ",".join(denied) and "mcp__claude_ai_Gmail__send_message" in flag(one, "--disallowedTools")
+    for argv in (one, two):          # no transcript of the raw mail on disk; the operator's user hooks stay out of the run
+        assert "--no-session-persistence" in argv and flag(argv, "--setting-sources") == "project,local"
     assert flag(one, "--tools") == "ToolSearch" and "--strict-mcp-config" not in one          # connectors are account-level: strict would drop them
     assert one[-1].startswith("You are the read-only gatherer") and "--bare" not in one + two
     assert flag(two, "--tools") == "" and "--strict-mcp-config" in two and flag(two, "--max-turns") == "1" and flag(two, "--model") == "claude-sonnet-5-5"
@@ -212,3 +217,29 @@ def test_the_notification_fires_only_when_something_needs_you(w):
     w.set_answers(brief=json.dumps(bs.brief(needs_you=[])))
     p = w.run("--force")
     assert p.stdout.splitlines()[-1] == "brief: ok, 0 need you" and not (w.tmp / "notified").exists()
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+@pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGINT])
+def test_a_signal_kills_the_claude_child_and_removes_the_raw_files_and_the_lock(w, sig):
+    proc = subprocess.Popen([str(SCRIPT), "--force"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=w.tmp,
+                            env={**w.env, "ACE_FAKE_SLEEP": "30"})
+    pidfile = w.fake / "pid_stage1"
+    for _ in range(100):
+        if pidfile.exists() and pidfile.read_text():
+            break
+        time.sleep(0.2)
+    pid = int(pidfile.read_text())
+    assert alive(pid) and (w.dir / "run.lock").exists()
+    proc.send_signal(sig)
+    proc.communicate(timeout=30)
+    time.sleep(0.5)
+    assert proc.returncode == 143 and not alive(pid) and not (w.dir / "run.lock").exists()
+    assert not [p for p in (w.dir / "run").iterdir() if p.name.startswith(("stage", "digest_raw"))]
