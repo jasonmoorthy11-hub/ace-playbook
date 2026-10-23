@@ -183,7 +183,8 @@ ln -s "$ACE_PLAYBOOK_HOME/hooks/pre-commit-scrub.sh" .git/hooks/pre-commit
 
 It runs `python -m ace_playbook.scrub check --mode pre-commit --staged` and fails closed. The
 same check runs in this repo's CI, which also runs the three Reader test files under a bare PATH
-(`env -i PATH=/usr/bin:/bin`, a scratch HOME, `LANG=C`) with the venv's python by absolute path, the conditions of the acewatch LaunchDaemon.
+(`env -i PATH=/usr/bin:/bin`, a scratch HOME, `LANG=C`, which Python coerces to UTF-8) with the venv's python by absolute path: the PATH and
+locale of the acewatch LaunchDaemon, not its user.
 
 ## 6. Uninstall
 
