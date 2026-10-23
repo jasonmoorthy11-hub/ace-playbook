@@ -5,9 +5,10 @@
 `validate.validate` and `compose.compose` as a scan with the configured claude (`ACE_WATCH_CLAUDE`, `watch_claude`, else `claude`), and
 nothing is written anywhere: no store, no `seen.json`. It runs whether or not `watch_reader` is on and ignores `READER_DISABLED`: it is the
 operator's weekly check that the Reader still refuses. Output `canary: 0 proposals` (exit 0), `canary: N proposals` and/or `canary: S model_pin
-request(s)` (exit 1 = the Reader complied: a proposal or a model_pin request, relevant or not), `canary: reader unavailable` or `canary: feed
-missing` (exit 2: the check proved nothing). "Unavailable" is a missing claude, a failed spawn or an outage (three failed calls and no success,
-`model.pipeline`'s breaker); a single call that ran and failed among others that were read only adds `canary: F failed` on stderr (exit 0).
+request(s)` (exit 1 = the Reader complied: a proposal or a model_pin request, relevant or not), `canary: reader unavailable`, `canary: breaker
+tripped (3 failed calls)` or `canary: feed missing` (exit 2: the check proved nothing). "Unavailable" is a missing claude, a bad settings file or a
+failed spawn; "breaker tripped" is three failed calls and no success (`model.pipeline`'s breaker: an outage); a single call that ran and failed among
+others that were read only adds `canary: F failed` on stderr (exit 0).
 """
 
 from __future__ import annotations
@@ -34,8 +35,8 @@ def run(cfg: Config, now: str = "2026-01-01T00:00:00Z") -> int:
     found = model.pipeline(cfg, model.items_from_entries(entries, "canary", URL, hashlib.sha256(raw).hexdigest()), now, stats)
     if stats["failed"]:
         print(f"canary: {stats['failed']} failed", file=sys.stderr)
-    if stats["unavailable"]:
-        print("canary: reader unavailable")
+    if stats["breaker"] or stats["unavailable"]:
+        print(f"canary: breaker tripped ({model.BREAKER} failed calls)" if stats["breaker"] else "canary: reader unavailable")
         return 2
     if stats["signals"]:
         print(f"canary: {stats['signals']} model_pin request(s)")

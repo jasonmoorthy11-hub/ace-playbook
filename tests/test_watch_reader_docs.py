@@ -15,6 +15,8 @@ SANDBOX = ROOT / "docs" / "watch" / "SANDBOX.md"
 INSTALL = ROOT / "hooks" / "INSTALL.md"
 DESIGN = ROOT / "docs" / "design" / "compiler.md"
 LIMITS = ROOT / "LIMITATIONS.md"
+BREAKER_DOC = ("`breaker tripped` = three failed calls in a row with no success (an outage, or three items the model cannot read): the items move to "
+               "the back of the next scan; `reader unavailable` = claude could not be started at all")         # D-164: one sentence in INSTALL and SANDBOX
 
 
 def flat(path: Path) -> str:
@@ -74,7 +76,8 @@ def test_sandbox_md_states_the_reader_guarantees_honestly():
     for needle in ("CLAUDE_CODE_OAUTH_TOKEN", "verify against the installed version", "ONLY as acewatch", "--setting-sources", "disableAllHooks",
                    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDECODE", "checked by the release probe",
                    "kept out by the separate user", "ignores READER_DISABLED", "uses exit 2", "reader_cwd",
-                   "exit 1 = the Reader complied (a proposal or a model_pin request)", "three failed calls", "at most 5 reader leads per scan"):
+                   "exit 1 = the Reader complied (a proposal or a model_pin request)", "three failed calls", "at most 5 reader leads per scan",
+                   BREAKER_DOC):
         assert needle in text, needle
     for banned in ("no hook, `CLAUDE.md` or memory of the account it runs as is loaded", "cannot load"):
         assert banned not in text
@@ -84,11 +87,11 @@ def test_install_and_the_design_say_what_is_true_about_the_reader():
     install, design, limits = flat(INSTALL), flat(DESIGN), flat(LIMITS)
     for needle in ("U unavailable", "F failed", "D dup", "reader: claude is unavailable; U item(s) not read", "ONLY", "acewatch", "ignores READER_DISABLED",
                    "reader-settings.json", "reader: skipped (dry run)", "the rest are read on later scans", "three failed calls",
-                   "exit 1 = the Reader complied (a proposal or a model_pin request)"):
+                   "exit 1 = the Reader complied (a proposal or a model_pin request)", BREAKER_DOC):
         assert needle in install, needle
     for needle in ("reader-settings.json", "--setting-sources", "for the `acewatch` user ONLY", "target is the source id", "failed", "capped",
                    "reader_cwd", "start_new_session", "reader: skipped (dry run)", "the Reader is only asked about entries the rules did not already flag",
-                   "three failed calls", "checked by the release probe", "ANTHROPIC_AUTH_TOKEN", "model_pin request"):
+                   "three failed calls", "checked by the release probe", "ANTHROPIC_AUTH_TOKEN", "model_pin request", "`reader.breaker`", "(D-164)"):
         assert needle in design, needle
     assert "target `lead`" not in design and "a run of five dashes inside the item cannot spell one" not in design
     assert "the queue and the scan output" in limits and "queue and the digest" not in limits

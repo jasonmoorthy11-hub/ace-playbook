@@ -6,7 +6,8 @@ envelope. $ACE_WATCH_FAKE_DIR, when set, gets one JSON line per call in calls.js
 the environment, the cwd, the number of stdin bytes and which of the five ANTHROPIC_* / CLAUDE* auth variables it saw. $ACE_WATCH_FAKE_SLEEP
 sleeps first (a timeout test).
 $ACE_WATCH_FAKE_SEQ ("iserror,good") names the answer of each call in turn (the last one repeats). Failing names: error (exit 1 and
-is_error), iserror (is_error, exit 0), exit1, empty, garbage, hang. Synthetic data only.
+is_error), iserror (is_error, exit 0), exit1, empty, garbage, hang. $ACE_WATCH_FAKE_POISON=<text> makes the call exit 1 whenever the prompt
+(the item) contains that text, whatever the answer name says (a crafted item the model cannot read). Synthetic data only.
 """
 
 import json
@@ -57,7 +58,9 @@ ANSWERS = {
 }
 seq = (os.environ.get("ACE_WATCH_FAKE_SEQ") or "").split(",")                          # "iserror,good": one answer name per call, the last repeats
 name = seq[min(prior, len(seq) - 1)] if seq != [""] else os.environ.get("ACE_WATCH_FAKE_ANSWER", "irrelevant")
-if name == "hang":                                                                      # never answers: the caller's timeout must end it
+if os.environ.get("ACE_WATCH_FAKE_POISON") and os.environ["ACE_WATCH_FAKE_POISON"] in (argv[-1] if argv else ""):
+    name = "exit1"
+if name == "hang":                                                                    # never answers: the caller's timeout must end it
     time.sleep(60)
 if name in ("exit1", "empty", "garbage"):                                               # failed calls with no usable envelope
     print("not an envelope" if name == "garbage" else "", end="")

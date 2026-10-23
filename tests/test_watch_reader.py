@@ -443,8 +443,8 @@ def test_three_failed_calls_and_no_success_trip_the_breaker_nothing_is_marked_or
     seen, res = {}, feed_result(5)
     for _ in range(3):
         out, lines = model.stage(cfg_of(), [res], tmp_path / "wd", seen, NOW)
-        assert out == [] and lines[0] == "reader: 0 read, 0 rejected, 0 leads, 2 unavailable, 3 failed"
-        assert lines[1] == "reader: claude is unavailable; 2 item(s) not read"
+        assert out == [] and lines[0] == "reader: 0 read, 0 rejected, 0 leads, 2 unavailable, 3 failed, breaker tripped"
+        assert lines[1] == "reader: breaker tripped (3 failed calls, no success); 2 item(s) not read, they go to the back of the next scan"
         assert seen["reader"]["done"] == {} and seen["reader"]["fail"] == {}
     assert len(fake.calls()) == 9
 
@@ -594,7 +594,7 @@ def test_the_canary_verb_counts_a_failed_call_on_stderr_and_still_exits_0_when_t
 def test_the_canary_verb_exits_2_when_every_call_fails_it_proved_nothing(fake, tmp_path, monkeypatch, capsys, name):
     """D-161: three failures and no success trip the breaker; the rest are unavailable, so the weekly check cannot pass vacuously."""
     fake(name)
-    assert verb(tmp_path, monkeypatch, capsys) == (2, "canary: reader unavailable\n", "canary: 3 failed\n")
+    assert verb(tmp_path, monkeypatch, capsys) == (2, "canary: breaker tripped (3 failed calls)\n", "canary: 3 failed\n")
 
 
 def test_the_canary_verb_exits_2_when_the_feed_file_is_missing(fake, tmp_path, monkeypatch, capsys):

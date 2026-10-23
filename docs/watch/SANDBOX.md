@@ -104,8 +104,11 @@ The watcher reads text written by strangers. W1 does that as the operator, in th
 - `watch_reader` false (the default) is the same as no model stage at all. A `--dry-run` scan skips the model stage (`reader: skipped (dry run)`).
 - Limits of one scan: at most 5 reader leads per scan (the loop stops there and the rest are read on later scans, `, C capped`), at most 20 items
   looked at, and an entry the rules already flagged is skipped before the read (`, D dup`).
-- The outage breaker: three failed calls in a row with no success end the run (`, F failed`, the rest `, U unavailable`, and the "claude is
-  unavailable" line). Nothing is marked as read and the three tries are not counted, so an expired login or a network outage loses no item.
+- The outage breaker: three failed calls in a row with no success end the run (`, F failed`, the rest `, U unavailable`, and `, breaker tripped`).
+  Nothing is marked as read and the three tries are not counted, so an expired login or a network outage loses no item. The three items move to
+  the back of the next scan, so crafted items at the head of a feed cost one scan, not the stage (D-164). `breaker tripped` = three failed calls in
+  a row with no success (an outage, or three items the model cannot read): the items move to the back of the next scan; `reader unavailable` =
+  claude could not be started at all. The canary prints `canary: breaker tripped (3 failed calls)` for the first, still with exit 2.
 
 ## The canary
 

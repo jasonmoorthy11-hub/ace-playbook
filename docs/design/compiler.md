@@ -1298,8 +1298,12 @@ never a traceback or a path; the first one stops the loop). A call that was spaw
 empty or garbage output) counts `failed`: the loop goes on to the next item, the item's try count is kept in `seen.json` (`reader.fail`) and the item
 is marked done after two failed tries. THE BREAKER (D-161): three failed calls in a row at the start of a run, with no success, are an outage (an
 expired login, no network), not a poison item: the rest of the run is `unavailable`, nothing is marked done and the three failed tries are not
-counted, so an outage loses no item, and the canary verb exits 2. `validate.validate` makes the quote the item's line at the index (verbatim, at most
-400 characters, unchanged by `store.clean`: the model supplies a number, not text), FORCES the class to `lead`, rejects (and logs one text-free line
+counted, so an outage loses no item, and the canary verb exits 2 (`canary: breaker tripped (3 failed calls)`). A trip is reported as
+`, breaker tripped`, apart from a missing claude (D-164), and the tripping items are kept in `seen.json` (`reader.breaker`) and read LAST on the next
+run, so three crafted items at the head cost one scan: the good items behind them are read, then the crafted ones fail individually (a failure of an
+item that already has a failed try counts at once) and are marked done after two tries.
+`validate.validate` makes the quote the item's line at the index (verbatim, at most 400 characters, unchanged by `store.clean`: the model supplies a
+number, not text), FORCES the class to `lead`, rejects (and logs one text-free line
 for) a `model_pin` request on a tier-1 item, whether or not the answer calls the item relevant (the check comes before the relevant gate, which also
 lives in `validate` alone), turns every whitespace separator in the title into one space, cleans it with `store.clean`, and refuses a title in the
 form of a code-made one (`Replace ...`, `Retirement ...`). `compose.compose` builds the record through the existing `records.record` (class `lead`, no

@@ -464,7 +464,9 @@ network, and it is never on a hook path.
    when the first one could not be started) and carries on. A call that started and then failed (an error answer, a non-zero exit, a
    timeout, empty output) is not "unavailable": it adds `, F failed` to the first line, the loop goes on to the next item, and an item that
    failed twice is not read again. But three failed calls in a row with no success are an outage (an expired login, no network): the run
-   stops, the rest count as `U unavailable`, nothing is marked read and the three tries are not counted, so no item is lost. An entry the W1
+   stops (`, breaker tripped`), the rest count as `U unavailable`, nothing is marked read and the three tries are not counted, so no item is
+   lost. `breaker tripped` = three failed calls in a row with no success (an outage, or three items the model cannot read): the items move to
+   the back of the next scan; `reader unavailable` = claude could not be started at all. An entry the W1
    rules already made a lead for is skipped before the read (`, D dup`: one entry is one lead, the rule lead wins). `touch
    <watch_dir>/READER_DISABLED` stops only this stage (`reader: disabled`); a `--dry-run` scan skips it (`reader: skipped (dry run)`). The scan
    prints `reader: N read, M rejected, K leads` (K is the number of NEW reader leads it stored); at most 5 reader leads per scan, and
