@@ -5,7 +5,8 @@ The answer is chosen by $ACE_WATCH_FAKE_ANSWER (a name below), never by the cont
 envelope. $ACE_WATCH_FAKE_DIR, when set, gets one JSON line per call in calls.jsonl: argv, whether ANTHROPIC_API_KEY / CLAUDECODE were in
 the environment, the cwd, the number of stdin bytes and which of the five ANTHROPIC_* / CLAUDE* auth variables it saw. $ACE_WATCH_FAKE_SLEEP
 sleeps first (a timeout test).
-$ACE_WATCH_FAKE_SEQ ("iserror,good") names the answer of each call in turn (the last one repeats). Failing names: error (exit 1 and
+$ACE_WATCH_FAKE_SEQ ("iserror,good") names the answer of each call in turn (the last one repeats); $ACE_WATCH_FAKE_COSTS ("0.1,0.25") the same for
+total_cost_usd (default 0.0004). Failing names: error (exit 1 and
 is_error), iserror (is_error, exit 0), exit1, empty, garbage, hang. $ACE_WATCH_FAKE_POISON=<text> makes the call exit 1 whenever the prompt
 (the item) contains that text, whatever the answer name says (a crafted item the model cannot read). Synthetic data only.
 """
@@ -66,8 +67,9 @@ if name in ("exit1", "empty", "garbage"):                                       
     print("not an envelope" if name == "garbage" else "", end="")
     sys.exit(1 if name == "exit1" else 0)
 failing = name in ("error", "iserror")
+costs = (os.environ.get("ACE_WATCH_FAKE_COSTS") or "0.0004").split(",")                 # "0.1,0.25": the total_cost_usd of each call, the last repeats
 env = {"type": "result", "subtype": "error_during_execution" if failing else "success", "is_error": failing, "duration_ms": 10,
-       "num_turns": 1, "result": "" if failing else ANSWERS[name], "session_id": "fake", "total_cost_usd": 0.0004,
+       "num_turns": 1, "result": "" if failing else ANSWERS[name], "session_id": "fake", "total_cost_usd": float(costs[min(prior, len(costs) - 1)]),
        "usage": {"input_tokens": 5, "output_tokens": 20}}
 if name == "padded":
     env["pad"] = "x" * 300_000
