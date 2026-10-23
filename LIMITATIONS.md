@@ -406,6 +406,14 @@ the long-token lint partly covers and nothing measures.
 - Subagent writes are read from the `isSidechain` records of the main transcript and from every `*.jsonl` under
   `<session>/subagents/` beside it (the harness's current layout); their turns are never kept. A file there that is not valid JSONL is
   skipped line by line and counted in `bad_lines`.
+- Written paths are compared casefolded (default APFS and NTFS are case-insensitive; on a case-sensitive filesystem this is an
+  over-approximation that can only make a file untrusted). A symlinked alias of a written file is not recognised: reading it through
+  another path stays `user_file`. Subagent writes use the session's first cwd as the root for the root taint and the clamp.
+- Any tool other than the four write tools whose name contains `write`, `edit`, `create`, `move`, `copy`, `save`, `append`, `rename` or
+  `delete` (an MCP file server's `write_file`, `move_file`) counts as a write of every `path`, `file_path`, `destination`, `dest`, `target`,
+  `notebook_path` or `filename` string it was given (and of `source`/`src` for move, copy and rename); a tool with a differently named
+  write is not tracked.
+- A transcript in which no record carries a working directory has no user files: every Read is `tool_output`.
 - The trust boundary for `user_file` is the session's first cwd. A record whose own cwd is outside it makes its Reads `tool_output`.
 - `shell_output` is decided by the `<bash-input>`, `<bash-stdout>` and `<bash-stderr>` tags of a user record: a user record with any of
   them in any text block, balanced or not, has every text block turned into `shell_output`, never partly a user message. Output that reaches the transcript

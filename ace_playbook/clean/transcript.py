@@ -108,7 +108,7 @@ def _result_origin(use: dict, root: str, written: set[str], untrusted: tuple[str
     if use.get("name") != "Read":
         return "tool_output"
     path = str(use.get("input", {}).get("file_path", ""))
-    if not path or not _under(normalise(cwd or root, ""), root):
+    if not path or not root or not _under(normalise(cwd or root, ""), root):  # no working directory at all: there are no user files
         return "tool_output"
     path = normalise(path, cwd or root)
     if is_written(path, written):
@@ -132,13 +132,12 @@ def parse_records(records: Iterator[dict], result_max: int,
     out = Parsed()
     uses: dict[str, dict] = {}
     written: set[str] = set()
-    for rec in side_records:  # subagent transcripts: only the files they wrote count, never their turns
-        out.drops.sidechain += 1
-        msg, cwd = rec.get("message"), str(rec.get("cwd") or "")
-        for b in _blocks(msg.get("content")) if isinstance(msg, dict) else []:
-            _note_writes(b, written, cwd, out, cwd)
+    side: Iterator[dict] | None = iter(side_records)
     for rec in records:
         out.cwd = out.cwd or rec.get("cwd", "") or ""
+        if out.cwd and side is not None:  # the session root is known: scan the subagent transcripts against it, then drop them
+            _scan_side(side, written, out)
+            side = None
         out.session_id = out.session_id or rec.get("sessionId", "") or ""
         cwd = rec.get("cwd") or out.cwd
         if rec.get("isSidechain"):
@@ -161,13 +160,24 @@ def parse_records(records: Iterator[dict], result_max: int,
         shell = rec["type"] == "user" and any(b.get("type") == "text" and SHELL_TAG_RE.search(str(b.get("text", ""))) for b in blocks)
         for b in blocks:
             _handle_block(rec["type"], b, out, uses, written, result_max, untrusted, cwd, shell)
+    if side is not None:
+        _scan_side(side, written, out)
     return out
 
 
-def _note_writes(b: dict, written: set, cwd: str, out: Parsed, root: str | None = None) -> None:
+def _scan_side(side: Iterator[dict], written: set, out: Parsed) -> None:
+    """Note the writes of subagent records (the ROOT marker and the clamp use the session root, a record without a cwd falls back to it)."""
+    for rec in side:
+        out.drops.sidechain += 1
+        msg = rec.get("message")
+        for b in _blocks(msg.get("content")) if isinstance(msg, dict) else []:
+            _note_writes(b, written, str(rec.get("cwd") or out.cwd), out)
+
+
+def _note_writes(b: dict, written: set, cwd: str, out: Parsed) -> None:
     if b.get("type") == "tool_use" and isinstance(b.get("input"), dict):
-        paths, unparsed = written_paths(str(b.get("name", "")), b["input"], cwd, out.cwd if root is None else root)
-        written |= paths
+        paths, unparsed = written_paths(str(b.get("name", "")), b["input"], cwd, out.cwd)
+        written |= {p.casefold() for p in paths}
         out.drops.unparsed_bash += unparsed
 
 

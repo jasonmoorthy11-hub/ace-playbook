@@ -413,6 +413,9 @@ def test_curl_and_wget_default_names(tmp_path, cmd, read_path):
     ("gh repo clone o/r", "README.md"),
     ("patch -p1 < fix.diff", "README.md"),
     ("cd sub && echo x > rel.md", "sub/rel.md"),                               # m4
+    ("ed -s n.md <<EOF\n1d\nEOF", "n.md"),                                       # wave 11 B: the `<<` trigger (a verb outside VERBS)
+    ("sort -o out.txt in.txt", "out.txt"),                                     # the output-flag trigger
+    ("pandoc in.md -o out.html", "out.html"),
 ])
 def test_wave6_worlds(tmp_path, cmd, read_path):
     assert result_origin(tmp_path, [bash(cmd)], read_path) == "agent_file"
@@ -540,3 +543,41 @@ def test_r13_the_root_marker_is_the_session_root_not_the_record_cwd(tmp_path):
 def test_r11_a_command_without_those_words_keeps_the_root_clean(tmp_path):
     for cmd in ("cp a.md b.md", "echo x > r.md", "cd sub && cat rel.md", "cp a.md docs/x.md"):
         assert result_origin(tmp_path, [bash(cmd)], "README.md") == "user_file", cmd
+
+
+# ------------------------------------------------------------- D-169 clause 9 (wave 11: the Opus round-2 findings)
+@pytest.mark.parametrize("cmd, read_name", [("cd x && echo a > r.md", "README.md"), ("cd .. && echo x > n.md", "n.md"),
+                                            ("tar xf a.tar -C ..", "new.md")])
+def test_subagent_root_taint_uses_the_session_root_not_the_subagents_cwd(tmp_path, cmd, read_name):      # A
+    side = tmp_path / "s" / "subagents"
+    side.mkdir(parents=True)
+    write(side / "agent-x.jsonl", [assistant(tool_use("sb", "Bash", command=cmd), isSidechain=True, cwd=CWD + "/sub")])
+    recs = [user("go on"), assistant(tool_use("rd", "Read", file_path=CWD + "/" + read_name)), tool_result("rd", "BODY TEXT")]
+    turns = clean_file(write(tmp_path / "s.jsonl", recs)).all_turns
+    assert {t.text: t.origin for t in turns}["BODY TEXT"] == "agent_file"
+    other = write(tmp_path / "t.jsonl", recs)                                  # no subagents directory beside it
+    assert {t.text: t.origin for t in clean_file(other).all_turns}["BODY TEXT"] == "user_file"
+
+
+def test_written_paths_are_compared_case_insensitively(tmp_path):                  # C
+    assert result_origin(tmp_path, [assistant(tool_use("w", "Write", file_path=CWD + "/NOTES.md"))], "notes.md") == "agent_file"
+    assert result_origin(tmp_path, [bash("cp a.md B.MD")], "b.md") == "agent_file"
+    assert result_origin(tmp_path, [bash("cp a.md docs/X.md")], "DOCS/x.md") == "agent_file"
+    assert result_origin(tmp_path, [assistant(tool_use("w", "Write", file_path=CWD + "/NOTES.md"))], "other.md") == "user_file"
+
+
+def test_mcp_write_tools_are_writes_and_read_tools_are_not(tmp_path):              # m1
+    write_tool = assistant(tool_use("w", "mcp__filesystem__write_file", path=CWD + "/n.md", content="x"))
+    assert result_origin(tmp_path, [write_tool], "n.md") == "agent_file"
+    move = assistant(tool_use("m", "mcp__x__move_file", source="old.md", destination="new.md"))
+    assert result_origin(tmp_path, [move], "new.md") == "agent_file" and result_origin(tmp_path, [move], "old.md") == "agent_file"
+    read_tool = assistant(tool_use("r", "mcp__filesystem__read_file", path=CWD + "/n.md"))
+    assert result_origin(tmp_path, [read_tool], "n.md") == "user_file"             # the pinned negative
+    assert result_origin(tmp_path, [assistant(tool_use("t", "TodoWrite", todos=[{"content": "x"}]))], "n.md") == "user_file"
+
+
+def test_a_transcript_without_a_working_directory_has_no_user_files(tmp_path):    # m2
+    bare = {k: v for k, v in user("go on").items() if k != "cwd"}
+    for path in ("README.md", CWD + "/README.md", "/etc/hosts"):
+        recs = [bare, assistant(tool_use("rd", "Read", file_path=path)), tool_result("rd", "BODY TEXT")]
+        assert {t.text: t.origin for t in parsed_of(tmp_path, recs).turns}["BODY TEXT"] == "tool_output", path

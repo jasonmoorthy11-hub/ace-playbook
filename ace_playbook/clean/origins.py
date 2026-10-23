@@ -14,6 +14,9 @@ from .bashwrite import DEST, ROOT, bash_analyse
 __all__ = ["DEST", "ROOT", "WRITE_TOOLS", "bash_analyse", "is_written", "normalise", "written_paths"]
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
+WRITE_NAME_RE = re.compile(r"write|edit|create|move|copy|save|append|rename|delete", re.IGNORECASE)  # any other tool named like a write
+PATH_KEYS = ("path", "file_path", "destination", "dest", "target", "notebook_path", "filename")
+SOURCE_KEYS = ("source", "src")  # also written when the tool moves, copies or renames
 HOME_RE = re.compile(r"^\$\{?HOME\}?(?=/|$)")
 
 
@@ -24,7 +27,9 @@ def normalise(path: str, cwd: str) -> str:
 
 
 def is_written(path: str, written: set[str]) -> bool:
-    """The path, or a directory above it, is in `written` (a clone or a copied tree covers the files inside)."""
+    """The path, or a directory above it, is in `written` (a clone or a copied tree covers the files inside). `written` holds casefolded
+    paths and the lookup is casefolded too: default APFS and NTFS are case-insensitive, and a false match only makes a file untrusted."""
+    path = path.casefold()
     while path not in written:
         parent = os.path.dirname(path)
         if parent == path:
@@ -42,8 +47,11 @@ def written_paths(name: str, inp: dict, cwd: str, root: str = "") -> tuple[set[s
         raw, ok = bash_analyse(str(inp.get("command", "")))
     elif name in WRITE_TOOLS and (inp.get("file_path") or inp.get("notebook_path")):
         raw = {str(inp.get("file_path") or inp.get("notebook_path"))}
+    elif name != "Bash" and WRITE_NAME_RE.search(name):  # an MCP or other tool whose name says it writes: every path-like string it was given
+        keys = PATH_KEYS + (SOURCE_KEYS if re.search("move|copy|rename", name, re.IGNORECASE) else ())
+        raw = {v for k, v in inp.items() if k in keys and isinstance(v, str) and v}
     bases = [normalise(b, "") for b in (cwd, root) if b]
     dests = {normalise(r[1:] or ".", cwd or root) for r in raw if r.startswith(DEST) and r != ROOT and (cwd or root)}
-    dests = {root or cwd if d == "/" or root.startswith(d + "/") else d for d in dests} | ({root or cwd} if ROOT in raw else set())
+    dests = {root or cwd if d == "/" or root.startswith(d + "/") else d for d in dests} | ({root or cwd} if ROOT in raw and (root or cwd) else set())
     plain = {normalise(r, cwd) for r in raw if not r.startswith(DEST)}
     return dests | {p for p in plain if p != "/" and not any(b == p or b.startswith(p + "/") for b in bases)}, not ok
