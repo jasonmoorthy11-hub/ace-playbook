@@ -148,16 +148,17 @@ def test_bash_written_files_are_agent_file(tmp_path, cmd, read_path):
 
 
 def test_bash_that_does_not_write_leaves_user_file(tmp_path):
-    for cmd in ("cat x.md", "grep -n 'a > b' x.md", "cp only-one-arg", "git clone", "ls 2>&1 | head", "curl https://example.com/x"):
+    for cmd in ("cat x.md", "cat README.md", "cp only-one-arg", "git clone", "ls 2>&1 | head", "curl https://example.com/x"):
         assert result_origin(tmp_path, [bash(cmd)], "x.md") == "user_file", cmd
+    assert result_origin(tmp_path, [bash("cat README.md")], "README.md") == "user_file"
     assert result_origin(tmp_path, [bash("cp a.md .")], "docs/other.md") == "user_file"
     assert result_origin(tmp_path, [bash("cp a.md b.md")], "c.md") == "user_file"
 
 
-def test_heredoc_body_is_not_scanned_for_targets():
-    from ace_playbook.clean.origins import bash_write_targets
+def test_heredoc_body_is_scanned_too(tmp_path):                     # D-169 clause 6: no heredoc parsing, over-approximate
     body = "cat > real.md <<'EOF'\nif a > leaked.md then\ncp q leaked2.md\nEOF\necho ok >> after.md"
-    assert bash_write_targets(body) == {"real.md", "after.md"}
+    for path in ("real.md", "leaked.md", "leaked2.md", "after.md"):
+        assert result_origin(tmp_path, [bash(body)], path) == "agent_file", path
 
 
 def test_subagent_write_is_agent_file_and_its_turns_stay_dropped(tmp_path):
@@ -188,9 +189,9 @@ def test_path_forms_match_the_same_write(tmp_path, wrote):
 
 def test_written_marker_and_outside_cwd_cases(tmp_path):
     before = [bash("cp a.md upstream/b.md")]
-    assert result_origin(tmp_path, before, "upstream/other.md") == "tool_output"
+    assert result_origin(tmp_path, [bash("cp a.md b.md")], "upstream/other.md") == "tool_output"
     assert result_origin(tmp_path, before, "upstream/b.md") == "agent_file"
-    assert result_origin(tmp_path, [bash("cp a.md /etc/hosts2")], "/etc/hosts") == "tool_output"
+    assert result_origin(tmp_path, [bash("cp a.md b.md")], "/etc/hosts") == "tool_output"
     assert result_origin(tmp_path, [bash("cp a.md /elsewhere/b.md")], "/elsewhere/b.md") == "agent_file"
 
 
@@ -252,28 +253,61 @@ def test_a_block_with_any_shell_tag_is_shell_output_as_a_whole(tmp_path):
     assert mixed.body.startswith("R: ") and "\nU:" not in mixed.body
 
 
-def test_heredoc_body_comment_and_quoted_operator(tmp_path):
-    from ace_playbook.clean.origins import bash_analyse
-    body = "cat > x.md <<'EOF'\n# not a comment, body\nfoo > leaked.md\ndon't stop\nEOF\ncp a.md after.md"
-    assert bash_analyse(body) == ({"x.md", "after.md", "after.md/a.md"}, True)
-    assert bash_analyse('echo "a <<EOF b" > y.md\ncp a.md z.md') == ({"y.md", "z.md", "z.md/a.md"}, True)
-    assert bash_analyse("ls # run <<EOF later\ncp a.md z.md") == ({"z.md", "z.md/a.md"}, True)
-    assert bash_analyse("echo hi # > fake.md") == (set(), True)
-    assert bash_analyse("echo a#b > f.md") == ({"f.md"}, True)
-    assert bash_analyse("cat > \\\nx.md <<EOF\nbody\nEOF") == ({"x.md"}, True)
-    assert bash_analyse("cp a.md \\\n  b.md") == ({"b.md", "b.md/a.md"}, True)
-    assert bash_analyse("cat <<-EOF > t.md\n\tbody\n\tEOF") == ({"t.md"}, True)
+@pytest.mark.parametrize("cmd, read_path", [
+    ("curl -sLOJ https://h.example/p/f.md", "f.md"),
+    ("wget -P out https://h.example/p/g.md", "out/g.md"),
+    ("cp \\\n  a.md b.md", "b.md"),
+    ("cat > x.md <<'EOF'\n# not a comment\nEOF", "x.md"),
+    ("cp a.md \\#b.md", "#b.md"),
+    ("cat <<-EOF > x.md\n\tbody\n\tEOF", "x.md"),
+    ("cp a.md \"b.md", "b.md"),
+    ("cp a.md docs/x.md", "docs/other.md"),                                    # the directory of a written path
+    ("cat > x.md <<EOF\nbody w.md", "w.md"),
+    ("python3 -c \"open('n.md', 'w').write('x')\"", "n.md"),                  # an interpreter, found by the suffix rule
+    ("echo 'a <<EOF b' > y.md; ls # > fake.md", "fake.md"),                    # no comment stripping
+    ("curl -O --output-dir dl https://h.example/p/f.md", "dl/f.md"),
+    ("grep -n 'a > b' x.md", "x.md"),                                          # documented over-approximation (c)
+    ("cp README.md /tmp/x", "README.md"),                                      # documented over-approximation (c)
+])
+def test_over_approximating_write_tracker(tmp_path, cmd, read_path):
+    assert result_origin(tmp_path, [bash(cmd)], read_path) == "agent_file"
 
 
-def test_unparsable_bash_fails_closed_and_is_counted(tmp_path):
+def test_a_read_in_an_untouched_directory_stays_user_file(tmp_path):
+    assert result_origin(tmp_path, [bash("cp a.md docs/x.md")], "other/o.md") == "user_file"
+    assert result_origin(tmp_path, [bash("cp a.md docs/x.md")], "o.md") == "user_file"
+
+
+def test_read_beside_an_etc_copy_is_agent_file(tmp_path):                   # documented over-approximation (c)
+    assert result_origin(tmp_path, [bash("cp a.md /etc/hosts2")], "/etc/hosts") == "agent_file"
+
+
+def test_directory_rule_is_bash_only(tmp_path):                             # a Write into docs/ must not taint every Read in docs/
+    wrote = assistant(tool_use("w", "Write", file_path=CWD + "/docs/x.md"))
+    assert result_origin(tmp_path, [wrote], "docs/other.md") == "user_file"
+    assert result_origin(tmp_path, [wrote], "docs/x.md") == "agent_file"
+
+
+def test_url_basename_lands_under_the_cwd_and_under_marked_directories():
     from ace_playbook.clean.origins import bash_analyse
-    targets, ok = bash_analyse("cat > x.md <<EOF\nbody w.md")
-    assert not ok and {"x.md", "w.md"} <= targets
-    for cmd in ("cat > x.md <<EOF\nbody text", "echo 'oops > a.md", "cat <<", "echo hi <<"):
-        assert parsed_of(tmp_path, [user("go on"), bash(cmd)]).drops.unparsed_bash == 1, cmd
-    recs = [user("go on"), bash("cat > x.md <<EOF\nbody w.md"), assistant(tool_use("rd", "Read", file_path="w.md")), tool_result("rd", "BODY TEXT")]
-    p = parsed_of(tmp_path, recs)
-    assert {t.text: t.origin for t in p.turns}["BODY TEXT"] == "agent_file"
+    got, ok = bash_analyse("curl -sLOJ https://h.example/p/f.md")
+    assert ok and "f.md" in got
+    got, ok = bash_analyse("wget -P out https://h.example/p/g.md")
+    assert ok and {"g.md", "out", "out/g.md"} <= got
+    assert "index.html" in bash_analyse("curl -O https://h.example/dir/")[0]
+
+
+def test_non_write_commands_mark_nothing():
+    from ace_playbook.clean.origins import bash_analyse
+    assert bash_analyse("cat README.md docs/a.md") == (set(), True)
+    assert bash_analyse("ls -la src && echo hi") == (set(), True)
+
+
+def test_unparsable_bash_falls_back_to_split_and_is_counted(tmp_path):
+    from ace_playbook.clean.origins import bash_analyse
+    assert bash_analyse('cp a.md "b.md')[1] is False and bash_analyse("cp a.md b.md")[1] is True
+    assert parsed_of(tmp_path, [user("go on"), bash('cp a.md "b.md')]).drops.unparsed_bash == 1
+    recs = [user("go on"), bash('cp a.md "b.md'), assistant(tool_use("rd", "Read", file_path="b.md")), tool_result("rd", "BODY TEXT")]
     assert "unparsed_bash=1" in clean_file(write(tmp_path / "h.jsonl", recs)).header
     assert parsed_of(tmp_path, [user("go on"), bash(HEREDOC)]).drops.unparsed_bash == 0
 
@@ -292,11 +326,3 @@ def test_unparsable_bash_fails_closed_and_is_counted(tmp_path):
 ])
 def test_curl_and_wget_default_names(tmp_path, cmd, read_path):
     assert result_origin(tmp_path, [bash(cmd)], read_path) == "agent_file"
-
-
-def test_curl_and_wget_do_not_write_what_they_do_not_write():
-    from ace_playbook.clean.origins import bash_analyse
-    assert bash_analyse("curl https://example.com/p/f.md") == (set(), True)
-    assert bash_analyse("curl -o out.md https://example.com/p/f.md") == ({"out.md"}, True)           # -o takes a value, no basename
-    assert bash_analyse("wget -O out.md https://example.com/p/g.md") == ({"out.md"}, True)
-    assert bash_analyse("curl -O")[1] is False and bash_analyse("curl https://example.com/f -o")[1] is False

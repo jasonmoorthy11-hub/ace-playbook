@@ -1,24 +1,24 @@
-"""Which paths did the agent itself write? A conservative parser, stdlib only (S-1 F6/F14/F16, D-169).
+"""Which paths did the agent itself write? Deliberately over-approximate, stdlib only (S-1 F6/F14/F16, D-169 clauses 6-7).
 
-A Read of a file the agent wrote (write tool, Bash redirection, copy, download, clone, subagent) is not the user's; other commands
-(`sed -i`, `patch`, `python -c`) are not tracked (LIMITATIONS.md). A command the parser cannot read fails closed: every word counts as written.
+Any write-capable Bash command (a write verb, `>`/`>>`/`<<`, or an output flag) marks every path-looking word it mentions, every URL
+basename and the directory of each as agent-written; a false mark only makes a file untrusted, a missed one is a provenance bypass.
 """
 
 from __future__ import annotations
 
 import os
 import re
+import shlex
 from urllib.parse import urlparse
 
-from .shellparse import analyse, every_word
-
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
-REDIRECTS = {">", ">>", ">|", "&>", "&>>", ">&"}
-INPUTS = {"<", "<<", "<<-", "<<<"}
-PREFIXES = {"sudo", "command", "env", "time", "nohup", "exec"}
-CLONE_VALUE_FLAGS = {"--depth", "-b", "--branch", "-o", "--origin", "-c", "--config", "--reference", "--filter", "-j", "--jobs",
-                     "--template", "--separate-git-dir"}
-FD_ONLY_RE = re.compile(r"[&\d-]*")
+VERBS = {"tee", "cp", "mv", "install", "curl", "wget", "git", "rsync", "ditto", "dd", "sed", "patch", "python", "python3", "perl",
+         "ruby", "node", "sh", "bash", "zsh", "touch", "mkdir", "ln", "unzip", "tar"}
+DEST_VERBS = {"tee", "cp", "mv", "install", "ln", "mkdir", "touch", "rsync", "ditto", "unzip", "tar", "git"}  # every non-flag word is a target
+OUT_RE = re.compile(r"-[A-Za-z]*[oOP]$|--(?:output|directory-prefix)[\w-]*(?:=.*)?$")  # flags whose value (next word or `=value`) is a path
+PATH_RE = re.compile(r"[^/]*/|[.~]|.*\.[A-Za-z0-9]{1,8}$")  # a `/` anywhere, a leading `.`/`~`, or a file suffix
+LOOSE_RE = re.compile(r"[^\s;&|()<>'\"`$,{}]+")  # words with quotes and shell punctuation cut away (also splits `bash -c "..."`)
+REDIRECT_RE = re.compile(r">>?[|&]?\s*(\"[^\"]*\"|'[^']*'|[^\s;&|()<>]+)")
 URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
 
 
@@ -37,82 +37,40 @@ def is_written(path: str, written: set[str]) -> bool:
     return True
 
 
-def _is_break(tok: str) -> bool:
-    return bool(tok) and not set(tok) - set(";&|()")
-
-def _clone_target(args: list[str]) -> set[str]:
-    rest, value = [], False
-    for a in args:
-        if not value and not a.startswith("-"):
-            rest.append(a)
-        value = a in CLONE_VALUE_FLAGS
-    if len(rest) >= 2:
-        return {rest[-1]}
-    return {os.path.basename(rest[0].rstrip("/")).removesuffix(".git")} if rest else set()
-
-
-def _download(name: str, args: list[str]) -> tuple[set[str], bool]:
-    """curl: `-o`/`--output` take a value, `-O`/`--remote-name[-all]` write basename(URL). wget: `-O` takes a value, else basename(URL)."""
-    found, bad, remote, prefix = set(), False, name == "wget", ""
-    out_short = re.compile(r"-[A-Za-z]*o" if name == "curl" else r"-[A-Za-z]*[oO]")
-    for i, a in enumerate(args):
-        val = args[i + 1] if i + 1 < len(args) else None
-        if a.split("=", 1)[0] in ("--output", "--output-document") or out_short.fullmatch(a):
-            target = a.split("=", 1)[1] if "=" in a else val
-            bad, remote = bad or target is None, remote and not (a.endswith("O") or "document" in a)
-            found |= {target} - {None, "-"}
-        elif a in ("--remote-name", "--remote-name-all") or (name == "curl" and re.fullmatch(r"-[A-Za-z]*O", a)):
-            remote = True
-        elif a in ("-P", "--directory-prefix"):
-            prefix = val or ""
-    if remote:
-        urls = [a for a in args if URL_RE.match(a)]
-        bad = bad or (name == "curl" and not urls)
-        found |= {os.path.join(prefix, os.path.basename(urlparse(u).path) or "index.html") for u in urls}
-    return found, bad
-
-
-def _segment_targets(seg: list[str]) -> tuple[set[str], bool]:
-    words = list(seg)
-    while words and (re.match(r"\w+=", words[0]) or words[0] in PREFIXES):
-        words.pop(0)
-    name, args = (os.path.basename(words[0]), words[1:]) if words else ("", [])
-    pos = [a for a in args if not a.startswith("-")]
-    if name == "tee":
-        return set(pos), False
-    if name in ("cp", "mv", "install") and len(pos) >= 2:
-        return {pos[-1]} | {os.path.join(pos[-1], os.path.basename(s)) for s in pos[:-1]}, False
-    if name in ("curl", "wget"):
-        return _download(name, args)
-    if name == "git" and args[:1] == ["clone"]:
-        return _clone_target(args[1:]), False
-    return set(), False
+def _marked(seq: list[str], dest: bool) -> set[str]:
+    """Path-looking words of one tokenisation (all non-flag words for a destination verb), flag values, and the last non-flag word."""
+    found, plain = set(), []
+    for i, w in enumerate(seq):
+        if w.startswith("-"):
+            value = w.split("=", 1)[1] if "=" in w else seq[i + 1] if i + 1 < len(seq) else ""
+            found |= {value} if OUT_RE.match(w) and not URL_RE.match(value) else set()
+        elif not URL_RE.match(w):
+            plain.append(w)
+            found |= {w, w.split("=", 1)[-1]} if dest or PATH_RE.match(w) else set()
+    return found | set(plain[-1:])
 
 
 def bash_analyse(cmd: str) -> tuple[set[str], bool]:
-    """Raw destinations a command writes (redirections, tee, cp/mv/install, curl/wget, git clone) and whether it all parsed; if not, every word."""
-    found: set[str] = set()
-    lines, ok = analyse(cmd)
-    for toks in lines:
-        seg: list[str] = []
-        for i, tok in enumerate(toks + [";"]):
-            after = toks[i + 1] if i + 1 < len(toks) else ""
-            if tok in REDIRECTS and not _is_break(after) and not FD_ONLY_RE.fullmatch(after):
-                found.add(after)
-            if _is_break(tok):
-                got, bad = _segment_targets(seg)
-                found, ok, seg = found | got, ok and not bad, []
-            elif tok not in REDIRECTS | INPUTS and not (i and toks[i - 1] in REDIRECTS | INPUTS):
-                seg.append(tok)
-    return ({t for t in found if t} if ok else every_word(cmd) | found), ok
-
-
-def bash_write_targets(cmd: str) -> set[str]:
-    return bash_analyse(cmd)[0]
+    """Raw paths a command may write (empty unless it is write-capable) and whether shlex read it (else `cmd.split()` was used)."""
+    cmd = cmd.replace("\\\n", "")
+    try:
+        toks, ok = shlex.split(cmd, comments=False, posix=True), True
+    except ValueError:
+        toks, ok = cmd.split(), False
+    seqs, redirects = [toks, LOOSE_RE.findall(cmd)], {m.strip("'\"") for m in REDIRECT_RE.findall(cmd)}
+    names = {os.path.basename(w) for s in seqs for w in s}
+    if not (names & VERBS or redirects or "<<" in cmd or any(OUT_RE.match(w) and w[:2] != "-P" for s in seqs for w in s)):
+        return set(), ok
+    found = redirects.union(*(_marked(s, bool(names & DEST_VERBS)) for s in seqs)) - {""}
+    urls = {w for s in seqs for w in s if URL_RE.match(w)}
+    bases = {n for u in urls for b in [os.path.basename(urlparse(u).path) or "index.html"] for n in (b, b.removesuffix(".git"))}
+    found |= bases | {os.path.join(p, b) for p in found for b in bases}
+    return (found | {os.path.dirname(p) for p in found}) - {""}, ok
 
 
 def written_paths(name: str, inp: dict, cwd: str, root: str = "") -> tuple[set[str], bool]:
-    """Normalised paths a tool_use writes, and whether a Bash command failed to parse. Never `/`, the root or the cwd, nor a parent of them."""
+    """Normalised paths a tool_use writes, and whether a Bash command needed the split fallback. Never `/`, the root or the cwd, nor a parent.
+    The directory-of-path rule (a Read beside a written file may be agent output too) applies to Bash only, never to the four write tools."""
     ok, raw = True, set()
     if name == "Bash":
         raw, ok = bash_analyse(str(inp.get("command", "")))

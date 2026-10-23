@@ -371,12 +371,17 @@ the long-token lint partly covers and nothing measures.
 
 - A pre-existing third-party file under the session's working directory that matches none of the untrusted markers (a cloned repo's
   `docs/`, a PR branch) is still labelled `user_file`, and so still counts as the user's. Authorship by git history is a later design (S-1 F6).
-- The `agent_file` label rests on a conservative parser of Bash command lines (`ace_playbook/clean/origins.py`, `shellparse.py`):
-  redirections, `tee`, `cp`/`mv`/`install`, `curl`/`wget` output (including the default `-O` and `wget` names), `git clone`, and writes by a
-  subagent's tool calls. A write through an unlisted command (`sed -i`, `patch`, `python -c "open(...).write(...)"`), after a `cd`,
-  through a variable, or a clone into the working directory itself is not tracked, and the file stays `user_file`. A command the parser
-  cannot read (an open quote, a heredoc that never closes, a `<<` with no delimiter) fails closed: every word of it counts as a written
-  path, and the summary's `unparsed_bash` counts such commands.
+- The `agent_file` label rests on a tracker that deliberately over-approximates (`ace_playbook/clean/origins.py`, D-169 clause 6): any
+  write-capable Bash command (a write verb such as `tee cp mv install curl wget git rsync sed patch python sh touch mkdir tar`, a
+  `>`/`>>`/`<<` anywhere in the text, or an `-o`/`-O`/`--output*` flag) marks every path-looking word it mentions as agent-written, plus the
+  basename of every URL (under the working directory and under each marked directory) and the directory of each marked path, and every
+  word of a command with a destination verb. A user-owned file the agent merely named in such a command is then untrusted for the rest
+  of the session. Two consequences are accepted by design and pinned in `tests/test_clean.py`: `grep -n 'a > b' x.md` makes `x.md`
+  `agent_file` (the `>` is inside quotes), and a Read of `/etc/hosts` after `cp a.md /etc/hosts2` is `agent_file` (the directory rule,
+  which applies to Bash only, never to the four write tools). Comments, heredoc bodies and quoting are not parsed (shlex with
+  `cmd.split()` as the fallback; `unparsed_bash` in the summary counts the fallbacks). Writes by a command outside the verb list and
+  without a redirection (an interpreter started under an unlisted name), writes after a `cd` or through a variable, are not tracked, and
+  the file stays `user_file`.
 - The trust boundary for `user_file` is the session's first cwd. A record whose own cwd is outside it makes its Reads `tool_output`.
 - `shell_output` is decided by the `<bash-input>`, `<bash-stdout>` and `<bash-stderr>` tags of a user record: a text block holding any of
   them, balanced or not, becomes one `shell_output` turn as a whole, never partly a user message. Output that reaches the transcript
