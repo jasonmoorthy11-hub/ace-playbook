@@ -36,8 +36,23 @@ FAR = {"px": 500, "pt": 500, "": 500, "em": 20, "rem": 20, "ch": 20, "vw": 100, 
 TINY = {"px": 1, "pt": 0.75, "em": 0.0625, "rem": 0.0625, "ex": 0.125, "ch": 0.125, "%": 6.25, "vw": 0.1, "vh": 0.1}
 
 
+# The two-reading rule: a number too long to read safely is AMBIGUOUS and every reader treats it as HIDING (a browser reads `opacity:0.000...0` of any
+# length as 0, a parser that called it "not a number" would show the text). AMBIGUOUS is (0.0, ""): zero hides in _zero, _faint, _tiny and _flat; _far and
+# _inset test `is AMBIGUOUS` first, because 0 is neither far nor a 50 % inset.
+AMBIGUOUS = (0.0, "")
+SPLIT = re.compile(r"([+-]?)(\d*)(?:\.(\d*))?(e[+-]?\d+)?([a-z%]*)")                  # sign, integer, fraction, exponent, unit: nothing here backtracks
+
+
 def _num(value: str) -> tuple[float, str] | None:
-    m = NUMBER.fullmatch(value) if len(value) <= MAX_NUMBER else None
+    if len(value) > MAX_NUMBER:                       # drop leading integer zeros and trailing fraction zeros (linear), then it may fit
+        p = SPLIT.fullmatch(value)
+        if p is None or not (p[2] or p[3]):
+            return None                               # no digits, or not a number: the declaration is invalid
+        frac = (p[3] or "").rstrip("0")
+        value = f"{p[1]}{p[2].lstrip('0') or '0'}{'.' + frac if frac else ''}{p[4] or ''}{p[5]}"
+        if len(value) > MAX_NUMBER:
+            return AMBIGUOUS
+    m = NUMBER.fullmatch(value)
     return (float(m.group(1)), m.group(2)) if m else None
 
 
@@ -48,7 +63,7 @@ def _zero(value: str) -> bool:
 
 def _far(value: str) -> bool:
     n = _num(value.strip())
-    return n is not None and n[0] <= -FAR.get(n[1], 500)
+    return n is AMBIGUOUS or (n is not None and n[0] <= -FAR.get(n[1], 500))
 
 
 def _faint(value: str) -> bool:
@@ -74,7 +89,7 @@ def _inset(value: str) -> bool:
     for m in INSET.finditer(value):
         for arg in m.group(1).split(" round ")[0].replace(",", " ").split():
             n = _num(arg)
-            if n is not None and n[1] == "%" and n[0] >= 50:
+            if n is AMBIGUOUS or (n is not None and n[1] == "%" and n[0] >= 50):
                 return True
     return False
 

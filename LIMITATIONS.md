@@ -184,7 +184,9 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   the thresholds, `var()` indirection in a style value, the content of `<textarea>`, `<plaintext>` and `<xmp>` (kept as text), and the odd
   comment spellings (`<!->` and similar) that browsers treat differently from the parser. End tags are matched by the name as written, so
   `</x:div>` does not close `<div>`, as in a browser. A style text (an inline `style` value or one rule body) over 64 KiB counts as hiding (fail
-  closed), and a CSS value longer than 64 characters is not read as a number (S-1 F2 F4), so `opacity:0.` plus 64 zeros and a 1 is read as visible.
+  closed). A CSS number over 64 characters is first normalised (leading integer zeros and trailing fraction zeros dropped, so
+  `opacity:` plus 80 zeros and `.0` is 0); if it still does not fit it is ambiguous and the property HIDES (S-1 F2 F4, wave 1b: an over-hide on
+  purpose, no real page writes a 64-character number, and a browser would read `opacity:0.000...0` of any length as 0).
   The sanitizer builds ONE HTML tree (the HTML Standard's tree construction, simplified: `treebuild`, `treemodes`) and reads it twice, for the
   visible text (`treewalk`) and for the rules of `<style>` (`treestyle`). Every simplification is fail closed: it hides MORE, never less. The
   stack of open elements keeps the scope barriers: `</p>` is stopped by `button`, `</li>` by `ol` and `ul`, an end tag by a "special"

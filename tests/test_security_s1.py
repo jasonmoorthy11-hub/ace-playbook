@@ -20,6 +20,7 @@ from ace_playbook.clean.transcript import Turn
 from ace_playbook.compile import shadow, status
 from ace_playbook.compile import state as st
 from ace_playbook.compile.watch import cssstyle, parsers, records, store
+from ace_playbook.compile.watch.sanitize import strip_hidden
 from ace_playbook.inject import injector
 from ace_playbook.reflect import reflect_transcript
 from ace_playbook.scrub import check
@@ -241,11 +242,45 @@ def test_f2_a_200000_digit_value_with_a_trailing_x_is_rejected_in_linear_time():
     assert decls == [("opacity", under_cap)] and secs < TIME_BUDGET
 
 
-def test_f2_numbers_still_parse_and_a_value_over_64_characters_is_not_a_number():
+def test_f2_numbers_still_parse_and_an_over_long_one_is_normalised_first():
     assert cssstyle._num("0.5px") == (0.5, "px") and cssstyle._num(".5") == (0.5, "") and cssstyle._num("-12.") == (-12.0, "")
     assert cssstyle._num("1e3em") == (1000.0, "em") and cssstyle._num("1.5.5") is None
-    assert cssstyle._num("0" * 64) == (0.0, "") and cssstyle._num("0" * 65) is None
+    assert cssstyle._num("0" * 64) == (0.0, "") and cssstyle._num("0" * 65) == (0.0, "")           # 65 zeros normalise to 0
+    assert cssstyle._num("0" * 80 + "12px") == (12.0, "px") and cssstyle._num("-" + "0" * 80 + ".50" + "0" * 80) == (-0.5, "")
+    assert cssstyle._num("9" * 200_000 + "x1") is None                                              # not a number at all: the declaration is invalid
+    assert cssstyle._num("9" * 80) is cssstyle.AMBIGUOUS and cssstyle._num("0." + "0" * 64 + "1") is cssstyle.AMBIGUOUS
     assert cssstyle.style_hidden("opacity:0.05") and not cssstyle.style_hidden("opacity:0.5")
+
+
+# F2 follow-up (wave 1b): an over-long number is not "not a number" (that read `opacity:0.000...0` as visible). It is normalised in linear time
+# (leading integer zeros, trailing fraction zeros dropped); if it still does not fit in MAX_NUMBER it is AMBIGUOUS and hides under both readings.
+LONG = {   # declaration -> hidden?
+    "opacity:" + "0" * 80 + ".0": True, "opacity: 0." + "0" * 64 + "1": True, "font-size: " + "0" * 80 + "0": True,
+    "font-size: " + "0" * 80 + "12px": False, "overflow:hidden;width:" + "1" * 80: True, "position:absolute;left: -" + "9" * 80 + "px": True,
+    "margin-left:-" + "9" * 80 + "px": True, "zoom:" + "0" * 80: True, "transform:scale(" + "0" * 80 + ")": True,
+    "color:rgba(0,0,0," + "0" * 80 + ")": True, "clip-path:inset(" + "9" * 80 + "%)": True, "text-indent:-" + "9" * 80 + "px": True,
+    "opacity: 0.5": False, "font-size: 12px": False, "margin-left: -1px": False, "opacity:" + "0" * 80 + "1": False,
+}
+
+
+@pytest.mark.parametrize("css", LONG)
+def test_f2_an_over_long_css_number_hides_under_both_readings_unless_it_normalises_to_a_visible_one(css):
+    assert cssstyle.style_hidden(css) is LONG[css]
+
+
+@HOSTILE
+def test_f2_the_normalisation_keeps_the_200000_digit_value_under_budget():
+    for value in ("9" * 200_000 + "x1", "0" * 200_000 + "5px", "0." + "0" * 200_000 + "1", "-" + "0" * 100_000 + "." + "0" * 100_000):
+        for fn in (cssstyle._num, cssstyle._zero, cssstyle._far, cssstyle._faint, cssstyle._tiny, cssstyle._flat, cssstyle._inset):
+            _, secs = timed(fn, value)
+            assert secs < TIME_BUDGET, (fn.__name__, value[:6])
+
+
+@pytest.mark.parametrize("markdown", [False, True])
+def test_f2_the_whole_sanitizer_hides_the_element_styled_with_a_long_zero_opacity(markdown):
+    page = "<style>.h{opacity:0." + "0" * 80 + "}</style><p class=h>LEAK</p>VIS"
+    assert strip_hidden(page, markdown=markdown).strip() == "VIS"
+    assert "LEAK" in strip_hidden("<style>.h{opacity:0.5}</style><p class=h>LEAK</p>VIS", markdown=markdown)
 
 
 @HOSTILE
