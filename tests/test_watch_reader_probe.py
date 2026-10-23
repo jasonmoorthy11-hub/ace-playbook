@@ -11,7 +11,7 @@ import subprocess
 
 import pytest
 
-from ace_playbook.compile.watch import canary, model, reader, readerloop, validate
+from ace_playbook.compile.watch import canary, match, model, reader, readerloop, validate
 
 from .test_compile_watch_cli import U
 from .test_watch_reader import CANARY, NOW, cfg_of, enable, fake, many_items, verb, world  # noqa: F401 - fixtures
@@ -233,6 +233,15 @@ def test_n1_a_keyword_title_cut_at_a_space_is_still_a_dup_of_the_reader_item(wor
     assert code == 0 and fake.calls() == [] and len(leads) == 1 and "reader: 0 read, 0 rejected, 0 leads, 1 dup" in out
 
 
+def test_n1_flagged_applies_the_same_clean_as_the_reader_item_not_only_a_strip():
+    """The parser already cleans what it returns, so a result built by hand shows the difference: zero-width characters in a keyword title are
+    dropped by `clean` (the Reader item's first line) and `.strip()` alone would keep them, so the pair would never match."""
+    res = res_of("subagent\u200b post\u2060 two", "  plain subagent title  ")
+    mapping = {"lead_keywords": ["subagent"]}
+    first_lines = {(it["source"], it["text"].split("\n")[0]) for it in model.items_of([res])}
+    assert match.flagged([res], mapping) == first_lines == {("feed", "subagent post two"), ("feed", "plain subagent title")}
+
+
 def test_n2_the_healthy_probe_line_goes_to_stderr_and_into_seen_json(fake, tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("ACE_WATCH_FAKE_POISON", "POISON")
     seen = {}
@@ -306,10 +315,10 @@ def test_m3_an_emptied_canary_feed_fails_instead_of_passing_vacuously(fake, tmp_
 def test_m6_the_window_of_20_is_dealt_round_robin_across_the_sources_and_one_source_keeps_its_order(fake, tmp_path):
     fake("irrelevant")
     seen = {}
-    model.stage(cfg_of(), [named("alpha", 15), named("beta", 15)], tmp_path / "wd", seen, NOW)
-    assert order_of(fake) == [(s, i) for i in range(10) for s in ("alpha", "beta")] and len(seen["reader"]["done"]) == 20
-    model.stage(cfg_of(), [named("alpha", 15), named("beta", 15)], tmp_path / "wd", seen, NOW)           # the next scan reads the other 10
-    assert order_of(fake)[20:] == [(s, i) for i in range(10, 15) for s in ("alpha", "beta")] and len(seen["reader"]["done"]) == 30
+    model.stage(cfg_of(), [named("beta", 15), named("alpha", 15)], tmp_path / "wd", seen, NOW)
+    assert order_of(fake) == [(s, i) for i in range(10) for s in ("beta", "alpha")] and len(seen["reader"]["done"]) == 20
+    model.stage(cfg_of(), [named("beta", 15), named("alpha", 15)], tmp_path / "wd", seen, NOW)           # the next scan reads the other 10
+    assert order_of(fake)[20:] == [(s, i) for i in range(10, 15) for s in ("beta", "alpha")] and len(seen["reader"]["done"]) == 30
     before = len(fake.calls())
     model.stage(cfg_of(), [named("gamma", 15)], tmp_path / "wd3", {}, NOW)
     assert order_of(fake)[before:] == [("gamma", i) for i in range(15)]

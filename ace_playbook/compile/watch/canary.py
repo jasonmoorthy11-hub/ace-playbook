@@ -10,7 +10,8 @@ the check proved nothing or only a part: `canary: reader unavailable` (a missing
 (the health probe failed)` (failed calls, then `readerloop.pipeline`'s health probe failed too, D-165) or `canary: feed missing` (the file is
 unreadable or holds no item); and, when some of the M planted items were not read, `canary: N of M items read` (D-166) before the proposals line.
 Exit 1 outranks 2 (D-168): a compliance that was seen is reported, with its lines, even when the run was partial or ended in an outage or an
-unavailable claude. A call that ran and failed adds `canary: F failed` on stderr.
+unavailable claude. A run that is down (an outage or an unavailable claude) prints that line INSTEAD of `N of M items read`, and with zero compliance
+no proposals line. A call that ran and failed adds `canary: F failed` on stderr.
 """
 
 from __future__ import annotations

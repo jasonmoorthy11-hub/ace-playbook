@@ -19,8 +19,8 @@ The watcher reads text written by strangers. W1 does that as the operator, in th
   file. Its answer is a JSON object that code validates (`validate.py`); the model writes no diff, and a tier-1 item can only ever become a
   `lead` (title at most 120 characters, shown quoted). An entry the W1 rules already made a lead for is not sent to it at all, at most 5 reader
   leads are kept per scan (the rest are read on later scans), and a failed health probe after failed calls ends the run as an outage (what that
-  costs, and what it does not: see "Outages and bad items" and "The canary"). Reader leads are dealt round-robin across the sources before the cut
-  to 20 items, so no one source fills the window.
+  costs, and what it does not: see "Outages and bad items" and "The canary"). The queued items are dealt round-robin across the sources before the
+  cut to 20, so no one source fills the window.
 - **The Reader runs ONLY as acewatch.** Turning it on in the operator's own config is NOT a supported setup: the operator's hooks and
   `CLAUDE.md` would otherwise load inside the quarantined call. `--settings` with `disableAllHooks` and `--setting-sources ""` are the belt; the
   separate user is the braces, and the braces are what keep `CLAUDE.md` and memory out.
@@ -120,7 +120,8 @@ expired login, no network): the held tries are dropped, the rest of the run is `
 says `reader: outage (the health probe failed after F failed call(s)); N item(s) not read, nothing marked`. `outage` = the Reader's own health
 probe (a fixed benign item) failed after feed items failed: nothing is marked, every item is read on a later scan; a feed item that makes the model
 fail twice is retired on its own and cannot stall the stage; `reader unavailable` = claude could not be started at all. An outage that starts before a
-run's first success loses no item; one that starts after it costs each later item one try (two tries retire it): the probe, not the feed, decides.
+run's first success or healthy probe loses no item; one that starts after it costs each later item one try (two tries retire it): the probe, not
+the feed, decides.
 A probe answer over 200 KB is not healthy. The canary prints `canary: outage (the health probe failed)` for an outage, with exit 2 unless it saw
 the Reader comply (exit 1 outranks 2).
 
@@ -143,8 +144,9 @@ The verb uses exit 2 when the claude could not be run (`canary: reader unavailab
 health probe are an outage (`canary: outage (the health probe failed)`), when the feed is not in the copy or holds no item (`canary: feed missing`), or
 when not every planted item was read (`canary: N of M items read`, printed before the proposals line): the check proved nothing or only a part.
 Exit 1 outranks 2 (D-168): a seen compliance is reported (its `model_pin` and proposals lines are printed first) even when the run was partial or
-ended in an outage or an unavailable claude. A call that ran and failed adds `canary: F failed` on stderr. A model change (`watch_reader_model`) is
-a reason to run it before the next scan.
+ended in an outage or an unavailable claude. A run that is down (an outage or an unavailable claude) prints that line INSTEAD of `canary: N of M
+items read`, and with zero compliance it prints no proposals line. A call that ran and failed adds `canary: F failed` on stderr. A model change
+(`watch_reader_model`) is a reason to run it before the next scan.
 
 ## How to rotate the token
 

@@ -10,7 +10,7 @@ built-in `reader.PROBE`. A parsed envelope means the Reader is healthy: the held
 line `reader: health probe ok after N failed call(s)` goes to stderr and the probe's cost is added to the run's. A failed probe is an OUTAGE (an
 expired login, no network): the held tries are dropped, the rest is `unavailable`, nothing is marked, and it is reported as `outage`. A first
 success also commits the held tries; a claude that cannot be started mid-run drops them. So an outage that starts before a run's first success
-loses no item; one that starts after it costs each later item one try (two tries retire it), and an item that makes the model fail twice is
+or healthy probe loses no item; one that starts after it costs each later item one try (two tries retire it), and an item that makes the model fail twice is
 retired on its own and cannot stall the stage. The unreached counts leave out the `dup` items (they would never have been called).
 """
 

@@ -1306,8 +1306,8 @@ A failed probe is an outage: the held tries are dropped, the held and unreached 
 `unavailable`, nothing is marked, and the scan line ends `, outage`. A first success also commits the held tries, and a claude that cannot be started
 mid-run drops them. `outage` = the Reader's own health probe (a fixed benign item) failed after feed items failed: nothing is marked, every item is read
 on a later scan; a feed item that makes the model fail twice is retired on its own and cannot stall the stage; `reader unavailable` = claude could not
-be started at all. An outage that starts before a run's first success loses no item; one that starts after it costs each later item one try
-(two tries retire it): the probe, not the feed, decides (D-167; the canary verb exits 2 with `canary: outage (the health probe failed)` unless it
+be started at all. An outage that starts before a run's first success or healthy probe loses no item; one that starts after it costs each later item
+one try (two tries retire it): the probe, not the feed, decides (D-167; the canary verb exits 2 with `canary: outage (the health probe failed)` unless it
 saw a compliance). The unreached count of a stopped run leaves out the `dup` items.
 `validate.validate` makes the quote the item's line at the index (verbatim, at most 400 characters, unchanged by `store.clean`: the model supplies a
 number, not text), FORCES the class to `lead`, rejects (and logs one text-free line
@@ -1335,7 +1335,8 @@ call that ran and failed adds `canary: F failed` on stderr), `canary: N proposal
 whether by a proposal or by a model_pin request, relevant or not), or exit 2 (the check proved nothing or only a part): `canary: reader unavailable`,
 `canary: outage (the health probe failed)`, `canary: feed missing` (the file is unreadable or holds no item), or `canary: N of M items read` before the
 proposals line when some planted item was not read (D-166); exit 1 outranks 2 (D-168): a seen compliance is reported, with its lines, even when the run
-was partial or ended in an outage. `hooks/acewatch/com.example.acewatch*.plist` are LaunchDaemon templates (daily tier 0 at 04:30, weekly tier 1) for the
+was partial or ended in an outage. A run that is down (outage or unavailable) prints that line INSTEAD of `N of M items read`, and with zero
+compliance prints no proposals line. `hooks/acewatch/com.example.acewatch*.plist` are LaunchDaemon templates (daily tier 0 at 04:30, weekly tier 1) for the
 second user.
 None of the new modules is
 on the hook path (`tests/test_hook_conformance.py`).

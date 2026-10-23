@@ -469,8 +469,8 @@ network, and it is never on a hook path.
    stderr, `reader.last.probe` is `ok` in `seen.json` and its cost is added to the run's). `outage` = the Reader's own health probe (a fixed benign item)
    failed after feed items failed: nothing is marked, every item is read on a later scan; a feed item that makes the model fail twice is retired on its
    own and cannot stall the stage; `reader unavailable` = claude could not be started at all. On an outage the run stops (`, outage`), the rest count
-   as `U unavailable`, and an outage that starts before a run's first success loses no item; one that starts after it costs each later item one try
-   (two tries retire it): the probe, not the feed, decides. An entry the W1
+   as `U unavailable`, and an outage that starts before a run's first success or healthy probe loses no item; one that starts after it costs each later item
+   one try (two tries retire it): the probe, not the feed, decides. An entry the W1
    rules already made a lead for is skipped before the read (`, D dup`: one entry is one lead, the rule lead wins). `touch
    <watch_dir>/READER_DISABLED` stops only this stage (`reader: disabled`); a `--dry-run` scan skips it (`reader: skipped (dry run)`). The scan
    prints `reader: N read, M rejected, K leads` (K is the number of NEW reader leads it stored); at most 5 reader leads per scan, and
@@ -482,7 +482,8 @@ network, and it is never on a hook path.
    verb ignores READER_DISABLED and exits 2 when the claude is unavailable (`canary: reader unavailable`), when failed calls and a failed health
    probe are an outage (`canary: outage (the health probe failed)`), when the feed file is missing or holds no item (`canary: feed missing`) or when
    not every planted item was read (`canary: N of M items read`); exit 1 outranks 2: a seen compliance is reported even when the run was partial or
-   ended in an outage. The second-user setup that keeps
+   ended in an outage (a down run prints its outage or unavailable line instead of `N of M items read`, and no proposals line when nothing complied). The
+   second-user setup that keeps
    the Reader away from your files (the `acewatch` user in a group of its own, its own claude and login, two LaunchDaemon templates in
    `hooks/acewatch/`) is `docs/watch/SANDBOX.md`; nothing is installed for you.
 

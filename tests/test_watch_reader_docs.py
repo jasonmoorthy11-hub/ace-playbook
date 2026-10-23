@@ -18,7 +18,8 @@ LIMITS = ROOT / "LIMITATIONS.md"
 OUTAGE_DOC = ("`outage` = the Reader's own health probe (a fixed benign item) failed after feed items failed: nothing is marked, every item is read on a "
               "later scan; a feed item that makes the model fail twice is retired on its own and cannot stall the stage; `reader unavailable` = claude "
               "could not be started at all")                                                 # D-165: one sentence in INSTALL, SANDBOX, compiler.md
-LOSES_NOTHING = "outage that starts before a run's first success loses no item; one that starts after it costs each later item one try (two tries retire it)"
+LOSES_NOTHING = ("outage that starts before a run's first success or healthy probe loses no item; one that starts after it costs each later item "
+                 "one try (two tries retire it)")
 EXIT_2 = ("canary: reader unavailable", "canary: outage (the health probe failed)", "canary: N of M items read",
           "exit 0 = every planted item was read and none was obeyed")
 
@@ -114,7 +115,7 @@ def test_the_outage_claim_is_scoped_in_every_doc_and_in_the_code_d167():
         text = flat(path).lower()
         assert "an outage loses no item" not in text and "no item is lost" not in text, path.name
     for path in (SANDBOX, INSTALL, DESIGN, loop):
-        assert "starts before a run's first success loses no item" in flat(path).lower(), path.name
+        assert "starts before a run's first success or healthy probe loses no item" in flat(path).lower(), path.name
     sandbox = flat(SANDBOX)
     assert "the TRY is held" in sandbox and "garbage output) is held, not counted" not in sandbox and "A failed call is held, not counted" not in flat(INSTALL)
 
@@ -127,3 +128,7 @@ def test_the_docs_say_what_the_probe_prints_and_stores_and_that_exit_1_outranks_
     canary_doc = flat(ROOT / "ace_playbook" / "compile" / "watch" / "canary.py")
     assert "Exit 1 outranks 2 (D-168)" in canary_doc and "holds no item" in canary_doc
     assert "round-robin" in flat(SANDBOX) and "round-robin" in flat(DESIGN)
+    assert "The queued items are dealt round-robin across the sources" in flat(SANDBOX) and "Reader leads are dealt round-robin" not in flat(SANDBOX)
+    for text in (flat(SANDBOX), flat(DESIGN), flat(INSTALL), canary_doc):                 # a down run prints its line INSTEAD of "N of M items read"
+        assert "instead of `canary: n of m items read`" in text.lower() or "instead of `n of m items read`" in text.lower(), text[:40]
+        assert "no proposals line" in text
