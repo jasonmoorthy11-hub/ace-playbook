@@ -31,7 +31,9 @@ LOOSE_RE = re.compile(r"[^\s;&|()<>'\"`$,{}]+")  # words with quotes and shell p
 REDIRECT_RE = re.compile(r">>?[|&]?\s*(\"[^\"]*\"|'[^']*'|[^\s;&|()<>]+)")
 URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
 SEPARATOR_RE = re.compile(r"&&|\|\||[;|&\n]")
-UNRESOLVABLE_RE = re.compile(r"[$`]|\.\.|.~")  # a variable, a substitution, a parent, or a `~` that is not first
+UNRESOLVABLE_RE = re.compile(r"[$`\"'<>(){}\\]|\.\.|.~")  # quoting, a variable or substitution, a redirection, a parent, a `~` that is not first
+CD = ("cd", "pushd")
+CD_MAX_LINKS, CD_MAX_JOINS, CD_MAX_PATH = 50, 20000, 4096
 
 
 def _server_named(w: str) -> bool:
@@ -92,13 +94,15 @@ def _cd_chain(cmd: str) -> list[str] | None:
     the next separator); None when any link has no target or cannot be resolved (the caller then records the root)."""
     chain, cur = [], ""
     for seg in SEPARATOR_RE.split(cmd):
-        words = [w.strip("'\"").lstrip("(") for w in seg.split()]
+        words = [w.lstrip("(") for w in seg.split()]
         for i, w in enumerate(words):
-            if w in ("cd", "pushd"):
+            if w in CD:
                 target = next((x for x in words[i + 1:] if not x.startswith("-")), "")
-                if not target or UNRESOLVABLE_RE.search(target):
-                    return None
+                if not target or UNRESOLVABLE_RE.search(target) or re.search("[\"']", seg):
+                    return None  # no target, an unresolvable one, or any quote in the segment (`cd "a b"` must not read as `a`)
                 cur = target if target.startswith(("/", "~")) else os.path.join(cur, target)
+                if len(chain) >= CD_MAX_LINKS or len(cur) > CD_MAX_PATH:
+                    return None
                 chain.append(cur)
     return chain
 
@@ -127,9 +131,11 @@ def bash_analyse(cmd: str) -> tuple[set[str], bool]:
     bases = {n for u in urls for b in [os.path.basename(urlparse(u).path) or "index.html"] for n in (b, b.removesuffix(".git"))}
     found |= bases | {os.path.join(p, b) for p in found for b in bases}
     chain = _cd_chain(cmd)
-    if chain is None:
-        dests.add("")  # a cd with no target or an unresolvable one: anything below the root may have been written
+    seen = max(sum(w in CD for w in s) for s in seqs)  # cd words in either tokenisation
+    if chain is None or seen > len(chain) or len(chain) * len(found) > CD_MAX_JOINS:
+        dests.add("")  # a cd the chain could not resolve, or over a cap: anything below the root may have been written
     else:
         dests |= set(chain)
         found |= {os.path.join(c, w) for c in chain for w in found}  # every marked word also lands under each cd target
+    dests |= {s[i + 1] for s in seqs for i, w in enumerate(s[:-1]) if w in CD and not s[i + 1].startswith("-")}
     return ((found | {os.path.dirname(p) for p in found}) - {""}) | {DEST + d for d in dests}, ok

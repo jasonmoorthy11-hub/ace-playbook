@@ -396,7 +396,8 @@ the long-token lint partly covers and nothing measures.
   as written (no glob or brace expansion is done), as does the cwd for any write-capable `find` or `xargs` (plus the `find` root);
   `~` and a leading `$HOME` are expanded; the target of every `cd` or `pushd` (the first word that is not an option) is recorded as a directory, chained
   targets resolve one after another, every marked word is also joined under each target, and a missing or unresolvable target (`$`, a
-  backtick, `..`, a `~` that is not first) records the session root; and for every URL its host and first
+  backtick, `..`, a `~` that is not first, a quote or a shell metacharacter in the target or a quote anywhere in
+  its segment, a `cd` word the chain did not resolve, a chain of over 50 links or 20 000 joins) records the session root; and for every URL its host and first
   path segment are recorded as directories under the working directory and under each marked directory (a recursive `wget` writes
   `host/path`). A script or interpreter that writes a file it does not name on its command line is not tracked; name the file on
   the command line or read it through the Bash tool's own output. Writes by a command outside the verb list and without a redirection

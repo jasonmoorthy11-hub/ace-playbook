@@ -521,3 +521,28 @@ def test_cd_chain_in_the_raw_set():
     got = bash_analyse("cd a && cd b && echo x > r.md")[0]
     assert {DEST + "a", DEST + "a/b", "a/b/r.md", "a/r.md", "r.md"} <= got and DEST not in got
     assert DEST in bash_analyse("cd a && cd $X && echo x > r.md")[0]
+
+
+# ------------------------------------------------------------- D-169 clause 9 (wave 8: R9 quoted/unresolved cd taints the root, R10 caps)
+@pytest.mark.parametrize("cmd", [
+    'cd "a b" && echo x > r.md',                                               # R9: a quote anywhere in the cd segment
+    "cd 'a b' && echo x > r.md",
+    'cd sub "x y" && echo x > r.md',                                           # the target is clean but the segment holds a quote
+    "cd $(pwd)/x && touch r",
+    "cd a\\ b && echo x > r.md",
+    "cd a>b && echo x > r.md",
+    "cd {a,b} && echo x > r.md",
+    '"cd" sub && echo x > r.md',                                               # R9: a cd token the chain did not resolve
+    "; ".join(["cd a"] * 51) + "; echo x > r.md",                              # R10: over 50 links
+    "cd a && cd b && echo " + " ".join(f"f{i}.md" for i in range(10001)) + " > r.md",   # R10: over 20 000 joins
+])
+def test_wave8_quoted_unresolved_and_oversized_cd_taint_the_root(tmp_path, cmd):
+    assert result_origin(tmp_path, [bash(cmd)], "README.md") == "agent_file"
+
+
+def test_wave8_quote_free_cd_keeps_the_root_clean(tmp_path):                      # the pinned negative
+    for cmd in ("pushd sub && cp a.md b.md", "; ".join(["cd a"] * 50) + "; echo x > r.md",
+                "cd a && cd b && echo " + " ".join(f"f{i}.md" for i in range(5000)) + " > r.md"):
+        assert result_origin(tmp_path, [bash(cmd)], "README.md") == "user_file", cmd[:40]
+    assert result_origin(tmp_path, [bash("pushd sub && cp a.md b.md")], "sub/b.md") == "agent_file"
+    assert result_origin(tmp_path, [bash("pushd sub && cp a.md b.md")], "b.md") == "agent_file"
