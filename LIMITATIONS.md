@@ -187,11 +187,12 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   that renders it must escape it as it does the lead titles of W1. The quote is a verbatim line chosen by number, never model text. A fooled
   Reader can still call an item relevant (a noise lead; at most five per scan) or stay silent about a real one; the canary verb
   (`compile watch canary`) checks refusal only for its four planted items, not in general. The Reader is for the `acewatch` user ONLY: run
-  as the operator it would load the operator's hooks and `CLAUDE.md` unless `--settings` and `--setting-sources ""` hold (they are in the
-  call, but the fake claude of the tests cannot tell whether a claude version still honours them). The `acewatch` user, its group, its own
-  claude and login and any egress limit are the operator's steps (`docs/watch/SANDBOX.md`): launchd cannot restrict the network, so without
-  a `pf` rule the fetcher's own guards are the only egress control. Moving `acewatch`'s proposals to the operator's store is a manual copy,
-  not built.
+  as the operator it would load the operator's hooks and `CLAUDE.md`. The call passes `--settings` (`disableAllHooks`) and
+  `--setting-sources ""` (hooks off, the settings files dropped; checked by the release probe on the installed binary, but the fake claude of the
+  tests cannot tell whether a later claude version still honours them); `CLAUDE.md` and auto-memory are kept out by the separate user, which
+  is the guarantee. The `acewatch` user, its group, its own claude and login and any egress limit are the operator's steps
+  (`docs/watch/SANDBOX.md`): launchd cannot restrict the network, so without a `pf` rule the fetcher's own guards are the only egress control.
+  Moving `acewatch`'s proposals to the operator's store is a manual copy, not built.
 - Watcher, sanitizer coverage: `strip_hidden` reads inline `style` attributes and simple single-selector `<style>` rules (a tag, `.class` or
   `#id` rule, no combinators; class and id names match without case, as in quirks mode). Media queries, descendant, child and attribute
   selectors, `@import` and external stylesheets are NOT handled, so text hidden that way is read as visible. The inline rules hide opacity

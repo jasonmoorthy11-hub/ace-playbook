@@ -450,7 +450,8 @@ network, and it is never on a hook path.
    single-turn `claude -p` call whose answer code validates; the only result is a `lead` with no diff. **The Reader is for the `acewatch` user
    ONLY** (`docs/watch/SANDBOX.md`): turning it on in your own config is NOT a supported setup, because your hooks and `CLAUDE.md` would
    otherwise load inside the quarantined call (the call passes `--settings hooks/reader-settings.json`, which holds `disableAllHooks`, and
-   `--setting-sources ""`; those are the belt, the separate user is the braces). Three config keys, in `acewatch`'s config (types are checked
+   `--setting-sources ""`: hooks off, the settings files dropped; the separate user is what keeps `CLAUDE.md` and memory out). Three config
+   keys, in `acewatch`'s config (types are checked
    at load, nothing else; the Reader looks at the claude when it runs):
 
    ```json
@@ -462,12 +463,17 @@ network, and it is never on a hook path.
    `reader: 0 read, 0 rejected, 0 leads, U unavailable` and `reader: claude is unavailable; U item(s) not read` (U is every item left unread
    when the first one could not be started) and carries on. A call that started and then failed (an error answer, a non-zero exit, a
    timeout, empty output) is not "unavailable": it adds `, F failed` to the first line, the loop goes on to the next item, and an item that
-   failed twice is not read again. `touch <watch_dir>/READER_DISABLED` stops only this stage (`reader: disabled`); a `--dry-run` scan skips it
-   (`reader: skipped (dry run)`). The scan prints `reader: N read, M rejected, K leads` (K is the number of NEW reader leads it stored; at most
-   five per scan, `, C capped` counts the rest) and `compile watch status` shows the last one. `python3 -m ace_playbook.compile watch canary`
-   runs the planted-injection feed through the real Reader path, writes nothing and prints `canary: 0 proposals` (exit 0) or
-   `canary: N proposals` (exit 1): run it weekly and after any model change. The canary verb ignores READER_DISABLED and exits 2 only when the
-   claude is unavailable or the feed file is missing (`canary: reader unavailable`, `canary: feed missing`). The second-user setup that keeps
+   failed twice is not read again. But three failed calls in a row with no success are an outage (an expired login, no network): the run
+   stops, the rest count as `U unavailable`, nothing is marked read and the three tries are not counted, so no item is lost. An entry the W1
+   rules already made a lead for is skipped before the read (`, D dup`: one entry is one lead, the rule lead wins). `touch
+   <watch_dir>/READER_DISABLED` stops only this stage (`reader: disabled`); a `--dry-run` scan skips it (`reader: skipped (dry run)`). The scan
+   prints `reader: N read, M rejected, K leads` (K is the number of NEW reader leads it stored); at most 5 reader leads per scan, and
+   the rest are read on later scans (`, C capped` counts the items not reached); `compile watch status` shows the last line.
+   `python3 -m ace_playbook.compile watch canary` runs the planted-injection feed through the real Reader path, writes nothing and prints
+   `canary: 0 proposals` (exit 0) or `canary: N proposals` and/or `canary: S model_pin request(s)`.
+   In short, exit 1 = the Reader complied (a proposal or a model_pin request), relevant or not. Run it weekly and after any model change. The canary
+   verb ignores READER_DISABLED and exits 2 when the claude is unavailable, when three failed calls in a row ended the run, or when the feed
+   file is missing (`canary: reader unavailable`, `canary: feed missing`). The second-user setup that keeps
    the Reader away from your files (the `acewatch` user in a group of its own, its own claude and login, two LaunchDaemon templates in
    `hooks/acewatch/`) is `docs/watch/SANDBOX.md`; nothing is installed for you.
 

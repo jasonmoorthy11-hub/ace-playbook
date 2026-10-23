@@ -41,6 +41,7 @@ def validate(out: object, item: dict, stats: dict | None = None) -> dict | None:
     spaced = " ".join(out["title"][:reader.MAX_TITLE + 1].split())          # a removed separator is a space, never a join: runs collapse
     title = " ".join(clean(spaced, reader.MAX_TITLE + 1).split())
     quote = lines[idx].strip()[:reader.MAX_LINE] if 0 <= idx < len(lines) else ""       # a line of the sanitized text: a substring of it by construction
+    # the cleaned title's upper bound is implied by the raw-length check (cleaning only removes and collapses); it stays as a cheap second guard
     ok = (0 < len(title) <= reader.MAX_TITLE and len(out["title"]) <= reader.MAX_TITLE and not title.lower().startswith(CODE_MADE)
           and quote != "" and clean(quote, reader.MAX_LINE) == quote)
     if not ok:

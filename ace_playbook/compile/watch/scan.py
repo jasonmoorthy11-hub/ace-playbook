@@ -111,7 +111,8 @@ def run(cfg: Config, tier: str = "all", dry_run: bool = False, force: bool = Fal
         results, notes, counts = collect(sources, seen, now, force, opener)
         inv = inventory.build(mapping, now)
         cands = match.candidates(inv, results, mapping, before, now)
-        made, rlines = model.stage(cfg, results, wd, seen, now, dry_run)         # the Reader: [] and no lines unless watch_reader is on
+        flagged = {(c["change"]["target"], c["evidence"][0]["quote"]) for c in cands if c["class"] == "lead"}      # entries the rules already flagged
+        made, rlines = model.stage(cfg, results, wd, seen, now, dry_run, flagged)   # the Reader: [] and no lines unless watch_reader is on
         extra = [r for r in made if r["id"] not in {c["id"] for c in cands}]       # a lead the rule path made for the same entry wins (same id)
         out = reconcile(wd, [*cands, *extra], results, now, dry_run, inv)
         model.settle(seen, rlines, now, sum(1 for c in out["new"] if c["id"] in {r["id"] for r in extra}))
