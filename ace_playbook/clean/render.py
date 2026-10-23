@@ -49,7 +49,9 @@ def compute_signals(parsed: Parsed) -> Signals:
 
 
 def turn_line(t: Turn) -> str:
-    return f"{PREFIX[t.role]}: {t.text}"
+    """`R: first line`, every further line of the turn indented: no line of tool output or user text starts at column 0, so none can pose as
+    a `U:` turn (S-1 F15). `splitlines` also breaks at \\r, \\x0b, \\x0c, \\x1c-\\x1e, \\x85 and the Unicode separators, which a reader may take for breaks."""
+    return f"{PREFIX[t.role]}: " + "\n    ".join(t.text.splitlines() or [""])
 
 
 def sample_turns(turns: list[Turn], head: int = HEAD_CHARS,

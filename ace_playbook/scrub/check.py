@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,11 +42,11 @@ def load_allow(root: Path) -> tuple[str, ...]:
 
 
 def list_files(root: Path, staged: bool) -> list[str]:
-    cmd = (["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"]
-           if staged else ["git", "ls-files", "--cached", "--others", "--exclude-standard"])
+    cmd = (["git", "diff", "--cached", "--name-only", "-z", "--diff-filter=ACM"]            # -z: NUL-split, git does not C-quote the names (S-1 F13)
+           if staged else ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"])
     try:
-        out = subprocess.run(cmd, cwd=root, capture_output=True, text=True, check=True).stdout
-        return [ln for ln in out.splitlines() if ln]
+        out = subprocess.run(cmd, cwd=root, capture_output=True, check=True).stdout
+        return [os.fsdecode(name) for name in out.split(b"\0") if name]
     except (subprocess.CalledProcessError, FileNotFoundError):
         return [str(p.relative_to(root)) for p in root.rglob("*")
                 if p.is_file() and ".git" not in p.parts and ".venv" not in p.parts]

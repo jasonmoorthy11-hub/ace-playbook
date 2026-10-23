@@ -45,7 +45,7 @@ def test_model_pin_generates_the_diff_from_the_template_and_quotes_the_table_row
     assert ev["quote"] == f"| March 1, 2027 | [`{OLD}`](https://docs.example.test/models) | `{NEW}` |"          # the history row, which names the successor
     assert ev["tier"] == 0 and ev["url"] == "https://example.test/deprecations.md" and len(ev["sha256"]) == 64 and len(ev["quote"]) <= 400
     assert r["verify"] == f'grep -n "{OLD}" ~/.claude/settings.json'
-    assert r["expires"] == "2026-11-20T12:00:00Z" and re.fullmatch(r"W-[0-9a-f]{8}", r["id"]) and match.check(r) is None
+    assert r["expires"] == "2026-11-20T12:00:00Z" and re.fullmatch(r"W-[0-9a-f]{16}", r["id"]) and match.check(r) is None
 
 
 def test_the_quote_is_the_table_row_text_verbatim_and_a_substring_of_the_fetched_body():
@@ -191,7 +191,7 @@ def test_ids_are_stable_across_rescans_and_change_with_the_evidence():
     b = match.candidates(inv(**{"settings.model": SETTINGS}), [DEPR()], {}, {}, "2026-10-22T00:00:00Z")
     assert [r["id"] for r in a] == [r["id"] for r in b]
     assert match.make_id("docs", "t", "0" * 64, "q") != match.make_id("docs", "t", "1" * 64, "q") != match.make_id("lead", "t", "0" * 64, "q")
-    assert match.make_id("docs", "t", "0" * 64, "q") == "W-" + hashlib.sha256(("docs|t|" + "0" * 64 + "|q").encode()).hexdigest()[:8]
+    assert match.make_id("docs", "t", "0" * 64, "q") == "W-" + hashlib.sha256(("docs|t|" + "0" * 64 + "|q").encode()).hexdigest()[:16]
 
 
 def test_candidates_are_ranked_model_pin_version_docs_lead():

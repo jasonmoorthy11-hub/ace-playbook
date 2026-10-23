@@ -23,7 +23,8 @@ import re
 
 from .cssscan import rules, simple_selectors, strip_comments, unescape
 
-NUMBER = re.compile(r"([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)([a-z%]*)")
+NUMBER = re.compile(r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)([a-z%]*)")      # alternatives that exclude each other: no digit run splits two ways
+MAX_NUMBER, MAX_STYLE = 64, 65536   # a CSS number never needs more than a few dozen characters; a style text over 64 KiB is read as hiding
 SCALE = re.compile(r"scale(?:3d|x|y|z)?\(([^)]*)\)")
 INSET = re.compile(r"inset\(([^)]*)\)")
 TRANSLATE = re.compile(r"translate(?:x|y|3d)?\(([^)]*)\)")
@@ -36,7 +37,7 @@ TINY = {"px": 1, "pt": 0.75, "em": 0.0625, "rem": 0.0625, "ex": 0.125, "ch": 0.1
 
 
 def _num(value: str) -> tuple[float, str] | None:
-    m = NUMBER.fullmatch(value)
+    m = NUMBER.fullmatch(value) if len(value) <= MAX_NUMBER else None
     return (float(m.group(1)), m.group(2)) if m else None
 
 
@@ -88,9 +89,9 @@ def _clear(value: str) -> bool:
 
 
 def _declarations(style: str) -> list[tuple[str, str]]:
-    s = unescape(strip_comments(style.replace("\x00", ""))).lower()
+    s = unescape(strip_comments(style[:MAX_STYLE].replace("\x00", ""))).lower()
     out = []
-    for d in re.sub(r"\s*!\s*important", "", s).split(";"):
+    for d in re.sub(r" ?! ?important", "", re.sub(r"\s+", " ", s)).split(";"):         # whitespace runs first: the pattern never backtracks over one
         k, _, v = d.partition(":")
         k, v = re.sub(r"\s+", "", k), re.sub(r"\s*([(),/])\s*", r"\1", " ".join(v.split()))
         v = v[5:-1] if v.startswith("calc(") and v.endswith(")") else v
@@ -111,7 +112,9 @@ def _hides(k: str, v: str) -> bool:
 
 
 def style_hidden(style: str) -> bool:
-    """True when the declarations of `style` hide their element (see the module docstring)."""
+    """True when the declarations of `style` hide their element (see the module docstring); a text over MAX_STYLE hides (fail closed)."""
+    if len(style) > MAX_STYLE:
+        return True
     decls = _declarations(style)
     if any(_hides(k, v) for k, v in decls):
         return True

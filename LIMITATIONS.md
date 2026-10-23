@@ -88,6 +88,16 @@ state-versus-lesson classifier. In the stage-2 compiler: the arms (randomization
   chains rests on their disjoint row schemas (`tests/test_chain_tamper.py`); a domain-separated MAC needs a format change and a re-seal migration.
   The tamper matrix is `tests/test_chain_tamper.py`; it pins the accepted residual (an old chain restored with its old heads file verifies) and
   that a cut last line in `labels.jsonl` is skipped by its tolerant read, where in the two keyed chains it is a break at that row.
+- The shadow hook's kill file `data_dir/proposals/DISABLED` is writable by the user the agent runs as, so the gated agent can mute block and warn
+  with one `touch` (S-1 F3). It is not prevented, it is visible: while it exists the hook still evaluates and writes its rows with
+  `mode: "disabled"` (the real cause, `would_fire: true`), prints nothing, and logs `disabled:kill_file` (once per 8 KiB of `shadow.log`);
+  `compile status` shows `kill_file` in the heartbeat notes and the status line and menu-bar plugin print `DISABLED`. Nothing is raised or
+  blocked, and the agent can delete the file again, so this is detection for the operator, not enforcement. The permission deny rules
+  should cover `data_dir/proposals/**` (so `proposals/approved/` too) as well as `~/.config/ace-playbook/**` (hooks/INSTALL.md section 7).
+  Separately, a payload over the 256 KiB stdin cap (S-1 F1) is read only for its first 256 KiB: the tool name is found by a raw scan of those
+  bytes and, when it cannot be read or appears with two different values, every proposal of the event applies; each one with
+  `on_truncated: "fire"` (all block-capable ones) fires as a `truncated` row and is denied or warned like a cut command. A proposal with
+  `on_truncated: "ignore"` does not fire on such a payload.
 - A mutation run over `detectors.py`, `shell.py` and `textrules.py` (250 of 787 mutants, 72.0 % killed) left 68 survivors; those that were not
   equivalent are pinned by `tests/test_mutation_survivors.py`. The module-level regexes (`CORRECTION`, `SCRATCH`, the `textrules` checks) remain
   the weak spot: each alternation branch and `\b` needs its own case. Every test runs under a 60 s SIGALRM timer (`tests/conftest.py`) that
@@ -173,7 +183,8 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   offsets on an element without `position`, `<font size=0>`, white-on-white or any low-contrast colour pair, a size or opacity just above
   the thresholds, `var()` indirection in a style value, the content of `<textarea>`, `<plaintext>` and `<xmp>` (kept as text), and the odd
   comment spellings (`<!->` and similar) that browsers treat differently from the parser. End tags are matched by the name as written, so
-  `</x:div>` does not close `<div>`, as in a browser.
+  `</x:div>` does not close `<div>`, as in a browser. A style text (an inline `style` value or one rule body) over 64 KiB counts as hiding (fail
+  closed), and a CSS value longer than 64 characters is not read as a number (S-1 F2 F4), so `opacity:0.` plus 64 zeros and a 1 is read as visible.
   The sanitizer builds ONE HTML tree (the HTML Standard's tree construction, simplified: `treebuild`, `treemodes`) and reads it twice, for the
   visible text (`treewalk`) and for the rules of `<style>` (`treestyle`). Every simplification is fail closed: it hides MORE, never less. The
   stack of open elements keeps the scope barriers: `</p>` is stopped by `button`, `</li>` by `ol` and `ul`, an end tag by a "special"

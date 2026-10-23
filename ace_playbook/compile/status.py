@@ -199,7 +199,8 @@ def _heartbeat(cfg: Config, rows: list[dict], notes: list[str]) -> dict:
     ok, extra = rec.get("ok") is True and _stamp(rec.get("last_run")) != "-", rec["notes"] if isinstance(rec.get("notes"), list) else []
     return {"last_hook_row": stamps(rows), "last_live_fire": stamps([r for r in rows if fired(r)]),
             "last_offline_scan": _mtime(cfg.path(OFFLINE_STATE)), "last_nightly_ok": rec["last_run"] if ok else None,
-            "notes": [*notes, *(["nightly:failed"] if rec.get("ok") is False else []), *[n[:80] for n in extra if isinstance(n, str) and n.isprintable()][:4]]}
+            "notes": [*notes, *(["kill_file"] if cfg.path("proposals/DISABLED").exists() else []),      # the shadow hook's kill switch is on (S-1 F3)
+                      *(["nightly:failed"] if rec.get("ok") is False else []), *[n[:80] for n in extra if isinstance(n, str) and n.isprintable()][:4]]}
 
 
 def build(cfg: Config, days: int = 14, now: str | None = None) -> dict:
@@ -258,10 +259,9 @@ def render(s: dict) -> str:
             f"chains {'ok' if all(v == 'ok' for v in m['chains'].values()) else 'BROKEN'}  report {s['report_sha256'][:8]}")
     oldest = f" (oldest {age(s['queue'][0]['ts'], now)})" if s["queue"] else ""
     oldest += f", {s['queue_retired']} more on retired proposals" if s.get("queue_retired") else ""
-    nightly = age(h["last_nightly_ok"], now)
     lines = [head, *table(s), "", f"queue: {s['queue_total']} unlabelled{oldest}",
              f"heartbeat  hook {age(h['last_hook_row'], now)}  live fire {age(h['last_live_fire'], now)}  "
-             f"offline scan {age(h['last_offline_scan'], now)}  nightly ok {nightly}",
+             f"offline scan {age(h['last_offline_scan'], now)}  nightly ok {age(h['last_nightly_ok'], now)}",
              f"cost p95 {c['p95_ms']} ms vs {c['threshold_ms']}",
              "agreement  " + "  ".join(f"{k.replace('_', ' ')} {'-' if v is None else v}" for k, v in s["agreement"].items()),
              "notes: " + (", ".join(h["notes"]) or "none")]

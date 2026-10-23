@@ -135,11 +135,11 @@ def test_unparseable_or_incomplete_payloads_exit_silently(w, run, raw):
     assert run.rows == []
 
 
-def test_an_oversize_payload_is_skipped_and_logged(w, run):
+def test_an_oversize_payload_is_logged_as_an_error_and_fires_like_a_cut_command(w, run):
     big = json.dumps(cs.pre_payload(RM + " # " + "a" * 270000)).encode()
     assert len(big) > shadow.MAX_STDIN
-    assert run(raw=big) == (0, "", "")
-    assert run.rows == [] and "skipped:oversize" in run.log
+    assert run(raw=big) == (0, "", "")                            # observe mode: nothing on stdout (block and warn: test_security_s1.py)
+    assert [r["cause"] for r in run.rows] == ["truncated"] and "error:oversize" in run.log and "skipped:oversize" not in run.log
 
 
 @pytest.mark.parametrize("arg", [None, "", "bogus", "PRE"])
@@ -153,10 +153,10 @@ def test_the_argument_decides_the_event_and_a_stop_payload_is_not_a_bash_call(w,
     assert run.rows == []
 
 
-def test_the_kill_switch_file_silences_the_hook(w, run):
+def test_the_kill_switch_file_silences_the_hook_but_leaves_a_disabled_row_and_a_log_line(w, run):
     (w.data / "proposals" / "DISABLED").write_text("")
     assert run(cs.pre_payload(RM)) == (0, "", "")
-    assert run.rows == []
+    assert [r["mode"] for r in run.rows] == ["disabled"] and "disabled:kill_file" in run.log
 
 
 def test_shell_metacharacters_in_the_command_are_data(w, run):

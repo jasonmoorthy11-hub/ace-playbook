@@ -255,10 +255,13 @@ want the wiring in place for later.
 
 What it writes, all under `data_dir` and mode 0600: `shadow.jsonl` (append-only, one row per fire:
 `ts`, `proposal_id`, `lesson_id`, `mode`, `event`, `tool_name`, `session` (a 16-character hash),
-`payload_sha256`, `would_fire`, `cause` (`detector` or `truncated`), `tier`; never the command text), `approvals.jsonl` (hash-chained, one row per approval), `shadow.log` (one type-only line per
+`payload_sha256`, `would_fire`, `cause` (`detector` or `truncated`), `tier`; never the command text; `mode` is `disabled` while the kill file
+exists), `approvals.jsonl` (hash-chained, one row per approval), `shadow.log` (one type-only line per
 skipped proposal or error, capped at 1 MB), `shadow_state/` (per-session detector state, hashed file
 names) and `proposals/approved/` (your approved copies). Every call re-validates each approved proposal
-from disk; a missing, edited, oversize or symlinked file is skipped and its id is logged.
+from disk; a missing, edited, oversize or symlinked file is skipped and its id is logged. A payload over 256 KiB is not skipped: it logs
+`error:oversize` and fires every applicable proposal with `on_truncated: "fire"` (all block-capable ones) as a `truncated` row, so in block mode
+padding a command past the cap gets it denied, not waved through.
 
 **Warn and block.** A proposal reaches `warn` only through `python3 -m ace_playbook.compile approve P-xxxxxxxx --mode warn`, at
 a terminal, after at least 14 days in observe with at least 5 true positives you labelled yourself (`compile label --tp`)
@@ -334,6 +337,11 @@ file):
 ] } }
 ```
 
+The kill file `data_dir/proposals/DISABLED` (below, "Remove it") and the approved copies in `data_dir/proposals/approved/` live in the data directory,
+which the agent's user can write too. Since S-1 the kill file is visible (rows with `mode: "disabled"`, a `disabled:kill_file` line in `shadow.log`, `kill_file`
+in the `compile status` notes, `DISABLED` on the status line) but it is not prevented, so add the same three rules for your `data_dir/proposals`
+(for the default data directory `~/.local/share/ace-playbook/proposals`; the `compile` commands you run in a terminal are not affected).
+
 There is no `Write(...)` rule: the permissions reference checks file rules against Read and Edit only, a `Write(...)` rule is never consulted
 (and Claude Code warns about it at every start), and a Read deny already blocks Edit, Write and file creation on the path (Claude Code 2.1.228
 and later). The bare-directory rule covers the directory itself (listings, `@`-mentions). These rules stop the Read, Edit and Write tools
@@ -372,9 +380,12 @@ the checkout left untouched.
 Check it by hand: `echo '{"session_id":"t1","tool_name":"Bash","tool_input":{"command":"rm -rf /w/src"}}'
 | hooks/shadow.sh pre` prints nothing; `shadow.jsonl` gains a row only if an approved proposal matches.
 
-**Remove it.** Delete the two entries from `settings.json`. To stop evaluation without touching settings,
+**Remove it.** Delete the two entries from `settings.json`. To stop the hook from warning and blocking without touching settings,
 create `data_dir/proposals/DISABLED` (any content) or run `python3 -m ace_playbook.compile unapprove
-P-xxxxxxxx` at a terminal. `shadow.jsonl`, `shadow.log` and `shadow_state/` are plain files you can delete.
+P-xxxxxxxx` at a terminal. The kill file mutes the hook but does not hide it: the hook keeps evaluating, writes its rows with
+`mode: "disabled"`, logs `disabled:kill_file` (once per 8 KiB of `shadow.log`), `compile status` lists `kill_file` in its heartbeat notes and the
+status line and the menu-bar plugin print `DISABLED`. Remove the file to arm the gate again.
+`shadow.jsonl`, `shadow.log` and `shadow_state/` are plain files you can delete.
 
 **Regression check.** `python3 -m ace_playbook.compile replay-synthetic` feeds the frozen invented corpus through the evaluator
 (a throwaway state directory), writes `data_dir/shadow.synthetic.jsonl` (never `shadow.jsonl`; `--out` inside `data_dir` is refused unless it is that file) and exits 1 if any expected outcome
@@ -404,7 +415,8 @@ of `generated_at` (`N+` when the queue, capped at 50 oldest first, is shorter th
 only when the approvals, demotions and labels chains all are. `heartbeat` is the age of the last hook row. Without a readable `status.json` it prints
 `<model> | ctx <pct>% | ace: no status file`. It runs one `python3 -I -S` (stdlib only, about 15 ms) and exits 0 on any error.
 The numbers are as fresh as `status.json`, which `compile status` and the nightly digest rewrite.
-The line ends with `watch N`: the open watcher proposals (`watch_open`, leads excluded), or `watch -` when `status.json` has no such count.
+The line ends with `watch N`: the open watcher proposals (`watch_open`, leads excluded), or `watch -` when `status.json` has no such count,
+followed by `  DISABLED` while the shadow hook's kill file exists (the `kill_file` heartbeat note; the SwiftBar plugin adds the same marker to its ACE line).
 
 ## Watch (the configuration watcher)
 

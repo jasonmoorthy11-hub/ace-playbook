@@ -18,7 +18,7 @@ VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]{1,40})?", re.A
 MODEL = re.compile(r"claude-[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?")
 SEPARATOR = re.compile(r"\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?")
 NONE_WORDS = ("", "n/a", "na", "-", "—", "none", "tbd", "tba", "null", "to be announced")
-MAX_ENTRIES = 100
+MAX_ENTRIES, MAX_LINE = 100, 2000
 
 
 class DTDRefused(ValueError):
@@ -137,10 +137,10 @@ def parse_md(text: str) -> dict:
 
 
 def _cells(line: str) -> list[str]:
-    text = line.strip()
+    text = line.strip()[:MAX_LINE]
     parts = re.split(r"(?<!\\)\|", text)                         # an escaped pipe (`\|`) is cell text, not a column break
     closed = text.endswith("|") and not text.endswith("\\|")
-    return [re.sub(r"\s+", " ", re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", c.replace("\\|", "|"))).replace("`", "").replace("*", "").strip()
+    return [re.sub(r"\s+", " ", re.sub(r"\[([^\[\]]*)\]\([^)]*\)", r"\1", c.replace("\\|", "|"))).replace("`", "").replace("*", "").strip()
             for c in parts[1:-1 if closed else None]]
 
 
@@ -160,7 +160,7 @@ def parse_deprecations_md(text: str) -> list[dict]:
     """Rows `{model_id, deprecated, retires, successor, state, row}` of every Markdown table with a model column. Columns are found by
     their header words, in any order (model | state/status | deprecat* | retire* | replace*/recommended/successor); `N/A` and empty
     cells are None; `row` is the table line verbatim (at most 400 characters). A model cell yields one row per `claude-...` id in it."""
-    lines, rows, i = text.splitlines(), [], 0
+    lines, rows, i = [ln[:MAX_LINE] for ln in text.splitlines()], [], 0                  # a table line is cut at MAX_LINE before anything reads it
     while i < len(lines) - 1:
         if not (lines[i].strip().startswith("|") and SEPARATOR.fullmatch(lines[i + 1].strip())):
             i += 1

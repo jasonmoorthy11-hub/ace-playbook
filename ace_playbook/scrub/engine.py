@@ -75,17 +75,26 @@ def _regex_hits(text: str, offset: int = 0, prefix: str = "") -> list[Hit]:
     return hits
 
 
+def _lines(text: str, pat: re.Pattern):
+    """(match, start, end) of `pat` line by line, `start`/`end` being offsets in `text` (S-1 F9 F12). For a pattern that cannot span a line
+    break (EMAIL, ENTROPY_CANDIDATE: no white space in their classes) this finds what one pass over `text` finds, in many small scans."""
+    off = 0
+    for line in text.split("\n"):
+        for m in pat.finditer(line):
+            yield m, m.start() + off, m.end() + off
+        off += len(line) + 1
+
+
 def _entropy_hits(text: str, offset: int = 0, prefix: str = "") -> list[Hit]:
     hits = []
-    for m in P.ENTROPY_CANDIDATE.finditer(text):
+    for m, start, end in _lines(text, P.ENTROPY_CANDIDATE):
         tok = m.group(0)
         if tok.count("/") >= 2 or len(tok) < ENTROPY_MIN_LEN:
             continue
         classes = sum([any(c.islower() for c in tok), any(c.isupper() for c in tok),
                        any(c.isdigit() for c in tok)])
         if classes >= 3 and shannon_entropy(tok) >= ENTROPY_MIN:
-            hits.append(Hit(prefix + "high_entropy", "decoded" if prefix else "entropy",
-                            m.start() + offset, m.end() + offset, tok))
+            hits.append(Hit(prefix + "high_entropy", "decoded" if prefix else "entropy", start + offset, end + offset, tok))
     return hits
 
 
@@ -121,11 +130,11 @@ def _decoded_hits(text: str, depth: int, offset: int = 0) -> list[Hit]:
 
 def _pii_hits(text: str, deny_terms: Iterable[str]) -> list[Hit]:
     hits = []
-    for m in P.EMAIL.finditer(text):
+    for m, start, end in _lines(text, P.EMAIL):
         local, _, domain = m.group(0).partition("@")
         if domain.lower() in P.SAFE_EMAIL_DOMAINS or local.lower() in P.SAFE_EMAIL_LOCALS:
             continue
-        hits.append(Hit("email", "lint", m.start(), m.end(), m.group(0)))
+        hits.append(Hit("email", "lint", start, end, m.group(0)))
     for m in P.PHONE.finditer(text):
         hits.append(Hit("phone", "lint", m.start(), m.end(), m.group(0)))
     for m in P.USER_PATH.finditer(text):

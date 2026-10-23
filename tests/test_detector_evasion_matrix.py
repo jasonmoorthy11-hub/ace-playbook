@@ -10,12 +10,16 @@ this file only measures them. The per-class miss counts are pinned in EXPECTED_M
 """
 
 import base64
+import io
+import json
+import sys
 from collections import Counter
 
 import pytest
 
 from ace_playbook.compile import catalogue as cat
 from ace_playbook.compile import detectors as d
+from ace_playbook.compile import shadow
 from ace_playbook.compile.events import MAX_CMD, event_from_hook
 from ace_playbook.fixtures import fakes
 
@@ -189,3 +193,31 @@ def test_every_catalogue_detector_has_a_firing_case_in_the_fixtures():
     cut = event_from_hook(bash("echo " + "a" * (MAX_CMD + 1)), probe=lambda _p: False)
     out, _state, errors = cat.evaluate(cut, None, names=["unparseable"], strict=False)
     assert errors == [] and [f.detector for f in out] == ["unparseable"]
+
+
+# F1 (S-1): the padding evasion. A payload over the hook's stdin cap used to return before any proposal loaded, so a block-mode proposal
+# never denied it. It is now a truncated fire (design 7, step 1): every variant below is denied, whatever the detector would have said.
+PAD = "a" * (shadow.MAX_STDIN + 10)
+OVERSIZE = {   # variant -> the payload object (JSON-encoded below); the padding goes where the variant says
+    "padding-after-the-delete": bash("rm -rf " + OUT + " # " + PAD),
+    "padding-in-description": {**bash("rm -rf " + OUT), "tool_input": {"command": "rm -rf " + OUT, "description": PAD}},
+    "padding-before-the-keys": {"pad": PAD, **bash("rm -rf " + OUT)},                       # session_id / tool_name past the cap: unknown tool
+    "heredoc-body-padding": bash("bash <<'EOF'\nrm -rf " + OUT + "\n" + PAD + "\nEOF"),
+    "no-delete-at-all": bash("echo " + PAD),
+}
+
+
+@pytest.mark.parametrize("variant", OVERSIZE)
+def test_an_oversize_payload_is_denied_in_block_mode_not_skipped(variant, tmp_path, monkeypatch, capsys):
+    raw = json.dumps(OVERSIZE[variant]).encode()
+    assert len(raw) > shadow.MAX_STDIN
+    w = cs.real_world(tmp_path)
+    cs.approve_file(w.cfg, w.props[NAME], "block", row=True)
+    monkeypatch.setenv("ACE_PLAYBOOK_CONFIG", w.conf)
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(raw)))
+    assert shadow.main(["pre"]) == 0
+    out = capsys.readouterr()
+    assert json.loads(out.out)["hookSpecificOutput"]["permissionDecision"] == "deny" and out.err == ""
+    (row,) = cs.shadow_rows(w.data)
+    assert (row["mode"], row["would_fire"], row["cause"]) == ("block", True, "truncated")
+    assert "error:oversize" in (w.data / "shadow.log").read_text()
