@@ -2,8 +2,8 @@
 
 Any write-capable Bash command (a write verb, `>`/`>>`/`<<`, or an output flag) marks every path-looking word it mentions, every URL
 basename and the directory of each as agent-written; a false mark only makes a file untrusted, a missed one is a provenance bypass.
-Extraction verbs (`tar unzip ditto rsync`, `git` with no URL) and server-named downloads (`-J`) record their destination directory, the cwd
-by default; a command shlex cannot read marks every word of it.
+Extraction verbs (`tar unzip ditto rsync`), any `git` and any server-named download (`-J`, `--content-d...`) record the cwd plus every
+directory-flag value anywhere in the command (D-169 R6, no per-tool logic); a command shlex cannot read marks every word of it.
 """
 
 from __future__ import annotations
@@ -18,10 +18,9 @@ VERBS = {"tee", "cp", "mv", "install", "curl", "wget", "git", "rsync", "ditto", 
          "ruby", "node", "sh", "bash", "zsh", "touch", "mkdir", "ln", "unzip", "tar"}
 DEST_VERBS = {"tee", "cp", "mv", "install", "ln", "mkdir", "touch", "rsync", "ditto", "unzip", "tar", "git", "python", "python3", "perl",
               "ruby", "node", "sh", "bash", "zsh", "sed", "patch", "dd"}  # every non-flag word is a target (interpreters: `python3 gen.py out`)
-EXTRACT = {"tar", "unzip", "ditto", "rsync"}  # also write into the cwd or the `-C`/`-d`/`--directory` value, as does `git` with no URL
-EXTRACT_DIR_RE = re.compile(r"-C|-d|--directory|--directory-prefix")
-DOWNLOAD_DIR_RE = re.compile(r"-P|-o|--directory-prefix|--output-dir")
-SERVER_NAME_RE = re.compile(r"-[A-Za-z]*J[A-Za-z]*|--remote-header-name|--content-disposition|--trust-server-names")  # the name is not in the URL
+EXTRACT = {"tar", "unzip", "ditto", "rsync", "git"}  # write into the cwd and any directory flag's value
+DIR_FLAG_RE = re.compile(r"(?:--directory-prefix|--directory|--output-dir|-[CdPo])(?:=(.*)|(.+))?")  # separated, `=value` and attached forms
+SERVER_NAME_RE = re.compile(r"-[A-Za-z]*J[A-Za-z]*|--(?:remote-h|content-d|trust-s).*|.*(?:content_disposition|trust_server_names).*")
 DEST = "\0"  # a raw item starting with this is a destination directory (empty: the cwd), recorded as written even when it is the cwd itself
 OUT_RE = re.compile(r"-[A-Za-z]*[oOP]$|--(?:output|directory-prefix)[\w-]*(?:=.*)?$")  # flags whose value (next word or `=value`) is a path
 PATH_RE = re.compile(r"[^/]*/|[.~]|.*\.[A-Za-z0-9]{1,8}$")  # a `/` anywhere, a leading `.`/`~`, or a file suffix
@@ -58,14 +57,14 @@ def _marked(seq: list[str], dest: bool) -> set[str]:
     return found | set(plain[-1:])
 
 
-def _flag_values(seqs: list[list[str]], flags: re.Pattern) -> set[str]:
-    """Values of the flags matching `flags` (next word or `=value`), leaving out another flag or a URL."""
+def _flag_values(seqs: list[list[str]]) -> set[str]:
+    """Values of every directory flag anywhere in the command (next word, `=value` or attached), leaving out another flag or a URL."""
     out = set()
     for s in seqs:
         for i, w in enumerate(s):
-            flag, eq, val = w.partition("=")
-            val = val if eq else s[i + 1] if i + 1 < len(s) else ""
-            out |= {val} if flags.fullmatch(flag) and val and not val.startswith("-") and not URL_RE.match(val) else set()
+            m = DIR_FLAG_RE.fullmatch(w)
+            val = (m.group(1) or m.group(2) or (s[i + 1] if i + 1 < len(s) else "")) if m else ""
+            out |= {val} if val and not val.startswith("-") and not URL_RE.match(val) else set()
     return out
 
 
@@ -84,11 +83,8 @@ def bash_analyse(cmd: str) -> tuple[set[str], bool]:
     found = redirects.union(*(_marked(s, forced or bool(names & DEST_VERBS)) for s in seqs)) - {""}
     urls = {w for s in seqs for w in s if URL_RE.match(w)}
     dests = set()
-    if names & EXTRACT or ("git" in names and not urls):
-        dirs = _flag_values(seqs, EXTRACT_DIR_RE)
-        dests |= dirs if dirs and not names & {"ditto", "rsync"} else dirs | {""}
-    if any(SERVER_NAME_RE.fullmatch(w) for s in seqs for w in s):
-        dests |= _flag_values(seqs, DOWNLOAD_DIR_RE) or {""}
+    if names & EXTRACT or any(SERVER_NAME_RE.fullmatch(w) for s in seqs for w in s):
+        dests = _flag_values(seqs) | {""}  # the cwd is always recorded; a flag value never replaces it
     bases = {n for u in urls for b in [os.path.basename(urlparse(u).path) or "index.html"] for n in (b, b.removesuffix(".git"))}
     found |= bases | {os.path.join(p, b) for p in found for b in bases}
     return ((found | {os.path.dirname(p) for p in found}) - {""}) | {DEST + d for d in dests}, ok

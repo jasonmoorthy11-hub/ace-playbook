@@ -381,10 +381,12 @@ the long-token lint partly covers and nothing measures.
   which applies to Bash only, never to the four write tools). Comments, heredoc bodies and quoting are not parsed (shlex with
   `cmd.split()` as the fallback; `unparsed_bash` in the summary counts the fallbacks, and a command that needed it is write-capable by
   definition: every non-flag word of it is marked). The interpreters (`python perl ruby node sh bash zsh`), `sed`, `patch` and `dd` mark
-  every word of the command. The extraction verbs (`tar unzip ditto rsync`) and `git` with no URL record their destination directory as
-  written, the `-C`/`-d`/`--directory` value if there is one, else the working directory, so every later Read under it is `agent_file`;
-  accepted: any such git command (`git status`) taints the working directory. A server-named download (`curl -J`, `--remote-header-name`,
-  `wget --content-disposition`, `--trust-server-names`) records its output directory the same way. A script or interpreter that writes
+  every word of the command. A command that names an extraction verb (`tar unzip ditto rsync`), `git` at all (any subcommand, with or without a URL), or a
+  server-name trigger (`curl -J` or any short-flag cluster holding `J`, `--remote-h...`, `--content-d...`, `--trust-s...`, `wget -e
+  content_disposition=on`) records the working directory as written, plus every value of `-C -d --directory -P --directory-prefix
+  --output-dir -o` found anywhere in the command, separated or attached (`-Cdir`); a flag value never replaces the working directory. So
+  `tar -C out`, `unzip -d dest`, `wget -P dl` and `git clone <url> vendor2` also taint the working directory, and after any git command
+  (even `git status`) every later Read under the session root is `agent_file`: accepted, pinned in `tests/test_clean.py`. A script or interpreter that writes
   a file it does not name on its command line is not tracked; name the file on the command line or read it through the Bash tool's own
   output. Writes by a command outside the verb list and without a redirection, after a `cd`, or through a variable are not tracked either.
 - The trust boundary for `user_file` is the session's first cwd. A record whose own cwd is outside it makes its Reads `tool_output`.

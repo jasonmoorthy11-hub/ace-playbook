@@ -292,11 +292,32 @@ def test_extraction_download_interpreter_and_unparsable_marks(tmp_path, cmd, rea
     assert result_origin(tmp_path, [bash(cmd)], read_path) == "agent_file"
 
 
-@pytest.mark.parametrize("cmd", ["tar xf a.tar -C out", "wget --content-disposition -P dl https://h.example/p",
-                                 "git clone https://example.com/y.git vendor2", "unzip a.zip -d dest"])
-def test_a_destination_directory_does_not_taint_the_cwd(tmp_path, cmd):
-    assert result_origin(tmp_path, [bash(cmd)], "README.md") == "user_file"
-    assert result_origin(tmp_path, [bash(cmd)], CWD + "/README.md") == "user_file"
+@pytest.mark.parametrize("cmd, dir_file", [
+    ("tar xf a.tar -C out", "out/x.md"),
+    ("wget --content-disposition -P dl https://h.example/p", "dl/x"),
+    ("git clone https://example.com/y.git vendor2", "vendor2/README.md"),
+    ("unzip a.zip -d dest", "dest/x"),
+    ("tar -Cout xf a.tar", "out/x"),                                           # R6: attached form
+    ("curl -sLOJ --output-dir=dl https://h.example/p/f", "dl/f"),
+])
+def test_a_destination_directory_taints_the_cwd_and_the_directory(tmp_path, cmd, dir_file):
+    for read_path in ("README.md", CWD + "/README.md", dir_file):
+        assert result_origin(tmp_path, [bash(cmd)], read_path) == "agent_file", read_path
+
+
+@pytest.mark.parametrize("cmd", ["git -C other status; tar xf a.tar", "git pull https://h.example/r.git",
+                                 "wget --content-d https://h.example/p", "wget -e content_disposition=on https://h.example/p",
+                                 "curl --remote-h -O https://h.example/p", "wget --trust-s https://h.example/p"])
+def test_r6_one_maximal_rule_records_the_cwd(tmp_path, cmd):
+    assert result_origin(tmp_path, [bash(cmd)], "README.md") == "agent_file"
+
+
+def test_directory_flag_values_in_every_form_are_destinations():
+    from ace_playbook.clean.origins import DEST, bash_analyse
+    for cmd, want in (("tar xf a.tar -C out", "out"), ("tar -Cout xf a.tar", "out"), ("unzip a.zip -ddest", "dest"),
+                      ("wget -e content_disposition=on --directory-prefix=dl https://h.example/p", "dl"),
+                      ("git -C other status; tar xf a.tar", "other")):
+        assert {DEST, DEST + want} <= bash_analyse(cmd)[0], cmd
 
 
 def test_a_root_or_parent_destination_records_the_root_not_slash(tmp_path):
