@@ -28,7 +28,7 @@ ALL_FIXTURES = {                                             # every file under 
     "rss_hidden.xml": ("rss", "application/rss+xml"), "rss_inline.xml": ("rss", "application/rss+xml"), "rss_ok.xml": ("rss", "application/rss+xml"),
     "sitemap.xml": ("sitemap", "application/xml"), "canary.xml": ("rss", "application/rss+xml"),       # W2: the planted-injection feed
 }
-NOT_A_SOURCE = {"fake_reader.py"}                            # W2: the fake `claude -p` of the Reader tests is a program, not a fetched source
+NOT_A_SOURCE = {"fake_reader.py", "fake_reader_hang.py"}     # W2: the fake `claude -p` programs of the Reader tests are not fetched sources
 
 
 def test_the_fixture_table_lists_every_fixture_file():

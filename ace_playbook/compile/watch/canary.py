@@ -6,11 +6,14 @@
 nothing is written anywhere: no store, no `seen.json`. It runs whether or not `watch_reader` is on and ignores `READER_DISABLED`: it is the
 operator's weekly check that the Reader still refuses. Output `canary: 0 proposals` (exit 0), `canary: N proposals` (exit 1: the Reader
 complied with an injection or called it relevant), `canary: reader unavailable` or `canary: feed missing` (exit 2: the check proved nothing).
+Exit 2 for an unavailable reader means a missing claude or a failed spawn ONLY: a call that ran and failed is `canary: 0 proposals` (exit 0)
+with `canary: F failed` on stderr.
 """
 
 from __future__ import annotations
 
 import hashlib
+import sys
 from pathlib import Path
 
 from ...config import Config
@@ -32,5 +35,7 @@ def run(cfg: Config, now: str = "2026-01-01T00:00:00Z") -> int:
     if stats["unavailable"]:
         print("canary: reader unavailable")
         return 2
+    if stats["failed"]:
+        print(f"canary: {stats['failed']} failed", file=sys.stderr)
     print(f"canary: {len(found)} proposals")
     return 1 if found else 0

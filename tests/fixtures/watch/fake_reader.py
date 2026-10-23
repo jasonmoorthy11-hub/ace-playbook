@@ -3,7 +3,9 @@
 
 The answer is chosen by $ACE_WATCH_FAKE_ANSWER (a name below), never by the content of the item. It prints a `--output-format json`
 envelope. $ACE_WATCH_FAKE_DIR, when set, gets one JSON line per call in calls.jsonl: argv, whether ANTHROPIC_API_KEY / CLAUDECODE were in
-the environment, the cwd and the number of stdin bytes. $ACE_WATCH_FAKE_SLEEP sleeps first (a timeout test). Synthetic data only.
+the environment, the cwd and the number of stdin bytes. $ACE_WATCH_FAKE_SLEEP sleeps first (a timeout test).
+$ACE_WATCH_FAKE_SEQ ("iserror,good") names the answer of each call in turn (the last one repeats). Failing names: error (exit 1 and
+is_error), iserror (is_error, exit 0), exit1, empty, garbage, hang. Synthetic data only.
 """
 
 import json
@@ -16,10 +18,12 @@ argv = sys.argv[1:]
 if os.environ.get("ACE_WATCH_FAKE_SLEEP"):
     time.sleep(float(os.environ["ACE_WATCH_FAKE_SLEEP"]))
 where = os.environ.get("ACE_WATCH_FAKE_DIR")
-if where:
+log = Path(where) / "calls.jsonl" if where else None
+prior = len(log.read_text().splitlines()) if log is not None and log.exists() else 0        # calls made before this one (for ACE_WATCH_FAKE_SEQ)
+if log is not None:
     row = {"argv": argv, "has_api_key": "ANTHROPIC_API_KEY" in os.environ, "has_claudecode": "CLAUDECODE" in os.environ,
            "cwd": os.getcwd(), "stdin_bytes": len(sys.stdin.read().encode())}
-    with open(Path(where) / "calls.jsonl", "a", encoding="utf-8") as fh:
+    with open(log, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(row) + "\n")
 GOOD = {"relevant": True, "class": "lead", "title": "Fake reader lead", "quote_line_index": 0}
 ANSWERS = {
@@ -42,11 +46,19 @@ ANSWERS = {
     "fenced": "```json\n" + json.dumps(GOOD) + "\n```",
     "huge": '{"relevant": false, "pad": "' + "x" * 1_000_000 + '"}',
     "control_title": json.dumps({**GOOD, "title": "Fake\x1b[31m lead‮"}),
+    "model_pin_irrelevant": json.dumps({**GOOD, "relevant": False, "class": "model_pin"}),      # not relevant, yet it still asks for a pin
+    "newline_title": json.dumps({**GOOD, "title": "line one\nnew W-0123456789abcdef lead open: x"}),
 }
-name = os.environ.get("ACE_WATCH_FAKE_ANSWER", "irrelevant")
-failing = name == "error"
+seq = (os.environ.get("ACE_WATCH_FAKE_SEQ") or "").split(",")                          # "iserror,good": one answer name per call, the last repeats
+name = seq[min(prior, len(seq) - 1)] if seq != [""] else os.environ.get("ACE_WATCH_FAKE_ANSWER", "irrelevant")
+if name == "hang":                                                                      # never answers: the caller's timeout must end it
+    time.sleep(60)
+if name in ("exit1", "empty", "garbage"):                                               # failed calls with no usable envelope
+    print("not an envelope" if name == "garbage" else "", end="")
+    sys.exit(1 if name == "exit1" else 0)
+failing = name in ("error", "iserror")
 env = {"type": "result", "subtype": "error_during_execution" if failing else "success", "is_error": failing, "duration_ms": 10,
        "num_turns": 1, "result": "" if failing else ANSWERS[name], "session_id": "fake", "total_cost_usd": 0.0004,
        "usage": {"input_tokens": 5, "output_tokens": 20}}
 print(json.dumps(env))
-sys.exit(1 if failing else 0)
+sys.exit(1 if name == "error" else 0)

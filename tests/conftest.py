@@ -12,10 +12,13 @@ from __future__ import annotations
 import math
 import signal
 import threading
+from pathlib import Path
 
 import pytest
 
 from ace_playbook import config as cfgmod
+
+FAKE_READER = Path(__file__).resolve().parent / "fixtures" / "watch" / "fake_reader.py"
 
 
 @pytest.fixture(autouse=True)
@@ -37,6 +40,13 @@ def no_real_dns(monkeypatch):
     (a test of the guard replaces `netguard.RESOLVE` itself)."""
     from ace_playbook.compile.watch import netguard
     monkeypatch.setattr(netguard, "RESOLVE", lambda host, port, *a, **k: [(2, 1, 6, "", ("93.184.216.34", 0))])
+
+
+@pytest.fixture(autouse=True)
+def fake_reader_claude(monkeypatch):
+    """The watcher's Reader runs `$ACE_WATCH_CLAUDE`, else `watch_claude`, else `claude` from the PATH: every test gets the fake reader as
+    the first, so no test can reach the real binary (tests/test_watch_reader.py has the `fake` fixture for the tests that read its calls)."""
+    monkeypatch.setenv("ACE_WATCH_CLAUDE", str(FAKE_READER))
 
 
 @pytest.fixture(autouse=True)

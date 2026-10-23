@@ -57,10 +57,12 @@ def block(f: dict, now: str, age) -> list[str]:
 
 
 def reader_text(s: dict) -> str:
-    """`reader: N read, M rejected, K leads` (plus `, U unavailable` and `; cost $C` when there are any) from a scan's counts; junk reads as 0."""
+    """`reader: N read, M rejected, K leads` (plus `, U unavailable`, `, F failed`, `, C capped` and `; cost $C` when there are any) from a scan's
+    counts; junk reads as 0."""
     n = lambda k: s[k] if isinstance(s.get(k), int) and not isinstance(s.get(k), bool) and s[k] >= 0 else 0  # noqa: E731
     cost = s.get("cost") if isinstance(s.get("cost"), (int, float)) and not isinstance(s.get("cost"), bool) and 0 < s["cost"] < 1000 else 0
     return (f"reader: {n('read')} read, {n('rejected')} rejected, {n('leads')} leads" + (f", {n('unavailable')} unavailable" if n("unavailable") else "")
+            + (f", {n('failed')} failed" if n("failed") else "") + (f", {n('capped')} capped" if n("capped") else "")
             + (f"; cost ${cost:.4f}" if cost else ""))
 
 

@@ -183,12 +183,15 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
 - Watcher, Reader (W2, built, not live, off by default): a tool-less single-turn model call reads one sanitized tier-1 feed item and may
   only answer a fixed JSON schema that code validates; the result is a `lead` with no diff, whatever the item says. The residual is the
   title: it is the one model-touched free text (at most 120 characters, control, invisible and line-separator characters removed, never in
-  the form of a code-made title) and it is shown in the queue and the digest, so every place that renders it must escape it as it does
-  the lead titles of W1. The quote is a verbatim line chosen by number, never model text. A fooled Reader can still call an item relevant (a
-  noise lead) or stay silent about a real one; the canary verb (`compile watch canary`) checks refusal only for its four planted items, not
-  in general. The `acewatch` user, its login and any egress limit are the operator's steps (`docs/watch/SANDBOX.md`): launchd cannot restrict
-  the network, so without a `pf` rule the fetcher's own guards are the only egress control. Moving `acewatch`'s proposals to the operator's
-  store is a manual copy, not built.
+  the form of a code-made title) and it is shown in the queue and the scan output (quoted; leads stay out of the digest), so every place
+  that renders it must escape it as it does the lead titles of W1. The quote is a verbatim line chosen by number, never model text. A fooled
+  Reader can still call an item relevant (a noise lead; at most five per scan) or stay silent about a real one; the canary verb
+  (`compile watch canary`) checks refusal only for its four planted items, not in general. The Reader is for the `acewatch` user ONLY: run
+  as the operator it would load the operator's hooks and `CLAUDE.md` unless `--settings` and `--setting-sources ""` hold (they are in the
+  call, but the fake claude of the tests cannot tell whether a claude version still honours them). The `acewatch` user, its group, its own
+  claude and login and any egress limit are the operator's steps (`docs/watch/SANDBOX.md`): launchd cannot restrict the network, so without
+  a `pf` rule the fetcher's own guards are the only egress control. Moving `acewatch`'s proposals to the operator's store is a manual copy,
+  not built.
 - Watcher, sanitizer coverage: `strip_hidden` reads inline `style` attributes and simple single-selector `<style>` rules (a tag, `.class` or
   `#id` rule, no combinators; class and id names match without case, as in quirks mode). Media queries, descendant, child and attribute
   selectors, `@import` and external stylesheets are NOT handled, so text hidden that way is read as visible. The inline rules hide opacity
