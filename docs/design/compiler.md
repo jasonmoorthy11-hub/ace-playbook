@@ -1272,6 +1272,34 @@ each (the last so that the tile says `none  corrupt 1`, not a bare `none`, while
 lines, `none` or `disabled`); the status line ends with `watch N`. Nothing here touches `metrics.py`, `report.py`, `seal.py`, the detector
 files or the live measurement.
 
+#### Reader (W2, as built)
+
+W2 adds the quarantined model stage, BUILT AND NOT LIVE (`watch_reader` defaults to false; the `acewatch` user and its login are the operator's
+steps, `docs/watch/SANDBOX.md`). Rule of Two: the process that reads untrusted text has no power to act. For a tier-1 feed entry (`rss`, `atom`)
+the scan hands ONE item (its title and summary lines, already visible text, cut to 4 000 characters) to `reader.read_item`: a `claude -p` call with
+`--tools ""`, `--strict-mcp-config`, `--no-session-persistence`, `--max-turns 1`, an explicit `--model` (`watch_reader_model`, default
+`claude-haiku-5-5`), `--max-budget-usd 0.05` and `--output-format json`, the prompt last, an empty scratch directory as its cwd, no stdin, a 120 s
+timeout and an environment without `ANTHROPIC_API_KEY` and `CLAUDECODE`. The prompt is a fixed preamble (the item is untrusted data, answer only
+the JSON object) and the numbered item lines between fixed delimiters (a run of five dashes inside the item cannot spell one). The model never
+sees a URL it can fetch, a tool, the inventory or another item. Its answer, the `result` of the envelope, must be exactly
+`{relevant: bool, class: <enum>, title: str <= 120, quote_line_index: int}` with the index inside the item's lines; anything else is None and
+counted `rejected`. A missing or non-executable claude, a non-zero exit or a timeout is None and counted `unavailable` (D-150: the loaders only
+type-check `watch_claude`; the Reader finds out at call time; one line per scan, never a traceback or a path; the first one stops the loop).
+`validate.validate` makes the quote the item's line at the index (verbatim, at most 400 characters, unchanged by `store.clean`: the model supplies
+a number, not text), FORCES the class to `lead`, rejects (and logs one text-free line for) a `model_pin` request on a tier-1 item, cleans the
+title with `store.clean`, and refuses a title in the form of a code-made one (`Replace ...`, `Retirement ...`). `compose.compose` builds the
+record through the existing `records.record` (class `lead`, target `lead`, no hits, diff None, tier-1 evidence, the lead `verify` template) and
+`records.check` must pass. No regular expression runs over the model's text or the item's. At most 20 new items are read per scan; an item read
+once is remembered in `seen.json` (`reader.done`) and not read again, one that could not be run for is retried. The scan prints
+`reader: N read, M rejected, K leads` (plus `, U unavailable` and `; cost $C` from the envelope's `total_cost_usd`; costs never enter a
+proposal) before its summary line, `watch status` shows the last one, `READER_DISABLED` in `watch_dir` stops the stage (`reader: disabled`) and
+the rule path of W1 runs as before. The canary feed `tests/fixtures/watch/canary.xml` (a requested model pin, requested extra keys, text hidden
+in HTML, a 5 000-character body) is a TEST (with the fake claude, `tests/fixtures/watch/fake_reader.py`, every adversarial answer yields zero
+proposals and `rejected` counts each) and a VERB, `compile watch canary`, which runs the feed through the real path with the configured claude,
+writes nothing and prints `canary: 0 proposals` (exit 0), `canary: N proposals` (exit 1), or `canary: reader unavailable` / `canary: feed
+missing` (exit 2). `hooks/acewatch/*.plist` are LaunchDaemon templates (daily tier 0 at 04:30, weekly tier 1) for the second user. None of
+the new modules is on the hook path (`tests/test_hook_conformance.py`).
+
 ### Seal (as built, not executed)
 
 `python3 -m ace_playbook.compile seal [--dry-run]` (`compile/seal.py`) is built; the pre-registration is not sealed, and the

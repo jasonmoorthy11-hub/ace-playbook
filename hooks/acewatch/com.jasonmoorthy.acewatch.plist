@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- TEMPLATE ONLY, installed by nobody: the daily tier-0 watcher scan, run by the second user `acewatch` (docs/watch/SANDBOX.md).
+     launchd does not expand ~ or $HOME: replace the two __PLACEHOLDERS__ with absolute paths.
+       __ACE_PLAYBOOK_COPY__  a copy of the checkout with its .venv, readable by acewatch and OUTSIDE the operator's home
+       __ACEWATCH_HOME__      acewatch's own home directory
+     The config at __ACEWATCH_HOME__/.config/ace-playbook/config.json is acewatch's own (its own watch_dir, watch_sources, watch_claude).
+     Install by hand as root: copy to /Library/LaunchDaemons (root:wheel, 0644), then `launchctl bootstrap system <file>`.
+     Remove: `launchctl bootout system/com.jasonmoorthy.acewatch`. The weekly tier-1 job is com.jasonmoorthy.acewatch.weekly.plist. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.jasonmoorthy.acewatch</string>
+  <key>UserName</key>
+  <string>acewatch</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__ACE_PLAYBOOK_COPY__/.venv/bin/python</string>
+    <string>-m</string>
+    <string>ace_playbook.compile</string>
+    <string>watch</string>
+    <string>scan</string>
+    <string>--tier</string>
+    <string>0</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__ACE_PLAYBOOK_COPY__</string>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>4</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>ACE_PLAYBOOK_CONFIG</key>
+    <string>__ACEWATCH_HOME__/.config/ace-playbook/config.json</string>
+    <key>HOME</key>
+    <string>__ACEWATCH_HOME__</string>
+    <key>PATH</key>
+    <string>/usr/bin:/bin</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__ACEWATCH_HOME__/logs/acewatch.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__ACEWATCH_HOME__/logs/acewatch.err.log</string>
+</dict>
+</plist>

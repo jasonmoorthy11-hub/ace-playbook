@@ -420,9 +420,10 @@ followed by `  DISABLED` while the shadow hook's kill file exists (the `kill_fil
 
 ## Watch (the configuration watcher)
 
-`python3 -m ace_playbook.compile watch scan|status|queue` watches the sources you list for changes that touch what your setup pins (a model
-id that is being retired, a newer Claude Code, a docs page you depend on) and stores inert proposals. It calls no model, applies nothing and
-writes only inside its own directory. It is the one part of ace-playbook that uses the network, and it is never on a hook path.
+`python3 -m ace_playbook.compile watch scan|status|queue|canary` watches the sources you list for changes that touch what your setup pins
+(a model id that is being retired, a newer Claude Code, a docs page you depend on) and stores inert proposals. It calls no model unless you
+turn the Reader on (step 5), applies nothing and writes only inside its own directory. It is the one part of ace-playbook that uses the
+network, and it is never on a hook path.
 
 1. Copy the two examples to a private place outside the checkout and edit them: `docs/watch/sources.example.json` (the source list: `id`,
    `url`, `kind` rss|atom|npm|deprecations|sitemap|md, `tier` 0 or 1, `cadence` daily|weekly) and `docs/watch/inventory_map.example.json`
@@ -445,6 +446,21 @@ writes only inside its own directory. It is the one part of ace-playbook that us
    `3` later, `q` quit. A decision is recorded in `decisions.jsonl`; nothing is changed on your machine. At most five proposals are open at
    once (leads excepted); the rest wait as `queued`.
 4. Kill switch: `touch <watch_dir>/DISABLED`. While it exists `scan` prints `watch: disabled` and fetches and writes nothing; remove it to resume.
+5. The Reader (W2, optional, off by default). Without it nothing above calls a model. With it, tier-1 feed items go one by one to a tool-less,
+   single-turn `claude -p` call whose answer code validates; the only result is a `lead` with no diff. Three config keys (types are checked
+   at load, nothing else; the Reader looks at the claude when it runs):
+
+   ```json
+   {"watch_reader": true, "watch_reader_model": "claude-haiku-5-5", "watch_claude": "~/.local/bin/claude"}
+   ```
+
+   `watch_reader` (default false), `watch_reader_model` (default `claude-haiku-5-5`, must look like `claude-<id>`) and `watch_claude` (default:
+   the `claude` on the PATH; `ACE_WATCH_CLAUDE` in the environment beats it). A missing claude is not an error: the scan prints
+   `reader: ... 1 unavailable` and carries on. `touch <watch_dir>/READER_DISABLED` stops only this stage (`reader: disabled`). The scan prints
+   `reader: N read, M rejected, K leads` and `compile watch status` shows the last one. `python3 -m ace_playbook.compile watch canary` runs the
+   planted-injection feed through the real Reader path, writes nothing and prints `canary: 0 proposals` (exit 0) or `canary: N proposals`
+   (exit 1): run it weekly and after any model change. The second-user setup that keeps the Reader away from your files (the `acewatch` user,
+   its own login, two LaunchDaemon templates in `hooks/acewatch/`) is `docs/watch/SANDBOX.md`; nothing is installed for you.
 
 The count also reaches `status.json` (`watch_open` and friends), the `proposals` block of `compile digest` and the status line (`watch N`).
 

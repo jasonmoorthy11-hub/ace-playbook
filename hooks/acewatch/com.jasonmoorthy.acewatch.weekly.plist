@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- TEMPLATE ONLY, installed by nobody: the weekly tier-1 watcher scan (feeds; the quarantined Reader runs here when watch_reader is on), run by the
+     second user `acewatch` on Sundays at 05:00 (docs/watch/SANDBOX.md). Same two __PLACEHOLDERS__ as com.jasonmoorthy.acewatch.plist; the same
+     install and remove steps (`launchctl bootout system/com.jasonmoorthy.acewatch.weekly`). -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.jasonmoorthy.acewatch.weekly</string>
+  <key>UserName</key>
+  <string>acewatch</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__ACE_PLAYBOOK_COPY__/.venv/bin/python</string>
+    <string>-m</string>
+    <string>ace_playbook.compile</string>
+    <string>watch</string>
+    <string>scan</string>
+    <string>--tier</string>
+    <string>1</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__ACE_PLAYBOOK_COPY__</string>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key>
+    <integer>0</integer>
+    <key>Hour</key>
+    <integer>5</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>ACE_PLAYBOOK_CONFIG</key>
+    <string>__ACEWATCH_HOME__/.config/ace-playbook/config.json</string>
+    <key>HOME</key>
+    <string>__ACEWATCH_HOME__</string>
+    <key>PATH</key>
+    <string>/usr/bin:/bin</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__ACEWATCH_HOME__/logs/acewatch.weekly.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__ACEWATCH_HOME__/logs/acewatch.weekly.err.log</string>
+</dict>
+</plist>

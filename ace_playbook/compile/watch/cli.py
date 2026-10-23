@@ -1,7 +1,7 @@
-"""`compile watch scan|status|queue` (docs/design/compiler.md 8.x "Watch (as built)"): the watcher PROPOSES; nothing here applies a change.
+"""`compile watch scan|status|queue|canary` (docs/design/compiler.md 8.x "Watch (as built)"): the watcher PROPOSES; nothing here applies a change.
 
 This module is light on purpose (`__main__` imports it to register the verb): the network-using `scan` (and through it `fetch` and
-`inventory`) loads only when a scan runs. `queue` is TTY only, like `label --queue`: oldest first, 1 accept / 2 dismiss (a note is
+`inventory`) and the model-calling `canary` load only when they run. `queue` is TTY only, like `label --queue`: oldest first, 1 accept / 2 dismiss (a note is
 required) / 3 later / q quit; each key appends one decision row and nothing else. Every string that came from the web is cleaned of
 control characters before it is printed.
 """
@@ -35,7 +35,7 @@ def _need_tty(what: str) -> bool:
 
 def add_parser(sub) -> None:
     """Register `watch` (with scan, status and queue) on the CLI's subparsers."""
-    p = sub.add_parser("watch", help="the configuration watcher: proposes changes, applies nothing (scan | status | queue)")
+    p = sub.add_parser("watch", help="the configuration watcher: proposes changes, applies nothing (scan | status | queue | canary)")
     w = p.add_subparsers(dest="watch_cmd", required=True)
     sc = w.add_parser("scan", help="fetch the sources that are due, rebuild the inventory, match, store (the one network-using verb)")
     sc.add_argument("--tier", choices=("0", "1", "all"), default="all", help="only sources of this tier (default all)")
@@ -44,6 +44,7 @@ def add_parser(sub) -> None:
     w.add_parser("status", help="open proposals, leads, oldest, last scan (read-only)")
     q = w.add_parser("queue", help="TTY only: review open proposals, oldest first, one key each")
     q.add_argument("--limit", type=int, default=50, help="how many cards (default 50)")
+    w.add_parser("canary", help="run the planted-injection feed through the Reader (dry run: 0 proposals expected, exit 1 otherwise)")
     p.set_defaults(run=lambda c, a: run(c, a, _ask, _need_tty))
 
 
@@ -119,8 +120,12 @@ def queue(cfg: Config, limit: int, ask: Callable[[str], str], need_tty: Callable
 def run(cfg: Config, args, ask: Callable[[str], str], need_tty: Callable[[str], bool]) -> int:
     """Entry of `compile watch`: exit 0 (a scan always exits 0), 2 for a configuration error, a missing terminal or a bad `--limit`."""
     if args.watch_cmd == "status":
-        print("\n".join(("proposals", *summary.block(summary.fields(cfg), now_iso(), status_mod.age))))
+        print("\n".join(("proposals", *summary.block(summary.fields(cfg), now_iso(), status_mod.age),
+                         *(x for x in (summary.reader_line(store.watch_dir(cfg)),) if x))))
         return 0
+    if args.watch_cmd == "canary":
+        from . import canary                                             # lazy: it loads the Reader (subprocess)
+        return canary.run(cfg)
     if args.watch_cmd == "queue":
         return queue(cfg, args.limit, ask, need_tty)
     from . import scan                                                   # lazy: scan loads the network-using modules

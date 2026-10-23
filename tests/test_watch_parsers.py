@@ -26,12 +26,14 @@ ALL_FIXTURES = {                                             # every file under 
     "deprecations.md": ("deprecations", "text/markdown"), "deprecations_reordered.md": ("deprecations", "text/markdown"),
     "doc_page.md": ("md", "text/markdown"), "npm_tags.json": ("npm", "application/json"), "page_hidden.html": ("md", "text/html"),
     "rss_hidden.xml": ("rss", "application/rss+xml"), "rss_inline.xml": ("rss", "application/rss+xml"), "rss_ok.xml": ("rss", "application/rss+xml"),
-    "sitemap.xml": ("sitemap", "application/xml"),
+    "sitemap.xml": ("sitemap", "application/xml"), "canary.xml": ("rss", "application/rss+xml"),       # W2: the planted-injection feed
 }
+NOT_A_SOURCE = {"fake_reader.py"}                            # W2: the fake `claude -p` of the Reader tests is a program, not a fetched source
 
 
 def test_the_fixture_table_lists_every_fixture_file():
-    assert sorted(ALL_FIXTURES) == sorted(p.name for p in (Path(__file__).parent / "fixtures" / "watch").iterdir()) and len(ALL_FIXTURES) == 11
+    files = sorted(p.name for p in (Path(__file__).parent / "fixtures" / "watch").iterdir() if p.name not in NOT_A_SOURCE)
+    assert sorted(ALL_FIXTURES) == files and len(ALL_FIXTURES) == 12
 
 
 @pytest.mark.parametrize("name", sorted(ALL_FIXTURES))
