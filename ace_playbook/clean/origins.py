@@ -8,15 +8,18 @@ from __future__ import annotations
 
 import os
 import re
+import unicodedata
 
 from .bashwrite import DEST, ROOT, bash_analyse
 
-__all__ = ["DEST", "ROOT", "WRITE_TOOLS", "bash_analyse", "is_written", "normalise", "written_paths"]
+__all__ = ["DEST", "ROOT", "WRITE_TOOLS", "bash_analyse", "is_written", "key", "normalise", "written_paths"]
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
-WRITE_NAME_RE = re.compile(r"write|edit|create|move|copy|save|append|rename|delete", re.IGNORECASE)  # any other tool named like a write
-PATH_KEYS = ("path", "file_path", "destination", "dest", "target", "notebook_path", "filename")
-SOURCE_KEYS = ("source", "src")  # also written when the tool moves, copies or renames
+READ_ONLY = {"Read", "Grep", "Glob", "LS", "TodoRead", "TaskList", "TaskGet", "WebSearch", "WebFetch", "ListMcpResourcesTool",
+             "ReadMcpResourceTool"}  # every other tool but Bash and the four write tools is presumed to write what it names
+READ_ONLY_RE = re.compile(r"(?:read|list|search|get|find|query|describe)_")  # the last `__` segment of an MCP tool name
+PATH_LIKE_RE = re.compile(r"[^/]*/|[.~]|.*\.[A-Za-z0-9]{1,8}$")
+MAX_TOOL_PATHS = 200
 HOME_RE = re.compile(r"^\$\{?HOME\}?(?=/|$)")
 
 
@@ -26,10 +29,25 @@ def normalise(path: str, cwd: str) -> str:
     return os.path.normpath(path if os.path.isabs(path) or not cwd else os.path.join(cwd, path))
 
 
+def key(path: str) -> str:
+    """The comparison form of a path: NFKC-normalised and casefolded (macOS stores NFD, default APFS and NTFS ignore case)."""
+    return unicodedata.normalize("NFKC", path).casefold()
+
+
+def _path_strings(value: object) -> set[str]:
+    """Every string anywhere inside `value` (dict values, list items, nested) that looks like a path; over the cap, the ROOT marker."""
+    found, stack = set(), [value]
+    while stack:
+        v = stack.pop()
+        stack.extend(v.values() if isinstance(v, dict) else v if isinstance(v, (list, tuple)) else [])
+        found |= {v} if isinstance(v, str) and v and PATH_LIKE_RE.match(v) else set()
+    return {ROOT} if len(found) > MAX_TOOL_PATHS else found
+
+
 def is_written(path: str, written: set[str]) -> bool:
     """The path, or a directory above it, is in `written` (a clone or a copied tree covers the files inside). `written` holds casefolded
     paths and the lookup is casefolded too: default APFS and NTFS are case-insensitive, and a false match only makes a file untrusted."""
-    path = path.casefold()
+    path = key(path)
     while path not in written:
         parent = os.path.dirname(path)
         if parent == path:
@@ -45,11 +63,10 @@ def written_paths(name: str, inp: dict, cwd: str, root: str = "") -> tuple[set[s
     ok, raw = True, set()
     if name == "Bash":
         raw, ok = bash_analyse(str(inp.get("command", "")))
-    elif name in WRITE_TOOLS and (inp.get("file_path") or inp.get("notebook_path")):
-        raw = {str(inp.get("file_path") or inp.get("notebook_path"))}
-    elif name != "Bash" and WRITE_NAME_RE.search(name):  # an MCP or other tool whose name says it writes: every path-like string it was given
-        keys = PATH_KEYS + (SOURCE_KEYS if re.search("move|copy|rename", name, re.IGNORECASE) else ())
-        raw = {v for k, v in inp.items() if k in keys and isinstance(v, str) and v}
+    elif name in WRITE_TOOLS:
+        raw = {str(inp.get("file_path") or inp.get("notebook_path"))} if inp.get("file_path") or inp.get("notebook_path") else set()
+    elif name not in READ_ONLY and not READ_ONLY_RE.match(name.split("__")[-1]):
+        raw = _path_strings(inp)  # an MCP or other tool that may write: every path-looking string it was given, however nested
     bases = [normalise(b, "") for b in (cwd, root) if b]
     dests = {normalise(r[1:] or ".", cwd or root) for r in raw if r.startswith(DEST) and r != ROOT and (cwd or root)}
     dests = {root or cwd if d == "/" or root.startswith(d + "/") else d for d in dests} | ({root or cwd} if ROOT in raw and (root or cwd) else set())

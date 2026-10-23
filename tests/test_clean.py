@@ -581,3 +581,42 @@ def test_a_transcript_without_a_working_directory_has_no_user_files(tmp_path):  
     for path in ("README.md", CWD + "/README.md", "/etc/hosts"):
         recs = [bare, assistant(tool_use("rd", "Read", file_path=path)), tool_result("rd", "BODY TEXT")]
         assert {t.text: t.origin for t in parsed_of(tmp_path, recs).turns}["BODY TEXT"] == "tool_output", path
+
+
+# ------------------------------------------------------------- D-169 clause 9 (wave 12: R14 any non-read-only tool, R15 NFKC keys)
+@pytest.mark.parametrize("tool, inp, read_path", [
+    ("mcp__x__upload", {"files": [{"local": "docs/a.md"}]}, "docs/a.md"),             # a nested value under an unlisted key
+    ("mcp__x__clone", {"from": "https://h.example/r.git", "to": "out/dir"}, "out/dir/x"),
+    ("mcp__x__mkdir", {"new_path": "made/dir"}, "made/dir/f"),
+    ("mcp__x__extract", {"paths": ["a/b.md", "c.md"]}, "c.md"),
+    ("mcp__x__put", {"opts": {"deep": {"er": ["~/n.md"]}}}, os.path.expanduser("~/n.md")),
+    ("SomeNewTool", {"output": "gen/out.txt"}, "gen/out.txt"),
+])
+def test_r14_any_non_read_only_tool_writes_its_path_looking_strings(tmp_path, tool, inp, read_path):
+    assert result_origin(tmp_path, [assistant(tool_use("t", tool, **inp))], read_path) == "agent_file"
+
+
+@pytest.mark.parametrize("tool, inp", [
+    ("mcp__x__read_file", {"path": "n.md"}), ("mcp__x__list_dir", {"path": "docs/a.md"}), ("mcp__x__get_file", {"file": "n.md"}),
+    ("mcp__x__search_files", {"query": "n.md"}), ("WebFetch", {"url": "https://h.example/n.md"}), ("Glob", {"pattern": "**/n.md"}),
+    ("Grep", {"pattern": "x", "path": "n.md"}), ("ReadMcpResourceTool", {"uri": "file://n.md"}), ("LS", {"path": "docs/a.md"}),
+])
+def test_r14_read_only_tools_mark_nothing(tmp_path, tool, inp):
+    for read_path in ("n.md", "docs/a.md"):
+        assert result_origin(tmp_path, [assistant(tool_use("t", tool, **inp))], read_path) == "user_file", read_path
+
+
+def test_r14_over_200_path_values_taint_the_root(tmp_path):
+    many = {"files": [f"d{i}/f.md" for i in range(201)]}
+    assert result_origin(tmp_path, [assistant(tool_use("t", "mcp__x__upload", **many))], "README.md") == "agent_file"
+    few = {"files": [f"d{i}/f.md" for i in range(200)]}
+    assert result_origin(tmp_path, [assistant(tool_use("t", "mcp__x__upload", **few))], "README.md") == "user_file"
+    assert result_origin(tmp_path, [assistant(tool_use("t", "mcp__x__upload", **few))], "d7/f.md") == "agent_file"
+
+
+def test_r15_unicode_forms_of_a_name_are_the_same_path(tmp_path):
+    nfc, nfd = "caf\u00e9.md", "cafe\u0301.md"
+    assert result_origin(tmp_path, [assistant(tool_use("w", "Write", file_path=CWD + "/" + nfc))], nfd) == "agent_file"
+    assert result_origin(tmp_path, [assistant(tool_use("w", "Write", file_path=CWD + "/" + nfd))], nfc) == "agent_file"
+    assert result_origin(tmp_path, [bash("cp a.md " + nfd)], nfc) == "agent_file"
+    assert result_origin(tmp_path, [assistant(tool_use("w", "Write", file_path=CWD + "/" + nfc))], "cafe.md") == "user_file"

@@ -406,13 +406,15 @@ the long-token lint partly covers and nothing measures.
 - Subagent writes are read from the `isSidechain` records of the main transcript and from every `*.jsonl` under
   `<session>/subagents/` beside it (the harness's current layout); their turns are never kept. A file there that is not valid JSONL is
   skipped line by line and counted in `bad_lines`.
-- Written paths are compared casefolded (default APFS and NTFS are case-insensitive; on a case-sensitive filesystem this is an
+- Written paths are compared casefolded (and NFKC-normalised; default APFS and NTFS are case-insensitive; on a case-sensitive filesystem this is an
   over-approximation that can only make a file untrusted). A symlinked alias of a written file is not recognised: reading it through
   another path stays `user_file`. Subagent writes use the session's first cwd as the root for the root taint and the clamp.
-- Any tool other than the four write tools whose name contains `write`, `edit`, `create`, `move`, `copy`, `save`, `append`, `rename` or
-  `delete` (an MCP file server's `write_file`, `move_file`) counts as a write of every `path`, `file_path`, `destination`, `dest`, `target`,
-  `notebook_path` or `filename` string it was given (and of `source`/`src` for move, copy and rename); a tool with a differently named
-  write is not tracked.
+- Any tool other than `Bash`, the four write tools and a read-only allowlist (`Read`, `Grep`, `Glob`, `LS`, `TodoRead`, `TaskList`, `TaskGet`,
+  `WebSearch`, `WebFetch`, the MCP resource readers, and any MCP tool whose last name segment starts with `read_`, `list_`, `search_`, `get_`,
+  `find_`, `query_` or `describe_`) is presumed to write: every string anywhere inside its input (nested dicts and lists included) that looks
+  like a path (a `/`, a leading `.` or `~`, or a file suffix) counts as written, and a tool_use with over 200 such strings taints the session
+  root. A write through a tool named like a reader, or a path that does not look like one, is not tracked. Paths are compared NFKC-normalised
+  and casefolded.
 - A transcript in which no record carries a working directory has no user files: every Read is `tool_output`.
 - The trust boundary for `user_file` is the session's first cwd. A record whose own cwd is outside it makes its Reads `tool_output`.
 - `shell_output` is decided by the `<bash-input>`, `<bash-stdout>` and `<bash-stderr>` tags of a user record: a user record with any of

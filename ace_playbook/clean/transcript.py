@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
-from .origins import is_written, normalise, written_paths
+from .origins import is_written, key, normalise, written_paths
 
 NOISE_TAGS = ("system-reminder", "local-command-caveat", "local-command-stdout",
               "local-command-stderr", "command-message", "ide_opened_file",
@@ -177,7 +177,7 @@ def _scan_side(side: Iterator[dict], written: set, out: Parsed) -> None:
 def _note_writes(b: dict, written: set, cwd: str, out: Parsed) -> None:
     if b.get("type") == "tool_use" and isinstance(b.get("input"), dict):
         paths, unparsed = written_paths(str(b.get("name", "")), b["input"], cwd, out.cwd)
-        written |= {p.casefold() for p in paths}
+        written |= {key(p) for p in paths}
         out.drops.unparsed_bash += unparsed
 
 
