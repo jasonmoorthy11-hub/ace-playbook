@@ -186,7 +186,9 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   the form of a code-made title) and it is shown in the queue and the scan output (quoted; leads stay out of the digest), so every place
   that renders it must escape it as it does the lead titles of W1. The quote is a verbatim line chosen by number, never model text. A fooled
   Reader can still call an item relevant (a noise lead; at most five per scan) or stay silent about a real one; the canary verb
-  (`compile watch canary`) checks refusal only for its four planted items, not in general. The Reader is for the `acewatch` user ONLY: run
+  (`compile watch canary`) checks refusal only for its four planted items, not in general. An outage is decided by the Reader's own health probe,
+  never by feed items (`outage` in the scan line); a feed item that makes the model fail twice is retired on its own. The Reader is for the
+  `acewatch` user ONLY: run
   as the operator it would load the operator's hooks and `CLAUDE.md`. The call passes `--settings` (`disableAllHooks`) and
   `--setting-sources ""` (hooks off, the settings files dropped; checked by the release probe on the installed binary, but the fake claude of the
   tests cannot tell whether a later claude version still honours them); `CLAUDE.md` and auto-memory are kept out by the separate user, which

@@ -429,41 +429,44 @@ def test_the_canary_control_a_well_formed_answer_does_yield_proposals_so_zero_is
 
 
 def test_the_pipeline_stops_at_the_first_unavailable_claude_or_failed_spawn_and_counts_the_rest(fake, monkeypatch):
+    spawns = []
+
+    def refuse(*a, **k):
+        spawns.append(1)
+        raise OSError("no spawn")
+
     for spoil in (lambda: monkeypatch.setenv("ACE_WATCH_CLAUDE", str(ROOT / "no-such-claude")),
-                  lambda: monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: (_ for _ in ()).throw(OSError("no spawn")))):
+                  lambda: (monkeypatch.setenv("ACE_WATCH_CLAUDE", str(FAKE)), monkeypatch.setattr(subprocess, "Popen", refuse))):
         spoil()
         s = stats()
         assert model.pipeline(cfg_of(), canary_items(), NOW, s) == [] and (s["read"], s["unavailable"], s["failed"]) == (0, 4, 0)
+    assert len(spawns) == 1                                                  # one failed spawn stops the loop: no futile attempt for the other 3
 
 
 @pytest.mark.parametrize("name", ["iserror", "exit1"])
-def test_three_failed_calls_and_no_success_trip_the_breaker_nothing_is_marked_or_counted_over_three_scans(fake, tmp_path, monkeypatch, name):
-    """D-161: an outage (an expired login) must lose nothing: the rest are `unavailable`, no item is marked done, and the 3 tries are rolled back."""
+def test_three_failed_calls_then_a_failed_probe_are_an_outage_the_rest_and_the_held_are_unavailable_nothing_is_marked(fake, monkeypatch, name):
+    """D-165: the probe (a 4th call on a built-in item), not the feed, decides: it fails too, so nothing is marked and no try is counted."""
     fake(name)
-    seen, res = {}, feed_result(5)
-    for _ in range(3):
-        out, lines = model.stage(cfg_of(), [res], tmp_path / "wd", seen, NOW)
-        assert out == [] and lines[0] == "reader: 0 read, 0 rejected, 0 leads, 2 unavailable, 3 failed, breaker tripped"
-        assert lines[1] == "reader: breaker tripped (3 failed calls, no success); 2 item(s) not read, they go to the back of the next scan"
-        assert seen["reader"]["done"] == {} and seen["reader"]["fail"] == {}
-    assert len(fake.calls()) == 9
+    s, done, fail = stats(), {}, {}
+    assert model.pipeline(cfg_of(), canary_items(), NOW, s, done, fail) == [] and len(fake.calls()) == 4
+    assert (s["read"], s["failed"], s["unavailable"], s["outage"]) == (0, 3, 4, 1) and done == {} and fail == {}
 
 
-def test_a_mixed_run_does_not_trip_the_breaker_and_the_earlier_failures_count_as_tries(fake, monkeypatch):
+def test_a_mixed_run_has_no_probe_and_the_earlier_failures_count_as_tries_at_the_first_success(fake, monkeypatch):
     monkeypatch.setenv("ACE_WATCH_FAKE_SEQ", "iserror,iserror,good,iserror")
     s, done, fail = stats(), {}, {}
     items = canary_items()
     recs = model.pipeline(cfg_of(), items, NOW, s, done, fail)
-    assert (s["failed"], s["read"], s["unavailable"], s["leads"]) == (3, 1, 0, 1) and len(recs) == 1 and len(fake.calls()) == 4
+    assert (s["failed"], s["read"], s["unavailable"], s["leads"], s["probe"]) == (3, 1, 0, 1, "") and len(recs) == 1 and len(fake.calls()) == 4
     assert fail == {items[0]["key"]: 1, items[1]["key"]: 1, items[3]["key"]: 1} and list(done) == [items[2]["key"]]
 
 
-def test_whitespace_items_are_not_calls_for_the_breaker(fake):
+def test_whitespace_items_are_not_calls_for_the_outage_decision(fake):
     fake("iserror")
     items = [{**it, "text": " \n "} for it in many_items(4)] + many_items(2)
     s = stats()
     model.pipeline(cfg_of(), items, NOW, s)
-    assert (s["rejected"], s["failed"], s["unavailable"]) == (4, 2, 0)
+    assert (s["rejected"], s["failed"], s["unavailable"], s["outage"]) == (4, 2, 2, 1) and len(fake.calls()) == 3     # 2 failed calls, then the probe
 
 
 @pytest.mark.parametrize("name", ["iserror", "exit1", "hang", "garbage", "empty"])
@@ -476,20 +479,22 @@ def test_a_failed_call_does_not_stop_the_loop_the_next_item_is_read_and_composes
     assert (s["failed"], s["unavailable"], s["read"], s["leads"]) == (1, 0, 1, 1) and len(recs) == 1 and len(fake.calls()) == 2
 
 
-def test_the_second_failed_try_of_the_same_item_marks_it_done_and_the_loop_never_reads_it_again(fake, tmp_path):
-    fake("iserror")
+def test_the_second_failed_try_of_the_same_item_marks_it_done_and_the_loop_never_reads_it_again(fake, tmp_path, monkeypatch):
+    monkeypatch.setenv("ACE_WATCH_FAKE_POISON", "Newsletter unsubscribe")                 # only this item fails; the probe is fine
     done, fail, s = {}, {}, stats()
     items = canary_items()[:1]
     model.pipeline(cfg_of(), items, NOW, s, done, fail)
-    assert fail == {items[0]["key"]: 1} and done == {} and s["failed"] == 1
+    assert fail == {items[0]["key"]: 1} and done == {} and s["failed"] == 1 and s["probe"] == "ok"
     model.pipeline(cfg_of(), items, NOW, stats(), done, fail)
-    assert fail == {} and list(done) == [items[0]["key"]] and len(fake.calls()) == 2
+    assert fail == {} and list(done) == [items[0]["key"]] and len(fake.calls()) == 4              # 2 items + 2 probes
 
 
-def test_a_good_read_clears_the_fail_count_of_the_item(fake):
+def test_a_good_read_clears_the_fail_count_of_the_item(fake, monkeypatch):
     done, fail, items = {}, {}, canary_items()[:1]
-    fake("iserror")
+    monkeypatch.setenv("ACE_WATCH_FAKE_POISON", "Newsletter unsubscribe")
     model.pipeline(cfg_of(), items, NOW, stats(), done, fail)
+    assert fail == {items[0]["key"]: 1}
+    monkeypatch.delenv("ACE_WATCH_FAKE_POISON")
     fake("irrelevant")
     s = stats()
     model.pipeline(cfg_of(), items, NOW, s, done, fail)
@@ -584,17 +589,11 @@ def test_the_canary_verb_says_unavailable_and_exits_2_instead_of_passing_vacuous
     assert (code, out) == (2, "canary: reader unavailable\n") and str(tmp_path) not in out + err
 
 
-def test_the_canary_verb_counts_a_failed_call_on_stderr_and_still_exits_0_when_the_others_were_read(fake, tmp_path, monkeypatch, capsys):
-    """canary I-1: one failing call in a mixed run is `canary: 0 proposals` exit 0 with a `failed` count (exit 2 is for an outage or no claude)."""
-    monkeypatch.setenv("ACE_WATCH_FAKE_SEQ", "iserror,irrelevant")
-    assert verb(tmp_path, monkeypatch, capsys) == (0, "canary: 0 proposals\n", "canary: 1 failed\n")
-
-
 @pytest.mark.parametrize("name", ["iserror", "exit1"])
 def test_the_canary_verb_exits_2_when_every_call_fails_it_proved_nothing(fake, tmp_path, monkeypatch, capsys, name):
-    """D-161: three failures and no success trip the breaker; the rest are unavailable, so the weekly check cannot pass vacuously."""
+    """D-165: three failures and a failed health probe are an outage; the weekly check cannot pass vacuously (4 calls: 3 items, the probe)."""
     fake(name)
-    assert verb(tmp_path, monkeypatch, capsys) == (2, "canary: breaker tripped (3 failed calls)\n", "canary: 3 failed\n")
+    assert verb(tmp_path, monkeypatch, capsys) == (2, "canary: outage (the health probe failed)\n", "canary: 3 failed\n") and len(fake.calls()) == 4
 
 
 def test_the_canary_verb_exits_2_when_the_feed_file_is_missing(fake, tmp_path, monkeypatch, capsys):
@@ -729,16 +728,16 @@ def test_a_failed_item_is_tried_twice_then_marked_done_and_the_scan_line_says_fa
     """canary I-1 through the scan: `F failed` in the line, reader.fail in seen.json, done after the second failed try, no stall after that."""
     plain(world)
     enable(world)
-    fake("iserror")
+    monkeypatch.setenv("ACE_WATCH_FAKE_POISON", "quiet post")                           # the item alone fails; the probe after it is healthy
     code, out, err = world.run(capsys, "scan")
     seen = json.loads((world.wd / "seen.json").read_text())["reader"]
     assert code == 0 and "reader: 0 read, 0 rejected, 0 leads, 1 failed" in out and "unavailable" not in out
     assert list(seen["fail"].values()) == [1] and seen["done"] == {}
     world.run(capsys, "scan", "--force")
     seen = json.loads((world.wd / "seen.json").read_text())["reader"]
-    assert seen["fail"] == {} and len(seen["done"]) == 1 and len(fake.calls()) == 2
+    assert seen["fail"] == {} and len(seen["done"]) == 1 and len(fake.calls()) == 4                  # item + probe, twice
     code, out, err = world.run(capsys, "scan", "--force")
-    assert "reader: 0 read, 0 rejected, 0 leads" in out and "failed" not in out and len(fake.calls()) == 2
+    assert "reader: 0 read, 0 rejected, 0 leads" in out and "failed" not in out and len(fake.calls()) == 4
 
 
 def test_an_unavailable_item_is_tried_again_once_the_claude_is_back(world, fake, capsys, monkeypatch):

@@ -8,11 +8,11 @@
        __ACEWATCH_HOME__      acewatch's own home directory
      The config at __ACEWATCH_HOME__/.config/ace-playbook/config.json is acewatch's own (its own watch_dir, watch_sources, watch_claude).
      Install by hand as root: copy to /Library/LaunchDaemons (root:wheel, 0644), then `launchctl bootstrap system <file>`.
-     Remove: `launchctl bootout system/com.jasonmoorthy.acewatch`. The weekly tier-1 job is com.jasonmoorthy.acewatch.weekly.plist. -->
+     Remove: `launchctl bootout system/com.example.acewatch`. The weekly tier-1 job is com.example.acewatch.weekly.plist. -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.jasonmoorthy.acewatch</string>
+  <string>com.example.acewatch</string>
   <key>UserName</key>
   <string>acewatch</string>
   <key>ProgramArguments</key>

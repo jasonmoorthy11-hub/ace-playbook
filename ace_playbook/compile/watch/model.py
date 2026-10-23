@@ -7,13 +7,12 @@ lead candidates) is skipped BEFORE the read: no call, marked done, counted `dup`
 not reached stay unmarked, are counted `capped` and are read on later scans (D-163). An item read once (a lead, a rejection or "not relevant") is
 remembered in `seen.json` (`reader.done`, KEEP newest) and not read again. Only a claude that is missing or cannot be spawned is `unavailable`: it
 stops the loop and the item is not marked. A call that was spawned and failed counts `failed`, the loop goes on, the try count is kept in `seen.json`
-(`reader.fail`) and the item is marked done after TRIES failed tries. THE BREAKER (D-161): BREAKER failed calls in a row at the start of a run with no
-success are an outage (an expired login, no network) or three items the model cannot read: the rest of the run is `unavailable`, nothing is marked and
-the failed tries of those calls are not counted, so an outage loses nothing; a trip is reported as `breaker tripped`, apart from a missing claude.
-ROTATION (D-164): the keys of the tripping streak go to `seen.json` (`reader.breaker`, pruned to the items still queued and dropped when one is read
-or marked done) and the next run puts those items LAST (stable otherwise), so three crafted items at the head cost one scan: the good items behind
-them are read, then the crafted ones fail individually and are marked done after TRIES (an item that already has a failed try is no evidence of an
-outage: its new try is held and committed at the first success or at an untripped run end, and a trip drops it, so an outage retires nothing).
+(`reader.fail`) and the item is marked done after TRIES failed tries. THE HEALTH PROBE (D-165): no feed item decides "outage". A failed call is HELD
+(nothing counted, nothing marked); after PROBE_AFTER failed calls with no success, or when the run ends with failed calls and no success, ONE call is
+made on the built-in `reader.PROBE`. A parsed envelope means the Reader is healthy: the held tries count and the run goes on (later failures count at
+once). A failed probe is an OUTAGE (an expired login, no network): the held tries are dropped, the rest is `unavailable`, nothing is marked, and it is
+reported as `outage`. A first success also commits the held tries; a claude that cannot be started mid-run drops them. So an outage loses no item and an
+item that makes the model fail twice is retired on its own and cannot stall the stage.
 The Reader runs in the one fixed empty directory `<watch_dir>/reader_cwd`. The counts of the scan go into `seen.json` (`reader.last`) for `watch status`;
 `settle` replaces its lead count with the reader leads reconcile stored as new.
 Costs come from the envelope and stay in the stats. `pipeline` is shared with the canary verb.
@@ -22,6 +21,7 @@ Costs come from the envelope and stay in the stats. `pipeline` is shared with th
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 from pathlib import Path
 
@@ -30,12 +30,13 @@ from . import compose, reader, summary, validate
 from .fsio import odd
 from .store import clean
 
-MAX_ITEMS, MAX_LEADS, KEEP, TRIES, BREAKER, KILL, CWD = 20, 5, 2000, 2, 3, "READER_DISABLED", "reader_cwd"
+MAX_ITEMS, MAX_LEADS, KEEP, TRIES, PROBE_AFTER, KILL, CWD = 20, 5, 2000, 2, 3, "READER_DISABLED", "reader_cwd"
+LOG = logging.getLogger("ace_playbook.watch")
 FEEDS = ("rss", "atom")
 
 
 def new_stats() -> dict:
-    return {"read": 0, "rejected": 0, "leads": 0, "unavailable": 0, "failed": 0, "breaker": 0, "capped": 0, "dup": 0, "signals": 0, "cost": 0.0}
+    return {"read": 0, "rejected": 0, "leads": 0, "unavailable": 0, "failed": 0, "outage": 0, "probe": "", "capped": 0, "dup": 0, "signals": 0, "cost": 0.0}
 
 
 def items_from_entries(entries: list[dict], source: str, url: str, sha256: str) -> list[dict]:
@@ -72,16 +73,27 @@ def _failed_try(key: str, now: str, done: dict | None, fail: dict | None) -> Non
         done[key] = now
 
 
+def _probe(cfg: Config, cwd: Path | None, stats: dict, held: list, now: str, done: dict | None, fail: dict | None, unreached: int) -> bool:
+    """D-165: ask the health probe once. Healthy: the held tries count (True). An outage: they are dropped and the held items and the `unreached`
+    ones are `unavailable`, nothing is marked (False)."""
+    if reader.probe(cfg, cwd):
+        stats["probe"] = "ok"
+        LOG.info("reader: health probe ok after %d failed call(s)", len(held))
+        for key in held:
+            _failed_try(key, now, done, fail)
+        return True
+    stats["unavailable"] += unreached + len(held)
+    stats["outage"] = 1
+    return False
+
+
 def pipeline(cfg: Config, items: list[dict], now: str, stats: dict, done: dict | None = None, fail: dict | None = None,
-             cwd: Path | None = None, dups=frozenset(), brk: list | None = None) -> list[dict]:
+             cwd: Path | None = None, dups=frozenset()) -> list[dict]:
     """Read, validate and compose each item; the records are leads only. Counts go into `stats`, a processed item's key into `done`, the failed
-    tries into `fail`. `unavailable` and the breaker stop the loop; so does the lead cap. `brk` (D-164) holds the keys that tripped the breaker
-    last time: they are read LAST and a trip rewrites it with the new streak first (`stage` drops the keys that were read or marked done)."""
+    tries into `fail`. `unavailable` and an outage stop the loop; so does the lead cap. `held` (D-165) has the keys of the failed calls before the
+    first success or healthy probe (None after): their tries are not counted yet."""
     out: list[dict] = []
-    if brk:
-        items = sorted(items, key=lambda it: it["key"] in brk)                  # stable: only the items that tripped the breaker move, to the back
-    streak: list[str] | None = []                    # keys of the failed calls before the first success (None once one succeeded): not counted yet
-    pending: list[str] = []                          # the same for items that already carry a strike: no evidence of an outage, held until the end
+    held: list[str] | None = []
     for n, item in enumerate(items):
         if len(out) >= MAX_LEADS:                                               # D-163: no call after the cap; the rest are read on a later scan
             stats["capped"] += sum(1 for it in items[n:] if not _dup(it, dups))
@@ -93,28 +105,23 @@ def pipeline(cfg: Config, items: list[dict], now: str, stats: dict, done: dict |
             continue
         before = (stats["unavailable"], stats["failed"], stats["read"])
         answer = reader.read_item(item, cfg, stats, cwd)
-        if stats["unavailable"] > before[0]:                                    # no claude or no spawn: stop, do not mark done
+        if stats["unavailable"] > before[0]:                                    # no claude or no spawn: stop, mark nothing, count none of the held tries
             stats["unavailable"] += len(items) - n - 1
-            break
+            return out
         if stats["failed"] > before[1]:                                         # the call ran and failed: go on to the next item
-            if streak is None:
+            if held is None:
                 _failed_try(item["key"], now, done, fail)
-                continue
-            if fail and fail.get(item["key"]):                                  # a prior strike: out of the outage decision, its try waits (D-164 cl. 2)
-                pending.append(item["key"])
-                continue
-            streak.append(item["key"])
-            if len(streak) >= BREAKER:                                          # D-161: an outage; the tries are dropped, nothing is marked
-                stats["unavailable"] += len(items) - n - 1
-                stats["breaker"] = 1                                            # D-164: reported apart from a missing claude, and rotated
-                if brk is not None:
-                    brk[:] = streak + [k for k in brk if k not in streak]
-                return out                                                      # `streak` and `pending` are dropped: count nothing, mark nothing
+            else:
+                held.append(item["key"])
+                if len(held) >= PROBE_AFTER:                                    # D-165: ask the probe, not the feed, whether this is an outage
+                    if not _probe(cfg, cwd, stats, held, now, done, fail, len(items) - n - 1):
+                        return out
+                    held = None
             continue
         if stats["read"] > before[2]:                                           # a success: the failures before it were the items' own
-            for key in (streak or []) + pending:
+            for key in held or []:
                 _failed_try(key, now, done, fail)
-            streak, pending = None, []
+            held = None
         if done is not None:
             done[item["key"]] = now
         if fail is not None:
@@ -127,10 +134,8 @@ def pipeline(cfg: Config, items: list[dict], now: str, stats: dict, done: dict |
             stats["leads"] += 1
         except ValueError:
             stats["rejected"] += 1
-    # fewer than BREAKER fresh failures and no success: they were the items' own. A run of ONLY prior-strike items that all fail retires them
-    # here (accepted residual: no fresh item can trip the breaker, so an outage hitting such a run retires them).
-    for key in (streak or []) + pending:
-        _failed_try(key, now, done, fail)
+    if held:                                                                    # the run ended with failed calls and no success: probe once
+        _probe(cfg, cwd, stats, held, now, done, fail, 0)
     return out
 
 
@@ -162,22 +167,20 @@ def stage(cfg: Config, results: list[dict], wd: Path, seen: dict, now: str, dry_
     done = state["done"] = {k: v for k, v in state.get("done", {}).items() if isinstance(v, str)} if isinstance(state.get("done"), dict) else {}
     fail = state["fail"] = ({k: v for k, v in state["fail"].items() if isinstance(k, str) and type(v) is int and 0 < v < TRIES}
                             if isinstance(state.get("fail"), dict) else {})
-    brk = state["breaker"] = [k for k in state["breaker"] if isinstance(k, str)] if isinstance(state.get("breaker"), list) else []
+    state.pop("breaker", None)                                                                # the D-164 rotation list is gone (D-165)
     stats = new_stats()
-    queued = sorted((it for it in items_of(results) if it["key"] not in done), key=lambda it: it["key"] in brk)       # D-164: tripped items last
-    recs = pipeline(cfg, queued[:MAX_ITEMS], now, stats, done, fail, reader_cwd(wd), dups, brk)
-    live = {it["key"] for it in queued}
-    brk[:] = [k for k in brk if k in live and k not in done]                                  # only items still queued stay on the list
+    queued = [it for it in items_of(results) if it["key"] not in done]
+    recs = pipeline(cfg, queued[:MAX_ITEMS], now, stats, done, fail, reader_cwd(wd), dups)
     for key in sorted(done, key=lambda k: done[k])[:max(0, len(done) - KEEP)]:
         del done[key]
     for key in list(fail)[:max(0, len(fail) - KEEP)]:
         del fail[key]
-    state["last"] = {"at": now, **{k: stats[k] for k in ("read", "rejected", "leads", "unavailable", "failed", "breaker", "capped", "dup")},
+    state["last"] = {"at": now, **{k: stats[k] for k in ("read", "rejected", "leads", "unavailable", "failed", "outage", "capped", "dup")},
                      "cost": round(stats["cost"], 6)}
     lines = [summary.reader_text(state["last"])]
-    if stats["breaker"]:
-        lines.append(f"reader: breaker tripped ({BREAKER} failed calls, no success); {stats['unavailable']} item(s) not read, "
-                     "they go to the back of the next scan")
+    if stats["outage"]:
+        lines.append(f"reader: outage (the health probe failed after {stats['failed']} failed call(s)); {stats['unavailable']} item(s) not read, "
+                     "nothing marked")
     elif stats["unavailable"]:
         lines.append(f"reader: claude is unavailable; {stats['unavailable']} item(s) not read")
     if stats["signals"]:

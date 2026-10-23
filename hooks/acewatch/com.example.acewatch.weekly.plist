@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- TEMPLATE ONLY, installed by nobody: the weekly tier-1 watcher scan (feeds; the quarantined Reader runs here when watch_reader is on), run by the
-     second user `acewatch` on Sundays at 05:00 (docs/watch/SANDBOX.md). Same two __PLACEHOLDERS__ as com.jasonmoorthy.acewatch.plist (the copy is
+     second user `acewatch` on Sundays at 05:00 (docs/watch/SANDBOX.md). Same two __PLACEHOLDERS__ as com.example.acewatch.plist (the copy is
      a full checkout with a .venv built from a python outside any user home); the same install and remove steps
-     (`launchctl bootout system/com.jasonmoorthy.acewatch.weekly`). -->
+     (`launchctl bootout system/com.example.acewatch.weekly`). -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.jasonmoorthy.acewatch.weekly</string>
+  <string>com.example.acewatch.weekly</string>
   <key>UserName</key>
   <string>acewatch</string>
   <key>ProgramArguments</key>
