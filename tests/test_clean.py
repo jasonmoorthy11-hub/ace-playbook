@@ -683,3 +683,15 @@ def test_m2_writes_before_the_first_cwd_are_resolved_against_it(tmp_path):
             assistant(tool_use("r3", "Read", file_path="other.md")), tool_result("r3", "THREE BODY")]
     origin = {t.text: t.origin for t in parsed_of(tmp_path, recs).turns}
     assert origin["ONE BODY"] == "agent_file" and origin["TWO BODY"] == "agent_file" and origin["THREE BODY"] == "user_file"
+
+
+# ------------------------------------------------------------- D-169 clause 9 (wave 15: Opus round 4)
+@pytest.mark.parametrize("cmd", ["echo x > $'no'tes; true", 'echo x > $"no"tes; true', "cp a.md $'no'tes", 'tee $"no"tes', "touch $'n'o.md"])
+def test_imp1_ansi_c_and_locale_quoting_taint_the_root(tmp_path, cmd):
+    assert result_origin(tmp_path, [bash(cmd)], "README.md") == "agent_file"
+
+
+def test_imp2_the_end_of_parse_flush_notes_held_back_writes():
+    no_cwd = {k: v for k, v in user("go on").items() if k != "cwd"}
+    parsed = parse_records(iter([bash('foo "b.md'), no_cwd]), 2000)
+    assert parsed.drops.unparsed_bash == 1 and parsed.pending == []

@@ -119,6 +119,6 @@ def bash_analyse(cmd: str) -> tuple[set[str], bool]:
             found |= {os.path.join(p, q) for p in found for q in qs}
     bases = {n for u in urls for b in [os.path.basename(urlparse(u).path) or "index.html"] for n in (b, b.removesuffix(".git"))}
     found |= bases | {os.path.join(p, b) for p in found for b in bases}
-    if names & ROOT_WORDS or any("CDPATH" in w for s in seqs for w in s):
-        root = True  # the tracker does not model the shell's working directory: a cd, eval, find, xargs... taints the session root
+    if names & ROOT_WORDS or any("CDPATH" in w for s in seqs for w in s) or "$'" in cmd or '$"' in cmd:
+        root = True  # the tracker does not model the shell's working directory (a cd, eval, find, xargs...) nor ANSI-C/locale quoting
     return ((found | {os.path.dirname(p) for p in found}) - {""}) | {DEST + d for d in dests} | ({ROOT} if root else set()), ok

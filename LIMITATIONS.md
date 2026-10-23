@@ -402,7 +402,8 @@ the long-token lint partly covers and nothing measures.
   path segment are recorded as directories under the working directory and under each marked directory (a recursive `wget` writes
   `host/path`). A script or interpreter that writes a file it does not name on its command line is not tracked; name the file on
   the command line or read it through the Bash tool's own output. Writes by a command outside the verb list and without a redirection
-  or through a variable (`$VAR` paths) are not tracked either.
+  or through a variable (`$VAR` paths) are not tracked either. ANSI-C or locale quoting (`$'...'`, `$"..."`) in a write-capable command
+  taints the session root, because shlex does not unquote it.
 - Subagent writes are read from the `isSidechain` records of the main transcript and from every `*.jsonl` under
   `<session>/subagents/` beside it (the harness's current layout); their turns are never kept. A file there that is not valid JSONL is
   skipped line by line and counted in `bad_lines`.
@@ -419,9 +420,9 @@ the long-token lint partly covers and nothing measures.
   `/`, a leading `.` or `~`, or a file suffix); a tool_use with over 200 such strings taints the session root. A write through a tool named
   like a reader without a write verb, or a path under an unknown key that does not look like one, is not tracked. A shell-command string
   of such a tool (under `command`, `cmd`, `script`, `commands` or `args`) is also analysed as a Bash command; a PowerShell `Set-Content` or any
-  other non-POSIX write form is a residual. Write blocks seen before the first record with a working directory are held back and noted once
-  it is known. Paths are compared
-  NFKC-normalised and casefolded.
+  other non-POSIX write form is a residual. Paths are compared NFKC-normalised and casefolded.
+- Write blocks of any tool seen before the first record with a working directory are held back and noted once it is known (or at the end of
+  the transcript if none ever appears).
 - A transcript in which no record carries a working directory has no user files: every Read is `tool_output`.
 - The trust boundary for `user_file` is the session's first cwd. A record whose own cwd is outside it makes its Reads `tool_output`.
 - `shell_output` is decided by the `<bash-input>`, `<bash-stdout>` and `<bash-stderr>` tags of a user record: a user record with any of
