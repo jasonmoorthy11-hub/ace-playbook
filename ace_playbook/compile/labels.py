@@ -204,7 +204,7 @@ def _rows(cfg: Config, limit: int) -> int:
     _need(limit >= 1, "--limit must be at least 1", 2)
     for r in shadow_rows(cfg)[-limit:]:
         print(*map(_clean, (r["ts"], row_id(r), r["proposal_id"], r.get("lesson_id", "-"), r.get("cause", "-"),
-                            str(r.get("would_fire")).lower())))
+                            str(r.get("would_fire")).lower(), r.get("mode") or "-")))      # mode last: a `disabled` row (kill file) shows
     return 0
 
 

@@ -1,8 +1,9 @@
 """The proposal record of design 4.3 (exactly): its builder, its id, its validator. Stdlib only.
 
 `record` builds `{id, created, class, elevated, title, evidence[{url, sha256, quote, tier}], inventory_hits, change{target, diff, diff_sha256},
-verify, expires, status}`; `id` is `W-` plus the first 8 hex of sha256 of `class|target|evidence sha|quote`, with `|model id` appended when
-the (code-made) title names a model: two ids in one table cell share a quote and must not share an id. A quote is ONE line of the fetched
+verify, expires, status}`; `id` is `W-` plus the first 16 hex (64 bits, S-1 F8) of sha256 of `class|target|evidence sha|quote`, with `|model id` appended when
+the (code-made) title names a model: two ids in one table cell share a quote and must not share an id. A record made before F8 keeps its `W-` plus
+8 hex id, the first 8 hex of the new one, and `check` accepts both widths. A quote is ONE line of the fetched
 body, verbatim (`quote_line`); `check(rec, body)` also requires it to be a substring of `body` when the body is given. `check` returns None
 for a valid W1 record, else the reason: shape, title, evidence, quote, id, diff hash, "tier-1 evidence alone cannot carry a diff", verify
 (one of three fixed command templates) or dates. `change.target` is always an inventory key, a mapped docs URL, a source id or
@@ -39,7 +40,7 @@ def title_model(title: object) -> tuple[str, str]:
 
 
 def make_id(cls: str, target: str, sha: str, quote: str, model: str = "") -> str:
-    return "W-" + hashlib.sha256("|".join((cls, target, sha, quote, *([model] if model else []))).encode()).hexdigest()[:8]
+    return "W-" + hashlib.sha256("|".join((cls, target, sha, quote, *([model] if model else []))).encode()).hexdigest()[:16]
 
 
 def quote_line(body: str, *prefer: str) -> str:
@@ -75,7 +76,8 @@ def check(rec: dict, body: str | None = None) -> str | None:
             return "evidence"
         if not all(e["quote"] == clean(e["quote"], 400) and (body is None or e["quote"] in body) for e in ev):
             return "quote"
-        if rec["id"] != make_id(rec["class"], ch["target"], ev[0]["sha256"], ev[0]["quote"], title_model(rec["title"])[0]):
+        made = make_id(rec["class"], ch["target"], ev[0]["sha256"], ev[0]["quote"], title_model(rec["title"])[0])
+        if rec["id"] not in (made, made[:10]):                  # `made[:10]` is the legacy 32-bit id, a prefix of the 64-bit one
             return "id"
         if ch["diff"] is not None and (not isinstance(ch["diff"], str) or ch["diff_sha256"] != hashlib.sha256(ch["diff"].encode()).hexdigest()):
             return "diff hash"

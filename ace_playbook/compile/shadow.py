@@ -1,12 +1,12 @@
 """The shadow hook (docs/design/compiler.md 7): evaluate approved proposals on one live hook payload.
 
-hooks/shadow.sh calls `main(["pre"|"stop"])`: one payload on stdin (cap 256 KiB), the approved proposals re-validated, their detectors run, one
-`shadow.jsonl` row per fire; ALWAYS returns 0, failures are type-only lines in `shadow.log`. Observe prints nothing; warn echoes the message on stderr
-and prints ONE `hookSpecificOutput.additionalContext` JSON on stdout (verified live for PreToolUse and Stop: a Stop additionalContext re-prompts the model, so `stop_hook_active` is honoured); block prints
-the deny/block JSON and wins. `modes.resolve` decides the mode: a copy above observe needs a matching `approvals.jsonl` row (else observe, logged), a
-revoked proposal is skipped, `demotions.jsonl` lowers it until a newer approval lifts the older rows. Both chains are read with the chain key (chains.py): without it a chain
-holding a `v: 2` row is broken, logged once as `chain_key:missing`. Rows hold enums, ids, hashes, a timestamp and `dur_ms` (monotonic ms from the call's start to the
-row write), never payload text. Stdlib plus this package; no inject/keys/reflect/network.
+hooks/shadow.sh calls `main(["pre"|"stop"])`: one payload on stdin (cap 256 KiB; a larger one logs `error:oversize` and fires every applicable
+`on_truncated: "fire"` proposal, the tool name read by a raw scan and an unreadable one meaning every proposal of the event), the approved proposals
+re-validated, their detectors run, one `shadow.jsonl` row per fire; ALWAYS returns 0, failures are type-only lines in `shadow.log`. Observe prints
+nothing; warn echoes the message on stderr and prints ONE `additionalContext` JSON on stdout (a Stop one re-prompts the model, so `stop_hook_active`
+is honoured); block prints the deny/block JSON and wins. `modes.resolve` decides the mode (approvals.jsonl and demotions.jsonl, read with the chain
+key: chains.py). With the kill file `proposals/DISABLED` nothing is printed, rows are written with mode `disabled` and `disabled:kill_file` is
+logged. Rows hold enums, ids, hashes, a timestamp and `dur_ms`, never payload text. Stdlib plus this package; no inject/keys/reflect/network.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from pathlib import Path
 from .. import config as cfgmod
 from ..canon import canonical, now_iso
 from . import approvals, catalogue, chains, demotions, evidence, modes, proposal
+from . import shadow_guard as guard
 from . import state as state_mod
 from .events import event_from_hook
 
@@ -227,15 +228,12 @@ def _evaluate(cfg, ev, sid: str, names: list[str], log) -> set[str]:
     return {f.detector for out in outs for f in out[0]}
 
 
-def _applies(p: dict, event: str, tool: str) -> bool:
-    return p["event"] == event and bool({"*", tool} & set(p["matcher"].split("|")))
-
-
-def _row(p: dict, mode: str, cause: str, event: str, ev, sid: str, raw: bytes, t0: float) -> dict:
-    tu = ev.tool_uses[0] if ev.tool_uses else None
+def _row(p: dict, mode: str, cause: str, event: str, ev, sid: str, raw: bytes, t0: float, tool: str = "") -> dict:
+    """`ev` None (an over-cap payload, never parsed) hashes the raw bytes and takes the scanned `tool` name."""
+    tu = ev.tool_uses[0] if ev and ev.tool_uses else None
     phash = evidence.payload_hash({"tool_name": tu.name, "tool_input": tu.input}) if tu else hashlib.sha256(raw).hexdigest()
     return {"v": 1, "ts": now_iso(), "proposal_id": p["id"], "lesson_id": p["lesson_id"], "mode": mode, "event": event,
-            "tool_name": tu.name if tu else "", "session": state_mod.session_hash(sid), "payload_sha256": phash,
+            "tool_name": tu.name if tu else tool, "session": state_mod.session_hash(sid), "payload_sha256": phash,
             "would_fire": True, "cause": cause, "tier": "live", "dur_ms": int((time.monotonic() - t0) * 1000)}
 
 
@@ -244,43 +242,44 @@ def _run(cfg, argv: list, log) -> None:
     if (event := EVENTS.get(argv[0]) if argv else None) is None:
         return
     raw = sys.stdin.buffer.read(MAX_STDIN + 1)
-    if len(raw) > MAX_STDIN:
-        return log("skipped:oversize")
-    try:
-        payload = json.loads(raw)
-    except (ValueError, RecursionError):
-        return
-    sid = payload.get("session_id") if isinstance(payload, dict) else None
-    if not (isinstance(sid, str) and sid) or (Path(cfg.data_dir) / proposal.PROPOSALS / "DISABLED").exists():
-        return
-    ev = event_from_hook({**payload, "hook_event_name": event})
-    tool = ev.tool_uses[0].name if ev.tool_uses else ""
-    todo = [(p, m) for p, m in load_approved(cfg, log) if _applies(p, event, tool)]
+    over, ev = len(raw) > MAX_STDIN, None
+    if over:                                                  # S-1 F1: never "nothing to decide"; fires like a cut command
+        log("error:oversize")
+        tool, sid, active = guard.scan(raw)
+    else:
+        try:
+            payload = json.loads(raw)
+        except (ValueError, RecursionError):
+            return
+        sid = payload.get("session_id") if isinstance(payload, dict) else None
+        if not (isinstance(sid, str) and sid):
+            return
+        ev, active = event_from_hook({**payload, "hook_event_name": event}), bool(payload.get("stop_hook_active"))
+        tool = ev.tool_uses[0].name if ev.tool_uses else ""
+    off = (Path(cfg.data_dir) / proposal.PROPOSALS / "DISABLED").exists()           # S-1 F3: evaluated and recorded, never enforced
+    if off:
+        _Once(cfg, log)("disabled:kill_file")
+    todo = [(p, m) for p, m in load_approved(cfg, log) if guard.applies(p, event, tool)]
     if not todo:
         return
-    fired = _evaluate(cfg, ev, sid, sorted({p["check"]["detector"] for p, _ in todo}), log)
-    cut = any(tu.truncated for tu in ev.tool_uses)
-    hits = [(p, m, "detector" if p["check"]["detector"] in fired else "truncated") for p, m in todo
-            if p["check"]["detector"] in fired or (cut and p["check"]["on_truncated"] == "fire")]
+    if over:
+        hits = [(p, m, "truncated") for p, m in todo if p["check"]["on_truncated"] == "fire"]
+    else:
+        fired = _evaluate(cfg, ev, sid, sorted({p["check"]["detector"] for p, _ in todo}), log)
+        cut = any(tu.truncated for tu in ev.tool_uses)
+        hits = [(p, m, "detector" if p["check"]["detector"] in fired else "truncated") for p, m in todo
+                if p["check"]["detector"] in fired or (cut and p["check"]["on_truncated"] == "fire")]
+    hits = [(p, "disabled" if off else m, cause) for p, m, cause in hits]
     for p, mode, cause in hits:
         try:
             _append(Path(cfg.data_dir) / "shadow.jsonl",
-                    json.dumps(_row(p, mode, cause, event, ev, sid, raw, t0), sort_keys=True) + "\n")
+                    json.dumps(_row(p, mode, cause, event, ev, sid, raw, t0, tool or ""), sort_keys=True) + "\n")
         except OSError as exc:                                # still act on the decision below
             log(f"error:row:{type(exc).__name__}")
-    if warns := [p["message"] for p, mode, _cause in hits if mode == "warn"]:       # the user-visible echo; the model never sees stderr
+    warns, out = guard.decision(event, hits, active)
+    if warns:                                                 # the user-visible echo; the model never sees stderr
         sys.stderr.write("".join(m + "\n" for m in warns))
-    block = next((p["message"] for p, mode, _cause in hits if mode == "block"), None)
-    out = None
-    if event == "Stop" and payload.get("stop_hook_active"):   # a loop guard: nothing on stdout, fires still recorded
-        pass
-    elif block is not None:                                   # block wins over warn
-        out = ({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-                                       "permissionDecisionReason": block}}
-               if event == "PreToolUse" else {"decision": "block", "reason": block})
-    elif warns:                                               # the model-visible channel (design 11 question 1)
-        out = {"hookSpecificOutput": {"hookEventName": event, "additionalContext": "\n".join(warns)}}
-    if out is not None:
+    if out is not None:                                       # the model-visible channel (design 11 question 1)
         sys.stdout.write(json.dumps(out, sort_keys=True) + "\n")
 
 

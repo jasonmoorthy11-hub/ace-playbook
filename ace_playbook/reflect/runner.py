@@ -55,6 +55,12 @@ def _ledger(cfg: Config, session_id: str, status: str, **extra) -> dict:
     return rec
 
 
+def _evidence(insight: dict) -> list:
+    """The insight's `evidence` when the model gave a list, else []: null, a number or an object must not abort the sweep (S-1 F10)."""
+    ev = insight.get("evidence")
+    return ev if isinstance(ev, list) else []
+
+
 def _quarantine(cfg: Config, session_id: str, insight: dict, reason: str, hits=()) -> None:
     """Record a rejected insight. Only text and applies_when are stored, and only masked;
     evidence quotes are scanned (so their secrets are masked everywhere) but never stored."""
@@ -62,7 +68,7 @@ def _quarantine(cfg: Config, session_id: str, insight: dict, reason: str, hits=(
     text = str(insight.get("text", ""))
     when = str(insight.get("applies_when", ""))
     hits = list(hits)
-    for e in insight.get("evidence", []) if isinstance(insight.get("evidence"), list) else []:
+    for e in _evidence(insight):
         if isinstance(e, dict):
             q = str(e.get("quote", ""))
             hits += scan(q, LESSON, deny) + scan(q, OUTBOUND, deny)
@@ -89,7 +95,7 @@ def gate_insight(cfg: Config, insight: dict, kept_turns, session_id: str) -> tup
     hits = scan(f"{text}\n{when}", LESSON, deny) + scan(f"{text}\n{when}", OUTBOUND, deny)
     if hits:
         return {"hits": hits}, "scrub_hit"
-    quotes = [e.get("quote", "") for e in insight.get("evidence", []) if isinstance(e, dict)]
+    quotes = [e.get("quote", "") for e in _evidence(insight) if isinstance(e, dict)]
     verdict = check_provenance([q for q in quotes if isinstance(q, str)], kept_turns, session_id,
                                f"{text} {when}")
     if not verdict.ok:
@@ -132,14 +138,20 @@ def _mint(cfg: Config, insights: list[dict], cleaned, state: dict, session_id: s
     return drafts, reasons
 
 
-def _tag_drafts(tags: list[dict], shown: list[str], session_id: str) -> list[dict]:
+def _tag_drafts(tags: list[dict], shown: list[str], session_id: str) -> tuple[list[dict], int]:
+    """(the NOOP drafts, the number of malformed tags): a tag whose `id` or `tag` is not a string is skipped and counted (S-1 F11)."""
     per: dict[str, dict[str, int]] = {sid: {"shown": 1} for sid in shown}
+    bad = 0
     for t in tags:
-        lid, counter = t.get("id"), TAG_COUNTERS.get(t.get("tag"))
+        lid, tag = t.get("id"), t.get("tag")
+        if not (isinstance(lid, str) and isinstance(tag, str)):
+            bad += 1
+            continue
+        counter = TAG_COUNTERS.get(tag)
         if lid in per and counter:
             per[lid][counter] = per[lid].get(counter, 0) + 1
     return [{"op": "NOOP", "lesson_id": lid, "counters": c, "session_id": session_id}
-            for lid, c in per.items()]
+            for lid, c in per.items()], bad
 
 
 def reflect_transcript(cfg: Config, path: Path, client: client_mod.ReflectorClient,
@@ -180,7 +192,9 @@ def _apply(cfg, log, state, cleaned, shown, text, base) -> dict:
     except ReflectParseError as e:
         return _ledger(cfg, sid, "parse_error", error=str(e), **base)
     drafts, reasons = _mint(cfg, parsed["insights"], cleaned, state, sid, log)
-    drafts += _tag_drafts(parsed["tags"], shown, sid)
+    tag_drafts, bad_tags = _tag_drafts(parsed["tags"], shown, sid)
+    drafts += tag_drafts
+    reasons += ["malformed_tag"] * bad_tags
     try:
         written = log.append_many(drafts, max_touched=cfg.max_touched_per_run) if drafts else []
         if written:

@@ -3,7 +3,8 @@
 Only what the other suites do not already pin. Already covered, and cited rather than repeated:
   - bad payloads in-process (empty, `not json`, `\\xff\\xfe`, arrays, 100000 `[`, missing fields) exit silently, no row:
     test_compile_shadow.py::test_unparseable_or_incomplete_payloads_exit_silently
-  - over the cap logs `skipped:oversize`: test_compile_shadow.py::test_an_oversize_payload_is_skipped_and_logged
+  - over the cap logs `error:oversize` and fires like a cut command:
+    test_compile_shadow.py::test_an_oversize_payload_is_logged_as_an_error_and_fires_like_a_cut_command
   - a cut (>64 KiB) command writes a `truncated` row: test_compile_shadow.py::test_a_truncated_command_fires_when_the_proposal_says_on_truncated_fire
   - `dur_ms` is an int from the call's start: test_compile_synth.py:182-192
   - a state lock held (in this process) is skipped within 0.5 s: test_compile_shadow.py::test_a_locked_state_file_is_skipped_but_a_stateless_detector_still_records
@@ -92,16 +93,28 @@ def test_bad_stdin_exits_0_silently_and_writes_nothing_but_at_most_a_log_line(w,
     assert not log.exists() or all(len(line.split()) == 2 for line in log.read_text().splitlines())   # "<ts> <type-only note>"
 
 
-def test_stdin_at_the_cap_is_evaluated_and_one_byte_over_is_skipped(w):
+def test_stdin_at_the_cap_is_evaluated_and_one_byte_over_fires_as_a_truncated_row_with_an_error_line(w):
     at_cap, over = padded(RM, shadow.MAX_STDIN), padded(RM, shadow.MAX_STDIN + 1)
     assert (len(at_cap), len(over)) == (shadow.MAX_STDIN, shadow.MAX_STDIN + 1)
     p, _ = hook(w, at_cap)
     assert (p.returncode, p.stdout, p.stderr) == (0, b"", b"") and len(cs.shadow_rows(w.data)) == 1
     before = cs.tree_state(w.data)
     p, secs = hook(w, over)
-    assert (p.returncode, p.stdout, p.stderr) == (0, b"", b"") and secs < FAST
-    assert len(cs.shadow_rows(w.data)) == 1 and "skipped:oversize" in (w.data / "shadow.log").read_text()
-    assert changed(before, cs.tree_state(w.data)) <= {"shadow.log"}
+    assert (p.returncode, p.stdout, p.stderr) == (0, b"", b"") and secs < FAST            # observe mode: nothing on stdout
+    assert [r["cause"] for r in cs.shadow_rows(w.data)] == ["detector", "truncated"]
+    assert "error:oversize" in (w.data / "shadow.log").read_text() and "skipped:oversize" not in (w.data / "shadow.log").read_text()
+    assert changed(before, cs.tree_state(w.data)) <= {"shadow.log", "shadow.jsonl"}
+
+
+def test_one_byte_over_the_cap_in_block_mode_is_denied_through_the_wrapper(w):
+    p = w.props["rm_rf_nonscratch"]
+    cs.approve_file(w.cfg, p, "block", row=True)
+    for raw in (padded(RM, shadow.MAX_STDIN), padded(RM, shadow.MAX_STDIN + 1), padded(RM, 3 * shadow.MAX_STDIN)):
+        proc, secs = hook(w, raw)
+        assert (proc.returncode, proc.stderr) == (0, b"") and secs < FAST
+        assert json.loads(proc.stdout)["hookSpecificOutput"] == {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                                                 "permissionDecisionReason": p["message"]}
+    assert [r["mode"] for r in cs.shadow_rows(w.data)] == ["block"] * 3
 
 
 @pytest.mark.parametrize("length,cause", [(MAX_CMD, "detector"), (MAX_CMD + 1, "detector")])
@@ -190,7 +203,8 @@ def test_keyed_flag_without_a_key_logs_chain_key_missing_once_across_processes_a
 ALLOWED_ACE = {"ace_playbook", "ace_playbook.config", "ace_playbook.canon", "ace_playbook.textrules", "ace_playbook.atomic",
                "ace_playbook.compile", *("ace_playbook.compile." + m for m in (
                    "shadow", "state", "evidence", "proposal", "modes", "demotions", "approvals", "chains", "catalogue",
-                   "detectors", "events", "shell", "srchash"))}
+                   "detectors", "events", "shell", "srchash",
+                   "shadow_guard"))}                       # S-1 F1: the over-cap raw scan, the matcher test and the output decision; `re` only
 ABSENT = ("seal", "dashboard", "dashboard_html", "status", "digest", "queue", "report", "synth", "metrics", "scrub", "measure",
           "brief", "brief_render", "brief_excl", "brief_audit", "nightly_notes",
           "watch", "fetch", "inventory", "match", "store", "summary", "chars", "fsio", "cssstyle", "records", "pin",

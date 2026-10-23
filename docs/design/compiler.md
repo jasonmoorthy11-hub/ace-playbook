@@ -98,10 +98,14 @@ Data lives under the existing `data_dir` (config.py:20, 69-70), never under `~/.
 - Hook-path imports are stdlib only: after `import ace_playbook.compile.shadow`, `sys.modules` holds no `sqlite3`, `ace_playbook.store`, `.scrub`, `.clean`, `.inject`, `.keys`, `.reflect` (a subprocess test asserts it). `canonical`/`now_iso`/`record_hash`/`ID_RE`/`GENESIS` moved to `canon.py`; `evidence.py` loads the cleaner, scrub engine and `DeltaLog` inside its offline functions; the scrub step moved to `propscrub.py`. Because the scrub engine is off the hook path, the load-time `proposal.validate(..., hot=True)` runs schema, message, regressions, replay and path but reports the scrub step as `hash-bound, not rerun`: `proposal_sha256` binds the text that passed scrub when the proposal was written.
 - The hook loads a record only if the hash matches, `mode` is in `shadow.ALLOWED_MODES` (`("observe",)`, widened only by tests, so a hand-edited `mode: "block"` is skipped), and `proposal.validate` passes on the body (all six steps, replay included) on every call. It measures about 1 ms in-process and 35 ms per wrapper call (p95 37 ms on 3.14, 104 ms on the system 3.9).
 - A `shadow.jsonl` row is `{ts, proposal_id, lesson_id, mode, event, tool_name, session, payload_sha256, would_fire, cause, tier}`: `session` is the bare `sha256[:16]` of the session id (the section 7.1 example's `sid:` prefix, `v`, `row_id`, `corpus`, `arm`, `hits`, `dur_ms` and `target_hashes` are not written yet); `payload_sha256` is `evidence.payload_hash` of `{tool_name, tool_input}`, so it joins to an evidence card.
-- With no approved proposal matching the event and tool, the hook exits before touching `shadow_state/`, so the Stop registration does not reset per-turn state yet (only `edit_unread_turn` needs it and it cannot be approved). No kill-switch config key; `proposals/DISABLED` is the switch. No arm, no `demotions.jsonl`, no `approvals.jsonl` check.
+- With no approved proposal matching the event and tool, the hook exits before touching `shadow_state/`, so the Stop registration does not reset
+  per-turn state yet (only `edit_unread_turn` needs it and it cannot be approved). No kill-switch config key; `proposals/DISABLED` is the switch,
+  and since S-1 F3 it is visible, not silent: the hook still evaluates, writes its rows with `mode: "disabled"`, prints nothing and logs
+  `disabled:kill_file` (7.1 step 2). No arm, no `demotions.jsonl`, no `approvals.jsonl` check.
 - When the state lock is skipped or the state directory is unusable, detectors with `state == "none"` still run on a blank state and stateful ones stay silent.
 - `python -m ace_playbook.compile.shadow pre` and `python -m ace_playbook.compile shadow pre` both work; the wrapper imports `ace_playbook.compile.shadow.main` directly.
-- `cause` is `detector` (the detector fired) or `truncated` (only the `on_truncated: "fire"` rule did).
+- `cause` is `detector` (the detector fired) or `truncated` (only the `on_truncated: "fire"` rule did; an over-cap payload also writes
+  `truncated`, never a third value, because `metrics.py` counts every cause but `truncated` as a detector fire, 7.1 step 1).
 - Replay check of the first approved proposal (2026-10-19, observe): the originating masked payload (`$VAR/patches` target) piped through `hooks/shadow.sh pre` gave exit 0, empty stdout and one `cause: detector` row; a `/tmp` target gave no row; a 70 KB command gave one `cause: truncated` row; `compile report` showed rows 2 / detector 1 / truncated 1 and `label --rows` listed both ids. The live registration then fired inside a real session on a `$VAR/x` target and stayed silent on a `$TMPDIR/...` target. Known interaction: the operator's own destructive-command guard matches the substring `rm -rf /`, so an absolute `/tmp/...` delete is blocked by that guard before this hook's verdict matters; the auto-TP rule in 7.3 ("an existing hook blocked the same call") covers that case.
 - `approve` prints a banner and asks a second y/N when a cited card has `provenance: legacy`; validation accepts a legacy card only if its `label_ref` matches an `incident` row of the hash-chained labels file (ref = card id).
 - The registration matcher is `Bash` only, narrower than section 7's `Bash|Read|Edit|Write|MultiEdit|NotebookEdit`: no approvable proposal consumes the other tools yet, and each extra matcher is one more Python start per call.
@@ -462,9 +466,23 @@ registration only resets per-turn state and logs observe rows.
 
 ### 7.1 Evaluation
 
-1. Read stdin (cap 256 KiB; larger means log `skipped:oversize`, exit 0). Require a non-empty
-   string `session_id`, as inject/__main__.py:28-30 does.
-2. Kill switch: `data_dir/proposals/DISABLED` exists, or config `shadow_enabled` false, then exit 0.
+1. Read stdin (cap 256 KiB). Up to the cap: require a non-empty string `session_id`, as inject/__main__.py:28-30 does. One byte
+   over the cap is never "nothing to decide" (S-1 F1; it used to log `skipped:oversize` and exit, so a block-mode proposal was
+   bypassed by padding): log `error:oversize` (not throttled; `report.hook_errors` counts it), read the tool name and session id
+   from the first 256 KiB with a raw scan (`shadow_guard.scan`: plain `"tool_name": "<word>"` / `"session_id": "<id>"`, a key found
+   with two different values, found only after the first `"tool_input"` key, or not as a plain string is unknown), load the approved
+   proposals as in step 3 and take those for this
+   event whose matcher covers the tool (an unknown tool: every proposal of the event). Each one with `check.on_truncated: "fire"`
+   is a hit with `cause: "truncated"` (the log line alone says oversize: `metrics.py` counts every other cause as a detector fire),
+   its row holds the hash of the bytes read, the scanned tool name (else empty) and the session hash (of the empty id when unknown),
+   and it is acted on like any hit (step 6). An over-cap `Stop` counts as `stop_hook_active` unless an explicit `false` is in the bytes
+   read: the loop guard wins over a block when the flag may sit past the cap, so it prints nothing and the row is still written (no
+   block-capable Stop detector exists yet).
+2. Kill switch: `data_dir/proposals/DISABLED` exists (no config key). It stays, and it is visible (S-1 F3): the hook evaluates as
+   usual, writes one `would_fire` row per hit with `mode: "disabled"` and the real cause, prints NOTHING on stdout or stderr, and
+   logs `disabled:kill_file` (throttled like the other once-per-8-KiB lines). `compile status` adds `kill_file` to the heartbeat
+   notes while the file exists, and `statusline.sh` and the SwiftBar plugin print `DISABLED`. The file is writable by the user the
+   agent runs as, so the permission deny rules should cover `data_dir/proposals/**` as well as the chain files (INSTALL.md section 7).
 3. Load approved proposals: at most 50 files, each at most 16 KiB, regular files only (no
    symlinks), hash must match `approvals.jsonl`, message re-checked with `inert_reason`
    (`textrules`). Any failure skips that proposal and logs the reason by type only (as inject/__main__.py:18-25).
@@ -544,7 +562,8 @@ reason_code, at, prev_hash, hash}` (`ref` is a `row_id` or a detector event id),
 LESSON profile; a hit refuses the row). `ref` is the card id of the incident (`--incident --lesson --session`) or
 the shadow `row_id` = sha256(ts, session, proposal_id, payload_sha256)[:8] (`--tp ID`, `--fp ID`, ids from `--rows`).
 Writing needs a TTY and a `y` on /dev/tty; the whole chain is verified before each append and a broken chain refuses
-the write. `--list [--kind K]` verifies and prints, `--rows` prints shadow rows with their ids; neither needs a TTY.
+the write. `--list [--kind K]` verifies and prints, `--rows` prints shadow rows with their ids and, last, their mode (`disabled` = written
+under the kill file); neither needs a TTY.
 The write opens the file `O_NOFOLLOW`, takes `flock`, and verifies the chain from that locked fd. `row_id` is
 computed on read from the stored shadow row (the bare `session` hash as stored, `ts|session|proposal_id|payload_sha256`
 joined with `|`, sha256, first 8 hex, no `r:` prefix); shadow.py writes no `row_id`, so a future hook that
@@ -1224,8 +1243,10 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   the digest block. `scan.py`, `cli.py`: `compile watch scan [--tier 0|1|all] [--dry-run] [--force]`, `status`, `queue [--limit N]`.
 
 Record (design 4.3, exactly): `{id, created, class, elevated, title, evidence[{url, sha256, quote, tier}], inventory_hits, change{target, diff,
-diff_sha256}, verify, expires, status}`. `id` is `W-` plus the first 8 hex of sha256 of `class|target|evidence sha|quote` (with `|model id`
-appended when the code-made title names a model), so a re-scan dedupes; `title` is at most 120 characters and `quote` 400, both cleaned
+diff_sha256}, verify, expires, status}`. `id` is `W-` plus the first 16 hex (64 bits; S-1 F8: it was 8 hex, 32 bits, and a crafted feed entry could
+pre-occupy a predicted id) of sha256 of `class|target|evidence sha|quote` (with `|model id` appended when the code-made title names a model), so a
+re-scan dedupes; a record stored with the legacy `W-<8 hex>` id stays readable (`store.ID` and `records.check` accept both widths: the legacy id is a
+prefix of the new one); `title` is at most 120 characters and `quote` 400, both cleaned
 of control characters, and the quote is ONE line of the fetched body, verbatim (`records.quote_line`, empty when no line is clean, which
 drops the record; `match.candidates` runs `check(rec, body)` with the body of the result that carries the sha256); `verify` comes from a fixed template per
 class (`grep -n "<model_id>" <path>`, `claude --version`, `curl -sI <url> | head -1`); a model id or successor taken from a page must match
@@ -1417,7 +1438,7 @@ Order W3 of the watcher and cockpit design (section 7, "The brief"). Not on the 
 | Scrub before write | cards and proposals through `scan(..., LESSON, deny_terms)`, hit means quarantine (quarantine.py:20-27); shadow rows and state hold no free text by schema | planted FAKE token in a fixture replay payload |
 | Tamper evidence | hash-chained `approvals.jsonl` (HMAC-keyed from `v: 2`) and `demotions.jsonl`, hash-chained `labels.jsonl`, TTY-only approve and label; hook loads only hash-matching files; report flags approved files whose hash or mtime changed without a ledger record | edited approved file is ignored |
 | Label forgery | `approve --mode warn|block` lists every counted TP and FP for TTY confirmation, re-derived from `shadow.jsonl`; broken chain or missing fire row refuses | forged label without a fire row; broken chain link; label appended after the last approval |
-| Bounded cost | input, file count, file size and state caps; oversize means skip | oversize fixtures |
+| Bounded cost | input, file count, file size, state caps; an oversize file is skipped, an oversize payload fires as a cut command | oversize fixtures |
 
 Residual risks, stated plainly: the agent runs with the user's permissions and can edit
 `data_dir`, so it could append a demotion or delete an approved file to evade a block; the controls

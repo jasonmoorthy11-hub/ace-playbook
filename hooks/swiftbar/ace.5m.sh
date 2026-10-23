@@ -51,13 +51,15 @@ try:
     beat = max([ts(hb.get(k)) or 0 for k in ("last_hook_row", "last_offline_scan", "last_nightly_ok")])
     opened, leads, unl = num(s.get("watch_open")), num(s.get("watch_leads")), num(s.get("queue_total"))
     chains = all(sub(sub(s, "measurement"), "chains").get(k) == "ok" for k in ("approvals", "demotions", "labels"))
+    off = isinstance(notes := hb.get("notes"), list) and "kill_file" in notes          # the shadow kill file exists: the gate is off
     if gen is None or now - gen > 36 * 3600:
         glyph, tail = "○ stale", ""
-    elif opened or unl:
+    elif opened or unl or off:
         glyph, tail = "◐ needs you", "  watch %d  unlabelled %d" % (opened, unl)
     else:
         glyph, tail = ("● ok", "  watch 0  unlabelled 0") if now - beat <= 36 * 3600 else ("○ stale", "")
-    out = [glyph + tail, "---", "ACE  unlabelled %d  chains %s  heartbeat %s" % (unl, "ok" if chains else "BROKEN", age(beat or None, now)) if s
+    out = [glyph + tail, "---", "ACE  unlabelled %d  chains %s  heartbeat %s%s" % (unl, "ok" if chains else "BROKEN", age(beat or None, now),
+                                                                               "  DISABLED" if off else "") if s
            else "ACE  no status file",
            "Watch  open %d  leads %d  oldest %s" % (opened, leads, age(ts(s.get("watch_oldest")), now))]
     titles = s.get("watch_titles") if isinstance(s.get("watch_titles"), list) else []

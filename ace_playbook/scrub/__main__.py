@@ -6,8 +6,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from .check import list_files, load_allow, scan_files
-from .engine import LESSON, line_of, scan
+from .check import list_files, load_allow, numbered, scan_files
+from .engine import LESSON, scan
 
 
 def _check(args: argparse.Namespace) -> int:
@@ -26,8 +26,8 @@ def _check(args: argparse.Namespace) -> int:
 def _scan_stdin(args: argparse.Namespace) -> int:
     text = sys.stdin.read()
     hits = scan(text, LESSON, tuple(args.deny_term))
-    for h in hits:
-        print(f"line {line_of(text, h.start)}: {h.rule} ({h.layer}) fp={h.fingerprint}")
+    for line, h in numbered(text, hits):
+        print(f"line {line}: {h.rule} ({h.layer}) fp={h.fingerprint}")
     return 1 if hits else 0
 
 

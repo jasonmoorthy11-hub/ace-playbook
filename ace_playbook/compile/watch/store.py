@@ -1,7 +1,8 @@
 """The watcher's private store (docs/design/compiler.md 8.x "Watch (as built)"): everything lives under `watch_dir`, nothing outside it.
 
-`proposals/W-<8 hex>.json` (0600, written once, never replaced), `decisions.jsonl` (append-only, 0600, O_APPEND, flock like
-`digest.append_log`), `seen.json` and `inventory.json` (0600, atomic) and the kill file `DISABLED`. The current status of a proposal is its
+`proposals/W-<16 hex>.json` (a record stored before S-1 F8 keeps its `W-<8 hex>` name and is read; 0600, written once, never replaced),
+`decisions.jsonl` (append-only, 0600, O_APPEND, flock like `digest.append_log`), `seen.json` and `inventory.json` (0600, atomic) and the kill file
+`DISABLED`. The current status of a proposal is its
 newest decision row, else the file's own `status`; `expired` once past `expires` while still open or queued. At most CAP proposals are
 open at once, leads excepted; the rest are `queued` and a `promoted` decision row opens them in ranking order when a slot frees.
 A file that cannot be read, is too deeply nested for the JSON reader, or has the wrong shape (`_shaped`) is skipped and counted
@@ -25,7 +26,7 @@ from .fsio import odd, write_private
 
 CAP, KILL, PROPOSALS, DECISIONS, SEEN, INVENTORY = 5, "DISABLED", "proposals", "decisions.jsonl", "seen.json", "inventory.json"
 RANK = {"model_pin": 0, "version": 1, "docs": 2}                            # every other class (leads) ranks after these
-ID = re.compile(r"W-[0-9a-f]{8}")
+ID = re.compile(r"W-[0-9a-f]{8}(?:[0-9a-f]{8})?")                         # 64 bits since S-1 F8; the 32-bit ids of records already stored stay valid
 WORDS = {"accepted": "accepted", "dismissed": "dismissed", "closed": "auto-closed", "later": "open", "promoted": "open", "reopened": "open"}
 STAMP = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ")
 FINAL = ("accepted", "dismissed", "closed")
@@ -104,7 +105,7 @@ def load_proposals(wd: Path) -> list[dict]:
 
 
 def write_proposal(wd: Path, rec: dict) -> bool:
-    """Write `rec` once (0600, atomic); False when that id already exists. ValueError for an id that is not `W-<8 hex>`."""
+    """Write `rec` once (0600, atomic); False when that id already exists. ValueError for an id that is not `W-<16 hex>` or the legacy `W-<8 hex>`."""
     if not isinstance(rec.get("id"), str) or not ID.fullmatch(rec["id"]):
         raise ValueError("bad proposal id")
     path = Path(wd) / PROPOSALS / (rec["id"] + ".json")

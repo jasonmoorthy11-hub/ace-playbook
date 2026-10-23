@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from .engine import REPO, Hit, line_of, scan, try_decode
+from .engine import REPO, Hit, scan, try_decode
 
 DEFAULT_ALLOW = ("ace_playbook/fixtures/frozen/",)
 ALLOW_FILE = ".ace-scrub-allow"
@@ -41,11 +42,11 @@ def load_allow(root: Path) -> tuple[str, ...]:
 
 
 def list_files(root: Path, staged: bool) -> list[str]:
-    cmd = (["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"]
-           if staged else ["git", "ls-files", "--cached", "--others", "--exclude-standard"])
+    cmd = (["git", "diff", "--cached", "--name-only", "-z", "--diff-filter=ACM"]            # -z: NUL-split, git does not C-quote the names (S-1 F13)
+           if staged else ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"])
     try:
-        out = subprocess.run(cmd, cwd=root, capture_output=True, text=True, check=True).stdout
-        return [ln for ln in out.splitlines() if ln]
+        out = subprocess.run(cmd, cwd=root, capture_output=True, check=True).stdout
+        return [os.fsdecode(name) for name in out.split(b"\0") if name]
     except (subprocess.CalledProcessError, FileNotFoundError):
         return [str(p.relative_to(root)) for p in root.rglob("*")
                 if p.is_file() and ".git" not in p.parts and ".venv" not in p.parts]
@@ -90,6 +91,15 @@ def has_fake_marker(match: str) -> bool:
     return False
 
 
+def numbered(text: str, hits: list[Hit]):
+    """(line number, hit) for `hits` sorted by start, as `scan` returns them: the newlines are counted since the previous hit, O(len(text)) in
+    all (`line_of` per hit is O(len(text)) each: S-1 Opus I-1, N-3). Shared by `scan_files` and `scrub scan`."""
+    line, seen = 1, 0
+    for hit in hits:
+        line, seen = line + text.count("\n", seen, hit.start), hit.start
+        yield line, hit
+
+
 def scan_files(
     root: Path,
     files: list[str],
@@ -111,9 +121,9 @@ def scan_files(
         if text is None:
             continue
         allowed = rel.startswith(allow)
-        for hit in scan(text, REPO, deny_terms):
+        for line, hit in numbered(text, scan(text, REPO, deny_terms)):
             tolerated = allowed and has_fake_marker(hit.match)
             if mode == "pre-commit" and tolerated:
                 continue
-            findings.append(Finding(rel, line_of(text, hit.start), hit, allowed))
+            findings.append(Finding(rel, line, hit, allowed))
     return findings
