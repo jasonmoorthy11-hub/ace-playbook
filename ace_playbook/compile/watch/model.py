@@ -12,9 +12,10 @@ success are an outage (an expired login, no network) or three items the model ca
 the failed tries of those calls are not counted, so an outage loses nothing; a trip is reported as `breaker tripped`, apart from a missing claude.
 ROTATION (D-164): the keys of the tripping streak go to `seen.json` (`reader.breaker`, pruned to the items still queued and dropped when one is read
 or marked done) and the next run puts those items LAST (stable otherwise), so three crafted items at the head cost one scan: the good items behind
-them are read, then the crafted ones fail individually (a call that fails for an item that already has a failed try counts at once, it is not
-evidence of an outage) and are marked done after TRIES. The Reader runs in the one fixed empty directory `<watch_dir>/reader_cwd`. The counts of
-the scan go into `seen.json` (`reader.last`) for `watch status`; `settle` replaces its lead count with the reader leads reconcile stored as new.
+them are read, then the crafted ones fail individually and are marked done after TRIES (an item that already has a failed try is no evidence of an
+outage: its new try is held and committed at the first success or at an untripped run end, and a trip drops it, so an outage retires nothing).
+The Reader runs in the one fixed empty directory `<watch_dir>/reader_cwd`. The counts of the scan go into `seen.json` (`reader.last`) for `watch status`;
+`settle` replaces its lead count with the reader leads reconcile stored as new.
 Costs come from the envelope and stay in the stats. `pipeline` is shared with the canary verb.
 """
 
@@ -80,6 +81,7 @@ def pipeline(cfg: Config, items: list[dict], now: str, stats: dict, done: dict |
     if brk:
         items = sorted(items, key=lambda it: it["key"] in brk)                  # stable: only the items that tripped the breaker move, to the back
     streak: list[str] | None = []                    # keys of the failed calls before the first success (None once one succeeded): not counted yet
+    pending: list[str] = []                          # the same for items that already carry a strike: no evidence of an outage, held until the end
     for n, item in enumerate(items):
         if len(out) >= MAX_LEADS:                                               # D-163: no call after the cap; the rest are read on a later scan
             stats["capped"] += sum(1 for it in items[n:] if not _dup(it, dups))
@@ -95,8 +97,11 @@ def pipeline(cfg: Config, items: list[dict], now: str, stats: dict, done: dict |
             stats["unavailable"] += len(items) - n - 1
             break
         if stats["failed"] > before[1]:                                         # the call ran and failed: go on to the next item
-            if streak is None or (fail and fail.get(item["key"])):              # an item that already failed once is no evidence of an outage
+            if streak is None:
                 _failed_try(item["key"], now, done, fail)
+                continue
+            if fail and fail.get(item["key"]):                                  # a prior strike: out of the outage decision, its try waits (D-164 cl. 2)
+                pending.append(item["key"])
                 continue
             streak.append(item["key"])
             if len(streak) >= BREAKER:                                          # D-161: an outage; the tries are dropped, nothing is marked
@@ -104,12 +109,12 @@ def pipeline(cfg: Config, items: list[dict], now: str, stats: dict, done: dict |
                 stats["breaker"] = 1                                            # D-164: reported apart from a missing claude, and rotated
                 if brk is not None:
                     brk[:] = streak + [k for k in brk if k not in streak]
-                return out
+                return out                                                      # `streak` and `pending` are dropped: count nothing, mark nothing
             continue
         if stats["read"] > before[2]:                                           # a success: the failures before it were the items' own
-            for key in streak or []:
+            for key in (streak or []) + pending:
                 _failed_try(key, now, done, fail)
-            streak = None
+            streak, pending = None, []
         if done is not None:
             done[item["key"]] = now
         if fail is not None:
@@ -122,7 +127,9 @@ def pipeline(cfg: Config, items: list[dict], now: str, stats: dict, done: dict |
             stats["leads"] += 1
         except ValueError:
             stats["rejected"] += 1
-    for key in streak or []:                                                    # fewer than BREAKER failures and no success: they were the items' own
+    # fewer than BREAKER fresh failures and no success: they were the items' own. A run of ONLY prior-strike items that all fail retires them
+    # here (accepted residual: no fresh item can trip the breaker, so an outage hitting such a run retires them).
+    for key in (streak or []) + pending:
         _failed_try(key, now, done, fail)
     return out
 

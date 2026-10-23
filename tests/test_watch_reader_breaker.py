@@ -83,3 +83,37 @@ def test_the_scan_line_and_watch_status_say_breaker_tripped_not_claude_unavailab
     assert code == 0 and "reader: 0 read, 0 rejected, 0 leads, 1 unavailable, 3 failed, breaker tripped" in out
     assert "claude is unavailable" not in out and "reader: breaker tripped (3 failed calls, no success); 1 item(s) not read" in out
     assert "breaker tripped" in world.run(capsys, "status")[1]
+
+
+def struck(res: dict, n: int) -> tuple[dict, list[str]]:
+    """A `seen` in which the first `n` items of `res` already carry one failed try (a strike), and the keys of all its items."""
+    keys = [it["key"] for it in model.items_of([res])]
+    return {"reader": {"fail": {k: 1 for k in keys[:n]}}}, keys
+
+
+def test_prior_strike_items_are_not_evidence_of_an_outage_and_lose_nothing_in_one(fake, tmp_path):
+    """D-164 clause 2: 3 items with a strike + 5 fresh ones, every call fails: the fresh ones trip the breaker, the strikes stay at 1, nothing is marked."""
+    fake("exit1")
+    res = res_of(*[f"item {i}" for i in range(8)])
+    seen, keys = struck(res, 3)
+    out, lines = model.stage(cfg_of(), [res], tmp_path / "wd", seen, NOW)
+    assert out == [] and "breaker tripped" in lines[0] and len(fake.calls()) == 6
+    assert seen["reader"]["fail"] == {k: 1 for k in keys[:3]} and seen["reader"]["done"] == {}
+
+
+def test_a_run_of_only_prior_strike_items_that_all_fail_retires_them(fake, tmp_path):
+    """Accepted residual: an outage hitting a run with nothing but prior-strike items retires them (no fresh item can trip the breaker)."""
+    fake("exit1")
+    res = res_of("a", "b", "c")
+    seen, keys = struck(res, 3)
+    out, lines = model.stage(cfg_of(), [res], tmp_path / "wd", seen, NOW)
+    assert lines[0] == "reader: 0 read, 0 rejected, 0 leads, 3 failed" and seen["reader"]["fail"] == {} and sorted(seen["reader"]["done"]) == sorted(keys)
+
+
+def test_a_strike_items_try_commits_at_the_first_success_of_the_run(fake, monkeypatch):
+    """strike item fails, a fresh one fails, a fresh one succeeds: the strike item is retired, the fresh failure keeps one strike."""
+    monkeypatch.setenv("ACE_WATCH_FAKE_SEQ", "exit1,exit1,irrelevant")
+    items = model.items_of([res_of("a", "b", "c")])
+    done, fail = {}, {items[0]["key"]: 1}
+    model.pipeline(cfg_of(), items, NOW, model.new_stats(), done, fail)
+    assert fail == {items[1]["key"]: 1} and sorted(done) == sorted([items[0]["key"], items[2]["key"]])

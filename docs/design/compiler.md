@@ -1300,8 +1300,9 @@ is marked done after two failed tries. THE BREAKER (D-161): three failed calls i
 expired login, no network), not a poison item: the rest of the run is `unavailable`, nothing is marked done and the three failed tries are not
 counted, so an outage loses no item, and the canary verb exits 2 (`canary: breaker tripped (3 failed calls)`). A trip is reported as
 `, breaker tripped`, apart from a missing claude (D-164), and the tripping items are kept in `seen.json` (`reader.breaker`) and read LAST on the next
-run, so three crafted items at the head cost one scan: the good items behind them are read, then the crafted ones fail individually (a failure of an
-item that already has a failed try counts at once) and are marked done after two tries.
+run, so three crafted items at the head cost one scan: the good items behind them are read, then the crafted ones fail individually and are marked
+done after two tries (an item that already has a failed try is no evidence of an outage: its new try is held until the first success or an
+untripped run end, and a trip drops it).
 `validate.validate` makes the quote the item's line at the index (verbatim, at most 400 characters, unchanged by `store.clean`: the model supplies a
 number, not text), FORCES the class to `lead`, rejects (and logs one text-free line
 for) a `model_pin` request on a tier-1 item, whether or not the answer calls the item relevant (the check comes before the relevant gate, which also
