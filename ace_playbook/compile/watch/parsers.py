@@ -19,6 +19,7 @@ MODEL = re.compile(r"claude-[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?")
 SEPARATOR = re.compile(r"\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?")
 NONE_WORDS = ("", "n/a", "na", "-", "—", "none", "tbd", "tba", "null", "to be announced")
 MAX_ENTRIES, MAX_LINE = 100, 2000
+LINK = re.compile(r"\[([^\[\]]*)\]\([^()]*\)")        # both classes exclude their opener, so no `[` and no `(` is scanned twice (S-1 F7, Opus I-2)
 
 
 class DTDRefused(ValueError):
@@ -140,7 +141,7 @@ def _cells(line: str) -> list[str]:
     text = line.strip()[:MAX_LINE]
     parts = re.split(r"(?<!\\)\|", text)                         # an escaped pipe (`\|`) is cell text, not a column break
     closed = text.endswith("|") and not text.endswith("\\|")
-    return [re.sub(r"\s+", " ", re.sub(r"\[([^\[\]]*)\]\([^)]*\)", r"\1", c.replace("\\|", "|"))).replace("`", "").replace("*", "").strip()
+    return [re.sub(r"\s+", " ", LINK.sub(r"\1", c.replace("\\|", "|"))).replace("`", "").replace("*", "").strip()
             for c in parts[1:-1 if closed else None]]
 
 

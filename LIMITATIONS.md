@@ -97,7 +97,8 @@ state-versus-lesson classifier. In the stage-2 compiler: the arms (randomization
   Separately, a payload over the 256 KiB stdin cap (S-1 F1) is read only for its first 256 KiB: the tool name is found by a raw scan of those
   bytes and, when it cannot be read or appears with two different values, every proposal of the event applies; each one with
   `on_truncated: "fire"` (all block-capable ones) fires as a `truncated` row and is denied or warned like a cut command. A proposal with
-  `on_truncated: "ignore"` does not fire on such a payload.
+  `on_truncated: "ignore"` does not fire on such a payload. A `tool_name` found only after the first `"tool_input"` key is not trusted (the tool
+  is then unknown), and an over-cap `Stop` whose `stop_hook_active` cannot be read is treated as active, so it is recorded but never blocked.
 - A mutation run over `detectors.py`, `shell.py` and `textrules.py` (250 of 787 mutants, 72.0 % killed) left 68 survivors; those that were not
   equivalent are pinned by `tests/test_mutation_survivors.py`. The module-level regexes (`CORRECTION`, `SCRATCH`, the `textrules` checks) remain
   the weak spot: each alternation branch and `\b` needs its own case. Every test runs under a 60 s SIGALRM timer (`tests/conftest.py`) that

@@ -7,7 +7,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from .engine import REPO, Hit, line_of, scan, try_decode
+from .engine import REPO, Hit, scan, try_decode
 
 DEFAULT_ALLOW = ("ace_playbook/fixtures/frozen/",)
 ALLOW_FILE = ".ace-scrub-allow"
@@ -112,9 +112,11 @@ def scan_files(
         if text is None:
             continue
         allowed = rel.startswith(allow)
+        line, seen = 1, 0           # hits come sorted by start: count the newlines since the previous one (`line_of` per hit was O(n) each)
         for hit in scan(text, REPO, deny_terms):
             tolerated = allowed and has_fake_marker(hit.match)
             if mode == "pre-commit" and tolerated:
                 continue
-            findings.append(Finding(rel, line_of(text, hit.start), hit, allowed))
+            line, seen = line + text.count("\n", seen, hit.start), hit.start
+            findings.append(Finding(rel, line, hit, allowed))
     return findings

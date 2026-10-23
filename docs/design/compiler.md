@@ -470,11 +470,14 @@ registration only resets per-turn state and logs observe rows.
    over the cap is never "nothing to decide" (S-1 F1; it used to log `skipped:oversize` and exit, so a block-mode proposal was
    bypassed by padding): log `error:oversize` (not throttled; `report.hook_errors` counts it), read the tool name and session id
    from the first 256 KiB with a raw scan (`shadow_guard.scan`: plain `"tool_name": "<word>"` / `"session_id": "<id>"`, a key found
-   with two different values or not as a plain string is unknown), load the approved proposals as in step 3 and take those for this
+   with two different values, found only after the first `"tool_input"` key, or not as a plain string is unknown), load the approved
+   proposals as in step 3 and take those for this
    event whose matcher covers the tool (an unknown tool: every proposal of the event). Each one with `check.on_truncated: "fire"`
    is a hit with `cause: "truncated"` (the log line alone says oversize: `metrics.py` counts every other cause as a detector fire),
    its row holds the hash of the bytes read, the scanned tool name (else empty) and the session hash (of the empty id when unknown),
-   and it is acted on like any hit (step 6; a `Stop` with `"stop_hook_active": true` in the first bytes prints nothing).
+   and it is acted on like any hit (step 6). An over-cap `Stop` counts as `stop_hook_active` unless an explicit `false` is in the bytes
+   read: the loop guard wins over a block when the flag may sit past the cap, so it prints nothing and the row is still written (no
+   block-capable Stop detector exists yet).
 2. Kill switch: `data_dir/proposals/DISABLED` exists (no config key). It stays, and it is visible (S-1 F3): the hook evaluates as
    usual, writes one `would_fire` row per hit with `mode: "disabled"` and the real cause, prints NOTHING on stdout or stderr, and
    logs `disabled:kill_file` (throttled like the other once-per-8-KiB lines). `compile status` adds `kill_file` to the heartbeat
@@ -559,7 +562,8 @@ reason_code, at, prev_hash, hash}` (`ref` is a `row_id` or a detector event id),
 LESSON profile; a hit refuses the row). `ref` is the card id of the incident (`--incident --lesson --session`) or
 the shadow `row_id` = sha256(ts, session, proposal_id, payload_sha256)[:8] (`--tp ID`, `--fp ID`, ids from `--rows`).
 Writing needs a TTY and a `y` on /dev/tty; the whole chain is verified before each append and a broken chain refuses
-the write. `--list [--kind K]` verifies and prints, `--rows` prints shadow rows with their ids; neither needs a TTY.
+the write. `--list [--kind K]` verifies and prints, `--rows` prints shadow rows with their ids and, last, their mode (`disabled` = written
+under the kill file); neither needs a TTY.
 The write opens the file `O_NOFOLLOW`, takes `flock`, and verifies the chain from that locked fd. `row_id` is
 computed on read from the stored shadow row (the bare `session` hash as stored, `ts|session|proposal_id|payload_sha256`
 joined with `|`, sha256, first 8 hex, no `r:` prefix); shadow.py writes no `row_id`, so a future hook that

@@ -11,16 +11,20 @@ import re
 
 RAW_TOOL, RAW_SID = (re.compile(rb'"%s"\s*:\s*"([%s]{1,%d})"' % (key, chars, cap))
                      for key, chars, cap in ((b"tool_name", b"A-Za-z0-9_", 64), (b"session_id", b"A-Za-z0-9_.:-", 128)))
-RAW_STOP = re.compile(rb'"stop_hook_active"\s*:\s*true')
+RAW_NOT_STOPPING = re.compile(rb'"stop_hook_active"\s*:\s*false')
 
 
 def scan(raw: bytes) -> tuple[str | None, str, bool]:
     """(tool_name or None, session_id or "", stop_hook_active) of an over-cap payload. A key that is absent, not a plain string or found with
-    two different values (a nested copy an agent put there) is unknown: None for the tool (every proposal of the event applies), "" otherwise."""
-    def one(rx: re.Pattern) -> str | None:
-        found = {m.decode() for m in rx.findall(raw)}
+    two different values (a nested copy an agent put there) is unknown: None for the tool (every proposal of the event applies), "" otherwise.
+    A `tool_name` after the first `"tool_input"` key is not the top-level one (S-1 Opus M-1): the tool is unknown. `stop_hook_active` counts as
+    true unless an explicit `false` is in the bytes read (Opus M-2): the Stop loop guard wins over a block when the flag may sit past the cap."""
+    top = raw.find(b'"tool_input"')
+
+    def one(rx: re.Pattern, before: int) -> str | None:
+        found = {m.group(1).decode() for m in rx.finditer(raw) if m.start() < before}
         return found.pop() if len(found) == 1 else None
-    return one(RAW_TOOL), one(RAW_SID) or "", RAW_STOP.search(raw) is not None
+    return one(RAW_TOOL, len(raw) if top < 0 else top), one(RAW_SID, len(raw)) or "", RAW_NOT_STOPPING.search(raw) is None
 
 
 def applies(p: dict, event: str, tool: str | None) -> bool:

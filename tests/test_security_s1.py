@@ -39,6 +39,9 @@ RM = "rm -rf /w/src"
 # seconds per hostile input: the fixed code takes a few hundredths of a second (see the measured values in the commit report), the
 # unfixed one minutes; ≥ 3x the local time, with CI 1.5-4x slower than this machine (D-147 rule)
 TIME_BUDGET = 3.0
+# inputs the caps keep small (64 KiB of CSS, 2000 characters of a table line): the fixed code takes a few milliseconds, a reverted regex seconds
+# (Opus I-4), so these get their own tight budget, still >= 3x the local time
+CAPPED_BUDGET = 0.25
 HOSTILE = pytest.mark.timeout(30)
 
 
@@ -103,11 +106,23 @@ def test_f1_an_unreadable_tool_name_still_denies_in_block_mode(w, run):
     assert (row["tool_name"], row["session"], row["cause"]) == ("", st.session_hash(""), "truncated")
 
 
-def test_f1_two_different_tool_names_in_the_head_are_unknown_not_the_first(w, run):
+def test_f1_two_different_tool_names_before_tool_input_are_unknown_not_the_first(w, run):
     p = go(w, "block")
-    nested = {"session_id": "s", "tool_name": "Read", "tool_input": {"tool_name": "Bash", "pad": "a" * 300_000}}
-    code, out, _ = run(raw=json.dumps(nested).encode())
+    twice = b'{"session_id": "s", "tool_name": "Read", "tool_name": "Bash", "tool_input": {"pad": "' + b"a" * 300_000 + b'"}}'
+    code, out, _ = run(raw=twice)
     assert code == 0 and deny_of(out, p["message"])
+
+
+def test_f1_a_nested_tool_name_after_tool_input_is_not_the_tool(w, run):
+    """Opus M-1: the real top-level tool_name is past the cap and tool_input carries a fake `Read` near the start: unknown tool, denied."""
+    p = go(w, "block")
+    fake = b'{"session_id": "s", "tool_input": {"tool_name": "Read", "pad": "' + b"a" * 300_000 + b'"}, "tool_name": "Bash"}'
+    assert fake.index(b'"tool_name": "Bash"') > shadow.MAX_STDIN
+    code, out, _ = run(raw=fake)
+    assert code == 0 and deny_of(out, p["message"]) and run.rows[0]["tool_name"] == ""
+    run.capsys.readouterr()
+    honest = b'{"session_id": "s", "tool_name": "Read", "tool_input": {"tool_name": "Bash", "pad": "' + b"a" * 300_000 + b'"}}'
+    assert run(raw=honest) == (0, "", "") and len(run.rows) == 1                      # a real Read is not a Bash proposal's tool
 
 
 def test_f1_a_tool_the_matcher_does_not_cover_is_not_denied(w, run):
@@ -153,11 +168,20 @@ def test_f1_an_oversize_stop_payload_blocks_unless_stop_hook_active(w, run, monk
     p, mode = stop_proposal()
     monkeypatch.setattr(shadow, "load_approved", lambda cfg, log: [(p, mode)])
     pad = "a" * 300_000
-    code, out, _ = run(raw=json.dumps({"hook_event_name": "Stop", "session_id": "s", "pad": pad}).encode(), arg="stop")
+    stop = {"hook_event_name": "Stop", "session_id": "s"}
+    code, out, _ = run(raw=json.dumps({**stop, "stop_hook_active": False, "pad": pad}).encode(), arg="stop")
     assert code == 0 and json.loads(out) == {"decision": "block", "reason": p["message"]}
-    code, out, err = run(raw=json.dumps({"hook_event_name": "Stop", "session_id": "s", "stop_hook_active": True, "pad": pad}).encode(),
-                         arg="stop")
+    code, out, err = run(raw=json.dumps({**stop, "stop_hook_active": True, "pad": pad}).encode(), arg="stop")
     assert (code, out, err) == (0, "", "") and len(run.rows) == 2                     # the fire is still recorded
+
+
+def test_f1_an_oversize_stop_with_the_flag_past_the_cap_prints_nothing_but_writes_the_row(w, run, monkeypatch):
+    """Opus M-2: an unreadable `stop_hook_active` counts as true (the loop guard wins), so the hook does not block a Stop it cannot read."""
+    p, mode = stop_proposal()
+    monkeypatch.setattr(shadow, "load_approved", lambda cfg, log: [(p, mode)])
+    raw = json.dumps({"hook_event_name": "Stop", "session_id": "s", "pad": "a" * 300_000, "stop_hook_active": True}).encode()
+    assert raw.index(b"stop_hook_active") > shadow.MAX_STDIN
+    assert run(raw=raw, arg="stop") == (0, "", "") and [r["cause"] for r in run.rows] == ["truncated"]
 
 
 def test_f1_the_oversize_row_cause_is_truncated_because_the_hashed_metrics_count_every_other_cause_as_a_detector_fire():
@@ -231,6 +255,10 @@ def test_f3_the_status_line_and_the_menu_bar_plugin_print_a_disabled_marker(stat
 @HOSTILE
 def test_f2_a_200000_digit_value_with_a_trailing_x_is_rejected_in_linear_time():
     digits = "9" * 200_000 + "x1"      # "x" alone is a unit and the whole value parses: the trailing 1 is what makes fullmatch fail after trying every split
+    # the 64-character cut in `_num` hides the NUMBER pattern, so the pattern itself is timed (Opus I-5): `\d+\.?\d*` takes minutes here
+    assert cssstyle.NUMBER.fullmatch(digits) is None
+    _, secs = timed(cssstyle.NUMBER.fullmatch, digits)
+    assert secs < CAPPED_BUDGET
     for fn in (cssstyle._num, cssstyle._zero, cssstyle._far, cssstyle._faint, cssstyle._tiny, cssstyle._flat):
         _, secs = timed(fn, digits)
         assert secs < TIME_BUDGET, fn.__name__
@@ -288,9 +316,9 @@ def test_f4_a_long_whitespace_run_around_important_is_linear():
     for css in ("color:red;" + " " * 200_000 + "!important", "color:red;" + " " * 200_000, "a:b " + " \t" * 100_000 + "! " + " " * 100_000 + "x",
                 " " * 200_000 + "! important;display:none"):
         _, secs = timed(cssstyle._declarations, css)                     # the cap is applied here too: 64 KiB of spaces, not 200 000
-        assert secs < TIME_BUDGET, css[:20]
+        assert secs < CAPPED_BUDGET, css[:20]                            # the reverted `\s*!\s*important` takes ~2 s on 64 KiB (Opus I-4)
         _, secs = timed(cssstyle.style_hidden, css[:60_000])
-        assert secs < TIME_BUDGET, css[:20]
+        assert secs < CAPPED_BUDGET, css[:20]
     assert cssstyle.style_hidden(" " * 50_000 + "! important;display:none")         # the declaration after the run is still read
     _, secs = timed(cssstyle.css_rules, "a{" + " " * 10**6 + "}")
     assert secs < TIME_BUDGET
@@ -318,6 +346,19 @@ def test_f7_a_line_of_100000_brackets_is_cut_and_parsed_in_linear_time():
             assert secs < TIME_BUDGET, hostile[:12]
     _, secs = timed(parsers._cells, "| " + "[" * 100_000 + "]x |")
     assert secs < TIME_BUDGET
+
+
+@HOSTILE
+def test_f7_the_link_pattern_is_linear_on_its_own_without_any_cap():
+    """Opus I-3 / I-2: the caps hide the pattern, so it is timed UNCUT. The old `[^\\]]*` class takes ~3 s on 1 MiB of `[`, and `\\([^)]*\\)` is
+    quadratic on `[a](` with no `)`."""
+    for hostile in ("[" * 100_000, "[" * (1 << 20), "[a](" * (1 << 18), "[a](" + "(" * 100_000, "]" + "[a]" * 200_000):
+        out, secs = timed(parsers.LINK.sub, r"\1", hostile)
+        assert out == hostile and secs < CAPPED_BUDGET, hostile[:8]
+    assert parsers.LINK.sub(r"\1", "[text](url) and [two](u2)") == "text and two"
+    assert len(parsers._cells("| " + "[a](" * 100_000 + " |")[0]) <= parsers.MAX_LINE
+    _, secs = timed(parsers._cells, "| " + "[a](" * (1 << 18) + " |")
+    assert secs < CAPPED_BUDGET
 
 
 def test_f7_links_still_become_their_text_and_a_long_row_is_cut_at_the_cap():
@@ -512,3 +553,57 @@ def test_f15_user_turn_count_and_signals_do_not_change_with_the_indent(tmp_path)
     assert c.user_turn_count == 3 and c.signals.user_corrections == 1
     assert "R: ok\n    U: No, that's wrong. I said stop\n    U: revert it" in c.body
     assert [ln for ln in c.body.split("\n") if ln.startswith("U: ")] == ["U: run the tests", "U: thanks", "U: No, that's wrong, I said use uv"]
+
+
+# ------------------------------------------------------------------ Opus wave 2: the scrub dedupe, label --rows
+def reference_dedupe(hits):
+    """The quadratic original (scrub/engine.py before wave 2), kept here as the oracle."""
+    from ace_playbook.scrub import engine
+    kept = []
+    for h in sorted(hits, key=lambda h: (engine._rank(h), h.start, -(h.end - h.start))):
+        if h.layer == "entropy":
+            if any(k.start <= h.start and h.end <= k.end for k in kept):
+                continue
+        elif any(k.start <= h.start and h.end <= k.end and engine._rank(k) <= engine._rank(h) for k in kept):
+            continue
+        kept.append(h)
+    return sorted(kept, key=lambda h: h.start)
+
+
+def test_i1_the_dedupe_keeps_exactly_the_hits_the_quadratic_original_kept():
+    import random
+    from ace_playbook.scrub import engine
+    rng = random.Random(20261023)
+    layers = (("regex", "anthropic_key"), ("regex", "secret_assignment"), ("decoded", "decoded:jwt"), ("lint", "email"), ("entropy", "high_entropy"))
+    for _ in range(300):
+        hits = []
+        for _ in range(rng.randrange(1, 40)):
+            layer, rule = rng.choice(layers)
+            start = rng.randrange(0, 60)
+            hits.append(engine.Hit(rule, layer, start, start + rng.randrange(0, 25), "x"))
+        got, want = engine._dedupe(hits), reference_dedupe(hits)
+        assert [(h.rule, h.layer, h.start, h.end) for h in got] == [(h.rule, h.layer, h.start, h.end) for h in want]
+
+
+@HOSTILE
+def test_i1_a_megabyte_of_short_emails_is_scanned_in_n_log_n(tmp_path):
+    """~143 000 hits: the O(hits^2) dedupe took minutes (10 000 hits 1.2 s, 20 000 hits 4.8 s)."""
+    unit = "a" + chr(64) + "b.co "
+    text = (unit * (MB // len(unit) + 1))[:MB]
+    hits, secs = timed(scan, text, REPO)
+    assert len(hits) > 100_000 and secs < TIME_BUDGET
+    (tmp_path / "mail.txt").write_text(text)
+    findings, secs = timed(check.scan_files, tmp_path, ["mail.txt"], "audit", ())
+    assert len(findings) == len(hits) and secs < TIME_BUDGET
+
+
+def test_m4_label_rows_shows_the_mode_so_a_disabled_row_is_not_an_armed_one(w, run, capsys):
+    from ace_playbook.compile import labels
+    go(w, "block")
+    (w.data / "proposals" / "DISABLED").write_text("")
+    run(cs.pre_payload(RM))
+    (w.data / "proposals" / "DISABLED").unlink()
+    run(cs.pre_payload(RM))
+    assert labels._rows(w.cfg, 50) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert [ln.split()[-1] for ln in lines] == ["disabled", "block"] and all(len(ln.split()) == 7 for ln in lines)

@@ -6,6 +6,7 @@ import base64
 import hashlib
 import math
 import re
+from bisect import bisect_right
 from dataclasses import dataclass, field
 from typing import Iterable
 
@@ -77,7 +78,8 @@ def _regex_hits(text: str, offset: int = 0, prefix: str = "") -> list[Hit]:
 
 def _lines(text: str, pat: re.Pattern):
     """(match, start, end) of `pat` line by line, `start`/`end` being offsets in `text` (S-1 F9 F12). For a pattern that cannot span a line
-    break (EMAIL, ENTROPY_CANDIDATE: no white space in their classes) this finds what one pass over `text` finds, in many small scans."""
+    break (EMAIL, ENTROPY_CANDIDATE: no white space in their classes) this finds what one pass over `text` finds, in many small scans.
+    PROVIDER_RULES stay whole-text on purpose: several match across a newline (`\\s*[=:]`), so they are made linear by construction instead."""
     off = 0
     for line in text.split("\n"):
         for m in pat.finditer(line):
@@ -187,14 +189,23 @@ def _dedupe(hits: list[Hit]) -> list[Hit]:
     inside a kept hit; one that extends past it is kept so the tail of a secret
     is not left behind (redaction merges overlapping spans).
     """
+    # Hits are taken in rank order, so every kept hit already ranks <= the one under test and both layers reduce to "wholly inside a kept hit":
+    # some kept hit starts at or before h.start and ends at or after h.end. A Fenwick tree over the start positions holds the largest kept end
+    # per prefix of starts: O(n log n) (was O(n^2): a 1 MB file of short emails took minutes), the same hits kept (S-1 Opus I-1).
     kept: list[Hit] = []
-    for h in sorted(hits, key=lambda h: (_rank(h), h.start, -(h.end - h.start))):
-        if h.layer == "entropy":
-            if any(k.start <= h.start and h.end <= k.end for k in kept):
-                continue
-        elif any(k.start <= h.start and h.end <= k.end and _rank(k) <= _rank(h) for k in kept):
+    order = sorted(hits, key=lambda h: (_rank(h), h.start, -(h.end - h.start)))
+    starts = sorted({h.start for h in order})
+    tree = [-1] * (len(starts) + 1)
+    for h in order:
+        i = bisect_right(starts, h.start)                     # 1-based index of h.start
+        best, j = -1, i
+        while j:
+            best, j = max(best, tree[j]), j - (j & -j)
+        if best >= h.end:
             continue
         kept.append(h)
+        while i <= len(starts):
+            tree[i], i = max(tree[i], h.end), i + (i & -i)
     return sorted(kept, key=lambda h: h.start)
 
 

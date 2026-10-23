@@ -347,7 +347,7 @@ def test_rows_prints_the_computed_ids_newest_last_and_honours_limit(world, capsy
     got = [line.split()[1] for line in out.splitlines()]
     assert code == 0 and got == ids and len(set(ids)) == 3
     assert out.splitlines()[0].split() == ["2026-10-20T09:00:00Z", ids[0], ROW["proposal_id"], ROW["lesson_id"],
-                                           "detector", "true"]
+                                           "detector", "true", "observe"]
     assert [x.split()[1] for x in run(world, "--rows", "--limit", "2", capsys=capsys)[1].splitlines()] == ids[1:]
     assert run(world, "--rows", "--limit", "0", capsys=capsys)[0] == 2
     assert run(world, "--rows", capsys=capsys)[0] == 0
