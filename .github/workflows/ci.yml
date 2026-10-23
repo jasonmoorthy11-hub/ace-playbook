@@ -36,3 +36,18 @@ jobs:
       - name: No personal paths or names in code or docs
         run: |
           ! grep -rn "jasonmoorthy\|/Users/" --include=*.py --include=*.md --include=*.json --include=*.jsonl --include=*.yml --include=*.cff . --exclude=INSTALL.md --exclude=ci.yml --exclude-dir=.venv --exclude-dir=.git | grep -v "jasonmoorthy11-hub/ace-playbook\|/Users/FAKEuser"
+  reader-bare-path:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - name: Install
+        run: uv sync --python 3.12
+      - name: Reader tests under a bare PATH (no uv, scratch HOME; LANG=C, which Python coerces to UTF-8)
+        run: |
+          mkdir -p "$RUNNER_TEMP/home"
+          env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP/home" LANG=C PYTHONDONTWRITEBYTECODE=1 \
+            "$PWD/.venv/bin/python" -m pytest -q -p no:cacheprovider \
+            tests/test_watch_reader.py tests/test_watch_reader_probe.py tests/test_watch_reader_docs.py
