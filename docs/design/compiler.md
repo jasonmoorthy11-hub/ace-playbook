@@ -1681,7 +1681,7 @@ became rung-aware and the date is the next rung's, not always warn's. It was nev
 | ace-playbook/ace_playbook/store/schema.py (full), store/log.py (lines 20-40, def list) | 262, 130 |
 | ace-playbook/ace_playbook/inject/sanitize.py, citations.py, ledger.py, injector.py, __main__.py | 120, 26, 38, 140, 68 |
 | ace-playbook/ace_playbook/reflect/provenance.py (full), reflect/runner.py (lines 20-60, def list) | 92, 192 |
-| ace-playbook/ace_playbook/clean/transcript.py (lines 28-60, 84-134), clean/origins.py, clean/bashwrite.py | 231, 49, 110 |
+| ace-playbook/ace_playbook/clean/transcript.py (lines 28-60, 84-134), clean/origins.py, clean/bashwrite.py | 231, 49, 135 |
 | ace-playbook/ace_playbook/scrub/engine.py (lines 192-205, def list), scrub/quarantine.py (lines 20-60) | 230, 84 |
 | ace-playbook/hooks/sessionstart.sh, stop_citation_ledger.sh, sessionend.sh, pre-commit-scrub.sh | 5, 5, 6, 23 |
 | ace-playbook/hooks/INSTALL.md (grep, lines 80-105) | 158 |

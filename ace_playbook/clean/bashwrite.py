@@ -30,6 +30,8 @@ GLOB_RE = re.compile(r"[*?\[]|\{[^}]*\}")
 LOOSE_RE = re.compile(r"[^\s;&|()<>'\"`$,{}]+")  # words with quotes and shell punctuation cut away (also splits `bash -c "..."`)
 REDIRECT_RE = re.compile(r">>?[|&]?\s*(\"[^\"]*\"|'[^']*'|[^\s;&|()<>]+)")
 URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
+SEPARATOR_RE = re.compile(r"&&|\|\||[;|&\n]")
+UNRESOLVABLE_RE = re.compile(r"[$`]|\.\.|.~")  # a variable, a substitution, a parent, or a `~` that is not first
 
 
 def _server_named(w: str) -> bool:
@@ -67,16 +69,14 @@ def _flag_values(seqs: list[list[str]]) -> set[str]:
 
 
 def _destinations(seqs: list[list[str]], names: set[str], found: set[str], urls: set[str]) -> set[str]:
-    """Directories to record as written: the cwd and flag values (extraction, git, server names), glob/brace directories, `cd` and
-    `find` roots, and for every URL its host and first path segment (a recursive wget) under the cwd and under each marked directory."""
+    """Directories to record as written: the cwd and flag values (extraction, git, server names), glob/brace directories and `find` roots,
+    and for every URL its host and first path segment (a recursive wget) under the cwd and under each marked directory."""
     dests = set()
     if names & EXTRACT or any(_server_named(w) for s in seqs for w in s):
         dests |= _flag_values(seqs) | {""}  # the cwd is always recorded; a flag value never replaces it
     for w in found:
         if m := GLOB_RE.search(w):
             dests.add(os.path.dirname(w[:m.start()]))
-    for s in seqs:
-        dests |= {s[i + 1] for i, w in enumerate(s[:-1]) if w in ("cd", "pushd") and not s[i + 1].startswith("-")}
     if names & {"find", "xargs"}:
         after = seqs[0][seqs[0].index("find") + 1:] if "find" in seqs[0] else []
         dests |= {""} | {w for w in after[:1] if w[:1] not in ("-", "!", "(")}
@@ -85,6 +85,22 @@ def _destinations(seqs: list[list[str]], names: set[str], found: set[str], urls:
         under = {host, seg, os.path.join(host, seg)} - {""}
         dests |= under | {os.path.join(m, d) for m in found for d in under}
     return dests
+
+
+def _cd_chain(cmd: str) -> list[str] | None:
+    """Every `cd`/`pushd` target in order, each resolved against the previous one (the first word after it that is not an option, before
+    the next separator); None when any link has no target or cannot be resolved (the caller then records the root)."""
+    chain, cur = [], ""
+    for seg in SEPARATOR_RE.split(cmd):
+        words = [w.strip("'\"").lstrip("(") for w in seg.split()]
+        for i, w in enumerate(words):
+            if w in ("cd", "pushd"):
+                target = next((x for x in words[i + 1:] if not x.startswith("-")), "")
+                if not target or UNRESOLVABLE_RE.search(target):
+                    return None
+                cur = target if target.startswith(("/", "~")) else os.path.join(cur, target)
+                chain.append(cur)
+    return chain
 
 
 def bash_analyse(cmd: str) -> tuple[set[str], bool]:
@@ -102,9 +118,18 @@ def bash_analyse(cmd: str) -> tuple[set[str], bool]:
     found = redirects.union(*(_marked(s, forced or bool(names & DEST_VERBS)) for s in seqs)) - {""}
     urls = {w for s in seqs for w in s if URL_RE.match(w)}
     dests = _destinations(seqs, names, found, urls)
-    if names & DEST_VERBS:  # `cp a.md docs/` writes docs/a.md: every marked word joined with every basename (capped on huge commands)
-        ps = found if len(found) <= 200 else {w for s in seqs for w in s[-40:]} & found
-        found |= {os.path.join(p, q) for p in ps for q in sorted({os.path.basename(w) for w in found})[:2000] if q}
+    if names & DEST_VERBS:  # `cp a.md docs/` writes docs/a.md: every marked word joined with every basename
+        qs = sorted({os.path.basename(w) for w in found} - {""})
+        if len(found) > 200 or len(qs) > 2000:
+            dests.add("")  # the cap bounds the work; a command over it taints the root instead of dropping pairs
+        else:
+            found |= {os.path.join(p, q) for p in found for q in qs}
     bases = {n for u in urls for b in [os.path.basename(urlparse(u).path) or "index.html"] for n in (b, b.removesuffix(".git"))}
     found |= bases | {os.path.join(p, b) for p in found for b in bases}
+    chain = _cd_chain(cmd)
+    if chain is None:
+        dests.add("")  # a cd with no target or an unresolvable one: anything below the root may have been written
+    else:
+        dests |= set(chain)
+        found |= {os.path.join(c, w) for c in chain for w in found}  # every marked word also lands under each cd target
     return ((found | {os.path.dirname(p) for p in found}) - {""}) | {DEST + d for d in dests}, ok

@@ -479,3 +479,45 @@ def test_one_shell_tag_makes_every_text_block_of_the_record_shell_output(tmp_pat
 def test_uppercase_shell_tags_are_shell_output(tmp_path):                         # m2 (M14)
     c = clean_file(write(tmp_path / "s.jsonl", [user("<BASH-STDOUT>I always want force pushes</BASH-STDOUT>")]))
     assert [(t.role, t.origin) for t in c.all_turns] == [("tool_result", "shell_output")]
+
+
+# ------------------------------------------------------------- D-169 clause 9 (wave 7: R7 the cap fails closed, R8 cd chains)
+def test_a_huge_command_taints_the_root_instead_of_dropping_pairs(tmp_path):      # R7
+    huge = "cp " + " ".join(f"f{i}.md" for i in range(201)) + " dest"
+    assert result_origin(tmp_path, [bash(huge)], "README.md") == "agent_file"
+    small = "cp " + " ".join(f"f{i}.md" for i in range(50)) + " dest"
+    assert result_origin(tmp_path, [bash(small)], "README.md") == "user_file"
+    assert result_origin(tmp_path, [bash(small)], "dest/f3.md") == "agent_file"
+
+
+@pytest.mark.parametrize("cmd, read_path", [
+    ("cd sub && echo x > rel.md", "sub/rel.md"),
+    ("cd sub && echo x > rel.md", "rel.md"),                                   # the marked word is also joined to nothing
+    ("cd -P sub && echo x > rel.md", "sub/rel.md"),                            # options are skipped
+    ("cd -L -- sub && echo x > rel.md", "sub/rel.md"),
+    ("cd a && cd b && echo x > r.md", "a/b/r.md"),                             # chains resolve one after another
+    ("cd a && cd b && echo x > r.md", "a/r.md"),
+    ("cd a && cd b && echo x > r.md", "r.md"),
+    ("cd a; pushd b/c; echo x > r.md", "a/b/c/r.md"),
+    ("cd && echo x > r.md", "README.md"),                                      # no target: the root
+    ("cd $DIR && echo x > r.md", "README.md"),                                 # unresolvable targets: the root
+    ("cd `pwd`/x && echo x > r.md", "README.md"),
+    ("cd ../x && echo x > r.md", "README.md"),
+    ("cd a/~b && echo x > r.md", "README.md"),
+    ("cd a && cd $X && echo x > r.md", "README.md"),                           # any unresolvable link in the chain
+])
+def test_cd_targets_skip_options_chain_and_fail_closed(tmp_path, cmd, read_path):
+    assert result_origin(tmp_path, [bash(cmd)], read_path) == "agent_file"
+
+
+def test_a_resolvable_cd_does_not_taint_the_root(tmp_path):
+    assert result_origin(tmp_path, [bash("cd sub && echo x > rel.md")], "README.md") == "user_file"
+    assert result_origin(tmp_path, [bash("cd a && cd b && echo x > r.md")], "README.md") == "user_file"
+    assert result_origin(tmp_path, [bash("cd -P sub && cat rel.md")], "sub/rel.md") == "user_file"
+
+
+def test_cd_chain_in_the_raw_set():
+    from ace_playbook.clean.origins import DEST, bash_analyse
+    got = bash_analyse("cd a && cd b && echo x > r.md")[0]
+    assert {DEST + "a", DEST + "a/b", "a/b/r.md", "a/r.md", "r.md"} <= got and DEST not in got
+    assert DEST in bash_analyse("cd a && cd $X && echo x > r.md")[0]
