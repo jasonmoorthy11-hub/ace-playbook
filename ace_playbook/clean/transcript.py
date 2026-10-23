@@ -3,7 +3,8 @@
 Dropped: harness noise (system-reminders and similar tag blocks, hook output,
 attachments, summaries), sidechain (subagent) records, thinking blocks, and
 tool_result blobs over a size limit. Kept: user text, assistant text, tool_use
-names with short command strings, and short tool results.
+names with short command strings, and short tool results. The user's `!` shell-mode
+records become `shell_output` tool results; a subagent's writes are noted, its turns are not kept.
 """
 
 from __future__ import annotations
@@ -14,25 +15,27 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 
+from .origins import is_written, normalise, written_paths
+
 NOISE_TAGS = ("system-reminder", "local-command-caveat", "local-command-stdout",
               "local-command-stderr", "command-message", "ide_opened_file",
               "ide_selection", "user-prompt-submit-hook", "task-notification")
 NOISE_RE = re.compile(
     "|".join(rf"<{t}[^>]*>.*?</{t}>" for t in NOISE_TAGS), re.DOTALL)
 ACE_BLOCK_RE = re.compile(r"=== ACE PLAYBOOK.*?=== END ACE PLAYBOOK ===", re.DOTALL)
+SHELL_BLOCK_RE = re.compile(r"<(bash-input|bash-stdout|bash-stderr)>(.*?)</\1>", re.DOTALL)
 
 USER_TEXT_MAX = 6000
 ASSISTANT_TEXT_MAX = 3000
 COMMAND_MAX = 200
 ARG_MAX = 120
-WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 
 
 @dataclass
 class Turn:
     role: str  # user | assistant | tool_use | tool_result
     text: str
-    origin: str  # user_message | user_file | tool_output | assistant
+    origin: str  # user_message | user_file | agent_file | shell_output | tool_output | assistant
     tool: str | None = None
 
 
@@ -94,13 +97,16 @@ def _is_hook_block(rec: dict, text: str) -> bool:
 
 
 def _result_origin(use: dict, cwd: str, written: set[str], untrusted: tuple[str, ...]) -> str:
-    """A Read of a file inside the project that the agent did not write itself is user-owned."""
+    """A Read of a file the agent itself wrote is `agent_file`; one inside the project that it did not write is user-owned."""
     if use.get("name") != "Read":
         return "tool_output"
     path = str(use.get("input", {}).get("file_path", ""))
-    if not path or path in written or any(m in path for m in untrusted):
+    if not path:
         return "tool_output"
-    if path.startswith("/") and cwd and not (path == cwd or path.startswith(cwd.rstrip("/") + "/")):
+    path = normalise(path, cwd)
+    if is_written(path, written):
+        return "agent_file"
+    if any(m in path for m in untrusted) or (cwd and not (path == cwd or path.startswith(cwd.rstrip("/") + "/"))):
         return "tool_output"
     return "user_file"
 
@@ -113,8 +119,12 @@ def parse_records(records: Iterator[dict], result_max: int,
     for rec in records:
         out.cwd = out.cwd or rec.get("cwd", "") or ""
         out.session_id = out.session_id or rec.get("sessionId", "") or ""
+        cwd = rec.get("cwd") or out.cwd
         if rec.get("isSidechain"):
             out.drops.sidechain += 1
+            msg = rec.get("message")
+            for b in _blocks(msg.get("content")) if isinstance(msg, dict) else []:
+                _note_writes(b, written, cwd)  # a subagent's turns are dropped; the files it wrote still are not the user's
             continue
         if (rec.get("isCompactSummary") or rec.get("isVisibleInTranscriptOnly")
                 or rec.get("origin") == "tool_output"):
@@ -127,17 +137,26 @@ def parse_records(records: Iterator[dict], result_max: int,
             out.drops.noise_records += 1
             continue
         for b in _blocks(msg.get("content")):
-            _handle_block(rec["type"], b, out, uses, written, result_max, untrusted)
+            _handle_block(rec["type"], b, out, uses, written, result_max, untrusted, cwd)
     return out
 
 
+def _note_writes(b: dict, written: set, cwd: str) -> None:
+    if b.get("type") == "tool_use" and isinstance(b.get("input"), dict):
+        written |= written_paths(str(b.get("name", "")), b["input"], cwd)
+
+
 def _handle_block(kind: str, b: dict, out: Parsed, uses: dict, written: set,
-                  result_max: int, untrusted: tuple[str, ...]) -> None:
+                  result_max: int, untrusted: tuple[str, ...], cwd: str = "") -> None:
     t = b.get("type")
     if t == "text" and kind == "user":
-        text = strip_noise(str(b.get("text", "")))
+        raw = str(b.get("text", ""))
+        text = strip_noise(SHELL_BLOCK_RE.sub("", raw))
         if text:
             out.turns.append(Turn("user", _clip(text, USER_TEXT_MAX), "user_message"))
+        for m in SHELL_BLOCK_RE.finditer(raw):  # the user's `!` output and command are not the user speaking
+            if block := strip_noise(m.group(2)):
+                out.turns.append(Turn("tool_result", _clip(block, USER_TEXT_MAX), "shell_output", "shell"))
     elif t == "text" and kind == "assistant":
         text = strip_noise(str(b.get("text", "")))
         if text:
@@ -145,16 +164,15 @@ def _handle_block(kind: str, b: dict, out: Parsed, uses: dict, written: set,
     elif t == "tool_use":
         name, inp = str(b.get("name", "?")), b.get("input") or {}
         uses[str(b.get("id"))] = {"name": name, "input": inp}
-        if name in WRITE_TOOLS and inp.get("file_path"):
-            written.add(str(inp["file_path"]))
+        _note_writes(b, written, cwd)
         out.turns.append(Turn("tool_use", f"{name}: {_tool_summary(name, inp)}".rstrip(": "),
                               "assistant", name))
     elif t == "tool_result":
-        _handle_result(b, out, uses, written, result_max, untrusted)
+        _handle_result(b, out, uses, written, result_max, untrusted, cwd)
 
 
 def _handle_result(b: dict, out: Parsed, uses: dict, written: set,
-                   result_max: int, untrusted: tuple[str, ...]) -> None:
+                   result_max: int, untrusted: tuple[str, ...], cwd: str = "") -> None:
     text = strip_noise(_result_text(b))
     use = uses.get(str(b.get("tool_use_id")), {})
     if _is_hook_block({}, text):
@@ -169,7 +187,7 @@ def _handle_result(b: dict, out: Parsed, uses: dict, written: set,
                               use.get("name")))
         return
     if text:
-        origin = _result_origin(use, out.cwd, written, untrusted)
+        origin = _result_origin(use, cwd or out.cwd, written, untrusted)
         out.turns.append(Turn("tool_result", text, origin, use.get("name")))
 
 

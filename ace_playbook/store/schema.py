@@ -18,7 +18,9 @@ SCHEMA_VERSION = 1
 OPS = ("ADD", "PATCH", "MERGE", "NARROW", "RETIRE", "NOOP")
 STATUSES = ("active", "dormant", "superseded", "retired", "compiled", "quarantined", "provisional")
 KINDS = ("gotcha", "rule", "preference", "workflow", "fact", "hook_candidate")
-ORIGINS = ("user_message", "user_file", "tool_output")
+# agent_file (written by the agent or a subagent) and shell_output (the user's `!` records) are real origins, but untrusted:
+# they are not in USER_ORIGINS, so they can neither mint a lesson nor make one live
+ORIGINS = ("user_message", "user_file", "agent_file", "shell_output", "tool_output")
 USER_ORIGINS = frozenset({"user_message", "user_file"})
 COUNTERS = ("shown", "cited", "helpful", "harmful", "violated")
 RETIRE_TARGETS = ("retired", "compiled", "dormant", "quarantined")

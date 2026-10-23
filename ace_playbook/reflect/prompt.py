@@ -19,7 +19,8 @@ Output ONLY one JSON object, no prose and no code fences:
 Rules:
 - Default to zero insights. Only record something the USER stated or corrected, or a fact
   shown in a file the user owns. Lines starting "U:" are user messages; "A:" is the
-  assistant; "T:" is a tool call; "R:" is a tool result.
+  assistant; "T:" is a tool call; "R:" is a tool result. Output of the user's own shell
+  commands and files the agent itself wrote are tool results, not the user: never evidence.
 - Every insight needs 1-2 evidence quotes copied verbatim (exact characters) from "U:"
   lines, or from "R:" lines that are a Read of the user's own file. Never quote assistant
   text. A quote that does not appear verbatim in the transcript is discarded.

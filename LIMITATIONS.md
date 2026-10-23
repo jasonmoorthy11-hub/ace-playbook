@@ -367,6 +367,17 @@ synthetic corpus is generated to match its own patterns, so detection on it is c
 Paraphrase leakage (a lesson that restates a token's prefix or last characters) is a hypothesis
 the long-token lint partly covers and nothing measures.
 
+## Provenance origins
+
+- A pre-existing third-party file under the session's working directory that matches none of the untrusted markers (a cloned repo's
+  `docs/`, a PR branch) is still labelled `user_file`, and so still counts as the user's. Authorship by git history is a later design (S-1 F6).
+- The `agent_file` label rests on a conservative parser of Bash command lines (`ace_playbook/clean/origins.py`): redirections,
+  `tee`, `cp`/`mv`/`install`, `curl`/`wget` output, `git clone`, and writes by a subagent's tool calls. A write through an unlisted command
+  (`sed -i`, `patch`, `python -c "open(...).write(...)"`), after a `cd`, inside a quoted multi-line string, through a variable, or a clone
+  into the working directory itself is not tracked, and the file stays `user_file`.
+- `shell_output` is decided by the `<bash-input>`, `<bash-stdout>` and `<bash-stderr>` tags of a user record. Output that reaches the
+  transcript another way is not recognised.
+
 ## Brief on wake
 
 The brief's Hammerspoon trigger (`hooks/hammerspoon/ace.lua`) has no test here: no Lua interpreter is installed on the build machine, so the
