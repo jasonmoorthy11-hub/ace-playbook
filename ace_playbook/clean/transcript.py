@@ -13,7 +13,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterable, Iterator
 
 from .origins import is_written, normalise, written_paths
 
@@ -116,11 +116,27 @@ def _result_origin(use: dict, root: str, written: set[str], untrusted: tuple[str
     return "tool_output" if any(m in path for m in untrusted) or not _under(path, root) else "user_file"
 
 
+def subagent_records(path: Path, drops: Drops | None = None) -> Iterator[dict]:
+    """Records of every `<session>/subagents/**/*.jsonl` beside the main transcript (where the harness writes a subagent's turns)."""
+    folder = Path(path).with_suffix("") / "subagents"
+    for f in sorted(folder.rglob("*.jsonl")) if folder.is_dir() else []:
+        try:
+            yield from read_records(f, drops)
+        except OSError:
+            continue
+
+
 def parse_records(records: Iterator[dict], result_max: int,
-                  untrusted: tuple[str, ...] = ("upstream/", "node_modules/", ".venv/")) -> Parsed:
+                  untrusted: tuple[str, ...] = ("upstream/", "node_modules/", ".venv/"),
+                  side_records: Iterable[dict] = ()) -> Parsed:
     out = Parsed()
     uses: dict[str, dict] = {}
     written: set[str] = set()
+    for rec in side_records:  # subagent transcripts: only the files they wrote count, never their turns
+        out.drops.sidechain += 1
+        msg, cwd = rec.get("message"), str(rec.get("cwd") or "")
+        for b in _blocks(msg.get("content")) if isinstance(msg, dict) else []:
+            _note_writes(b, written, cwd, out, cwd)
     for rec in records:
         out.cwd = out.cwd or rec.get("cwd", "") or ""
         out.session_id = out.session_id or rec.get("sessionId", "") or ""
@@ -141,24 +157,26 @@ def parse_records(records: Iterator[dict], result_max: int,
         if rec.get("type") not in ("user", "assistant") or not isinstance(msg, dict) or rec.get("isMeta"):
             out.drops.noise_records += 1
             continue
-        for b in _blocks(msg.get("content")):
-            _handle_block(rec["type"], b, out, uses, written, result_max, untrusted, cwd)
+        blocks = _blocks(msg.get("content"))
+        shell = rec["type"] == "user" and any(b.get("type") == "text" and SHELL_TAG_RE.search(str(b.get("text", ""))) for b in blocks)
+        for b in blocks:
+            _handle_block(rec["type"], b, out, uses, written, result_max, untrusted, cwd, shell)
     return out
 
 
-def _note_writes(b: dict, written: set, cwd: str, out: Parsed) -> None:
+def _note_writes(b: dict, written: set, cwd: str, out: Parsed, root: str | None = None) -> None:
     if b.get("type") == "tool_use" and isinstance(b.get("input"), dict):
-        paths, unparsed = written_paths(str(b.get("name", "")), b["input"], cwd, out.cwd)
+        paths, unparsed = written_paths(str(b.get("name", "")), b["input"], cwd, out.cwd if root is None else root)
         written |= paths
         out.drops.unparsed_bash += unparsed
 
 
 def _handle_block(kind: str, b: dict, out: Parsed, uses: dict, written: set,
-                  result_max: int, untrusted: tuple[str, ...], cwd: str = "") -> None:
+                  result_max: int, untrusted: tuple[str, ...], cwd: str = "", shell: bool = False) -> None:
     t = b.get("type")
     if t == "text" and kind == "user":
         raw = str(b.get("text", ""))
-        if SHELL_TAG_RE.search(raw):  # the user's `!` command and output: a block with any shell tag is shell_output as a whole
+        if shell or SHELL_TAG_RE.search(raw):  # the user's `!` command and output: one shell tag makes every text block of the record shell_output
             if text := strip_noise(SHELL_TAG_RE.sub("\n", raw)):
                 out.turns.append(Turn("tool_result", _clip(text, USER_TEXT_MAX), "shell_output", "shell"))
         elif text := strip_noise(raw):

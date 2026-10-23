@@ -371,7 +371,7 @@ the long-token lint partly covers and nothing measures.
 
 - A pre-existing third-party file under the session's working directory that matches none of the untrusted markers (a cloned repo's
   `docs/`, a PR branch) is still labelled `user_file`, and so still counts as the user's. Authorship by git history is a later design (S-1 F6).
-- The `agent_file` label rests on a tracker that deliberately over-approximates (`ace_playbook/clean/origins.py`, D-169 clause 6): any
+- The `agent_file` label rests on a tracker that deliberately over-approximates (`ace_playbook/clean/bashwrite.py` and `origins.py`, D-169 clauses 6-9): any
   write-capable Bash command (a write verb such as `tee cp mv install curl wget git rsync sed patch python sh touch mkdir tar`, a
   `>`/`>>`/`<<` anywhere in the text, or an `-o`/`-O`/`--output*` flag) marks every path-looking word it mentions as agent-written, plus the
   basename of every URL (under the working directory and under each marked directory) and the directory of each marked path, and every
@@ -381,17 +381,29 @@ the long-token lint partly covers and nothing measures.
   which applies to Bash only, never to the four write tools). Comments, heredoc bodies and quoting are not parsed (shlex with
   `cmd.split()` as the fallback; `unparsed_bash` in the summary counts the fallbacks, and a command that needed it is write-capable by
   definition: every non-flag word of it is marked). The interpreters (`python perl ruby node sh bash zsh`), `sed`, `patch` and `dd` mark
-  every word of the command. A command that names an extraction verb (`tar unzip ditto rsync`), `git` at all (any subcommand, with or without a URL), or a
-  server-name trigger (`curl -J` or any short-flag cluster holding `J`, `--remote-h...`, `--content-d...`, `--trust-s...`, `wget -e
-  content_disposition=on`) records the working directory as written, plus every value of `-C -d --directory -P --directory-prefix
+  every word of the command. A command that names an extraction verb (`tar unzip ditto rsync patch gh bsdtar 7z gzip gunzip bzip2 bunzip2 xz
+  unxz zstd unzstd cpio pax`), `git` at all (any subcommand, with or without a URL), or a
+  server-name trigger (`curl -J` or any short-flag cluster holding `J`, `--remote-h...`, `--content-d...`, `--trust-s...`, a wgetrc `-e` spelling of
+  content-disposition or trust-server-names in any case, with or without `_` and `-`) records the working directory as written, plus every
+  value of `-C -d --directory -P --directory-prefix
   --output-dir -o` found anywhere in the command, separated or attached (`-Cdir`); a flag value never replaces the working directory. So
   `tar -C out`, `unzip -d dest`, `wget -P dl` and `git clone <url> vendor2` also taint the working directory, and after any git command
-  (even `git status`) every later Read under the session root is `agent_file`: accepted, pinned in `tests/test_clean.py`. A script or interpreter that writes
-  a file it does not name on its command line is not tracked; name the file on the command line or read it through the Bash tool's own
-  output. Writes by a command outside the verb list and without a redirection, after a `cd`, or through a variable are not tracked either.
+  (even `git status`) every later Read under the session root is `agent_file`: accepted, pinned in `tests/test_clean.py`. A destination verb
+  joins every marked word with the basename of every other (`cp ../x/a.md .` writes `./a.md`; the
+  join is capped on huge commands), every word after a bare `--` is a plain word, and the value of any `--flag=value` or attached short
+  flag (`-tdir`, `-oout.md`, `-sLoout.md`, `-Pdl`) is a marked word. A word holding `*`, `?`, `[` or a `{...}` group records its directory
+  as written (no glob or brace expansion is done), as does the cwd for any write-capable `find` or `xargs` (plus the `find` root);
+  `~` and a leading `$HOME` are expanded; the word after `cd` or `pushd` is recorded as a directory; and for every URL its host and first
+  path segment are recorded as directories under the working directory and under each marked directory (a recursive `wget` writes
+  `host/path`). A script or interpreter that writes a file it does not name on its command line is not tracked; name the file on
+  the command line or read it through the Bash tool's own output. Writes by a command outside the verb list and without a redirection
+  or through a variable (`$VAR` paths) are not tracked either.
+- Subagent writes are read from the `isSidechain` records of the main transcript and from every `*.jsonl` under
+  `<session>/subagents/` beside it (the harness's current layout); their turns are never kept. A file there that is not valid JSONL is
+  skipped line by line and counted in `bad_lines`.
 - The trust boundary for `user_file` is the session's first cwd. A record whose own cwd is outside it makes its Reads `tool_output`.
-- `shell_output` is decided by the `<bash-input>`, `<bash-stdout>` and `<bash-stderr>` tags of a user record: a text block holding any of
-  them, balanced or not, becomes one `shell_output` turn as a whole, never partly a user message. Output that reaches the transcript
+- `shell_output` is decided by the `<bash-input>`, `<bash-stdout>` and `<bash-stderr>` tags of a user record: a user record with any of
+  them in any text block, balanced or not, has every text block turned into `shell_output`, never partly a user message. Output that reaches the transcript
   another way is not recognised.
 - Shell-mode records no longer count as user turns, so the quote offsets of evidence cards minted before this change (`compile/evidence.py`
   `_offsets`, an index among user messages) can shift for sessions that held such records.

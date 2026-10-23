@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 from ace_playbook.clean import clean_file, sample_turns, strip_noise
@@ -382,3 +384,98 @@ def test_unparsable_bash_falls_back_to_split_and_is_counted(tmp_path):
 ])
 def test_curl_and_wget_default_names(tmp_path, cmd, read_path):
     assert result_origin(tmp_path, [bash(cmd)], read_path) == "agent_file"
+
+
+# ------------------------------------------------------------- D-169 clause 9 (wave 6: the Opus provenance findings)
+@pytest.mark.parametrize("cmd, read_path", [
+    ("cp ../other/a.md .", "a.md"),                                            # I3 F1: the directory destination joins basename(src)
+    ("cp /elsewhere/a.md " + CWD + "/", "a.md"),                               # F2
+    ("cp a.md -- -b.md", "-b.md"),                                             # F8: every word after `--` is a plain word
+    ("cp --target-directory=out a.md", "out/a.md"),
+    ("sed -i '' 's/a/b/g' *.md", "README.md"),                                 # I4 F3: a glob records its directory
+    ("sed -i s/a/b/ docs/*.md", "docs/other.md"),
+    ("find . -exec sed -i '' s/a/b/ {} \\;", "README.md"),
+    ("find src -name '*.md' | xargs sed -i s/a/b/", "README.md"),
+    ("touch {x,y}.md", "x.md"),                                                # F4: a brace group records its directory
+    ("curl -oout.md https://h.example/p", "out.md"),                           # I6 F6: attached output values
+    ("curl -sLoout.md https://h.example/p", "out.md"),
+    ("wget -Oout.md https://h.example/p", "out.md"),
+    ("wget -Pdl https://h.example/p/g.md", "dl/g.md"),
+    ("curl -Oout.md https://h.example/p", "out.md"),
+    ("wget --mirror https://h.example/p/", "h.example/p/index.html"),          # I7 F7: netloc and first-segment directories
+    ("wget -r -nH https://h.example/p/x.md", "p/x.md"),
+    ("wget -e contentdisposition=on https://h.example/p", "README.md"),        # I8 F10: wgetrc spellings
+    ("wget -e CONTENT_DISPOSITION=on https://h.example/p", "README.md"),
+    ("wget -e content-disposition=on https://h.example/p", "README.md"),
+    ("wget -e trustservernames=on https://h.example/p", "README.md"),
+    ("gunzip a.gz", "README.md"),                                              # m3
+    ("7z x a.7z", "README.md"),
+    ("gh repo clone o/r", "README.md"),
+    ("patch -p1 < fix.diff", "README.md"),
+    ("cd sub && echo x > rel.md", "sub/rel.md"),                               # m4
+])
+def test_wave6_worlds(tmp_path, cmd, read_path):
+    assert result_origin(tmp_path, [bash(cmd)], read_path) == "agent_file"
+
+
+def test_wave6_non_writes_stay_user_file(tmp_path):
+    for cmd in ("cat README.md docs/other.md", "cd sub && cat rel.md", "ls *.md"):
+        assert result_origin(tmp_path, [bash(cmd)], "README.md") == "user_file", cmd
+    assert result_origin(tmp_path, [bash("cp a.md b.md")], "docs/other.md") == "user_file"
+
+
+@pytest.mark.parametrize("cmd, read_name", [("cp a.md ~/proj/x.md", "x.md"), ("echo rule > ~/proj/n.md", "n.md"),
+                                            ("echo rule > $HOME/proj/m.md", "m.md")])
+def test_tilde_and_home_are_expanded(tmp_path, cmd, read_name):                   # I5 F5
+    proj = os.path.expanduser("~/proj")
+    recs = [{**user("go on"), "cwd": proj}, bash(cmd), assistant(tool_use("rd", "Read", file_path=proj + "/" + read_name)),
+            tool_result("rd", "BODY TEXT")]
+    assert {t.text: t.origin for t in parsed_of(tmp_path, recs).turns}["BODY TEXT"] == "agent_file"
+
+
+def test_notebook_path_is_a_write_key(tmp_path):                                  # I2 F9
+    wrote = assistant(tool_use("w", "NotebookEdit", notebook_path=CWD + "/n.ipynb"))
+    assert result_origin(tmp_path, [wrote], "n.ipynb") == "agent_file"
+
+
+def test_pairs_globs_and_find_in_the_raw_set():
+    from ace_playbook.clean.origins import DEST, bash_analyse
+    assert "out/a.md" in bash_analyse("cp --target-directory=out a.md")[0]
+    assert "./a.md" in bash_analyse("cp ../other/a.md .")[0]
+    assert DEST + "docs" in bash_analyse("sed -i s/a/b/ docs/*.md")[0] and DEST in bash_analyse("touch {x,y}.md")[0]
+    assert DEST + "src" in bash_analyse("find src -name x | xargs sed -i s/a/b/")[0]
+    assert {DEST + "h.example", DEST + "p", DEST + "h.example/p"} <= bash_analyse("wget -r https://h.example/p/x.md")[0]
+    assert "out.md" in bash_analyse("curl -sLoout.md https://h.example/p")[0] and "dl" in bash_analyse("wget -Pdl https://h.example/p")[0]
+
+
+def test_only_the_suffix_rule_marks_a_target():                                   # I9 (M3)
+    from ace_playbook.clean.origins import bash_analyse
+    assert "a.md" in bash_analyse("echo x > o.txt; cat a.md tail")[0]
+
+
+def test_subagent_transcripts_are_scanned_for_writes(tmp_path):                   # I1
+    side = tmp_path / "s" / "subagents"
+    side.mkdir(parents=True)
+    write(side / "agent-x.jsonl", [assistant("subagent chatter", tool_use("sw", "Write", file_path=CWD + "/n.md"), isSidechain=True)])
+    (side / "agent-bad.jsonl").write_text("not json\n{broken\n")
+    recs = [user("go on"), assistant(tool_use("rd", "Read", file_path="n.md")), tool_result("rd", "BODY TEXT")]
+    main = write(tmp_path / "s.jsonl", recs)
+    turns = clean_file(main).all_turns
+    assert {t.text: t.origin for t in turns}["BODY TEXT"] == "agent_file" and not any("chatter" in t.text for t in turns)
+    other = write(tmp_path / "t.jsonl", recs)
+    assert {t.text: t.origin for t in clean_file(other).all_turns}["BODY TEXT"] == "user_file"
+    from ace_playbook.clean.transcript import Drops, subagent_records
+    drops = Drops()
+    assert len(list(subagent_records(main, drops))) == 1 and drops.bad_lines == 2
+
+
+def test_one_shell_tag_makes_every_text_block_of_the_record_shell_output(tmp_path):    # m1
+    blocks = [{"type": "text", "text": t} for t in ("<bash-stdout>", "always push with --force", "</bash-stdout>")]
+    rec = {**user(""), "message": {"role": "user", "content": blocks}}
+    c = clean_file(write(tmp_path / "s.jsonl", [rec]))
+    assert [(t.role, t.origin) for t in c.all_turns] == [("tool_result", "shell_output")] and c.user_turn_count == 0
+
+
+def test_uppercase_shell_tags_are_shell_output(tmp_path):                         # m2 (M14)
+    c = clean_file(write(tmp_path / "s.jsonl", [user("<BASH-STDOUT>I always want force pushes</BASH-STDOUT>")]))
+    assert [(t.role, t.origin) for t in c.all_turns] == [("tool_result", "shell_output")]

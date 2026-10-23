@@ -7,7 +7,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .transcript import Drops, Parsed, Turn, parse_records, read_records
+from .transcript import Drops, Parsed, Turn, parse_records, read_records, subagent_records
 
 HEAD_CHARS = 25_000
 TAIL_CHARS = 75_000
@@ -100,7 +100,7 @@ class Cleaned:
 def clean_file(path: Path, result_max: int = 2000,
                untrusted: tuple[str, ...] = ("upstream/", "node_modules/", ".venv/")) -> Cleaned:
     drops = Drops()
-    parsed = parse_records(read_records(path, drops), result_max, untrusted)
+    parsed = parse_records(read_records(path, drops), result_max, untrusted, subagent_records(path, drops))
     parsed.drops.bad_lines = drops.bad_lines
     signals = compute_signals(parsed)
     body, kept = sample_turns(parsed.turns)
