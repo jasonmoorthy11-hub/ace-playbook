@@ -35,7 +35,7 @@ class Signals:
             f"- hook_blocks: {self.hook_blocks}\n"
             f"- repeated_failing_commands: {rep}\n"
             f"- dropped: sidechain={d.sidechain} noise_records={d.noise_records} "
-            f"big_results={d.big_results}\n")
+            f"big_results={d.big_results} unparsed_bash={d.unparsed_bash}\n")
 
 
 def compute_signals(parsed: Parsed) -> Signals:

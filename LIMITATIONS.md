@@ -371,12 +371,18 @@ the long-token lint partly covers and nothing measures.
 
 - A pre-existing third-party file under the session's working directory that matches none of the untrusted markers (a cloned repo's
   `docs/`, a PR branch) is still labelled `user_file`, and so still counts as the user's. Authorship by git history is a later design (S-1 F6).
-- The `agent_file` label rests on a conservative parser of Bash command lines (`ace_playbook/clean/origins.py`): redirections,
-  `tee`, `cp`/`mv`/`install`, `curl`/`wget` output, `git clone`, and writes by a subagent's tool calls. A write through an unlisted command
-  (`sed -i`, `patch`, `python -c "open(...).write(...)"`), after a `cd`, inside a quoted multi-line string, through a variable, or a clone
-  into the working directory itself is not tracked, and the file stays `user_file`.
-- `shell_output` is decided by the `<bash-input>`, `<bash-stdout>` and `<bash-stderr>` tags of a user record. Output that reaches the
-  transcript another way is not recognised.
+- The `agent_file` label rests on a conservative parser of Bash command lines (`ace_playbook/clean/origins.py`, `shellparse.py`):
+  redirections, `tee`, `cp`/`mv`/`install`, `curl`/`wget` output (including the default `-O` and `wget` names), `git clone`, and writes by a
+  subagent's tool calls. A write through an unlisted command (`sed -i`, `patch`, `python -c "open(...).write(...)"`), after a `cd`,
+  through a variable, or a clone into the working directory itself is not tracked, and the file stays `user_file`. A command the parser
+  cannot read (an open quote, a heredoc that never closes, a `<<` with no delimiter) fails closed: every word of it counts as a written
+  path, and the summary's `unparsed_bash` counts such commands.
+- The trust boundary for `user_file` is the session's first cwd. A record whose own cwd is outside it makes its Reads `tool_output`.
+- `shell_output` is decided by the `<bash-input>`, `<bash-stdout>` and `<bash-stderr>` tags of a user record: a text block holding any of
+  them, balanced or not, becomes one `shell_output` turn as a whole, never partly a user message. Output that reaches the transcript
+  another way is not recognised.
+- Shell-mode records no longer count as user turns, so the quote offsets of evidence cards minted before this change (`compile/evidence.py`
+  `_offsets`, an index among user messages) can shift for sessions that held such records.
 
 ## Brief on wake
 

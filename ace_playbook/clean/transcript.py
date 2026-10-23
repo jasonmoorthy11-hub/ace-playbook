@@ -23,7 +23,7 @@ NOISE_TAGS = ("system-reminder", "local-command-caveat", "local-command-stdout",
 NOISE_RE = re.compile(
     "|".join(rf"<{t}[^>]*>.*?</{t}>" for t in NOISE_TAGS), re.DOTALL)
 ACE_BLOCK_RE = re.compile(r"=== ACE PLAYBOOK.*?=== END ACE PLAYBOOK ===", re.DOTALL)
-SHELL_BLOCK_RE = re.compile(r"<(bash-input|bash-stdout|bash-stderr)>(.*?)</\1>", re.DOTALL)
+SHELL_TAG_RE = re.compile(r"</?bash-(?:input|stdout|stderr)\b[^>]*>", re.IGNORECASE)
 
 USER_TEXT_MAX = 6000
 ASSISTANT_TEXT_MAX = 3000
@@ -46,6 +46,7 @@ class Drops:
     noise_records: int = 0
     big_results: int = 0
     bad_lines: int = 0
+    unparsed_bash: int = 0  # Bash commands the write tracker could not parse (it then fails closed)
 
 
 @dataclass
@@ -96,19 +97,23 @@ def _is_hook_block(rec: dict, text: str) -> bool:
                           text[:600], re.IGNORECASE))
 
 
-def _result_origin(use: dict, cwd: str, written: set[str], untrusted: tuple[str, ...]) -> str:
-    """A Read of a file the agent itself wrote is `agent_file`; one inside the project that it did not write is user-owned."""
+def _under(path: str, root: str) -> bool:
+    return not root or path == root or path.startswith(root.rstrip("/") + "/")
+
+
+def _result_origin(use: dict, root: str, written: set[str], untrusted: tuple[str, ...], cwd: str = "") -> str:
+    """A Read of a file the agent itself wrote is `agent_file`; one inside the project that it did not write is user-owned.
+    `root` (the session's first cwd) is the trust boundary; the record's `cwd` only makes a relative path absolute, and a record whose
+    cwd is outside the root makes its Reads `tool_output`."""
     if use.get("name") != "Read":
         return "tool_output"
     path = str(use.get("input", {}).get("file_path", ""))
-    if not path:
+    if not path or not _under(normalise(cwd or root, ""), root):
         return "tool_output"
-    path = normalise(path, cwd)
+    path = normalise(path, cwd or root)
     if is_written(path, written):
         return "agent_file"
-    if any(m in path for m in untrusted) or (cwd and not (path == cwd or path.startswith(cwd.rstrip("/") + "/"))):
-        return "tool_output"
-    return "user_file"
+    return "tool_output" if any(m in path for m in untrusted) or not _under(path, root) else "user_file"
 
 
 def parse_records(records: Iterator[dict], result_max: int,
@@ -124,7 +129,7 @@ def parse_records(records: Iterator[dict], result_max: int,
             out.drops.sidechain += 1
             msg = rec.get("message")
             for b in _blocks(msg.get("content")) if isinstance(msg, dict) else []:
-                _note_writes(b, written, cwd)  # a subagent's turns are dropped; the files it wrote still are not the user's
+                _note_writes(b, written, cwd, out)  # a subagent's turns are dropped; the files it wrote still are not the user's
             continue
         if (rec.get("isCompactSummary") or rec.get("isVisibleInTranscriptOnly")
                 or rec.get("origin") == "tool_output"):
@@ -141,9 +146,11 @@ def parse_records(records: Iterator[dict], result_max: int,
     return out
 
 
-def _note_writes(b: dict, written: set, cwd: str) -> None:
+def _note_writes(b: dict, written: set, cwd: str, out: Parsed) -> None:
     if b.get("type") == "tool_use" and isinstance(b.get("input"), dict):
-        written |= written_paths(str(b.get("name", "")), b["input"], cwd)
+        paths, unparsed = written_paths(str(b.get("name", "")), b["input"], cwd, out.cwd)
+        written |= paths
+        out.drops.unparsed_bash += unparsed
 
 
 def _handle_block(kind: str, b: dict, out: Parsed, uses: dict, written: set,
@@ -151,12 +158,11 @@ def _handle_block(kind: str, b: dict, out: Parsed, uses: dict, written: set,
     t = b.get("type")
     if t == "text" and kind == "user":
         raw = str(b.get("text", ""))
-        text = strip_noise(SHELL_BLOCK_RE.sub("", raw))
-        if text:
+        if SHELL_TAG_RE.search(raw):  # the user's `!` command and output: a block with any shell tag is shell_output as a whole
+            if text := strip_noise(SHELL_TAG_RE.sub("\n", raw)):
+                out.turns.append(Turn("tool_result", _clip(text, USER_TEXT_MAX), "shell_output", "shell"))
+        elif text := strip_noise(raw):
             out.turns.append(Turn("user", _clip(text, USER_TEXT_MAX), "user_message"))
-        for m in SHELL_BLOCK_RE.finditer(raw):  # the user's `!` output and command are not the user speaking
-            if block := strip_noise(m.group(2)):
-                out.turns.append(Turn("tool_result", _clip(block, USER_TEXT_MAX), "shell_output", "shell"))
     elif t == "text" and kind == "assistant":
         text = strip_noise(str(b.get("text", "")))
         if text:
@@ -164,7 +170,7 @@ def _handle_block(kind: str, b: dict, out: Parsed, uses: dict, written: set,
     elif t == "tool_use":
         name, inp = str(b.get("name", "?")), b.get("input") or {}
         uses[str(b.get("id"))] = {"name": name, "input": inp}
-        _note_writes(b, written, cwd)
+        _note_writes(b, written, cwd, out)
         out.turns.append(Turn("tool_use", f"{name}: {_tool_summary(name, inp)}".rstrip(": "),
                               "assistant", name))
     elif t == "tool_result":
@@ -187,7 +193,7 @@ def _handle_result(b: dict, out: Parsed, uses: dict, written: set,
                               use.get("name")))
         return
     if text:
-        origin = _result_origin(use, cwd or out.cwd, written, untrusted)
+        origin = _result_origin(use, out.cwd, written, untrusted, cwd)
         out.turns.append(Turn("tool_result", text, origin, use.get("name")))
 
 

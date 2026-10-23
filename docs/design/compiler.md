@@ -301,7 +301,7 @@ Admission rules, standard path (all must hold, else no card): the lesson is `act
 `provisional` with user evidence; the evidence quote is re-located, with `provenance.norm`
 (provenance.py:31-32), inside a *user message* of the originating session's cleaned transcript,
 with compact summaries and
-sidechains dropped as in clean/transcript.py:123-135 (shell-mode records are `shell_output`, not user messages);
+sidechains dropped as in clean/transcript.py:128-133 (shell-mode records are `shell_output`, not user messages);
 at least one detector event mapped to the
 lesson exists. The incident is the first mapped detector event in the originating session, or if
 there is none, the first one in a later session where the lesson was eligible (card field
@@ -1681,7 +1681,7 @@ became rung-aware and the date is the next rung's, not always warn's. It was nev
 | ace-playbook/ace_playbook/store/schema.py (full), store/log.py (lines 20-40, def list) | 262, 130 |
 | ace-playbook/ace_playbook/inject/sanitize.py, citations.py, ledger.py, injector.py, __main__.py | 120, 26, 38, 140, 68 |
 | ace-playbook/ace_playbook/reflect/provenance.py (full), reflect/runner.py (lines 20-60, def list) | 92, 192 |
-| ace-playbook/ace_playbook/clean/transcript.py (lines 28-60, 84-134) | 189 |
+| ace-playbook/ace_playbook/clean/transcript.py (lines 28-60, 84-134), clean/origins.py, clean/shellparse.py | 213, 122, 91 |
 | ace-playbook/ace_playbook/scrub/engine.py (lines 192-205, def list), scrub/quarantine.py (lines 20-60) | 230, 84 |
 | ace-playbook/hooks/sessionstart.sh, stop_citation_ledger.sh, sessionend.sh, pre-commit-scrub.sh | 5, 5, 6, 23 |
 | ace-playbook/hooks/INSTALL.md (grep, lines 80-105) | 158 |
