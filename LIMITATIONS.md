@@ -379,9 +379,14 @@ the long-token lint partly covers and nothing measures.
   of the session. Two consequences are accepted by design and pinned in `tests/test_clean.py`: `grep -n 'a > b' x.md` makes `x.md`
   `agent_file` (the `>` is inside quotes), and a Read of `/etc/hosts` after `cp a.md /etc/hosts2` is `agent_file` (the directory rule,
   which applies to Bash only, never to the four write tools). Comments, heredoc bodies and quoting are not parsed (shlex with
-  `cmd.split()` as the fallback; `unparsed_bash` in the summary counts the fallbacks). Writes by a command outside the verb list and
-  without a redirection (an interpreter started under an unlisted name), writes after a `cd` or through a variable, are not tracked, and
-  the file stays `user_file`.
+  `cmd.split()` as the fallback; `unparsed_bash` in the summary counts the fallbacks, and a command that needed it is write-capable by
+  definition: every non-flag word of it is marked). The interpreters (`python perl ruby node sh bash zsh`), `sed`, `patch` and `dd` mark
+  every word of the command. The extraction verbs (`tar unzip ditto rsync`) and `git` with no URL record their destination directory as
+  written, the `-C`/`-d`/`--directory` value if there is one, else the working directory, so every later Read under it is `agent_file`;
+  accepted: any such git command (`git status`) taints the working directory. A server-named download (`curl -J`, `--remote-header-name`,
+  `wget --content-disposition`, `--trust-server-names`) records its output directory the same way. A script or interpreter that writes
+  a file it does not name on its command line is not tracked; name the file on the command line or read it through the Bash tool's own
+  output. Writes by a command outside the verb list and without a redirection, after a `cd`, or through a variable are not tracked either.
 - The trust boundary for `user_file` is the session's first cwd. A record whose own cwd is outside it makes its Reads `tool_output`.
 - `shell_output` is decided by the `<bash-input>`, `<bash-stdout>` and `<bash-stderr>` tags of a user record: a text block holding any of
   them, balanced or not, becomes one `shell_output` turn as a whole, never partly a user message. Output that reaches the transcript

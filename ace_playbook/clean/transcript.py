@@ -46,7 +46,7 @@ class Drops:
     noise_records: int = 0
     big_results: int = 0
     bad_lines: int = 0
-    unparsed_bash: int = 0  # Bash commands the write tracker could not parse (it then fails closed)
+    unparsed_bash: int = 0  # Bash commands the write tracker needed the cmd.split() fallback for (it then marks every word)
 
 
 @dataclass

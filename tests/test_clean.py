@@ -148,7 +148,7 @@ def test_bash_written_files_are_agent_file(tmp_path, cmd, read_path):
 
 
 def test_bash_that_does_not_write_leaves_user_file(tmp_path):
-    for cmd in ("cat x.md", "cat README.md", "cp only-one-arg", "git clone", "ls 2>&1 | head", "curl https://example.com/x"):
+    for cmd in ("cat x.md", "cat README.md", "cp only-one-arg", "ls 2>&1 | head", "curl https://example.com/x"):
         assert result_origin(tmp_path, [bash(cmd)], "x.md") == "user_file", cmd
     assert result_origin(tmp_path, [bash("cat README.md")], "README.md") == "user_file"
     assert result_origin(tmp_path, [bash("cp a.md .")], "docs/other.md") == "user_file"
@@ -271,6 +271,41 @@ def test_a_block_with_any_shell_tag_is_shell_output_as_a_whole(tmp_path):
 ])
 def test_over_approximating_write_tracker(tmp_path, cmd, read_path):
     assert result_origin(tmp_path, [bash(cmd)], read_path) == "agent_file"
+
+
+@pytest.mark.parametrize("cmd, read_path", [
+    ("tar xf a.tar", CWD + "/any/new.md"),                                     # D-169 clause 8: extraction records the cwd
+    ("tar xf a.tar -C out", "out/x.md"),
+    ("tar xf a.tar -C /", "new.md"),                                           # `/` or a parent of the root records the root instead
+    ("tar xf a.tar --directory=..", "new.md"),
+    ("unzip a.zip -d dest", "dest/anything"),
+    ("git pull", "README.md"),                                                 # any git command without a URL taints the cwd (accepted)
+    ("git status", "README.md"),
+    ("git clone", "x.md"),
+    ("curl -sLOJ https://h.example/p/f", CWD + "/whatever.bin"),               # server-chosen name: the output directory
+    ("wget --content-disposition -P dl https://h.example/p", "dl/x"),
+    ("python3 gen.py out extra", "out"),                                       # interpreters mark every word
+    ("dd if=a of=b", "b"),
+    ('foo "b.md', "b.md"),                                                     # unparsable: every word, whatever the verb
+])
+def test_extraction_download_interpreter_and_unparsable_marks(tmp_path, cmd, read_path):
+    assert result_origin(tmp_path, [bash(cmd)], read_path) == "agent_file"
+
+
+@pytest.mark.parametrize("cmd", ["tar xf a.tar -C out", "wget --content-disposition -P dl https://h.example/p",
+                                 "git clone https://example.com/y.git vendor2", "unzip a.zip -d dest"])
+def test_a_destination_directory_does_not_taint_the_cwd(tmp_path, cmd):
+    assert result_origin(tmp_path, [bash(cmd)], "README.md") == "user_file"
+    assert result_origin(tmp_path, [bash(cmd)], CWD + "/README.md") == "user_file"
+
+
+def test_a_root_or_parent_destination_records_the_root_not_slash(tmp_path):
+    for cmd in ("tar xf a.tar -C /", "tar xf a.tar -C .."):
+        assert result_origin(tmp_path, [bash(cmd)], "/etc/hosts") == "tool_output", cmd
+
+
+def test_unparsable_command_without_a_verb_is_counted(tmp_path):
+    assert parsed_of(tmp_path, [user("go on"), bash('foo "b.md')]).drops.unparsed_bash == 1
 
 
 def test_a_read_in_an_untouched_directory_stays_user_file(tmp_path):
