@@ -57,6 +57,7 @@ class Parsed:
     failures: list[tuple[str, bool]] = field(default_factory=list)  # (command, is_error)
     session_id: str = ""
     cwd: str = ""
+    pending: list = field(default_factory=list)  # (tool_use block, record cwd) seen before the first cwd; noted once it is known
 
 
 def strip_noise(text: str) -> str:
@@ -135,8 +136,10 @@ def parse_records(records: Iterator[dict], result_max: int,
     side: Iterator[dict] | None = iter(side_records)
     for rec in records:
         out.cwd = out.cwd or rec.get("cwd", "") or ""
-        if out.cwd and side is not None:  # the session root is known: scan the subagent transcripts against it, then drop them
-            _scan_side(side, written, out)
+        if out.cwd and (side is not None or out.pending):  # the session root is known: note held-back writes, scan the subagents
+            _flush_pending(written, out)
+            if side is not None:
+                _scan_side(side, written, out)
             side = None
         out.session_id = out.session_id or rec.get("sessionId", "") or ""
         cwd = rec.get("cwd") or out.cwd
@@ -160,9 +163,16 @@ def parse_records(records: Iterator[dict], result_max: int,
         shell = rec["type"] == "user" and any(b.get("type") == "text" and SHELL_TAG_RE.search(str(b.get("text", ""))) for b in blocks)
         for b in blocks:
             _handle_block(rec["type"], b, out, uses, written, result_max, untrusted, cwd, shell)
+    _flush_pending(written, out)
     if side is not None:
         _scan_side(side, written, out)
     return out
+
+
+def _flush_pending(written: set, out: Parsed) -> None:
+    pending, out.pending = out.pending, []
+    for b, cwd in pending:
+        _note_writes(b, written, cwd or out.cwd, out, force=True)
 
 
 def _scan_side(side: Iterator[dict], written: set, out: Parsed) -> None:
@@ -171,11 +181,14 @@ def _scan_side(side: Iterator[dict], written: set, out: Parsed) -> None:
         out.drops.sidechain += 1
         msg = rec.get("message")
         for b in _blocks(msg.get("content")) if isinstance(msg, dict) else []:
-            _note_writes(b, written, str(rec.get("cwd") or out.cwd), out)
+            _note_writes(b, written, str(rec.get("cwd") or out.cwd), out, force=True)
 
 
-def _note_writes(b: dict, written: set, cwd: str, out: Parsed) -> None:
+def _note_writes(b: dict, written: set, cwd: str, out: Parsed, force: bool = False) -> None:
     if b.get("type") == "tool_use" and isinstance(b.get("input"), dict):
+        if not out.cwd and not force:  # no session root yet: hold the block back (relative paths cannot be resolved)
+            out.pending.append((b, cwd))
+            return
         paths, unparsed = written_paths(str(b.get("name", "")), b["input"], cwd, out.cwd)
         written |= {key(p) for p in paths}
         out.drops.unparsed_bash += unparsed

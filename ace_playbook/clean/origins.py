@@ -20,6 +20,7 @@ READ_ONLY = {"Read", "Grep", "Glob", "LS", "TodoRead", "TaskList", "TaskGet", "W
 READ_ONLY_RE = re.compile(r"(?:read|list|search|get|find|query|describe)_")  # the last `__` segment of an MCP tool name ...
 WRITE_VERB_RE = re.compile(r"write|edit|create|replace|move|copy|save|append|rename|delete|put|upload|patch|set|update|insert|remove|mkdir|touch"
                            r"|extract|clone|download", re.IGNORECASE)  # ... unless the whole name also holds a write verb (`get_and_write`)
+COMMAND_KEYS = {"command", "cmd", "script", "commands", "args"}  # a non-read-only tool's shell-command strings go through bash_analyse too
 PATH_KEYS = {"path", "file_path", "destination", "dest", "target", "notebook_path", "filename", "source", "src", "from", "to", "new_path",
              "old_path", "output", "output_path", "out", "file", "files", "paths", "uri"}  # everything under these is recorded, whatever its shape
 PATH_LIKE_RE = re.compile(r"[^/]*/|[.~]|.*\.[A-Za-z0-9]{1,8}$")
@@ -30,7 +31,8 @@ HOME_RE = re.compile(r"^\$\{?HOME\}?(?=/|$)")
 def normalise(path: str, cwd: str) -> str:
     """Absolute, `..`-free form of `path`; `~` and a leading `$HOME` are expanded, and a relative path is joined to `cwd`."""
     path = os.path.expanduser(HOME_RE.sub(lambda _: os.path.expanduser("~"), path)) if path.startswith(("~", "$")) else path
-    return os.path.normpath(path if os.path.isabs(path) or not cwd else os.path.join(cwd, path))
+    out = os.path.normpath(path if os.path.isabs(path) or not cwd else os.path.join(cwd, path))
+    return "/" + out.lstrip("/") if out.startswith("//") else out  # posix normpath keeps exactly two leading slashes
 
 
 def key(path: str) -> str:
@@ -52,6 +54,20 @@ def _path_strings(value: object) -> set[str]:
         elif isinstance(v, str) and v and (known or PATH_LIKE_RE.match(v)):
             found.add(v)
     return {ROOT} if len(found) > MAX_TOOL_PATHS else found
+
+
+def _command_strings(value: object, under: bool = False) -> set[str]:
+    """Every string under a command key (nested), each alone and the strings of a list joined, for `bash_analyse`."""
+    out = set()
+    if isinstance(value, dict):
+        for k, item in value.items():
+            out |= _command_strings(item, under or str(k).lower() in COMMAND_KEYS)
+    elif isinstance(value, (list, tuple)):
+        parts = [i for i in value if isinstance(i, str)]
+        out |= ({" ".join(parts)} if under and parts else set()) | set().union(*(_command_strings(i, under) for i in value))
+    elif isinstance(value, str) and under:
+        out.add(value)
+    return out
 
 
 def _read_only(name: str) -> bool:
@@ -81,6 +97,9 @@ def written_paths(name: str, inp: dict, cwd: str, root: str = "") -> tuple[set[s
         raw = {str(inp.get("file_path") or inp.get("notebook_path"))} if inp.get("file_path") or inp.get("notebook_path") else set()
     elif not _read_only(name):
         raw = _path_strings(inp)  # an MCP or other tool that may write: every path-looking string it was given, however nested
+        for command in _command_strings(inp):  # ... and its shell-command strings are Bash commands
+            more, fine = bash_analyse(command)
+            raw, ok = raw | more, ok and fine
     bases = [normalise(b, "") for b in (cwd, root) if b]
     dests = {normalise(r[1:] or ".", cwd or root) for r in raw if r.startswith(DEST) and r != ROOT and (cwd or root)}
     dests = {root or cwd if d == "/" or root.startswith(d + "/") else d for d in dests} | ({root or cwd} if ROOT in raw and (root or cwd) else set())

@@ -406,9 +406,10 @@ the long-token lint partly covers and nothing measures.
 - Subagent writes are read from the `isSidechain` records of the main transcript and from every `*.jsonl` under
   `<session>/subagents/` beside it (the harness's current layout); their turns are never kept. A file there that is not valid JSONL is
   skipped line by line and counted in `bad_lines`.
-- Written paths are compared casefolded (and NFKC-normalised; default APFS and NTFS are case-insensitive; on a case-sensitive filesystem this is an
-  over-approximation that can only make a file untrusted). A symlinked alias of a written file is not recognised: reading it through
-  another path stays `user_file`. Subagent writes use the session's first cwd as the root for the root taint and the clamp.
+- Written paths are compared casefolded (and NFKC-normalised; default APFS and NTFS are case-insensitive; on a case-sensitive filesystem
+  this is an over-approximation that can only make a file untrusted). A symlinked or firmlinked alias of a written file (macOS
+  `/System/Volumes/Data/...`) is not recognised: reading it through another path stays `user_file`; a leading `//` is collapsed to `/`.
+  Subagent writes use the session's first cwd as the root for the root taint and the clamp.
 - Any tool other than `Bash`, the four write tools and a read-only allowlist (`Read`, `Grep`, `Glob`, `LS`, `TodoRead`, `TaskList`, `TaskGet`,
   `WebSearch`, `WebFetch`, the MCP resource readers, and any MCP tool whose last name segment starts with `read_`, `list_`, `search_`, `get_`,
   `find_`, `query_` or `describe_` and whose whole name holds no write verb such as `write`, `edit`, `create`, `move`, `copy`, `save`, `put`,
@@ -416,7 +417,10 @@ the long-token lint partly covers and nothing measures.
   dicts and lists, dict keys included) that sits under a known path key (`path`, `file_path`, `destination`, `target`, `source`, `from`, `to`,
   `output`, `file`, `files`, `paths`, `uri` and similar) counts as written whatever its shape, as does any other string that looks like a path (a
   `/`, a leading `.` or `~`, or a file suffix); a tool_use with over 200 such strings taints the session root. A write through a tool named
-  like a reader without a write verb, or a path under an unknown key that does not look like one, is not tracked. Paths are compared
+  like a reader without a write verb, or a path under an unknown key that does not look like one, is not tracked. A shell-command string
+  of such a tool (under `command`, `cmd`, `script`, `commands` or `args`) is also analysed as a Bash command; a PowerShell `Set-Content` or any
+  other non-POSIX write form is a residual. Write blocks seen before the first record with a working directory are held back and noted once
+  it is known. Paths are compared
   NFKC-normalised and casefolded.
 - A transcript in which no record carries a working directory has no user files: every Read is `tool_output`.
 - The trust boundary for `user_file` is the session's first cwd. A record whose own cwd is outside it makes its Reads `tool_output`.

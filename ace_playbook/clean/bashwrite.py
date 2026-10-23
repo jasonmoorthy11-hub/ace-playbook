@@ -30,7 +30,7 @@ ATTACHED_RE = re.compile(r"-(?!-)[A-Za-z]*?[oOPtCd](.+)")  # `-oout.md`, `-sLoou
 PATH_RE = re.compile(r"[^/]*/|[.~]|.*\.[A-Za-z0-9]{1,8}$")  # a `/` anywhere, a leading `.`/`~`, or a file suffix
 GLOB_RE = re.compile(r"[*?\[]|\{[^}]*\}")
 LOOSE_RE = re.compile(r"[^\s;&|()<>'\"`$,{}]+")  # words with quotes and shell punctuation cut away (also splits `bash -c "..."`)
-REDIRECT_RE = re.compile(r">>?[|&]?\s*(\"[^\"]*\"|'[^']*'|[^\s;&|()<>]+)")
+REDIRECT_RE = re.compile(r">>?[|&]?\s*((?:\"[^\"]*\"|'[^']*'|\\.|[^\s;&|()<>\"'\\])+)")  # a quoted, escaped or bare redirect target
 URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
 ROOT_WORDS = {"cd", "pushd", "popd", "eval", "source", ".", "exec", "env", "nohup", "time", "xargs", "find"}  # change directory or re-evaluate text
 
@@ -38,6 +38,18 @@ def _server_named(w: str) -> bool:
     """A flag that makes the server choose the file name (`curl -J`, `wget --content-d`, a wgetrc spelling in any case, `_` or `-`)."""
     n = w.lower().replace("_", "").replace("-", "")
     return bool(SERVER_RE.fullmatch(w)) or "contentdisposition" in n or "trustservernames" in n
+
+
+def _redirect_targets(cmd: str) -> set[str]:
+    """Every redirect target, raw and unquoted by shlex (`> "no"tes` writes `notes`, `> my\\ notes` writes `my notes`)."""
+    out = set()
+    for target in REDIRECT_RE.findall(cmd):
+        out |= {target, target.strip("'\"")}
+        try:
+            out |= set(shlex.split(target)[:1])
+        except ValueError:
+            pass  # the raw form stays
+    return out
 
 
 def _marked(seq: list[str], dest: bool) -> set[str]:
@@ -91,7 +103,7 @@ def bash_analyse(cmd: str) -> tuple[set[str], bool]:
         toks, ok = shlex.split(cmd, comments=False, posix=True), True
     except ValueError:
         toks, ok = cmd.split(), False
-    seqs, redirects = [toks, LOOSE_RE.findall(cmd)], {m.strip("'\"") for m in REDIRECT_RE.findall(cmd)}
+    seqs, redirects = [toks, LOOSE_RE.findall(cmd)], _redirect_targets(cmd)
     names = {os.path.basename(w) for s in seqs for w in s}
     forced = not ok  # a command shlex cannot read is write-capable by definition: every non-flag word of the fallback is marked
     if not (forced or names & VERBS or redirects or "<<" in cmd or any(OUT_RE.match(w) and w[:2] != "-P" for s in seqs for w in s)):

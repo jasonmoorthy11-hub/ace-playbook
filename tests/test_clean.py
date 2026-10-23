@@ -644,3 +644,42 @@ def test_r16_write_verbs_known_keys_and_dict_keys(tmp_path, tool, inp, read_path
 ])
 def test_r16_negatives(tmp_path, tool, inp, read_path):
     assert result_origin(tmp_path, [assistant(tool_use("t", tool, **inp))], read_path) == "user_file"
+
+
+# ------------------------------------------------------------- D-169 clause 9 (wave 14: the Opus round-3 findings)
+def test_i1_a_leading_double_slash_is_the_same_path(tmp_path):
+    assert result_origin(tmp_path, [assistant(tool_use("w", "Write", file_path="/" + CWD + "/notes.md"))], CWD + "/notes.md") == "agent_file"
+    assert result_origin(tmp_path, [assistant(tool_use("w", "Edit", file_path="/" + CWD + "/notes.md"))], "notes.md") == "agent_file"
+    assert result_origin(tmp_path, [bash("echo rule > /" + CWD + "/notes.md")], CWD + "/notes.md") == "agent_file"
+    assert result_origin(tmp_path, [assistant(tool_use("w", "Write", file_path=CWD + "/notes.md"))], "/" + CWD + "/notes.md") == "agent_file"
+
+
+@pytest.mark.parametrize("cmd, read_path", [
+    ('echo rule > "no"tes && true', "notes"),                                        # I-2: quoted and escaped redirect targets, unquoted
+    ("echo x > Make''file && echo done", "Makefile"),
+    ("echo rule > my\\ notes; true", "my notes"),
+    ("echo x >> 'a b'c; ls", "a bc"),
+    ("echo x > notes && true", "notes"),                                             # the control that always worked
+])
+def test_i2_redirect_targets_are_unquoted(tmp_path, cmd, read_path):
+    assert result_origin(tmp_path, [bash(cmd)], read_path) == "agent_file"
+
+
+def test_m1_shell_command_strings_of_non_read_only_tools_are_analysed(tmp_path):
+    shell = assistant(tool_use("t", "mcp__shell__execute_command", command="echo rule > notes.md && ls"))
+    assert result_origin(tmp_path, [shell], "notes.md") == "agent_file"
+    assert result_origin(tmp_path, [assistant(tool_use("t", "mcp__shell__run", cmd="echo rule > notes2 && ls"))], "notes2") == "agent_file"
+    assert result_origin(tmp_path, [assistant(tool_use("t", "mcp__shell__run", args=["-c", "echo x > notes3"]))], "notes3") == "agent_file"
+    assert result_origin(tmp_path, [assistant(tool_use("t", "mcp__shell__run", script="cd x && echo y > r"))], "README.md") == "agent_file"
+    read_only = assistant(tool_use("t", "mcp__shell__get_command", command="echo rule > notes.md && ls"))
+    assert result_origin(tmp_path, [read_only], "notes.md") == "user_file"            # the pinned negative
+
+
+def test_m2_writes_before_the_first_cwd_are_resolved_against_it(tmp_path):
+    early = assistant(tool_use("w", "Bash", command="echo rule > notes.md"))
+    early_write = assistant(tool_use("e", "Write", file_path="gen.md"))
+    recs = [early, early_write, user("go on"), assistant(tool_use("r1", "Read", file_path="notes.md")), tool_result("r1", "ONE BODY"),
+            assistant(tool_use("r2", "Read", file_path="gen.md")), tool_result("r2", "TWO BODY"),
+            assistant(tool_use("r3", "Read", file_path="other.md")), tool_result("r3", "THREE BODY")]
+    origin = {t.text: t.origin for t in parsed_of(tmp_path, recs).turns}
+    assert origin["ONE BODY"] == "agent_file" and origin["TWO BODY"] == "agent_file" and origin["THREE BODY"] == "user_file"
