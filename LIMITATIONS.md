@@ -402,8 +402,9 @@ the long-token lint partly covers and nothing measures.
   path segment are recorded as directories under the working directory and under each marked directory (a recursive `wget` writes
   `host/path`). A script or interpreter that writes a file it does not name on its command line is not tracked; name the file on
   the command line or read it through the Bash tool's own output. Writes by a command outside the verb list and without a redirection
-  or through a variable (`$VAR` paths) are not tracked either. ANSI-C or locale quoting (`$'...'`, `$"..."`) in a write-capable command
-  taints the session root, because shlex does not unquote it.
+  are not tracked either. Any command containing a `$` expansion (`$VAR`, `${...}`, `$(...)`, `$@`, `$$`), ANSI-C or locale quoting
+  (`$'...'`, `$"..."`) or a backtick makes it write-capable and taints the whole session root, because shlex models none of them and an
+  expansion can spell a verb or a path (`echo "$X" > out.md`, `cp a.md "$DIR/"` and ``cat `ls` `` all taint the root).
 - Subagent writes are read from the `isSidechain` records of the main transcript and from every `*.jsonl` under
   `<session>/subagents/` beside it (the harness's current layout); their turns are never kept. A file there that is not valid JSONL is
   skipped line by line and counted in `bad_lines`.

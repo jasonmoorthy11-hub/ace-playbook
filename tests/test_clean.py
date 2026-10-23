@@ -695,3 +695,15 @@ def test_imp2_the_end_of_parse_flush_notes_held_back_writes():
     no_cwd = {k: v for k, v in user("go on").items() if k != "cwd"}
     parsed = parse_records(iter([bash('foo "b.md'), no_cwd]), 2000)
     assert parsed.drops.unparsed_bash == 1 and parsed.pending == []
+
+
+# ------------------------------------------------------------- D-169 clause 9 (wave 16: R17 any expansion taints the root, before the early return)
+@pytest.mark.parametrize("cmd", ["$'c'p a.md b.md", 'echo "$X" > out.md', "cp a.md \"$DIR/\"", "echo `date`", "cat `ls`", "echo ${X:-y}",
+                                 "echo $(date)", "echo $@", "echo $$"])
+def test_r17_any_expansion_or_backtick_taints_the_root(tmp_path, cmd):
+    assert result_origin(tmp_path, [bash(cmd)], "README.md") == "agent_file"
+
+
+def test_r17_a_command_without_an_expansion_marks_nothing(tmp_path):
+    for cmd in ("echo hi", "echo 'costs 5 dollars'", "ls -la"):
+        assert result_origin(tmp_path, [bash(cmd)], "README.md") == "user_file", cmd

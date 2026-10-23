@@ -32,6 +32,7 @@ GLOB_RE = re.compile(r"[*?\[]|\{[^}]*\}")
 LOOSE_RE = re.compile(r"[^\s;&|()<>'\"`$,{}]+")  # words with quotes and shell punctuation cut away (also splits `bash -c "..."`)
 REDIRECT_RE = re.compile(r">>?[|&]?\s*((?:\"[^\"]*\"|'[^']*'|\\.|[^\s;&|()<>\"'\\])+)")  # a quoted, escaped or bare redirect target
 URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
+EXPANSION_RE = re.compile(r"\$[\w{(@*#?!$'\"-]|`")  # a variable, a substitution, ANSI-C or locale quoting, a backtick: shlex models none of them
 ROOT_WORDS = {"cd", "pushd", "popd", "eval", "source", ".", "exec", "env", "nohup", "time", "xargs", "find"}  # change directory or re-evaluate text
 
 def _server_named(w: str) -> bool:
@@ -106,7 +107,8 @@ def bash_analyse(cmd: str) -> tuple[set[str], bool]:
     seqs, redirects = [toks, LOOSE_RE.findall(cmd)], _redirect_targets(cmd)
     names = {os.path.basename(w) for s in seqs for w in s}
     forced = not ok  # a command shlex cannot read is write-capable by definition: every non-flag word of the fallback is marked
-    if not (forced or names & VERBS or redirects or "<<" in cmd or any(OUT_RE.match(w) and w[:2] != "-P" for s in seqs for w in s)):
+    expanding = bool(EXPANSION_RE.search(cmd))  # an unmodelled expansion can spell a verb or a path: write-capable, and it taints the root
+    if not (forced or expanding or names & VERBS or redirects or "<<" in cmd or any(OUT_RE.match(w) and w[:2] != "-P" for s in seqs for w in s)):
         return set(), ok
     found = redirects.union(*(_marked(s, forced or bool(names & DEST_VERBS)) for s in seqs)) - {""}
     urls = {w for s in seqs for w in s if URL_RE.match(w)}
@@ -119,6 +121,6 @@ def bash_analyse(cmd: str) -> tuple[set[str], bool]:
             found |= {os.path.join(p, q) for p in found for q in qs}
     bases = {n for u in urls for b in [os.path.basename(urlparse(u).path) or "index.html"] for n in (b, b.removesuffix(".git"))}
     found |= bases | {os.path.join(p, b) for p in found for b in bases}
-    if names & ROOT_WORDS or any("CDPATH" in w for s in seqs for w in s) or "$'" in cmd or '$"' in cmd:
-        root = True  # the tracker does not model the shell's working directory (a cd, eval, find, xargs...) nor ANSI-C/locale quoting
+    if expanding or names & ROOT_WORDS or any("CDPATH" in w for s in seqs for w in s):
+        root = True  # the tracker does not model the shell's working directory (a cd, eval, find, xargs...) nor any expansion
     return ((found | {os.path.dirname(p) for p in found}) - {""}) | {DEST + d for d in dests} | ({ROOT} if root else set()), ok
