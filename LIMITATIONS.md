@@ -395,7 +395,10 @@ the long-token lint partly covers and nothing measures.
   flag (`-tdir`, `-oout.md`, `-sLoout.md`, `-Pdl`) is a marked word. A word holding `*`, `?`, `[` or a `{...}` group records its directory
   as written (no glob or brace expansion is done); `~` and a leading `$HOME` are expanded; a write-capable command that changes directory
   or re-evaluates text (`cd`, `pushd`, `popd`, `eval`, `source`, `.`, `exec`, `env`, `nohup`, `time`, `xargs`, `find`, or any mention of
-  `CDPATH`) taints the whole session root, because the tracker does not model the shell's working directory; and for every URL its host and first
+  `CDPATH`; matched on basenames, so `/usr/bin/env` counts) taints the whole session root (the first cwd, never a record's own cwd), because the
+  tracker does not model the shell's working directory; the explicit `cd` and `find` targets are not recorded separately (every target under the root
+  is covered by the root, every target outside it is outside the trust boundary and already `tool_output`), and a `cd` or `eval` inside a quoted word
+  is still seen because the loose tokenisation splits on punctuation (`bash -c "cd x; echo a > r.md"`, pinned); and for every URL its host and first
   path segment are recorded as directories under the working directory and under each marked directory (a recursive `wget` writes
   `host/path`). A script or interpreter that writes a file it does not name on its command line is not tracked; name the file on
   the command line or read it through the Bash tool's own output. Writes by a command outside the verb list and without a redirection

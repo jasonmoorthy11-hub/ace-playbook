@@ -9,9 +9,9 @@ from __future__ import annotations
 import os
 import re
 
-from .bashwrite import DEST, bash_analyse
+from .bashwrite import DEST, ROOT, bash_analyse
 
-__all__ = ["DEST", "WRITE_TOOLS", "bash_analyse", "is_written", "normalise", "written_paths"]
+__all__ = ["DEST", "ROOT", "WRITE_TOOLS", "bash_analyse", "is_written", "normalise", "written_paths"]
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 HOME_RE = re.compile(r"^\$\{?HOME\}?(?=/|$)")
@@ -43,7 +43,7 @@ def written_paths(name: str, inp: dict, cwd: str, root: str = "") -> tuple[set[s
     elif name in WRITE_TOOLS and (inp.get("file_path") or inp.get("notebook_path")):
         raw = {str(inp.get("file_path") or inp.get("notebook_path"))}
     bases = [normalise(b, "") for b in (cwd, root) if b]
-    dests = {normalise(r[1:] or ".", cwd or root) for r in raw if r.startswith(DEST) and (cwd or root)}
-    dests = {root or cwd if d == "/" or root.startswith(d + "/") else d for d in dests}
+    dests = {normalise(r[1:] or ".", cwd or root) for r in raw if r.startswith(DEST) and r != ROOT and (cwd or root)}
+    dests = {root or cwd if d == "/" or root.startswith(d + "/") else d for d in dests} | ({root or cwd} if ROOT in raw else set())
     plain = {normalise(r, cwd) for r in raw if not r.startswith(DEST)}
     return dests | {p for p in plain if p != "/" and not any(b == p or b.startswith(p + "/") for b in bases)}, not ok

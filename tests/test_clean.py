@@ -439,11 +439,11 @@ def test_notebook_path_is_a_write_key(tmp_path):                                
 
 
 def test_pairs_globs_and_find_in_the_raw_set():
-    from ace_playbook.clean.origins import DEST, bash_analyse
+    from ace_playbook.clean.origins import DEST, ROOT, bash_analyse
     assert "out/a.md" in bash_analyse("cp --target-directory=out a.md")[0]
     assert "./a.md" in bash_analyse("cp ../other/a.md .")[0]
     assert DEST + "docs" in bash_analyse("sed -i s/a/b/ docs/*.md")[0] and DEST in bash_analyse("touch {x,y}.md")[0]
-    assert DEST in bash_analyse("find src -name x | xargs sed -i s/a/b/")[0]
+    assert ROOT in bash_analyse("find src -name x | xargs sed -i s/a/b/")[0]
     assert {DEST + "h.example", DEST + "p", DEST + "h.example/p"} <= bash_analyse("wget -r https://h.example/p/x.md")[0]
     assert "out.md" in bash_analyse("curl -sLoout.md https://h.example/p")[0] and "dl" in bash_analyse("wget -Pdl https://h.example/p")[0]
 
@@ -521,6 +521,20 @@ def test_a_huge_command_taints_the_root_instead_of_dropping_pairs(tmp_path):    
 ])
 def test_r11_directory_changes_and_re_evaluation_taint_the_root(tmp_path, cmd):
     assert result_origin(tmp_path, [bash(cmd)], "README.md") == "agent_file"
+
+
+def test_r12_root_words_match_basenames(tmp_path):
+    for cmd in ("/usr/bin/env FOO=1 cp a.md b.md", "/usr/bin/time cp a.md b.md", "/usr/bin/find . -name x -exec touch {} +"):
+        assert result_origin(tmp_path, [bash(cmd)], "README.md") == "agent_file", cmd
+
+
+def test_r13_the_root_marker_is_the_session_root_not_the_record_cwd(tmp_path):
+    sub = {**bash("cd x && echo a > r.md"), "cwd": CWD + "/sub"}
+    recs = [user("go on"), sub, assistant(tool_use("rd", "Read", file_path=CWD + "/README.md")), tool_result("rd", "BODY TEXT")]
+    assert {t.text: t.origin for t in parsed_of(tmp_path, recs).turns}["BODY TEXT"] == "agent_file"
+    huge = {**bash("cp " + " ".join(f"f{i}.md" for i in range(201)) + " dest"), "cwd": CWD + "/sub"}     # the R7 cap taints the root too
+    recs = [user("go on"), huge, assistant(tool_use("rd", "Read", file_path=CWD + "/README.md")), tool_result("rd", "BODY TEXT")]
+    assert {t.text: t.origin for t in parsed_of(tmp_path, recs).turns}["BODY TEXT"] == "agent_file"
 
 
 def test_r11_a_command_without_those_words_keeps_the_root_clean(tmp_path):

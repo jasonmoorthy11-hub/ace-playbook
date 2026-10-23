@@ -16,6 +16,7 @@ import shlex
 from urllib.parse import urlparse
 
 DEST = "\0"
+ROOT = DEST + DEST  # a raw item for "taint the whole session root" (written_paths maps it to the first cwd, never a record cwd)
 EXTRACT = {"tar", "unzip", "ditto", "rsync", "git", "patch", "gh", "bsdtar", "7z", "7za", "gzip", "gunzip", "bzip2", "bunzip2", "xz", "unxz",
            "zstd", "unzstd", "cpio", "pax"}  # write into the cwd and any directory flag's value
 VERBS = {"tee", "cp", "mv", "install", "curl", "wget", "dd", "sed", "python", "python3", "perl", "ruby", "node", "sh", "bash", "zsh",
@@ -97,15 +98,15 @@ def bash_analyse(cmd: str) -> tuple[set[str], bool]:
         return set(), ok
     found = redirects.union(*(_marked(s, forced or bool(names & DEST_VERBS)) for s in seqs)) - {""}
     urls = {w for s in seqs for w in s if URL_RE.match(w)}
-    dests = _destinations(seqs, names, found, urls)
+    dests, root = _destinations(seqs, names, found, urls), False
     if names & DEST_VERBS:  # `cp a.md docs/` writes docs/a.md: every marked word joined with every basename
         qs = sorted({os.path.basename(w) for w in found} - {""})
         if len(found) > 200 or len(qs) > 2000:
-            dests.add("")  # the cap bounds the work; a command over it taints the root instead of dropping pairs
+            root = True  # the cap bounds the work; a command over it taints the root instead of dropping pairs
         else:
             found |= {os.path.join(p, q) for p in found for q in qs}
     bases = {n for u in urls for b in [os.path.basename(urlparse(u).path) or "index.html"] for n in (b, b.removesuffix(".git"))}
     found |= bases | {os.path.join(p, b) for p in found for b in bases}
-    if any(w in ROOT_WORDS or "CDPATH" in w for s in seqs for w in s):
-        dests.add("")  # the tracker does not model the shell's working directory: a cd, eval, find, xargs... taints the session root
-    return ((found | {os.path.dirname(p) for p in found}) - {""}) | {DEST + d for d in dests}, ok
+    if names & ROOT_WORDS or any("CDPATH" in w for s in seqs for w in s):
+        root = True  # the tracker does not model the shell's working directory: a cd, eval, find, xargs... taints the session root
+    return ((found | {os.path.dirname(p) for p in found}) - {""}) | {DEST + d for d in dests} | ({ROOT} if root else set()), ok
