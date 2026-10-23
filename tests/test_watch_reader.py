@@ -20,7 +20,7 @@ import pytest
 from ace_playbook import config as cfgmod
 from ace_playbook.compile import __main__ as cli_main
 from ace_playbook.compile import shadow
-from ace_playbook.compile.watch import canary, compose, model, parsers, reader, records, scan, store, validate
+from ace_playbook.compile.watch import canary, compose, model, parsers, reader, readerloop, records, scan, store, validate
 
 from . import compile_support as cs
 from .test_compile_shadow import RM
@@ -415,17 +415,17 @@ ADVERSARIAL = ["model_pin", "extra_keys", "quote_key", "index_oob", "index_neg",
 def test_the_canary_feed_yields_zero_proposals_for_every_adversarial_answer_and_counts_each_as_rejected(fake, name):
     fake(name)
     s = stats()
-    assert model.pipeline(cfg_of(), canary_items(), NOW, s) == []
+    assert readerloop.pipeline(cfg_of(), canary_items(), NOW, s) == []
     assert (s["read"], s["rejected"], s["leads"], s["unavailable"]) == (4, 4, 0, 0)
     assert len(fake.calls()) == 4
 
 
 def test_the_canary_control_a_well_formed_answer_does_yield_proposals_so_zero_is_not_vacuous(fake):
     s = stats()
-    recs = model.pipeline(cfg_of(), canary_items(), NOW, s)
+    recs = readerloop.pipeline(cfg_of(), canary_items(), NOW, s)
     assert len(recs) == 4 and s["leads"] == 4 and all(r["class"] == "lead" and r["change"]["diff"] is None for r in recs)
     fake("good_docs")
-    assert {r["class"] for r in model.pipeline(cfg_of(), canary_items(), NOW, stats())} == {"lead"}       # a docs request is still only a lead
+    assert {r["class"] for r in readerloop.pipeline(cfg_of(), canary_items(), NOW, stats())} == {"lead"}       # a docs request is still only a lead
 
 
 def test_the_pipeline_stops_at_the_first_unavailable_claude_or_failed_spawn_and_counts_the_rest(fake, monkeypatch):
@@ -439,7 +439,7 @@ def test_the_pipeline_stops_at_the_first_unavailable_claude_or_failed_spawn_and_
                   lambda: (monkeypatch.setenv("ACE_WATCH_CLAUDE", str(FAKE)), monkeypatch.setattr(subprocess, "Popen", refuse))):
         spoil()
         s = stats()
-        assert model.pipeline(cfg_of(), canary_items(), NOW, s) == [] and (s["read"], s["unavailable"], s["failed"]) == (0, 4, 0)
+        assert readerloop.pipeline(cfg_of(), canary_items(), NOW, s) == [] and (s["read"], s["unavailable"], s["failed"]) == (0, 4, 0)
     assert len(spawns) == 1                                                  # one failed spawn stops the loop: no futile attempt for the other 3
 
 
@@ -448,7 +448,7 @@ def test_three_failed_calls_then_a_failed_probe_are_an_outage_the_rest_and_the_h
     """D-165: the probe (a 4th call on a built-in item), not the feed, decides: it fails too, so nothing is marked and no try is counted."""
     fake(name)
     s, done, fail = stats(), {}, {}
-    assert model.pipeline(cfg_of(), canary_items(), NOW, s, done, fail) == [] and len(fake.calls()) == 4
+    assert readerloop.pipeline(cfg_of(), canary_items(), NOW, s, done, fail) == [] and len(fake.calls()) == 4
     assert (s["read"], s["failed"], s["unavailable"], s["outage"]) == (0, 3, 4, 1) and done == {} and fail == {}
 
 
@@ -456,7 +456,7 @@ def test_a_mixed_run_has_no_probe_and_the_earlier_failures_count_as_tries_at_the
     monkeypatch.setenv("ACE_WATCH_FAKE_SEQ", "iserror,iserror,good,iserror")
     s, done, fail = stats(), {}, {}
     items = canary_items()
-    recs = model.pipeline(cfg_of(), items, NOW, s, done, fail)
+    recs = readerloop.pipeline(cfg_of(), items, NOW, s, done, fail)
     assert (s["failed"], s["read"], s["unavailable"], s["leads"], s["probe"]) == (3, 1, 0, 1, "") and len(recs) == 1 and len(fake.calls()) == 4
     assert fail == {items[0]["key"]: 1, items[1]["key"]: 1, items[3]["key"]: 1} and list(done) == [items[2]["key"]]
 
@@ -465,7 +465,7 @@ def test_whitespace_items_are_not_calls_for_the_outage_decision(fake):
     fake("iserror")
     items = [{**it, "text": " \n "} for it in many_items(4)] + many_items(2)
     s = stats()
-    model.pipeline(cfg_of(), items, NOW, s)
+    readerloop.pipeline(cfg_of(), items, NOW, s)
     assert (s["rejected"], s["failed"], s["unavailable"], s["outage"]) == (4, 2, 2, 1) and len(fake.calls()) == 3     # 2 failed calls, then the probe
 
 
@@ -475,7 +475,7 @@ def test_a_failed_call_does_not_stop_the_loop_the_next_item_is_read_and_composes
     monkeypatch.setattr(reader, "TIMEOUT", 1)
     monkeypatch.setenv("ACE_WATCH_FAKE_SEQ", f"{name},good")
     s = stats()
-    recs = model.pipeline(cfg_of(), canary_items()[:2], NOW, s)
+    recs = readerloop.pipeline(cfg_of(), canary_items()[:2], NOW, s)
     assert (s["failed"], s["unavailable"], s["read"], s["leads"]) == (1, 0, 1, 1) and len(recs) == 1 and len(fake.calls()) == 2
 
 
@@ -483,21 +483,21 @@ def test_the_second_failed_try_of_the_same_item_marks_it_done_and_the_loop_never
     monkeypatch.setenv("ACE_WATCH_FAKE_POISON", "Newsletter unsubscribe")                 # only this item fails; the probe is fine
     done, fail, s = {}, {}, stats()
     items = canary_items()[:1]
-    model.pipeline(cfg_of(), items, NOW, s, done, fail)
+    readerloop.pipeline(cfg_of(), items, NOW, s, done, fail)
     assert fail == {items[0]["key"]: 1} and done == {} and s["failed"] == 1 and s["probe"] == "ok"
-    model.pipeline(cfg_of(), items, NOW, stats(), done, fail)
+    readerloop.pipeline(cfg_of(), items, NOW, stats(), done, fail)
     assert fail == {} and list(done) == [items[0]["key"]] and len(fake.calls()) == 4              # 2 items + 2 probes
 
 
 def test_a_good_read_clears_the_fail_count_of_the_item(fake, monkeypatch):
     done, fail, items = {}, {}, canary_items()[:1]
     monkeypatch.setenv("ACE_WATCH_FAKE_POISON", "Newsletter unsubscribe")
-    model.pipeline(cfg_of(), items, NOW, stats(), done, fail)
+    readerloop.pipeline(cfg_of(), items, NOW, stats(), done, fail)
     assert fail == {items[0]["key"]: 1}
     monkeypatch.delenv("ACE_WATCH_FAKE_POISON")
     fake("irrelevant")
     s = stats()
-    model.pipeline(cfg_of(), items, NOW, s, done, fail)
+    readerloop.pipeline(cfg_of(), items, NOW, s, done, fail)
     assert fail == {} and list(done) == [items[0]["key"]] and (s["read"], s["rejected"]) == (1, 0)             # read, but not relevant: not rejected
 
 
@@ -514,8 +514,8 @@ def feed_result(n: int, **extra) -> dict:
 def test_the_cap_of_five_leads_stops_the_loop_the_rest_stay_unmarked_and_are_read_on_the_next_scan(fake, tmp_path):
     """D-163: no call after the 5th lead; the items not reached are `capped` and NOT in done, so the next scan reads them."""
     s = stats()
-    recs = model.pipeline(cfg_of(), many_items(7), NOW, s, done := {})
-    assert len(recs) == model.MAX_LEADS == 5 and (s["leads"], s["capped"], s["read"]) == (5, 2, 5) and len(fake.calls()) == 5
+    recs = readerloop.pipeline(cfg_of(), many_items(7), NOW, s, done := {})
+    assert len(recs) == readerloop.MAX_LEADS == 5 and (s["leads"], s["capped"], s["read"]) == (5, 2, 5) and len(fake.calls()) == 5
     assert sorted(done) == ["k0", "k1", "k2", "k3", "k4"]
     seen, res = {}, feed_result(7)
     out, lines = model.stage(cfg_of(), [res], tmp_path / "wd", seen, NOW)
@@ -527,7 +527,7 @@ def test_the_cap_of_five_leads_stops_the_loop_the_rest_stay_unmarked_and_are_rea
 def test_an_item_the_rule_path_already_has_a_lead_for_is_skipped_before_the_read_and_marked_done(fake):
     """D-162: `dups` holds the (target, quote) of the W1 lead candidates; such an item costs no call and is counted `dup`."""
     items, s, done = many_items(3), stats(), {}
-    recs = model.pipeline(cfg_of(), items, NOW, s, done, None, None, {("feed", "Post 0"), ("feed", "Post 2"), ("other", "Post 1")})
+    recs = readerloop.pipeline(cfg_of(), items, NOW, s, done, None, None, {("feed", "Post 0"), ("feed", "Post 2"), ("other", "Post 1")})
     assert len(recs) == 1 and (s["dup"], s["read"], s["leads"]) == (2, 1, 1) and len(fake.calls()) == 1 and sorted(done) == ["k0", "k1", "k2"]
 
 
@@ -535,7 +535,7 @@ def test_the_cap_of_five_leads_is_not_spent_on_entries_the_rules_already_flagged
     items = many_items(8)
     dups = {("feed", f"Post {i}") for i in range(6)}                     # six W1 leads, then two plain entries
     s = stats()
-    assert len(model.pipeline(cfg_of(), items, NOW, s, None, None, None, dups)) == 2 and (s["dup"], s["capped"], s["read"]) == (6, 0, 2)
+    assert len(readerloop.pipeline(cfg_of(), items, NOW, s, None, None, None, dups)) == 2 and (s["dup"], s["capped"], s["read"]) == (6, 0, 2)
 
 
 def test_a_tier_0_feed_result_is_never_read_stage_makes_zero_calls(fake, tmp_path):

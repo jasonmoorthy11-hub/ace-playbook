@@ -157,6 +157,8 @@ def read_item(item: dict, cfg: Config, stats: dict | None = None, cwd: str | Pat
     if raw is None:
         return None
     big = len(raw) > OUT_CAP                                                # too large to parse: rejected, not a failed call
+    if big:
+        _bump(stats, "big")                                                 # `probe` reads it: an output over the cap is no proof of health
     envelope = None if big else _envelope(raw)
     if not big and (envelope is None or envelope.get("is_error")):          # empty or garbage output, or an error envelope
         _bump(stats, "failed")
@@ -172,9 +174,10 @@ def read_item(item: dict, cfg: Config, stats: dict | None = None, cwd: str | Pat
     return out
 
 
-def probe(cfg: Config, cwd: str | Path | None = None) -> bool:
-    """D-165: True when ONE call on the built-in `PROBE` item comes back as a parsed exit-0 envelope (whatever it says), else False (an outage, or no
-    claude). The call has the argv, environment and cwd of any other; its counts go to a private dict, so the probe is never read, rejected or paid."""
+def probe(cfg: Config, cwd: str | Path | None = None) -> tuple[bool, float]:
+    """D-165: (healthy, cost) of ONE call on the built-in `PROBE` item. Healthy = a parsed exit-0 envelope within OUT_CAP (whatever it says); an
+    outage, no claude or an output over the cap is not. The call has the argv, environment and cwd of any other; its counts go to a private dict,
+    so the probe item is never read or rejected as an item; its cost is paid once per probed run and added to the run's cost."""
     mine: dict = {}
     read_item(PROBE, cfg, mine, cwd)
-    return bool(mine.get("read"))
+    return bool(mine.get("read")) and not mine.get("big"), float(mine.get("cost", 0.0))

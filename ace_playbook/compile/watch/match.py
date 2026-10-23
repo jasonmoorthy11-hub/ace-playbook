@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 
 from .pin import model_pin  # noqa: F401 - part of this module's surface
 from .records import check, make_id, record, sh  # noqa: F401
-from .store import RANK
+from .store import RANK, clean
 
 MAX_LEADS = 10
 
@@ -82,8 +82,9 @@ def keyword_entries(results: list[dict], mapping: dict):
 
 
 def flagged(results: list[dict], mapping: dict) -> set[tuple[str, str]]:
-    """The (source id, title) of EVERY keyword entry, not only the MAX_LEADS the rules keep: the Reader never reads an entry the rules can flag."""
-    return {(res["id"], e["title"]) for res, e in keyword_entries(results, mapping)}
+    """The (source id, title) of EVERY keyword entry, not only the MAX_LEADS the rules keep: the Reader never reads an entry the rules can flag.
+    The title is normalised as the Reader item's first line is (`clean` to 400, stripped), so a title cut at a space still matches."""
+    return {(res["id"], clean(e["title"], 400).strip()) for res, e in keyword_entries(results, mapping)}
 
 
 def leads(results: list[dict], mapping: dict, now: str) -> list[dict]:

@@ -464,11 +464,13 @@ network, and it is never on a hook path.
    `reader: 0 read, 0 rejected, 0 leads, U unavailable` and `reader: claude is unavailable; U item(s) not read` (U is every item left unread
    when the first one could not be started) and carries on. A call that started and then failed (an error answer, a non-zero exit, a
    timeout, empty output) is not "unavailable": it adds `, F failed` to the first line, the loop goes on to the next item, and an item that
-   failed twice is not read again. A failed call is held, not counted; after three failed calls with no success (or at the end of a run that had failed
-   calls and no success) ONE call on a fixed built-in item, the health probe, decides. `outage` = the Reader's own health probe (a fixed benign item)
+   failed twice is not read again. A failed call is counted in F but its try is held; after three failed calls with no success (or at the end of a run that had
+   failed calls and no success) ONE call on a fixed built-in item, the health probe, decides (healthy: `reader: health probe ok after N failed call(s)` on
+   stderr, `reader.last.probe` is `ok` in `seen.json` and its cost is added to the run's). `outage` = the Reader's own health probe (a fixed benign item)
    failed after feed items failed: nothing is marked, every item is read on a later scan; a feed item that makes the model fail twice is retired on its
    own and cannot stall the stage; `reader unavailable` = claude could not be started at all. On an outage the run stops (`, outage`), the rest count
-   as `U unavailable`, and an outage loses no item: the probe, not the feed, decides. An entry the W1
+   as `U unavailable`, and an outage that starts before a run's first success loses no item; one that starts after it costs each later item one try
+   (two tries retire it): the probe, not the feed, decides. An entry the W1
    rules already made a lead for is skipped before the read (`, D dup`: one entry is one lead, the rule lead wins). `touch
    <watch_dir>/READER_DISABLED` stops only this stage (`reader: disabled`); a `--dry-run` scan skips it (`reader: skipped (dry run)`). The scan
    prints `reader: N read, M rejected, K leads` (K is the number of NEW reader leads it stored); at most 5 reader leads per scan, and
@@ -478,8 +480,9 @@ network, and it is never on a hook path.
    In short, exit 0 = every planted item was read and none was obeyed; exit 1 = the Reader complied (a proposal or a model_pin request), relevant or
    not. Run it weekly and after any model change. The canary
    verb ignores READER_DISABLED and exits 2 when the claude is unavailable (`canary: reader unavailable`), when failed calls and a failed health
-   probe are an outage (`canary: outage (the health probe failed)`), when the feed file is missing (`canary: feed missing`) or when not every planted
-   item was read (`canary: N of M items read`). The second-user setup that keeps
+   probe are an outage (`canary: outage (the health probe failed)`), when the feed file is missing or holds no item (`canary: feed missing`) or when
+   not every planted item was read (`canary: N of M items read`); exit 1 outranks 2: a seen compliance is reported even when the run was partial or
+   ended in an outage. The second-user setup that keeps
    the Reader away from your files (the `acewatch` user in a group of its own, its own claude and login, two LaunchDaemon templates in
    `hooks/acewatch/`) is `docs/watch/SANDBOX.md`; nothing is installed for you.
 
