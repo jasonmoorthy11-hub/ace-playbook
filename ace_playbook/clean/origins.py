@@ -17,7 +17,11 @@ __all__ = ["DEST", "ROOT", "WRITE_TOOLS", "bash_analyse", "is_written", "key", "
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 READ_ONLY = {"Read", "Grep", "Glob", "LS", "TodoRead", "TaskList", "TaskGet", "WebSearch", "WebFetch", "ListMcpResourcesTool",
              "ReadMcpResourceTool"}  # every other tool but Bash and the four write tools is presumed to write what it names
-READ_ONLY_RE = re.compile(r"(?:read|list|search|get|find|query|describe)_")  # the last `__` segment of an MCP tool name
+READ_ONLY_RE = re.compile(r"(?:read|list|search|get|find|query|describe)_")  # the last `__` segment of an MCP tool name ...
+WRITE_VERB_RE = re.compile(r"write|edit|create|replace|move|copy|save|append|rename|delete|put|upload|patch|set|update|insert|remove|mkdir|touch"
+                           r"|extract|clone|download", re.IGNORECASE)  # ... unless the whole name also holds a write verb (`get_and_write`)
+PATH_KEYS = {"path", "file_path", "destination", "dest", "target", "notebook_path", "filename", "source", "src", "from", "to", "new_path",
+             "old_path", "output", "output_path", "out", "file", "files", "paths", "uri"}  # everything under these is recorded, whatever its shape
 PATH_LIKE_RE = re.compile(r"[^/]*/|[.~]|.*\.[A-Za-z0-9]{1,8}$")
 MAX_TOOL_PATHS = 200
 HOME_RE = re.compile(r"^\$\{?HOME\}?(?=/|$)")
@@ -35,13 +39,23 @@ def key(path: str) -> str:
 
 
 def _path_strings(value: object) -> set[str]:
-    """Every string anywhere inside `value` (dict values, list items, nested) that looks like a path; over the cap, the ROOT marker."""
-    found, stack = set(), [value]
+    """Every string anywhere inside `value` (dict keys and values, list items, nested) that sits under a known path key or looks like a
+    path; over the cap, the ROOT marker."""
+    found, stack = set(), [(value, False)]
     while stack:
-        v = stack.pop()
-        stack.extend(v.values() if isinstance(v, dict) else v if isinstance(v, (list, tuple)) else [])
-        found |= {v} if isinstance(v, str) and v and PATH_LIKE_RE.match(v) else set()
+        v, known = stack.pop()
+        if isinstance(v, dict):
+            for k, item in v.items():
+                stack += [(k, known), (item, known or str(k).lower() in PATH_KEYS)]
+        elif isinstance(v, (list, tuple)):
+            stack += [(i, known) for i in v]
+        elif isinstance(v, str) and v and (known or PATH_LIKE_RE.match(v)):
+            found.add(v)
     return {ROOT} if len(found) > MAX_TOOL_PATHS else found
+
+
+def _read_only(name: str) -> bool:
+    return name in READ_ONLY or bool(READ_ONLY_RE.match(name.split("__")[-1]) and not WRITE_VERB_RE.search(name))
 
 
 def is_written(path: str, written: set[str]) -> bool:
@@ -65,7 +79,7 @@ def written_paths(name: str, inp: dict, cwd: str, root: str = "") -> tuple[set[s
         raw, ok = bash_analyse(str(inp.get("command", "")))
     elif name in WRITE_TOOLS:
         raw = {str(inp.get("file_path") or inp.get("notebook_path"))} if inp.get("file_path") or inp.get("notebook_path") else set()
-    elif name not in READ_ONLY and not READ_ONLY_RE.match(name.split("__")[-1]):
+    elif not _read_only(name):
         raw = _path_strings(inp)  # an MCP or other tool that may write: every path-looking string it was given, however nested
     bases = [normalise(b, "") for b in (cwd, root) if b]
     dests = {normalise(r[1:] or ".", cwd or root) for r in raw if r.startswith(DEST) and r != ROOT and (cwd or root)}

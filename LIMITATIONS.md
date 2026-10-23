@@ -411,10 +411,13 @@ the long-token lint partly covers and nothing measures.
   another path stays `user_file`. Subagent writes use the session's first cwd as the root for the root taint and the clamp.
 - Any tool other than `Bash`, the four write tools and a read-only allowlist (`Read`, `Grep`, `Glob`, `LS`, `TodoRead`, `TaskList`, `TaskGet`,
   `WebSearch`, `WebFetch`, the MCP resource readers, and any MCP tool whose last name segment starts with `read_`, `list_`, `search_`, `get_`,
-  `find_`, `query_` or `describe_`) is presumed to write: every string anywhere inside its input (nested dicts and lists included) that looks
-  like a path (a `/`, a leading `.` or `~`, or a file suffix) counts as written, and a tool_use with over 200 such strings taints the session
-  root. A write through a tool named like a reader, or a path that does not look like one, is not tracked. Paths are compared NFKC-normalised
-  and casefolded.
+  `find_`, `query_` or `describe_` and whose whole name holds no write verb such as `write`, `edit`, `create`, `move`, `copy`, `save`, `put`,
+  `upload`, `patch`, `set`, `update`, `delete`, `clone`, `extract`) is presumed to write: every string anywhere inside its input (nested
+  dicts and lists, dict keys included) that sits under a known path key (`path`, `file_path`, `destination`, `target`, `source`, `from`, `to`,
+  `output`, `file`, `files`, `paths`, `uri` and similar) counts as written whatever its shape, as does any other string that looks like a path (a
+  `/`, a leading `.` or `~`, or a file suffix); a tool_use with over 200 such strings taints the session root. A write through a tool named
+  like a reader without a write verb, or a path under an unknown key that does not look like one, is not tracked. Paths are compared
+  NFKC-normalised and casefolded.
 - A transcript in which no record carries a working directory has no user files: every Read is `tool_output`.
 - The trust boundary for `user_file` is the session's first cwd. A record whose own cwd is outside it makes its Reads `tool_output`.
 - `shell_output` is decided by the `<bash-input>`, `<bash-stdout>` and `<bash-stderr>` tags of a user record: a user record with any of

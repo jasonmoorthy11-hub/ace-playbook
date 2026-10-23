@@ -620,3 +620,27 @@ def test_r15_unicode_forms_of_a_name_are_the_same_path(tmp_path):
     assert result_origin(tmp_path, [assistant(tool_use("w", "Write", file_path=CWD + "/" + nfd))], nfc) == "agent_file"
     assert result_origin(tmp_path, [bash("cp a.md " + nfd)], nfc) == "agent_file"
     assert result_origin(tmp_path, [assistant(tool_use("w", "Write", file_path=CWD + "/" + nfc))], "cafe.md") == "user_file"
+
+
+# ------------------------------------------------------------- D-169 clause 9 (wave 13: R16 read-only needs no write verb, known keys, dict keys)
+@pytest.mark.parametrize("tool, inp, read_path", [
+    ("mcp__x__get_and_write", {"path": "n.md"}, "n.md"),                              # (a) a read-only prefix does not excuse a write verb
+    ("mcp__x__list_and_delete", {"path": "docs/a.md"}, "docs/a.md"),
+    ("mcp__x__read_then_upload", {"file": "n.md"}, "n.md"),
+    ("mcp__x__save", {"target": "notes"}, "notes"),                                   # (b) a known path key is recorded whatever its shape
+    ("mcp__x__upload", {"files": [{"local": "notes"}]}, "notes"),                     # ... and so is everything nested under it
+    ("mcp__x__publish", {"paths": ["a", "b"]}, "b"),
+    ("SomeNewTool", {"docs/a.md": {"content": "x"}}, "docs/a.md"),                    # (c) dict keys are scanned like values
+    ("SomeNewTool", {"opts": [{"out/file.txt": 1}]}, "out/file.txt"),
+])
+def test_r16_write_verbs_known_keys_and_dict_keys(tmp_path, tool, inp, read_path):
+    assert result_origin(tmp_path, [assistant(tool_use("t", tool, **inp))], read_path) == "agent_file"
+
+
+@pytest.mark.parametrize("tool, inp, read_path", [
+    ("mcp__x__get_file", {"path": "n.md"}, "n.md"), ("Grep", {"pattern": "x", "path": "n.md"}, "n.md"),
+    ("mcp__x__search_files", {"query": "notes", "target": "notes"}, "notes"),
+    ("SomeNewTool", {"note": "plain words", "count": 3}, "plain"),                    # other keys still need a path-looking value
+])
+def test_r16_negatives(tmp_path, tool, inp, read_path):
+    assert result_origin(tmp_path, [assistant(tool_use("t", tool, **inp))], read_path) == "user_file"
