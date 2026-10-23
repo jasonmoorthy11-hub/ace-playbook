@@ -393,11 +393,9 @@ the long-token lint partly covers and nothing measures.
   with over 200 marked words or 2000 basenames records the session root instead of pairing, so a huge command taints every later
   Read), every word after a bare `--` is a plain word, and the value of any `--flag=value` or attached short
   flag (`-tdir`, `-oout.md`, `-sLoout.md`, `-Pdl`) is a marked word. A word holding `*`, `?`, `[` or a `{...}` group records its directory
-  as written (no glob or brace expansion is done), as does the cwd for any write-capable `find` or `xargs` (plus the `find` root);
-  `~` and a leading `$HOME` are expanded; the target of every `cd` or `pushd` (the first word that is not an option) is recorded as a directory, chained
-  targets resolve one after another, every marked word is also joined under each target, and a missing or unresolvable target (`$`, a
-  backtick, `..`, a `~` that is not first, a quote or a shell metacharacter in the target or a quote anywhere in
-  its segment, a `cd` word the chain did not resolve, a chain of over 50 links or 20 000 joins) records the session root; and for every URL its host and first
+  as written (no glob or brace expansion is done); `~` and a leading `$HOME` are expanded; a write-capable command that changes directory
+  or re-evaluates text (`cd`, `pushd`, `popd`, `eval`, `source`, `.`, `exec`, `env`, `nohup`, `time`, `xargs`, `find`, or any mention of
+  `CDPATH`) taints the whole session root, because the tracker does not model the shell's working directory; and for every URL its host and first
   path segment are recorded as directories under the working directory and under each marked directory (a recursive `wget` writes
   `host/path`). A script or interpreter that writes a file it does not name on its command line is not tracked; name the file on
   the command line or read it through the Bash tool's own output. Writes by a command outside the verb list and without a redirection

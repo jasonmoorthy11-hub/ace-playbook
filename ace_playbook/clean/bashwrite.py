@@ -3,7 +3,8 @@
 Any write-capable command (a write verb, `>`/`>>`/`<<`, or an output flag) marks every path-looking word it mentions, every URL basename
 and the directory of each as agent-written; a false mark only makes a file untrusted, a missed one is a provenance bypass. Destination
 verbs mark every word and every `dir/basename` pair; globs and braces record their directory; extraction verbs, any `git` and
-server-named downloads record the cwd plus every directory-flag value; a command shlex cannot read marks every word. No parser.
+server-named downloads record the cwd plus every directory-flag value; a command that changes directory or re-evaluates text
+(`cd`, `eval`, `find`, `CDPATH` ...) taints the root; a command shlex cannot read marks every word. No parser.
 A raw item starting with `DEST` is a destination directory (empty: the cwd), recorded as written even when it is the cwd itself.
 """
 
@@ -30,11 +31,7 @@ GLOB_RE = re.compile(r"[*?\[]|\{[^}]*\}")
 LOOSE_RE = re.compile(r"[^\s;&|()<>'\"`$,{}]+")  # words with quotes and shell punctuation cut away (also splits `bash -c "..."`)
 REDIRECT_RE = re.compile(r">>?[|&]?\s*(\"[^\"]*\"|'[^']*'|[^\s;&|()<>]+)")
 URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
-SEPARATOR_RE = re.compile(r"&&|\|\||[;|&\n]")
-UNRESOLVABLE_RE = re.compile(r"[$`\"'<>(){}\\]|\.\.|.~")  # quoting, a variable or substitution, a redirection, a parent, a `~` that is not first
-CD = ("cd", "pushd")
-CD_MAX_LINKS, CD_MAX_JOINS, CD_MAX_PATH = 50, 20000, 4096
-
+ROOT_WORDS = {"cd", "pushd", "popd", "eval", "source", ".", "exec", "env", "nohup", "time", "xargs", "find"}  # change directory or re-evaluate text
 
 def _server_named(w: str) -> bool:
     """A flag that makes the server choose the file name (`curl -J`, `wget --content-d`, a wgetrc spelling in any case, `_` or `-`)."""
@@ -71,7 +68,7 @@ def _flag_values(seqs: list[list[str]]) -> set[str]:
 
 
 def _destinations(seqs: list[list[str]], names: set[str], found: set[str], urls: set[str]) -> set[str]:
-    """Directories to record as written: the cwd and flag values (extraction, git, server names), glob/brace directories and `find` roots,
+    """Directories to record as written: the cwd and flag values (extraction, git, server names), glob/brace directories,
     and for every URL its host and first path segment (a recursive wget) under the cwd and under each marked directory."""
     dests = set()
     if names & EXTRACT or any(_server_named(w) for s in seqs for w in s):
@@ -79,32 +76,11 @@ def _destinations(seqs: list[list[str]], names: set[str], found: set[str], urls:
     for w in found:
         if m := GLOB_RE.search(w):
             dests.add(os.path.dirname(w[:m.start()]))
-    if names & {"find", "xargs"}:
-        after = seqs[0][seqs[0].index("find") + 1:] if "find" in seqs[0] else []
-        dests |= {""} | {w for w in after[:1] if w[:1] not in ("-", "!", "(")}
     for u in urls:
         host, seg = urlparse(u).netloc, urlparse(u).path.strip("/").split("/")[0]
         under = {host, seg, os.path.join(host, seg)} - {""}
         dests |= under | {os.path.join(m, d) for m in found for d in under}
     return dests
-
-
-def _cd_chain(cmd: str) -> list[str] | None:
-    """Every `cd`/`pushd` target in order, each resolved against the previous one (the first word after it that is not an option, before
-    the next separator); None when any link has no target or cannot be resolved (the caller then records the root)."""
-    chain, cur = [], ""
-    for seg in SEPARATOR_RE.split(cmd):
-        words = [w.lstrip("(") for w in seg.split()]
-        for i, w in enumerate(words):
-            if w in CD:
-                target = next((x for x in words[i + 1:] if not x.startswith("-")), "")
-                if not target or UNRESOLVABLE_RE.search(target) or re.search("[\"']", seg):
-                    return None  # no target, an unresolvable one, or any quote in the segment (`cd "a b"` must not read as `a`)
-                cur = target if target.startswith(("/", "~")) else os.path.join(cur, target)
-                if len(chain) >= CD_MAX_LINKS or len(cur) > CD_MAX_PATH:
-                    return None
-                chain.append(cur)
-    return chain
 
 
 def bash_analyse(cmd: str) -> tuple[set[str], bool]:
@@ -130,12 +106,6 @@ def bash_analyse(cmd: str) -> tuple[set[str], bool]:
             found |= {os.path.join(p, q) for p in found for q in qs}
     bases = {n for u in urls for b in [os.path.basename(urlparse(u).path) or "index.html"] for n in (b, b.removesuffix(".git"))}
     found |= bases | {os.path.join(p, b) for p in found for b in bases}
-    chain = _cd_chain(cmd)
-    seen = max(sum(w in CD for w in s) for s in seqs)  # cd words in either tokenisation
-    if chain is None or seen > len(chain) or len(chain) * len(found) > CD_MAX_JOINS:
-        dests.add("")  # a cd the chain could not resolve, or over a cap: anything below the root may have been written
-    else:
-        dests |= set(chain)
-        found |= {os.path.join(c, w) for c in chain for w in found}  # every marked word also lands under each cd target
-    dests |= {s[i + 1] for s in seqs for i, w in enumerate(s[:-1]) if w in CD and not s[i + 1].startswith("-")}
+    if any(w in ROOT_WORDS or "CDPATH" in w for s in seqs for w in s):
+        dests.add("")  # the tracker does not model the shell's working directory: a cd, eval, find, xargs... taints the session root
     return ((found | {os.path.dirname(p) for p in found}) - {""}) | {DEST + d for d in dests}, ok

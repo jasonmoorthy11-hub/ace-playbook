@@ -153,7 +153,7 @@ def test_bash_that_does_not_write_leaves_user_file(tmp_path):
     for cmd in ("cat x.md", "cat README.md", "cp only-one-arg", "ls 2>&1 | head", "curl https://example.com/x"):
         assert result_origin(tmp_path, [bash(cmd)], "x.md") == "user_file", cmd
     assert result_origin(tmp_path, [bash("cat README.md")], "README.md") == "user_file"
-    assert result_origin(tmp_path, [bash("cp a.md .")], "docs/other.md") == "user_file"
+    assert result_origin(tmp_path, [bash("cp a.md .")], "docs/other.md") == "agent_file"      # `.` is a root word (R11): by design
     assert result_origin(tmp_path, [bash("cp a.md b.md")], "c.md") == "user_file"
 
 
@@ -443,7 +443,7 @@ def test_pairs_globs_and_find_in_the_raw_set():
     assert "out/a.md" in bash_analyse("cp --target-directory=out a.md")[0]
     assert "./a.md" in bash_analyse("cp ../other/a.md .")[0]
     assert DEST + "docs" in bash_analyse("sed -i s/a/b/ docs/*.md")[0] and DEST in bash_analyse("touch {x,y}.md")[0]
-    assert DEST + "src" in bash_analyse("find src -name x | xargs sed -i s/a/b/")[0]
+    assert DEST in bash_analyse("find src -name x | xargs sed -i s/a/b/")[0]
     assert {DEST + "h.example", DEST + "p", DEST + "h.example/p"} <= bash_analyse("wget -r https://h.example/p/x.md")[0]
     assert "out.md" in bash_analyse("curl -sLoout.md https://h.example/p")[0] and "dl" in bash_analyse("wget -Pdl https://h.example/p")[0]
 
@@ -490,59 +490,39 @@ def test_a_huge_command_taints_the_root_instead_of_dropping_pairs(tmp_path):    
     assert result_origin(tmp_path, [bash(small)], "dest/f3.md") == "agent_file"
 
 
-@pytest.mark.parametrize("cmd, read_path", [
-    ("cd sub && echo x > rel.md", "sub/rel.md"),
-    ("cd sub && echo x > rel.md", "rel.md"),                                   # the marked word is also joined to nothing
-    ("cd -P sub && echo x > rel.md", "sub/rel.md"),                            # options are skipped
-    ("cd -L -- sub && echo x > rel.md", "sub/rel.md"),
-    ("cd a && cd b && echo x > r.md", "a/b/r.md"),                             # chains resolve one after another
-    ("cd a && cd b && echo x > r.md", "a/r.md"),
-    ("cd a && cd b && echo x > r.md", "r.md"),
-    ("cd a; pushd b/c; echo x > r.md", "a/b/c/r.md"),
-    ("cd && echo x > r.md", "README.md"),                                      # no target: the root
-    ("cd $DIR && echo x > r.md", "README.md"),                                 # unresolvable targets: the root
-    ("cd `pwd`/x && echo x > r.md", "README.md"),
-    ("cd ../x && echo x > r.md", "README.md"),
-    ("cd a/~b && echo x > r.md", "README.md"),
-    ("cd a && cd $X && echo x > r.md", "README.md"),                           # any unresolvable link in the chain
-])
-def test_cd_targets_skip_options_chain_and_fail_closed(tmp_path, cmd, read_path):
-    assert result_origin(tmp_path, [bash(cmd)], read_path) == "agent_file"
-
-
-def test_a_resolvable_cd_does_not_taint_the_root(tmp_path):
-    assert result_origin(tmp_path, [bash("cd sub && echo x > rel.md")], "README.md") == "user_file"
-    assert result_origin(tmp_path, [bash("cd a && cd b && echo x > r.md")], "README.md") == "user_file"
-    assert result_origin(tmp_path, [bash("cd -P sub && cat rel.md")], "sub/rel.md") == "user_file"
-
-
-def test_cd_chain_in_the_raw_set():
-    from ace_playbook.clean.origins import DEST, bash_analyse
-    got = bash_analyse("cd a && cd b && echo x > r.md")[0]
-    assert {DEST + "a", DEST + "a/b", "a/b/r.md", "a/r.md", "r.md"} <= got and DEST not in got
-    assert DEST in bash_analyse("cd a && cd $X && echo x > r.md")[0]
-
-
-# ------------------------------------------------------------- D-169 clause 9 (wave 8: R9 quoted/unresolved cd taints the root, R10 caps)
 @pytest.mark.parametrize("cmd", [
-    'cd "a b" && echo x > r.md',                                               # R9: a quote anywhere in the cd segment
-    "cd 'a b' && echo x > r.md",
-    'cd sub "x y" && echo x > r.md',                                           # the target is clean but the segment holds a quote
+    "cd sub && echo x > rel.md",                                               # R11: any directory change taints the session root
+    "cd -P sub && echo x > rel.md",
+    "cd a && cd b && echo x > r.md",
+    "cd a; pushd b/c; echo x > r.md",
+    "popd && echo x > r.md",
+    "pushd sub && cp a.md b.md",                                               # the old negative pin, flipped by design
+    "cd && echo x > r.md",
+    "cd $DIR && echo x > r.md",
+    "cd `pwd`/x && echo x > r.md",
+    "cd ../x && echo x > r.md",
+    'cd "a b" && echo x > r.md',
     "cd $(pwd)/x && touch r",
-    "cd a\\ b && echo x > r.md",
-    "cd a>b && echo x > r.md",
-    "cd {a,b} && echo x > r.md",
-    '"cd" sub && echo x > r.md',                                               # R9: a cd token the chain did not resolve
-    "; ".join(["cd a"] * 51) + "; echo x > r.md",                              # R10: over 50 links
-    "cd a && cd b && echo " + " ".join(f"f{i}.md" for i in range(10001)) + " > r.md",   # R10: over 20 000 joins
+    '"cd" sub && echo x > r.md',
+    "cd sub* && echo x > r.md",                                                # globs
+    "cd s[ua]b && echo x > r.md",
+    'eval "cd sub" && echo x > r.md',                                          # re-evaluated text
+    'bash -c "cd sub && echo x > r.md"',
+    "source env.sh && echo x > r.md",
+    ". ./env.sh && echo x > r.md",
+    "exec sh -c 'echo x > r.md'",
+    "CDPATH=sub echo x > r.md",                                                # CDPATH changes what a relative cd means
+    "export CDPATH=/x; echo y > r.md",
+    "env FOO=1 cp a.md b.md",
+    "nohup sh -c 'echo x > r.md'",
+    "time cp a.md b.md",
+    "find . -name x | xargs touch",
+    "ls | xargs -I{} cp {} b.md",
 ])
-def test_wave8_quoted_unresolved_and_oversized_cd_taint_the_root(tmp_path, cmd):
+def test_r11_directory_changes_and_re_evaluation_taint_the_root(tmp_path, cmd):
     assert result_origin(tmp_path, [bash(cmd)], "README.md") == "agent_file"
 
 
-def test_wave8_quote_free_cd_keeps_the_root_clean(tmp_path):                      # the pinned negative
-    for cmd in ("pushd sub && cp a.md b.md", "; ".join(["cd a"] * 50) + "; echo x > r.md",
-                "cd a && cd b && echo " + " ".join(f"f{i}.md" for i in range(5000)) + " > r.md"):
-        assert result_origin(tmp_path, [bash(cmd)], "README.md") == "user_file", cmd[:40]
-    assert result_origin(tmp_path, [bash("pushd sub && cp a.md b.md")], "sub/b.md") == "agent_file"
-    assert result_origin(tmp_path, [bash("pushd sub && cp a.md b.md")], "b.md") == "agent_file"
+def test_r11_a_command_without_those_words_keeps_the_root_clean(tmp_path):
+    for cmd in ("cp a.md b.md", "echo x > r.md", "cd sub && cat rel.md", "cp a.md docs/x.md"):
+        assert result_origin(tmp_path, [bash(cmd)], "README.md") == "user_file", cmd
