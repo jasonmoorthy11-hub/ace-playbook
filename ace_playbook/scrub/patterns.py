@@ -65,7 +65,25 @@ PLACEHOLDER_PREFIXES = (
     "none", "null", "true", "false", "os.environ", "env[", "getenv",
 )
 
-EMAIL = re.compile(r"(?<![A-Za-z0-9._%+\-])[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}")    # S-1 F9: one start per run
+_EMAIL_BODY = r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}"
+EMAIL = re.compile(r"(?<![A-Za-z0-9._%+\-])" + _EMAIL_BODY)         # S-1 F9: one start per run, so a long run with no `@` is scanned once
+EMAIL_TAIL = re.compile(_EMAIL_BODY)                                # the same without the guard: for a match that starts where the last one ended
+
+
+def emails(line: str):
+    """The email matches of one line, exactly those a plain `EMAIL_TAIL.finditer(line)` finds (S-1 Opus N-1). A match ends inside a run of local-part
+    characters (its TLD is letters only), so the next one may start right there, where the guard forbids a start: after every match, safe ones
+    included, an unguarded attempt is made at its end, and repeated from the end of each success (three addresses glued with `_`). One extra attempt
+    per match, each scanning the rest of one run at most once: linear."""
+    pos = 0
+    while m := EMAIL.search(line, pos):
+        yield m
+        pos = m.end()
+        while m := EMAIL_TAIL.match(line, pos):
+            yield m
+            pos = m.end()
+
+
 SAFE_EMAIL_DOMAINS = {"example.com", "example.org", "example.net", "users.noreply.github.com"}
 SAFE_EMAIL_LOCALS = {"noreply", "no-reply"}
 

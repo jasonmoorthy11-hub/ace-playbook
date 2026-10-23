@@ -91,6 +91,15 @@ def has_fake_marker(match: str) -> bool:
     return False
 
 
+def numbered(text: str, hits: list[Hit]):
+    """(line number, hit) for `hits` sorted by start, as `scan` returns them: the newlines are counted since the previous hit, O(len(text)) in
+    all (`line_of` per hit is O(len(text)) each: S-1 Opus I-1, N-3). Shared by `scan_files` and `scrub scan`."""
+    line, seen = 1, 0
+    for hit in hits:
+        line, seen = line + text.count("\n", seen, hit.start), hit.start
+        yield line, hit
+
+
 def scan_files(
     root: Path,
     files: list[str],
@@ -112,11 +121,9 @@ def scan_files(
         if text is None:
             continue
         allowed = rel.startswith(allow)
-        line, seen = 1, 0           # hits come sorted by start: count the newlines since the previous one (`line_of` per hit was O(n) each)
-        for hit in scan(text, REPO, deny_terms):
+        for line, hit in numbered(text, scan(text, REPO, deny_terms)):
             tolerated = allowed and has_fake_marker(hit.match)
             if mode == "pre-commit" and tolerated:
                 continue
-            line, seen = line + text.count("\n", seen, hit.start), hit.start
             findings.append(Finding(rel, line, hit, allowed))
     return findings

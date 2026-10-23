@@ -76,20 +76,20 @@ def _regex_hits(text: str, offset: int = 0, prefix: str = "") -> list[Hit]:
     return hits
 
 
-def _lines(text: str, pat: re.Pattern):
-    """(match, start, end) of `pat` line by line, `start`/`end` being offsets in `text` (S-1 F9 F12). For a pattern that cannot span a line
+def _lines(text: str, find):
+    """(match, start, end) of `find(line)` line by line, `start`/`end` being offsets in `text` (S-1 F9 F12). For a pattern that cannot span a line
     break (EMAIL, ENTROPY_CANDIDATE: no white space in their classes) this finds what one pass over `text` finds, in many small scans.
     PROVIDER_RULES stay whole-text on purpose: several match across a newline (`\\s*[=:]`), so they are made linear by construction instead."""
     off = 0
     for line in text.split("\n"):
-        for m in pat.finditer(line):
+        for m in find(line):
             yield m, m.start() + off, m.end() + off
         off += len(line) + 1
 
 
 def _entropy_hits(text: str, offset: int = 0, prefix: str = "") -> list[Hit]:
     hits = []
-    for m, start, end in _lines(text, P.ENTROPY_CANDIDATE):
+    for m, start, end in _lines(text, P.ENTROPY_CANDIDATE.finditer):
         tok = m.group(0)
         if tok.count("/") >= 2 or len(tok) < ENTROPY_MIN_LEN:
             continue
@@ -132,7 +132,7 @@ def _decoded_hits(text: str, depth: int, offset: int = 0) -> list[Hit]:
 
 def _pii_hits(text: str, deny_terms: Iterable[str]) -> list[Hit]:
     hits = []
-    for m, start, end in _lines(text, P.EMAIL):
+    for m, start, end in _lines(text, P.emails):
         local, _, domain = m.group(0).partition("@")
         if domain.lower() in P.SAFE_EMAIL_DOMAINS or local.lower() in P.SAFE_EMAIL_LOCALS:
             continue

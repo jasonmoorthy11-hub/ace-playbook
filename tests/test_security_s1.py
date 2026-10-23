@@ -24,7 +24,8 @@ from ace_playbook.compile.watch.sanitize import strip_hidden
 from ace_playbook.inject import injector
 from ace_playbook.reflect import reflect_transcript
 from ace_playbook.scrub import check
-from ace_playbook.scrub.engine import REPO, scan
+from ace_playbook.scrub import patterns as P
+from ace_playbook.scrub.engine import LESSON, OUTBOUND, REPO, scan
 from ace_playbook.store import DeltaLog
 
 from . import compile_support as cs
@@ -352,7 +353,8 @@ def test_f7_a_line_of_100000_brackets_is_cut_and_parsed_in_linear_time():
 def test_f7_the_link_pattern_is_linear_on_its_own_without_any_cap():
     """Opus I-3 / I-2: the caps hide the pattern, so it is timed UNCUT. The old `[^\\]]*` class takes ~3 s on 1 MiB of `[`, and `\\([^)]*\\)` is
     quadratic on `[a](` with no `)`."""
-    for hostile in ("[" * 100_000, "[" * (1 << 20), "[a](" * (1 << 18), "[a](" + "(" * 100_000, "]" + "[a]" * 200_000):
+    for hostile in ("[" * 100_000, "[" * (1 << 20), "[a](" * (1 << 18), "[a](" + "(" * 100_000, "]" + "[a]" * 200_000,
+                    "[a](b(" * 100_000, "[a](b(c" * 100_000):                      # the last two are the shapes of the balanced-paren group (Opus N-2)
         out, secs = timed(parsers.LINK.sub, r"\1", hostile)
         assert out == hostile and secs < CAPPED_BUDGET, hostile[:8]
     assert parsers.LINK.sub(r"\1", "[text](url) and [two](u2)") == "text and two"
@@ -363,6 +365,8 @@ def test_f7_the_link_pattern_is_linear_on_its_own_without_any_cap():
 
 def test_f7_links_still_become_their_text_and_a_long_row_is_cut_at_the_cap():
     assert parsers._cells("| [claude-x-1](https://a.test/p) | [b *c*](u) |") == ["claude-x-1", "b c"]
+    assert parsers._cells("| [claude-x](https://e.org/a_(b)) | [t](u(v)w(x)y) |") == ["claude-x", "t"]      # one level of balanced parentheses (Opus N-2)
+    assert parsers._cells("| [a](b(c) | [a](b(c(d))) |") == ["[a](b(c)", "[a](b(c(d)))"]                  # unbalanced or two levels deep: left as written
     assert parsers.MAX_LINE == 2000
     page = "| Model | Status |\n|---|---|\n| claude-opus-9 | " + "x" * 5000 + " |\n"
     (row,) = parsers.parse_deprecations_md(page)
@@ -411,15 +415,74 @@ def test_f9_f12_real_hits_are_found_with_their_exact_offsets():
     assert all(KNOWN[h.start:h.end] == h.match for h in hits)
 
 
+# the four probe strings of Opus N-1 (built with chr(64): no email-shaped literal in the source)
+PROBES = [
+    "x" + chr(64) + "example.com_jane.doe" + chr(64) + "client.com", "x" + chr(64) + "example.com+jane.doe" + chr(64) + "client.com",
+    "noreply" + chr(64) + "github.com_jane.doe" + chr(64) + "client.com", "u" + chr(64) + "h.example.org_jane.doe" + chr(64) + "client.com",
+]
+
+
 @pytest.mark.parametrize("text, rule", [
     ("OPENAI_" + "API_KEY=" + "abcdefghijklmnop1234", "secret_assignment"),
     ("my_token = '" + "abcdefghijklmnop1234" + "'", "secret_assignment"),
     ("RAILWAY_" + "TOKEN=" + "abcdefghijklmnop1234", "railway_token"), ("Authorization: bearer " + "abcdefghijklmnopqrst12", "bearer_token"),
     ("curl https://user:" + "pass1234" + chr(64) + "host.example.org/x", "url_userinfo"), ("a" + chr(64) + "b.co", "email"),
     ("MY_SECRET\n=" + "abcdefghijklmnop1234", "secret_assignment"),
+    *((probe, "email") for probe in PROBES),
 ])
 def test_f9_f12_the_rewritten_rules_still_match_what_they_matched(text, rule):
     assert rule in {h.rule for h in scan(text, REPO)}
+
+
+@pytest.mark.parametrize("probe", PROBES)
+@pytest.mark.parametrize("profile", [REPO, LESSON, OUTBOUND], ids=["repo", "lesson", "outbound"])
+def test_n1_a_client_email_glued_to_a_safe_one_is_still_found_in_every_profile(probe, profile):
+    """Opus N-1: the run-start guard lost the resume point after a match that ends inside a run, so a safe address glued to a client one with `_` had 0 hits."""
+    want = probe.index("jane.doe")
+    spans = [(h.start, h.end) for h in scan(probe, profile) if h.rule == "email"]
+    assert any(s <= want and e == len(probe) for s, e in spans), spans
+
+
+def test_n1_glued_emails_chain_and_every_one_is_found():
+    a, b, c = (n + chr(64) + d for n, d in (("a", "x.com"), ("b.b", "y.org"), ("c", "z.co")))
+    text = f"{a}_{b}+{c}"
+    assert [m.group(0) for m in P.emails(text)] == [a, "_" + b, "+" + c]
+    assert [(h.start, h.end) for h in scan(text, REPO) if h.rule == "email"] == [(0, len(a)), (len(a), len(a) + 1 + len(b)), (len(a) + 1 + len(b), len(text))]
+
+
+def test_n1_emails_finds_exactly_what_the_unguarded_pattern_found_on_main():
+    import random
+    rng = random.Random(1023)
+    for _ in range(4000):
+        line = "".join(rng.choice("ab.@_-+ 1cx%") for _ in range(rng.randrange(1, 40)))
+        got = [(m.start(), m.end()) for m in P.emails(line)]
+        assert got == [(m.start(), m.end()) for m in P.EMAIL_TAIL.finditer(line)], line
+
+
+@HOSTILE
+def test_n1_a_megabyte_of_glued_emails_and_of_runs_after_a_match_is_scanned_in_linear_time():
+    glued = ("a" + chr(64) + "b.co_") * 200_000
+    after_match = "a" + chr(64) + "b.co" + "x" * 1_000_000
+    for text in (glued, after_match, ("a" + chr(64) + "b.co" + "x" * 1000 + " ") * 1000):
+        hits, secs = timed(scan, text, REPO)
+        assert secs < TIME_BUDGET, text[:12]
+    assert len([h for h in scan(glued, REPO)]) == 200_000
+
+
+def test_n3_scrub_scan_numbers_its_lines_like_line_of_and_a_megabyte_of_emails_is_fast(monkeypatch, capsys):
+    import io
+    import sys
+    from ace_playbook.scrub import __main__ as cli
+    from ace_playbook.scrub.engine import line_of
+    mixed = f"one\ntwo a{chr(64)}b.co\n\nthree {fakes.github()}\nfour {fakes.anthropic()} z{chr(64)}q.org\n"
+    monkeypatch.setattr(sys, "stdin", io.StringIO(mixed))
+    assert cli.main(["scan"]) == 1
+    want = [f"line {line_of(mixed, h.start)}: {h.rule} ({h.layer}) fp={h.fingerprint}" for h in scan(mixed, LESSON)]
+    assert capsys.readouterr().out.splitlines() == want and any(ln.startswith("line 4:") for ln in want)
+    big = (("a" + chr(64) + "b.co ") * 200_000)[:MB]
+    monkeypatch.setattr(sys, "stdin", io.StringIO(big))
+    _, secs = timed(cli.main, ["scan"])
+    assert secs < TIME_BUDGET and capsys.readouterr().out.count("\n") > 100_000
 
 
 # ------------------------------------------------------------------ F8: 64-bit proposal ids, legacy 32-bit ids stay readable

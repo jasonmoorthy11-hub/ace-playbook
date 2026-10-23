@@ -19,7 +19,8 @@ MODEL = re.compile(r"claude-[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?")
 SEPARATOR = re.compile(r"\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?")
 NONE_WORDS = ("", "n/a", "na", "-", "—", "none", "tbd", "tba", "null", "to be announced")
 MAX_ENTRIES, MAX_LINE = 100, 2000
-LINK = re.compile(r"\[([^\[\]]*)\]\([^()]*\)")        # both classes exclude their opener, so no `[` and no `(` is scanned twice (S-1 F7, Opus I-2)
+LINK = re.compile(r"\[([^\[\]]*)\]\((?:[^()]*(?:\([^()]*\)[^()]*)*)\)")         # the classes exclude their openers, so no `[` and no `(` is scanned
+#   twice (S-1 F7, Opus I-2); one level of balanced parentheses in the URL is allowed (`.../a_(b)`, Opus N-2)
 
 
 class DTDRefused(ValueError):

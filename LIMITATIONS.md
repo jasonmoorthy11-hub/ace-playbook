@@ -99,6 +99,11 @@ state-versus-lesson classifier. In the stage-2 compiler: the arms (randomization
   `on_truncated: "fire"` (all block-capable ones) fires as a `truncated` row and is denied or warned like a cut command. A proposal with
   `on_truncated: "ignore"` does not fire on such a payload. A `tool_name` found only after the first `"tool_input"` key is not trusted (the tool
   is then unknown), and an over-cap `Stop` whose `stop_hook_active` cannot be read is treated as active, so it is recorded but never blocked.
+- Scrub, run-start guards (S-1 F9 F12): to keep the regexes linear several rules only start where an identifier run starts. The e-mail rule still
+  finds what the old one found (`scrub/patterns.py` `emails`: an unguarded attempt where the previous match ended, so two addresses glued with `_`
+  give two hits). The `jwt`, `railway_token`, `vercel_token` and `url_userinfo` rules no longer start in the middle of a run: a JWT written directly after a
+  `-` (`-eyJ...`) is reported by the entropy layer and the outbound profile rather than by the `jwt` rule, so that hit may not span the whole token;
+  the commit is still blocked.
 - A mutation run over `detectors.py`, `shell.py` and `textrules.py` (250 of 787 mutants, 72.0 % killed) left 68 survivors; those that were not
   equivalent are pinned by `tests/test_mutation_survivors.py`. The module-level regexes (`CORRECTION`, `SCRATCH`, the `textrules` checks) remain
   the weak spot: each alternation branch and `\b` needs its own case. Every test runs under a 60 s SIGALRM timer (`tests/conftest.py`) that
