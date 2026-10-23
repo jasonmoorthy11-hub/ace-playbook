@@ -54,3 +54,23 @@ def block(f: dict, now: str, age) -> list[str]:
         return ["none" + bad]
     return [f"open {num('watch_open')}  leads {num('watch_leads')}  oldest {age(f.get('watch_oldest'), now)}  "
             f"last scan {age(f.get('watch_last_scan'), now)}{bad}", *(f"- {t}" for t in titles)]
+
+
+def reader_text(s: dict) -> str:
+    """`reader: N read, M rejected, K leads` (plus `, U unavailable`, `, F failed`, `, outage`, `, C capped`, `, D dup` and `; cost $C`
+    when there are any) from a scan's counts; junk reads as 0."""
+    n = lambda k: s[k] if isinstance(s.get(k), int) and not isinstance(s.get(k), bool) and s[k] >= 0 else 0  # noqa: E731
+    cost = s.get("cost") if isinstance(s.get("cost"), (int, float)) and not isinstance(s.get("cost"), bool) and 0 < s["cost"] < 1000 else 0
+    return (f"reader: {n('read')} read, {n('rejected')} rejected, {n('leads')} leads" + (f", {n('unavailable')} unavailable" if n("unavailable") else "")
+            + (f", {n('failed')} failed" if n("failed") else "") + (", outage" if n("outage") else "")
+            + (f", {n('capped')} capped" if n("capped") else "")
+            + (f", {n('dup')} dup" if n("dup") else "") + (f"; cost ${cost:.4f}" if cost else ""))
+
+
+def reader_line(wd) -> str | None:
+    """The last scan's reader line for `compile watch status`, None when no scan has run the Reader (a corrupt store reads as none)."""
+    try:
+        last = store.read_seen(wd).get("reader", {}).get("last")
+        return reader_text(last) if isinstance(last, dict) else None
+    except (AttributeError, OSError, ValueError):
+        return None

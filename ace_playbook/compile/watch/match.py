@@ -72,14 +72,26 @@ def docs(inv: dict, results: list[dict], mapping: dict, prev: dict, now: str) ->
     return out
 
 
-def leads(results: list[dict], mapping: dict, now: str) -> list[dict]:
-    words, out = [w.lower() for w in mapping.get("lead_keywords", [])], []
+def keyword_entries(results: list[dict], mapping: dict):
+    """Every (result, entry) of a tier-1 feed whose entry has a title and a configured keyword: what `leads` records (before its cap of MAX_LEADS)."""
+    words = [w.lower() for w in mapping.get("lead_keywords", [])]
     for res in (r for r in results if r["kind"] in ("rss", "atom") and r["tier"] == 1):
         for e in res["data"]:
             if e["title"] and any(w in f"{e['title']} {e['summary']}".lower() for w in words):
-                url = e["link"] or res["url"]
-                ev = {"url": url, "sha256": res["sha256"], "quote": e["title"], "tier": 1}
-                out.append(record("lead", e["title"], ev, [], res["id"], None, f"curl -sI {sh(url)} | head -1", now))
+                yield res, e
+
+
+def flagged(results: list[dict], mapping: dict) -> set[tuple[str, str]]:
+    """The (source id, title) of EVERY keyword entry, not only the MAX_LEADS the rules keep: the Reader never reads an entry the rules can flag."""
+    return {(res["id"], e["title"]) for res, e in keyword_entries(results, mapping)}
+
+
+def leads(results: list[dict], mapping: dict, now: str) -> list[dict]:
+    out = []
+    for res, e in keyword_entries(results, mapping):
+        url = e["link"] or res["url"]
+        ev = {"url": url, "sha256": res["sha256"], "quote": e["title"], "tier": 1}
+        out.append(record("lead", e["title"], ev, [], res["id"], None, f"curl -sI {sh(url)} | head -1", now))
     return out[:MAX_LEADS]
 
 

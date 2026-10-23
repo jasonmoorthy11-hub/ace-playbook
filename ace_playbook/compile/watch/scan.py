@@ -5,6 +5,8 @@ Sources are due by their cadence (daily or weekly) against the stamps in `seen.j
 source is cached in `seen.json`, so an unchanged page (a 304, or the same sha256) still yields its proposals on the next scan. What a scan does
 with the candidates (dedupe, auto-close, reopen, the cap) is `reconcile.py`. A scan holds an exclusive non-blocking lock on `watch_dir/scan.lock`;
 a second one prints `watch: scan running` and exits 0. Writes go to `watch_dir` only; `dry_run` writes nothing (the network is still read).
+With `watch_reader` on (default off), no `READER_DISABLED` and no `--dry-run`, tier-1 feed items also go through the quarantined Reader
+(`model.py`): leads only. A title is printed quoted (`!r`).
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ from pathlib import Path
 from ...canon import now_iso
 from ...config import Config
 from . import fetch as fetchmod
-from . import fsio, inventory, match, store
+from . import fsio, inventory, match, model, store
 from .reconcile import reconcile  # noqa: F401 - tests call scan.reconcile
 from .records import quote_line
 
@@ -108,7 +110,12 @@ def run(cfg: Config, tier: str = "all", dry_run: bool = False, force: bool = Fal
         before = copy.deepcopy(seen.get("lastmod", {}))
         results, notes, counts = collect(sources, seen, now, force, opener)
         inv = inventory.build(mapping, now)
-        out = reconcile(wd, match.candidates(inv, results, mapping, before, now), results, now, dry_run, inv)
+        cands = match.candidates(inv, results, mapping, before, now)
+        flagged = match.flagged(results, mapping)                  # every entry the rules can flag, past the W1 cap too: the Reader skips them all
+        made, rlines = model.stage(cfg, results, wd, seen, now, dry_run, flagged)   # the Reader: [] and no lines unless watch_reader is on
+        extra = [r for r in made if r["id"] not in {c["id"] for c in cands}]       # a lead the rule path made for the same entry wins (same id)
+        out = reconcile(wd, [*cands, *extra], results, now, dry_run, inv)
+        model.settle(seen, rlines, now, sum(1 for c in out["new"] if c["id"] in {r["id"] for r in extra}))
         mapped = {match.norm(u) for u in mapping["docs"]}
         seen.setdefault("lastmod", {}).update({loc: lm for r in results if r["kind"] == "sitemap" for loc, lm in r["data"].items()
                                                if match.norm(loc) in mapped and match.plausible(lm, now)})
@@ -120,7 +127,7 @@ def run(cfg: Config, tier: str = "all", dry_run: bool = False, force: bool = Fal
     finally:
         if lock is not None:
             os.close(lock)
-    lines = [*notes, *(f"new {c['id']} {c['class']} {c['status']}: {c['title']}" for c in out["new"])]
+    lines = [*notes, *(f"new {c['id']} {c['class']} {c['status']}: {c['title']!r}" for c in out["new"]), *rlines]       # a title is shown quoted
     lines.append(f"watch{' (dry run, nothing written)' if dry_run else ''}: fetched {counts['fetched']}, unchanged {counts['unchanged']}, "
                  f"dropped {counts['dropped']}; new {len(out['new'])}, closed {len(out['closed'])}, promoted {len(out['promoted'])}; "
                  f"open {store.open_count(live)}, leads {sum(1 for p, s in live if s == 'open' and p['class'] == 'lead')}"

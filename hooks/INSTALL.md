@@ -420,9 +420,10 @@ followed by `  DISABLED` while the shadow hook's kill file exists (the `kill_fil
 
 ## Watch (the configuration watcher)
 
-`python3 -m ace_playbook.compile watch scan|status|queue` watches the sources you list for changes that touch what your setup pins (a model
-id that is being retired, a newer Claude Code, a docs page you depend on) and stores inert proposals. It calls no model, applies nothing and
-writes only inside its own directory. It is the one part of ace-playbook that uses the network, and it is never on a hook path.
+`python3 -m ace_playbook.compile watch scan|status|queue|canary` watches the sources you list for changes that touch what your setup pins
+(a model id that is being retired, a newer Claude Code, a docs page you depend on) and stores inert proposals. It calls no model unless you
+turn the Reader on (step 5), applies nothing and writes only inside its own directory. It is the one part of ace-playbook that uses the
+network, and it is never on a hook path.
 
 1. Copy the two examples to a private place outside the checkout and edit them: `docs/watch/sources.example.json` (the source list: `id`,
    `url`, `kind` rss|atom|npm|deprecations|sitemap|md, `tier` 0 or 1, `cadence` daily|weekly) and `docs/watch/inventory_map.example.json`
@@ -445,6 +446,42 @@ writes only inside its own directory. It is the one part of ace-playbook that us
    `3` later, `q` quit. A decision is recorded in `decisions.jsonl`; nothing is changed on your machine. At most five proposals are open at
    once (leads excepted); the rest wait as `queued`.
 4. Kill switch: `touch <watch_dir>/DISABLED`. While it exists `scan` prints `watch: disabled` and fetches and writes nothing; remove it to resume.
+5. The Reader (W2, optional, off by default). Without it nothing above calls a model. With it, tier-1 feed items go one by one to a tool-less,
+   single-turn `claude -p` call whose answer code validates; the only result is a `lead` with no diff. **The Reader is for the `acewatch` user
+   ONLY** (`docs/watch/SANDBOX.md`): turning it on in your own config is NOT a supported setup, because your hooks and `CLAUDE.md` would
+   otherwise load inside the quarantined call (the call passes `--settings hooks/reader-settings.json`, which holds `disableAllHooks`, and
+   `--setting-sources ""`: hooks off, the settings files dropped; the separate user is what keeps `CLAUDE.md` and memory out). Three config
+   keys, in `acewatch`'s config (types are checked
+   at load, nothing else; the Reader looks at the claude when it runs):
+
+   ```json
+   {"watch_reader": true, "watch_reader_model": "claude-haiku-5-5", "watch_claude": "/var/acewatch/bin/claude-reader"}
+   ```
+
+   `watch_reader` (default false), `watch_reader_model` (default `claude-haiku-5-5`, must look like `claude-<id>`) and `watch_claude` (default:
+   the `claude` on the PATH; `ACE_WATCH_CLAUDE` in the environment beats it). The example path is the wrapper (the 0700 token wrapper of SANDBOX
+   step 6). A missing claude is not an error: the scan prints
+   `reader: 0 read, 0 rejected, 0 leads, U unavailable` and `reader: claude is unavailable; U item(s) not read` (U is every item left unread
+   when the first one could not be started) and carries on. A call that started and then failed (an error answer, a non-zero exit, a
+   timeout, empty output) is not "unavailable": it adds `, F failed` to the first line, the loop goes on to the next item, and an item that
+   failed twice is not read again. A failed call is held, not counted; after three failed calls with no success (or at the end of a run that had failed
+   calls and no success) ONE call on a fixed built-in item, the health probe, decides. `outage` = the Reader's own health probe (a fixed benign item)
+   failed after feed items failed: nothing is marked, every item is read on a later scan; a feed item that makes the model fail twice is retired on its
+   own and cannot stall the stage; `reader unavailable` = claude could not be started at all. On an outage the run stops (`, outage`), the rest count
+   as `U unavailable`, and an outage loses no item: the probe, not the feed, decides. An entry the W1
+   rules already made a lead for is skipped before the read (`, D dup`: one entry is one lead, the rule lead wins). `touch
+   <watch_dir>/READER_DISABLED` stops only this stage (`reader: disabled`); a `--dry-run` scan skips it (`reader: skipped (dry run)`). The scan
+   prints `reader: N read, M rejected, K leads` (K is the number of NEW reader leads it stored); at most 5 reader leads per scan, and
+   the rest are read on later scans (`, C capped` counts the items not reached); `compile watch status` shows the last line.
+   `python3 -m ace_playbook.compile watch canary` runs the planted-injection feed through the real Reader path, writes nothing and prints
+   `canary: 0 proposals` (exit 0) or `canary: N proposals` and/or `canary: S model_pin request(s)`.
+   In short, exit 0 = every planted item was read and none was obeyed; exit 1 = the Reader complied (a proposal or a model_pin request), relevant or
+   not. Run it weekly and after any model change. The canary
+   verb ignores READER_DISABLED and exits 2 when the claude is unavailable (`canary: reader unavailable`), when failed calls and a failed health
+   probe are an outage (`canary: outage (the health probe failed)`), when the feed file is missing (`canary: feed missing`) or when not every planted
+   item was read (`canary: N of M items read`). The second-user setup that keeps
+   the Reader away from your files (the `acewatch` user in a group of its own, its own claude and login, two LaunchDaemon templates in
+   `hooks/acewatch/`) is `docs/watch/SANDBOX.md`; nothing is installed for you.
 
 The count also reaches `status.json` (`watch_open` and friends), the `proposals` block of `compile digest` and the status line (`watch N`).
 

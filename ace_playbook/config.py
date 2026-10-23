@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, ClassVar
@@ -18,7 +19,8 @@ SUGGESTED_KEY = "chain_key"   # keygen's suggestion beside the config file; neve
 MAX_INJECT_CHARS = 7000
 
 
-CHECK_FIELDS = ("backup_check", "brain_check")   # the nightly's optional note scripts (ace_playbook/nightly_notes.py)
+CHECK_FIELDS = ("backup_check", "brain_check", "watch_claude")   # optional scripts and binaries, type-checked only: nightly notes, the watcher Reader's claude
+READER_MODEL = re.compile(r"claude-[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
 def check_value(key: str, value: Any) -> None:
@@ -38,6 +40,9 @@ class Config:
     watch_dir: Path | None = None  # the watcher's private store (docs/design/compiler.md 8.x Watch); None means data_dir/watch
     watch_sources: Path | None = None  # JSON list of sources read by `compile watch scan` (hooks/INSTALL.md, Watch)
     watch_inventory_map: Path | None = None  # JSON map of the pinned lines and docs pages that matter to this setup (private)
+    watch_reader: bool = False  # W2: the quarantined model stage reads tier-1 feed items (default OFF; docs/design/compiler.md 8.x Reader)
+    watch_reader_model: str = "claude-haiku-5-5"  # the Reader's model; a type check only (claude-<id>)
+    watch_claude: Path | None = None  # the claude the Reader runs (None: $ACE_WATCH_CLAUDE, else `claude` on the PATH); looked at at call time (D-150)
     fold_key_separators: bool = False
     model: str = "claude-haiku-5-5"
     api_url: str = "https://api.anthropic.com/v1/messages"
@@ -86,6 +91,10 @@ class Config:
             raise ValueError("brief_dedupe_hours must be >= 0 and brief_max_budget_usd in (0, 100]")
         for key in CHECK_FIELDS:
             check_value(key, getattr(self, key))
+        if not isinstance(self.watch_reader, bool):
+            raise ValueError("watch_reader must be true or false")
+        if not (isinstance(self.watch_reader_model, str) and READER_MODEL.fullmatch(self.watch_reader_model)):
+            raise ValueError("watch_reader_model must look like claude-<id>")
 
     def check_holdout(self) -> None:
         """Raise ValueError if holdout is on without a usable private seed."""
@@ -139,7 +148,7 @@ class Config:
 
 
 _PATH_FIELDS = {"data_dir", "transcripts_root", "api_key_path", "engagements_path", "chain_key_path", "brief_dir", "brief_exclusions",
-                "watch_dir", "watch_sources", "watch_inventory_map", "backup_check", "brain_check"}
+                "watch_dir", "watch_sources", "watch_inventory_map", "backup_check", "brain_check", "watch_claude"}
 
 
 def from_dict(raw: dict[str, Any]) -> Config:
