@@ -29,7 +29,8 @@ The watcher reads text written by strangers. W1 does that as the operator, in th
 
 ## Creating the user (the operator, once)
 
-The commands below were run as written on macOS 26 (2026-10-23); `<operator>` is your own account name, `~<operator>` its home.
+The commands below follow the shape of the commands run on macOS 26 (2026-10-23); the chain-check loop, the `.inputs.old` name, the by-hand
+install and the `inputs.legacy-<date>` name are written from that run, not pasted from it. `<operator>` is your own account name, `~<operator>` its home.
 
 1. Give `acewatch` a group of its own, then the user (WITHOUT `-admin`, with a password you discard: nobody logs in as it). The user is not in
    `admin`, and gets no sudo rights: no sudo, no sudoers entry, now or later.
@@ -49,7 +50,8 @@ The commands below were run as written on macOS 26 (2026-10-23); `<operator>` is
    The command ends in `-password -`, which makes `sysadminctl` ask for the password on its own; do not add the word `interactive` after it, because
    macOS 26 rejects it ("Invalid option: (interactive)"). Discard the password you type.
 
-   The `chmod 0700 ~<operator>` is the EXPECTED step, not an exception: a default macOS home is `drwxr-xr-x` (755), so any local user can list it,
+   The `chmod 0700 ~<operator>` is the EXPECTED step, not an exception: a default macOS home is `drwxr-xr-x`
+   (755, or 750 for group `staff` on some releases; the chmod is needed either way), so any local user (or any `staff` member) can list it,
    and `sysadminctl -addUser` puts a new user in group 20 (`staff`), the group of an ordinary operator account (and local users can reach `staff`
    through nested groups too). Without its own primary group and the chmod, `acewatch` could list the operator's home and read every file there that
    `staff` or the world may read (`~/.claude/settings.json`, `CLAUDE.md`). Run the chmod, then the four `ls` lines above (the home, `.claude`,
@@ -62,7 +64,8 @@ The commands below were run as written on macOS 26 (2026-10-23); `<operator>` is
    `.config/ace-playbook/` (0700), `logs/`, `data/` and the watch directory (which holds `reader_cwd`, the Reader's fixed empty working directory,
    0700). Anything that has to be moved aside inside this tree is parked IN PLACE, as `acewatch` (`mv inputs inputs.legacy-<date>` inside the same
    parent): a cross-parent directory rename needs write permission on the directory itself, which a directory the operator owns does not give
-   `acewatch`, and root never deletes inside the tree.
+   `acewatch`, and root never deletes inside the tree, with ONE exception (step 5): a parked copy that the OPERATOR owns can only be removed by
+   root, or may stay parked.
 3. Give it a checkout copy it can read but not change, OUTSIDE every user's home (a root-owned copy; the plist templates call it
    `__ACE_PLAYBOOK_COPY__`). The copy is a FULL checkout including `tests/fixtures/watch/` (the canary verb reads `canary.xml` from it),
    not a wheel, not `--no-editable`. Build its `.venv` from a python outside any user home, as root, with the environment spelled out (sudo
@@ -77,17 +80,19 @@ The commands below were run as written on macOS 26 (2026-10-23); `<operator>` is
    worked in the live install but is untested in CI. (Or point the venv at a system-wide 3.12.) A venv built in your own session symlinks its
    python into your home, which `acewatch` cannot read once step 1 holds. Check: `sudo -u acewatch <copy>/.venv/bin/python -c "import ace_playbook"`.
 4. `acewatch`'s own config, `ACE_PLAYBOOK_CONFIG` in the plists, is `/var/acewatch/.config/ace-playbook/config.json` (0600): its own
-   `data_dir` and `watch_dir` (0700, owned by `acewatch`; the watch directory is the ONE writable directory), `watch_sources`, `watch_inventory_map`,
+   `data_dir` and `watch_dir` (0700, owned by `acewatch`; the watch directory is the one directory the scan writes, and `data_dir` holds the
+   Reader's own state), `watch_sources`, `watch_inventory_map`,
    `watch_reader`, `watch_reader_model` and `watch_claude`. It never names `chain_key_path` or `api_key_path`. As installed:
 
    ```
    {"data_dir": "/var/acewatch/data", "watch_dir": "/var/acewatch/watch",
     "watch_sources": "/var/acewatch/.config/ace-playbook/watch_sources.json",
     "watch_inventory_map": "/var/acewatch/.config/ace-playbook/watch_inventory_map.json",
-    "watch_reader": true, "watch_reader_model": "claude-haiku-5-5", "watch_claude": "/opt/acewatch/bin/claude-reader"}
+    "watch_reader": false, "watch_reader_model": "claude-haiku-5-5", "watch_claude": "/opt/acewatch/bin/claude-reader"}
    ```
 
-   (`watch_reader` stays false until step 6 is done and the canary has run.) The three files in `.config/ace-playbook/` are installed by step 5.
+   (`watch_reader` stays false until step 6 is done and the canary has run: flip it to `true` after the first canary
+   passes.) The three files in `.config/ace-playbook/` are installed by step 5.
 5. The pinned inputs and the Reader wrapper live in a ROOT-OWNED tree, never under the acewatch-owned `watch/`: root must not write through a path
    `acewatch` could have planted a symlink on. `/opt/acewatch` is `root:acewatch` 0750; `/opt/acewatch/inputs/` holds the copies of the pinned files the
    map names (directories 0750, files 0440 `root:acewatch`: `acewatch` can read them, not change them) and `/opt/acewatch/bin/claude-reader` is the
@@ -96,7 +101,7 @@ The commands below were run as written on macOS 26 (2026-10-23); `<operator>` is
 
    ```
    R=/opt/acewatch
-   [ -L $R ] && echo "refusing: $R is a symlink"       # MUST print nothing
+   [ -L "$R" ] && { echo "refusing: $R is a symlink"; false; }       # MUST print nothing; stop here if it prints
    sudo install -d -o root -g acewatch -m 0750 $R $R/bin
    T=$(sudo mktemp -d $R/.inputs.XXXXXX)
    sudo install -d -o root -g acewatch -m 0750 $T/agents $T/brief_prompts
@@ -105,10 +110,13 @@ The commands below were run as written on macOS 26 (2026-10-23); `<operator>` is
    sudo install -o root -g acewatch -m 0440 ~<operator>/.claude/agents/*.md $T/agents/
    sudo install -o root -g acewatch -m 0440 <the brief prompt files the map names> $T/brief_prompts/
    sudo chown root:acewatch $T && sudo chmod 0750 $T
-   [ -e $R/inputs ] && sudo mv $R/inputs $R/.inputs.old
-   sudo mv $T $R/inputs && { [ ! -e $R/.inputs.old ] || sudo rm -r $R/.inputs.old; }
+   if sudo test -e "$R/inputs"; then sudo mv "$R/inputs" "$R/.inputs.old"; fi
+   sudo mv "$T" "$R/inputs" && { sudo test ! -e "$R/.inputs.old" || sudo rm -r "$R/.inputs.old"; }
    sudo install -o root -g acewatch -m 0750 <your copy of the claude-reader wrapper of step 6> $R/bin/claude-reader
    ```
+
+   Every test on a path under `$R` runs as root (`sudo test -e`), because the operator cannot search `/opt/acewatch` (`root:acewatch` 0750) and a
+   plain `[ -e ... ]` would always say "absent": on a re-install the old tree would stay in place and `mv` would nest the new tree inside it.
 
    The three acewatch-owned config files (`watch_sources.json`, `watch_inventory_map.json`, `config.json`, each 0600) are installed only after a
    symlink and ownership check of the path chain, and are written AS `acewatch` from stdin, so root never writes into `acewatch`'s tree:
@@ -124,7 +132,10 @@ The commands below were run as written on macOS 26 (2026-10-23); `<operator>` is
    `/opt/acewatch/inputs/settings.json`) and `watch_claude` at `/opt/acewatch/bin/claude-reader`. The scan reads the pinned files; it cannot change
    them. A legacy `watch/inputs` or wrapper directory from an earlier install is handled as in step 2: a cross-parent rename needs write permission
    on the directory itself, so park it IN PLACE as `acewatch` (`sudo -u acewatch mv /var/acewatch/watch/inputs /var/acewatch/watch/inputs.legacy-<date>`),
-   never move it out to an operator-owned folder, and remove it by hand later as `acewatch` (`sudo -u acewatch rm -r <the parked directory>`).
+   never move it out to an operator-owned folder. Removing it later depends on who owns it. An `acewatch`-owned old wrapper directory is
+   removed as `acewatch` (`sudo -u acewatch rm -r <the parked directory>`). The legacy operator-owned `watch/inputs` copy is the ONE exception to
+   "root never deletes inside the tree": `acewatch` cannot write that directory, so only root can remove it (`sudo rm -r <the parked directory>`,
+   which does not follow symlinks), or it may stay parked.
 6. Its own claude and its own login. Install claude AS `acewatch` (its own claude install: its own `~/.local/bin/claude` under `/var/acewatch`,
    never the operator's binary and never a symlink into the operator's home), with the installer the installed version documents, run as
    `acewatch` with a bare environment:
@@ -139,7 +150,8 @@ The commands below were run as written on macOS 26 (2026-10-23); `<operator>` is
 
    If the installer's second phase prints `Download timed out: exceeded the total deadline` (slow links: that phase downloads the full binary again
    under its own deadline and deletes its download directory), install BY HAND, as `acewatch`. Fetch the release manifest
-   `curl -fsSL https://downloads.claude.ai/claude-code-releases/<ver>/manifest.json` and read `.platforms["darwin-arm64"].checksum` and `.size` from it.
+   `curl -fsSL https://downloads.claude.ai/claude-code-releases/<ver>/manifest.json` and read
+   `.platforms["darwin-arm64"].checksum` (`darwin-x64` on Intel) and `.size` from it.
    Verify the binary you will place (`shasum -a 256 <file>` and `stat -f %z <file>`) against both: the verified copy may be the operator's own
    `~<operator>/.local/share/claude/versions/<ver>`. Then write it as `acewatch` (root never writes into the sandbox tree) and link it:
 
@@ -147,8 +159,11 @@ The commands below were run as written on macOS 26 (2026-10-23); `<operator>` is
    sudo -u acewatch -H bash -c 'mkdir -p ~/.local/bin ~/.local/share/claude/versions'
    sudo -u acewatch -H bash -c 'cat > ~/.local/share/claude/versions/<ver> && chmod 0755 ~/.local/share/claude/versions/<ver>' < <file>
    sudo -u acewatch -H bash -c 'ln -sfn ~/.local/share/claude/versions/<ver> ~/.local/bin/claude'
+   sudo -u acewatch -H bash -c 'shasum -a 256 ~/.local/share/claude/versions/<ver>'
    sudo -u acewatch -H /var/acewatch/.local/bin/claude --version
    ```
+
+   The `shasum` line re-verifies the placed copy: it must print the manifest checksum before you run `--version`.
 
    Then, as `acewatch`, run `claude setup-token` and keep the token in
    ONE file in its config dir, mode 0600, for example `/var/acewatch/.config/ace-playbook/claude_credential`. The token file is consumed by the
