@@ -30,9 +30,10 @@ ATTACHED_RE = re.compile(r"-(?!-)[A-Za-z]*?[oOPtCd](.+)")  # `-oout.md`, `-sLoou
 PATH_RE = re.compile(r"[^/]*/|[.~]|.*\.[A-Za-z0-9]{1,8}$")  # a `/` anywhere, a leading `.`/`~`, or a file suffix
 GLOB_RE = re.compile(r"[*?\[]|\{[^}]*\}")
 LOOSE_RE = re.compile(r"[^\s;&|()<>'\"`$,{}]+")  # words with quotes and shell punctuation cut away (also splits `bash -c "..."`)
-REDIRECT_RE = re.compile(r">>?[|&]?\s*((?:\"[^\"]*\"|'[^']*'|\\.|[^\s;&|()<>\"'\\])+)")  # a quoted, escaped or bare redirect target
+REDIRECT_RE = re.compile(r">>?[|&!]?\s*((?:\"[^\"]*\"|'[^']*'|\\.|[^\s;&|()<>\"'\\])+)")  # a quoted, escaped or bare redirect target
 URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
-EXPANSION_RE = re.compile(r"\$[\w{(\[@*#?!$'\"-]|[`*?\[{]|(?:^|[\s;&|(])=")  # variable, substitution, quote, backtick, glob, brace, zsh `=cmd`
+EXPANSION_RE = re.compile(r"\$[\w{(\[@*#?!$'\"-]|[`*?\[{]|(?:^|[\s;&|(])=|(?:^|[\s;&|(<>=:])~(?=[^/\s;&|)<>])")
+# variable, substitution, quote, backtick, glob, brace, zsh `=cmd`, and a tilde form other than `~/` or a bare `~` (`~+`, `~-`, `~N`, `~user`)
 ROOT_WORDS = {"cd", "pushd", "popd", "eval", "source", ".", "exec", "env", "nohup", "time", "xargs", "find"}  # change directory or re-evaluate text
 
 def _server_named(w: str) -> bool:

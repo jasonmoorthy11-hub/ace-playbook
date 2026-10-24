@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import re
 import unicodedata
+from urllib.parse import unquote
 
 from .bashwrite import DEST, ROOT, bash_analyse
 
@@ -27,6 +28,7 @@ PATH_LIKE_RE = re.compile(r"[^/]*/|[.~]|.*\.[A-Za-z0-9]{1,8}$")
 GLOB_META_RE = re.compile(r"[*?\[{]")
 MAX_TOOL_PATHS = 200
 HOME_RE = re.compile(r"^\$\{?HOME\}?(?=/|$)")
+FILE_URL_RE = re.compile(r"^file://[^/]*", re.IGNORECASE)  # `file:///a/b`, `file://localhost/a/b`: the path after the authority, percent-decoded
 
 
 def normalise(path: str, cwd: str) -> str:
@@ -53,7 +55,7 @@ def _path_strings(value: object) -> set[str]:
         elif isinstance(v, (list, tuple)):
             stack += [(i, known) for i in v]
         elif isinstance(v, str) and v and (known or PATH_LIKE_RE.match(v)):
-            found.add(v)
+            found.add(unquote(FILE_URL_RE.sub("", v)) or v)  # a `file://` URL is mapped to its path before it is recorded (the glob rule sees it too)
     return {ROOT} if len(found) > MAX_TOOL_PATHS else found
 
 

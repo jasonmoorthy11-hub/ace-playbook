@@ -408,6 +408,10 @@ the long-token lint partly covers and nothing measures.
   or `[` anywhere in a command, quoted or not, counts the same way (`c? a.md b.md` can spell `cp`): any glob in a command taints the session root.
   A `{` anywhere (brace expansion: `c{p,} a.md docs`) or a word-initial `=` (zsh: `=cp a.md z.md`) counts the same way, so a JSON literal in a command
   taints the root, by design. Verbs match case-insensitively (macOS volumes are case-insensitive); flag spellings stay case-sensitive.
+  Any tilde form other than `~/` or a bare `~` (`~+`, `~-`, `~N`, `~user`, zsh `~NAME`) counts as an unmodelled expansion and taints the root;
+  the zsh clobber operators `>!`, `>>!` and `&>!` are redirects; and a `file://` URL in a non-read-only tool's strings is mapped to its
+  percent-decoded path (`file:///a/b`, `file://localhost/a/b`) before it is recorded. Shell spellings outside the modelled set — the verb
+  list, the redirect operators and the expansion characters — are not tracked; six review rounds each found a new one, so assume more exist.
 - Subagent writes are read from the `isSidechain` records of the main transcript and from every `*.jsonl` under
   `<session>/subagents/` beside it (the harness's current layout); their turns are never kept. A file there that is not valid JSONL is
   skipped line by line and counted in `bad_lines`.
