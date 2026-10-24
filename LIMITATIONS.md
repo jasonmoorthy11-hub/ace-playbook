@@ -413,6 +413,8 @@ the long-token lint partly covers and nothing measures.
   the zsh clobber operators `>!`, `>>!` and `&>!` are redirects (both `!target` and `target` are recorded: bash writes `!target`, zsh `target`);
   and a string in a non-read-only tool's input is recorded as the raw string and, for a `file://` URL, also as its path and the percent-decoded
   path (`file:///a/b`, `file://localhost/a/b`, `sp%20ace.md` and `sp ace.md`); a string that is not a file URL is never decoded.
+  A tool that percent-decodes a non-URL path argument itself (`a%20b.md` written as `a b.md`) is not tracked; the next tracker widening records
+  every tool string in its percent-decoded form as well.
   Shell spellings outside the modelled set — the verb list, the redirect operators and the expansion characters —
   are not tracked; six review rounds each found a new one, so assume more exist.
 - Subagent writes are read from the `isSidechain` records of the main transcript and from every `*.jsonl` under
