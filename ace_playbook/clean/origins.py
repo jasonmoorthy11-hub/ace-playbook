@@ -24,6 +24,7 @@ COMMAND_KEYS = {"command", "cmd", "script", "commands", "args"}  # a non-read-on
 PATH_KEYS = {"path", "file_path", "destination", "dest", "target", "notebook_path", "filename", "source", "src", "from", "to", "new_path",
              "old_path", "output", "output_path", "out", "file", "files", "paths", "uri"}  # everything under these is recorded, whatever its shape
 PATH_LIKE_RE = re.compile(r"[^/]*/|[.~]|.*\.[A-Za-z0-9]{1,8}$")
+GLOB_META_RE = re.compile(r"[*?\[{]")
 MAX_TOOL_PATHS = 200
 HOME_RE = re.compile(r"^\$\{?HOME\}?(?=/|$)")
 
@@ -97,6 +98,7 @@ def written_paths(name: str, inp: dict, cwd: str, root: str = "") -> tuple[set[s
         raw = {str(inp.get("file_path") or inp.get("notebook_path"))} if inp.get("file_path") or inp.get("notebook_path") else set()
     elif not _read_only(name):
         raw = _path_strings(inp)  # an MCP or other tool that may write: every path-looking string it was given, however nested
+        raw |= {DEST + os.path.dirname(p[:m.start()]) for p in raw if (m := GLOB_META_RE.search(p))}  # `docs/*.md`: its directory is written too
         for command in _command_strings(inp):  # ... and its shell-command strings are Bash commands
             more, fine = bash_analyse(command)
             raw, ok = raw | more, ok and fine

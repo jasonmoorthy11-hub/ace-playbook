@@ -406,6 +406,8 @@ the long-token lint partly covers and nothing measures.
   (`$'...'`, `$"..."`) or a backtick makes it write-capable and taints the whole session root, because shlex models none of them and an
   expansion can spell a verb or a path (`echo "$X" > out.md`, `cp a.md "$DIR/"` and ``cat `ls` `` all taint the root). By design, any `*`, `?`
   or `[` anywhere in a command, quoted or not, counts the same way (`c? a.md b.md` can spell `cp`): any glob in a command taints the session root.
+  A `{` anywhere (brace expansion: `c{p,} a.md docs`) or a word-initial `=` (zsh: `=cp a.md z.md`) counts the same way, so a JSON literal in a command
+  taints the root, by design. Verbs match case-insensitively (macOS volumes are case-insensitive); flag spellings stay case-sensitive.
 - Subagent writes are read from the `isSidechain` records of the main transcript and from every `*.jsonl` under
   `<session>/subagents/` beside it (the harness's current layout); their turns are never kept. A file there that is not valid JSONL is
   skipped line by line and counted in `bad_lines`.
@@ -419,7 +421,9 @@ the long-token lint partly covers and nothing measures.
   `upload`, `patch`, `set`, `update`, `delete`, `clone`, `extract`) is presumed to write: every string anywhere inside its input (nested
   dicts and lists, dict keys included) that sits under a known path key (`path`, `file_path`, `destination`, `target`, `source`, `from`, `to`,
   `output`, `file`, `files`, `paths`, `uri` and similar) counts as written whatever its shape, as does any other string that looks like a path (a
-  `/`, a leading `.` or `~`, or a file suffix); a tool_use with over 200 such strings taints the session root. A write through a tool named
+  `/`, a leading `.` or `~`, or a file suffix), and such a string holding `*`, `?`, `[` or `{` also records the directory before the first of them
+  (`docs/*.md` records `docs`; `*.md` the working directory); a tool that writes files it does not name at all is not tracked; a tool_use with
+  over 200 such strings taints the session root. A write through a tool named
   like a reader without a write verb, or a path under an unknown key that does not look like one, is not tracked. A shell-command string
   of such a tool (under `command`, `cmd`, `script`, `commands` or `args`) is also analysed as a Bash command; a PowerShell `Set-Content` or any
   other non-POSIX write form is a residual. Paths are compared NFKC-normalised and casefolded.

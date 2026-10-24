@@ -717,3 +717,44 @@ def test_r18_a_glob_metacharacter_taints_the_root(tmp_path, cmd):
 
 def test_r18_a_command_without_a_glob_still_marks_nothing(tmp_path):
     assert result_origin(tmp_path, [bash("echo hi")], "README.md") == "user_file"
+
+
+# ------------------------------------------------------------- D-169 clause 9 (wave 18: R19-R22, Opus round 5)
+@pytest.mark.parametrize("cmd", ["c{p,} a.md docs", "echo x | te{e,} b2.md", "{t,}ee b1.md", "{c..c}p a.md docs/z", "=cp a.md z.md", "=tee n.md"])
+def test_r19_a_brace_or_a_word_initial_equals_taints_the_root(tmp_path, cmd):
+    assert result_origin(tmp_path, [bash(cmd)], "README.md") == "agent_file"
+
+
+@pytest.mark.parametrize("cmd", ["echo hi", "echo costs 5 dollars", "x=5 true"])
+def test_r19_a_command_without_a_brace_or_a_word_initial_equals_marks_nothing(tmp_path, cmd):
+    assert result_origin(tmp_path, [bash(cmd)], "README.md") == "user_file"
+
+
+@pytest.mark.parametrize("cmd, read_path", [("CP a.md c.md", "c.md"), ("echo x | TEE t.md", "t.md"), ("TAR xf a.tar", "README.md"),
+                                            ("GIT pull https://h.example/r.git", "README.md")])
+def test_r20_verbs_match_casefolded(tmp_path, cmd, read_path):
+    assert result_origin(tmp_path, [bash(cmd)], read_path) == "agent_file"
+
+
+def test_r20_an_unlisted_word_in_capitals_still_marks_nothing(tmp_path):
+    assert result_origin(tmp_path, [bash("ECHO hi")], "README.md") == "user_file"
+
+
+def test_r21_a_trailing_slash_session_root_is_normalised_once(tmp_path):
+    def origin(first_cwd):
+        deep = {**bash("cd x && echo a > r.md"), "cwd": CWD + "/sub"}
+        recs = [user("go on", cwd=first_cwd), deep, assistant(tool_use("rd", "Read", file_path=CWD + "/README.md")), tool_result("rd", "BODY TEXT")]
+        return {t.text: t.origin for t in parsed_of(tmp_path, recs).turns}["BODY TEXT"]
+    assert origin(CWD + "/") == "agent_file" and origin(CWD) == "agent_file"
+    assert parsed_of(tmp_path, [user("go on", cwd=CWD + "/")]).cwd == CWD and parsed_of(tmp_path, [user("go on", cwd="")]).cwd == ""
+
+
+@pytest.mark.parametrize("inp, read_path", [({"files": ["docs/*.md"]}, "docs/a.md"), ({"files": ["*.md"]}, "README.md"),
+                                            ({"out": "docs/{a,b}.md"}, "docs/b.md"), ({"paths": ["a/b/x?.md"]}, "a/b/x1.md")])
+def test_r22_glob_bearing_tool_strings_record_their_directory(tmp_path, inp, read_path):
+    assert result_origin(tmp_path, [assistant(tool_use("t", "mcp__fs__write_files", **inp))], read_path) == "agent_file"
+
+
+def test_r22_a_read_only_tool_with_a_glob_marks_nothing(tmp_path):
+    for tool in ("mcp__fs__read_files", "Glob", "Grep"):
+        assert result_origin(tmp_path, [assistant(tool_use("t", tool, files=["docs/*.md"]))], "docs/a.md") == "user_file", tool

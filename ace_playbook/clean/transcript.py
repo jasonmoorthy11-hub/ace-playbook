@@ -135,7 +135,7 @@ def parse_records(records: Iterator[dict], result_max: int,
     written: set[str] = set()
     side: Iterator[dict] | None = iter(side_records)
     for rec in records:
-        out.cwd = out.cwd or rec.get("cwd", "") or ""
+        out.cwd = out.cwd or (normalise(str(rec["cwd"]), "") if rec.get("cwd") else "")  # the session root, normalised once (`/work/demo/`)
         if out.cwd and (side is not None or out.pending):  # the session root is known: note held-back writes, scan the subagents
             _flush_pending(written, out)
             if side is not None:

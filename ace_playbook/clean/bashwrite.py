@@ -32,7 +32,7 @@ GLOB_RE = re.compile(r"[*?\[]|\{[^}]*\}")
 LOOSE_RE = re.compile(r"[^\s;&|()<>'\"`$,{}]+")  # words with quotes and shell punctuation cut away (also splits `bash -c "..."`)
 REDIRECT_RE = re.compile(r">>?[|&]?\s*((?:\"[^\"]*\"|'[^']*'|\\.|[^\s;&|()<>\"'\\])+)")  # a quoted, escaped or bare redirect target
 URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
-EXPANSION_RE = re.compile(r"\$[\w{(\[@*#?!$'\"-]|[`*?\[]")  # a variable, substitution, ANSI-C/locale quote, backtick or glob: shlex models none
+EXPANSION_RE = re.compile(r"\$[\w{(\[@*#?!$'\"-]|[`*?\[{]|(?:^|[\s;&|(])=")  # variable, substitution, quote, backtick, glob, brace, zsh `=cmd`
 ROOT_WORDS = {"cd", "pushd", "popd", "eval", "source", ".", "exec", "env", "nohup", "time", "xargs", "find"}  # change directory or re-evaluate text
 
 def _server_named(w: str) -> bool:
@@ -105,7 +105,7 @@ def bash_analyse(cmd: str) -> tuple[set[str], bool]:
     except ValueError:
         toks, ok = cmd.split(), False
     seqs, redirects = [toks, LOOSE_RE.findall(cmd)], _redirect_targets(cmd)
-    names = {os.path.basename(w) for s in seqs for w in s}
+    names = {os.path.basename(w).casefold() for s in seqs for w in s}  # macOS volumes are case-insensitive: `CP` runs `cp`
     forced = not ok  # a command shlex cannot read is write-capable by definition: every non-flag word of the fallback is marked
     expanding = bool(EXPANSION_RE.search(cmd))  # an unmodelled expansion can spell a verb or a path: write-capable, and it taints the root
     if not (forced or expanding or names & VERBS or redirects or "<<" in cmd or any(OUT_RE.match(w) and w[:2] != "-P" for s in seqs for w in s)):
