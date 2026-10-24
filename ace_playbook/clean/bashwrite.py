@@ -30,10 +30,10 @@ ATTACHED_RE = re.compile(r"-(?!-)[A-Za-z]*?[oOPtCd](.+)")  # `-oout.md`, `-sLoou
 PATH_RE = re.compile(r"[^/]*/|[.~]|.*\.[A-Za-z0-9]{1,8}$")  # a `/` anywhere, a leading `.`/`~`, or a file suffix
 GLOB_RE = re.compile(r"[*?\[]|\{[^}]*\}")
 LOOSE_RE = re.compile(r"[^\s;&|()<>'\"`$,{}]+")  # words with quotes and shell punctuation cut away (also splits `bash -c "..."`)
-REDIRECT_RE = re.compile(r">>?[|&!]?\s*((?:\"[^\"]*\"|'[^']*'|\\.|[^\s;&|()<>\"'\\])+)")  # a quoted, escaped or bare redirect target
+REDIRECT_RE = re.compile(r"(>>?[|&!]?)\s*((?:\"[^\"]*\"|'[^']*'|\\.|[^\s;&|()<>\"'\\])+)")  # a quoted, escaped or bare redirect target
 URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
-EXPANSION_RE = re.compile(r"\$[\w{(\[@*#?!$'\"-]|[`*?\[{]|(?:^|[\s;&|(])=|(?:^|[\s;&|(<>=:])~(?=[^/\s;&|)<>])")
-# variable, substitution, quote, backtick, glob, brace, zsh `=cmd`, and a tilde form other than `~/` or a bare `~` (`~+`, `~-`, `~N`, `~user`)
+EXPANSION_RE = re.compile(r"\$[\w{(\[@*#?!$'\"-]|[`*?\[{]|(?:^|[\s;&|(])=|~(?![/\s]|$)")
+# variable, substitution, quote, backtick, glob, brace, zsh `=cmd`, and any `~` not followed by `/`, whitespace or the end (`~+`, `~user`, `x~+`)
 ROOT_WORDS = {"cd", "pushd", "popd", "eval", "source", ".", "exec", "env", "nohup", "time", "xargs", "find"}  # change directory or re-evaluate text
 
 def _server_named(w: str) -> bool:
@@ -45,8 +45,8 @@ def _server_named(w: str) -> bool:
 def _redirect_targets(cmd: str) -> set[str]:
     """Every redirect target, raw and unquoted by shlex (`> "no"tes` writes `notes`, `> my\\ notes` writes `my notes`)."""
     out = set()
-    for target in REDIRECT_RE.findall(cmd):
-        out |= {target, target.strip("'\"")}
+    for op, target in REDIRECT_RE.findall(cmd):
+        out |= {target, target.strip("'\"")} | ({"!" + target} if "!" in op else set())  # `>!n`: bash writes `!n`, zsh clobbers `n`
         try:
             out |= set(shlex.split(target)[:1])
         except ValueError:

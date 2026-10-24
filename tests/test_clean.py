@@ -761,7 +761,8 @@ def test_r22_a_read_only_tool_with_a_glob_marks_nothing(tmp_path):
 
 
 # ------------------------------------------------------------- D-169 clause 9 (wave 19: R23-R25, Opus round 6)
-@pytest.mark.parametrize("cmd", ["echo rule > ~+/notes.md", "cp /elsewhere/a.md ~+", "echo r | tee ~+/notes", "echo r > ~PWD/pwd.md", "echo r > ~-/old.md"])
+@pytest.mark.parametrize("cmd", ["echo rule > ~+/notes.md", "cp /elsewhere/a.md ~+", "echo r | tee ~+/notes", "echo r > ~PWD/pwd.md", "echo r > ~-/old.md",
+                                 "echo r >!~+/n.md", "echo r > x~+"])
 def test_r23_a_tilde_form_other_than_home_taints_the_root(tmp_path, cmd):
     assert result_origin(tmp_path, [bash(cmd)], "README.md") == "agent_file"
 
@@ -770,19 +771,21 @@ def test_r23_home_tilde_forms_keep_their_old_behaviour(tmp_path):
     home_file = os.path.expanduser("~/x.md")
     assert result_origin(tmp_path, [bash("cp a.md ~/x.md")], home_file) == "agent_file"   # marked under the expanded home, as before
     assert result_origin(tmp_path, [bash("cp a.md ~/x.md")], "README.md") == "user_file"    # no root taint
-    for cmd in ("cat ~/notes.md", "echo hi"):
+    for cmd in ("cat ~/notes.md", "echo hi", "ls file~", "echo ~"):
         assert result_origin(tmp_path, [bash(cmd)], "README.md") == "user_file", cmd
 
 
 @pytest.mark.parametrize("cmd, read_path", [("echo rule >! notes; true", "notes"), ("echo r >>! LICENSE; ls", "LICENSE"),
-                                            ("echo rule >!Makefile && true", "Makefile"), ("echo r &>! zn; ls", "zn"), ("echo hi > out.md", "out.md")])
+                                            ("echo rule >!Makefile && true", "Makefile"), ("echo r &>! zn; ls", "zn"), ("echo hi > out.md", "out.md"),
+                                            ("echo rule >!notes; true", "!notes"), ("echo rule >!notes; true", "notes")])
 def test_r24_zsh_clobber_operators_are_redirects(tmp_path, cmd, read_path):
     assert result_origin(tmp_path, [bash(cmd)], read_path) == "agent_file"
     assert result_origin(tmp_path, [bash(cmd)], "README.md") == "user_file"
 
 
 @pytest.mark.parametrize("inp, read_path", [({"uri": "file:///work/demo/notes.md"}, "notes.md"), ({"path": "file://localhost/work/demo/n2.md"}, "n2.md"),
-                                            ({"files": ["file:///work/demo/docs/*.md"]}, "docs/a.md"), ({"uri": "file:///work/demo/sp%20ace.md"}, "sp ace.md")])
+                                            ({"files": ["file:///work/demo/docs/*.md"]}, "docs/a.md"), ({"uri": "file:///work/demo/sp%20ace.md"}, "sp ace.md"),
+                                            ({"uri": "file:///work/demo/sp%20ace.md"}, "sp%20ace.md"), ({"files": ["a%20b.md"]}, "a%20b.md")])
 def test_r25_file_urls_in_tool_strings_are_paths(tmp_path, inp, read_path):
     assert result_origin(tmp_path, [assistant(tool_use("t", "mcp__fs__write_resource", **inp))], read_path) == "agent_file"
 

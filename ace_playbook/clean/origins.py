@@ -55,7 +55,10 @@ def _path_strings(value: object) -> set[str]:
         elif isinstance(v, (list, tuple)):
             stack += [(i, known) for i in v]
         elif isinstance(v, str) and v and (known or PATH_LIKE_RE.match(v)):
-            found.add(unquote(FILE_URL_RE.sub("", v)) or v)  # a `file://` URL is mapped to its path before it is recorded (the glob rule sees it too)
+            found.add(v)  # the raw string is always recorded (`a%20b.md` is a literal name); only a file URL also adds its path and decoded path
+            if FILE_URL_RE.match(v):
+                p = FILE_URL_RE.sub("", v)
+                found |= {p, unquote(p)} - {""}  # the glob rule sees both
     return {ROOT} if len(found) > MAX_TOOL_PATHS else found
 
 
