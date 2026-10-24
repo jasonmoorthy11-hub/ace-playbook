@@ -422,7 +422,7 @@ def test_wave6_worlds(tmp_path, cmd, read_path):
 
 
 def test_wave6_non_writes_stay_user_file(tmp_path):
-    for cmd in ("cat README.md docs/other.md", "cd sub && cat rel.md", "ls *.md"):
+    for cmd in ("cat README.md docs/other.md", "cd sub && cat rel.md"):  # `ls *.md` moved to the R18 worlds: a glob taints the root
         assert result_origin(tmp_path, [bash(cmd)], "README.md") == "user_file", cmd
     assert result_origin(tmp_path, [bash("cp a.md b.md")], "docs/other.md") == "user_file"
 
@@ -707,3 +707,13 @@ def test_r17_any_expansion_or_backtick_taints_the_root(tmp_path, cmd):
 def test_r17_a_command_without_an_expansion_marks_nothing(tmp_path):
     for cmd in ("echo hi", "echo 'costs 5 dollars'", "ls -la"):
         assert result_origin(tmp_path, [bash(cmd)], "README.md") == "user_file", cmd
+
+
+# ------------------------------------------------------------- D-169 clause 9 (wave 17: R18 glob metacharacters are unmodelled expansion)
+@pytest.mark.parametrize("cmd", ["c? a.md b.md", "[c]p a.md b.md", "ls *.md"])
+def test_r18_a_glob_metacharacter_taints_the_root(tmp_path, cmd):
+    assert result_origin(tmp_path, [bash(cmd)], "README.md") == "agent_file"
+
+
+def test_r18_a_command_without_a_glob_still_marks_nothing(tmp_path):
+    assert result_origin(tmp_path, [bash("echo hi")], "README.md") == "user_file"

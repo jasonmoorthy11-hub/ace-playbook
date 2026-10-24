@@ -32,7 +32,7 @@ GLOB_RE = re.compile(r"[*?\[]|\{[^}]*\}")
 LOOSE_RE = re.compile(r"[^\s;&|()<>'\"`$,{}]+")  # words with quotes and shell punctuation cut away (also splits `bash -c "..."`)
 REDIRECT_RE = re.compile(r">>?[|&]?\s*((?:\"[^\"]*\"|'[^']*'|\\.|[^\s;&|()<>\"'\\])+)")  # a quoted, escaped or bare redirect target
 URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
-EXPANSION_RE = re.compile(r"\$[\w{(@*#?!$'\"-]|`")  # a variable, a substitution, ANSI-C or locale quoting, a backtick: shlex models none of them
+EXPANSION_RE = re.compile(r"\$[\w{(\[@*#?!$'\"-]|[`*?\[]")  # a variable, substitution, ANSI-C/locale quote, backtick or glob: shlex models none
 ROOT_WORDS = {"cd", "pushd", "popd", "eval", "source", ".", "exec", "env", "nohup", "time", "xargs", "find"}  # change directory or re-evaluate text
 
 def _server_named(w: str) -> bool:
