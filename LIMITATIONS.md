@@ -367,6 +367,83 @@ synthetic corpus is generated to match its own patterns, so detection on it is c
 Paraphrase leakage (a lesson that restates a token's prefix or last characters) is a hypothesis
 the long-token lint partly covers and nothing measures.
 
+## Provenance origins
+
+- A pre-existing third-party file under the session's working directory that matches none of the untrusted markers (a cloned repo's
+  `docs/`, a PR branch) is still labelled `user_file`, and so still counts as the user's. Authorship by git history is a later design (S-1 F6).
+- The `agent_file` label rests on a tracker that deliberately over-approximates (`ace_playbook/clean/bashwrite.py` and `origins.py`, D-169 clauses 6-9): any
+  write-capable Bash command (a write verb such as `tee cp mv install curl wget git rsync sed patch python sh touch mkdir tar`, a
+  `>`/`>>`/`<<` anywhere in the text, or an `-o`/`-O`/`--output*` flag) marks every path-looking word it mentions as agent-written, plus the
+  basename of every URL (under the working directory and under each marked directory) and the directory of each marked path, and every
+  word of a command with a destination verb. A user-owned file the agent merely named in such a command is then untrusted for the rest
+  of the session. Two consequences are accepted by design and pinned in `tests/test_clean.py`: `grep -n 'a > b' x.md` makes `x.md`
+  `agent_file` (the `>` is inside quotes), and a Read of `/etc/hosts` after `cp a.md /etc/hosts2` is `agent_file` (the directory rule,
+  which applies to Bash only, never to the four write tools). Comments, heredoc bodies and quoting are not parsed (shlex with
+  `cmd.split()` as the fallback; `unparsed_bash` in the summary counts the fallbacks, and a command that needed it is write-capable by
+  definition: every non-flag word of it is marked). The interpreters (`python perl ruby node sh bash zsh`), `sed`, `patch` and `dd` mark
+  every word of the command. A command that names an extraction verb (`tar unzip ditto rsync patch gh bsdtar 7z gzip gunzip bzip2 bunzip2 xz
+  unxz zstd unzstd cpio pax`), `git` at all (any subcommand, with or without a URL), or a
+  server-name trigger (`curl -J` or any short-flag cluster holding `J`, `--remote-h...`, `--content-d...`, `--trust-s...`, a wgetrc `-e` spelling of
+  content-disposition or trust-server-names in any case, with or without `_` and `-`) records the working directory as written, plus every
+  value of `-C -d --directory -P --directory-prefix
+  --output-dir -o` found anywhere in the command, separated or attached (`-Cdir`); a flag value never replaces the working directory. So
+  `tar -C out`, `unzip -d dest`, `wget -P dl` and `git clone <url> vendor2` also taint the working directory, and after any git command
+  (even `git status`) every later Read under the session root is `agent_file`: accepted, pinned in `tests/test_clean.py`. A destination verb
+  joins every marked word with the basename of every other (`cp ../x/a.md .` writes `./a.md`; a command
+  with over 200 marked words or 2000 basenames records the session root instead of pairing, so a huge command taints every later
+  Read), every word after a bare `--` is a plain word, and the value of any `--flag=value` or attached short
+  flag (`-tdir`, `-oout.md`, `-sLoout.md`, `-Pdl`) is a marked word. A word holding `*`, `?`, `[` or a `{...}` group records its directory
+  as written (no glob or brace expansion is done); `~` and a leading `$HOME` are expanded; a write-capable command that changes directory
+  or re-evaluates text (`cd`, `pushd`, `popd`, `eval`, `source`, `.`, `exec`, `env`, `nohup`, `time`, `xargs`, `find`, or any mention of
+  `CDPATH`; matched on basenames, so `/usr/bin/env` counts) taints the whole session root (the first cwd, never a record's own cwd), because the
+  tracker does not model the shell's working directory; the explicit `cd` and `find` targets are not recorded separately (every target under the root
+  is covered by the root, every target outside it is outside the trust boundary and already `tool_output`), and a `cd` or `eval` inside a quoted word
+  is still seen because the loose tokenisation splits on punctuation (`bash -c "cd x; echo a > r.md"`, pinned); and for every URL its host and first
+  path segment are recorded as directories under the working directory and under each marked directory (a recursive `wget` writes
+  `host/path`). A script or interpreter that writes a file it does not name on its command line is not tracked; name the file on
+  the command line or read it through the Bash tool's own output. Writes by a command outside the verb list and without a redirection
+  are not tracked either. Any command containing a `$` expansion (`$VAR`, `${...}`, `$(...)`, `$@`, `$$`), ANSI-C or locale quoting
+  (`$'...'`, `$"..."`) or a backtick makes it write-capable and taints the whole session root, because shlex models none of them and an
+  expansion can spell a verb or a path (`echo "$X" > out.md`, `cp a.md "$DIR/"` and ``cat `ls` `` all taint the root). By design, any `*`, `?`
+  or `[` anywhere in a command, quoted or not, counts the same way (`c? a.md b.md` can spell `cp`): any glob in a command taints the session root.
+  A `{` anywhere (brace expansion: `c{p,} a.md docs`) or a word-initial `=` (zsh: `=cp a.md z.md`) counts the same way, so a JSON literal in a command
+  taints the root, by design. Verbs match case-insensitively (macOS volumes are case-insensitive); flag spellings stay case-sensitive.
+  Any `~` not followed by `/`, whitespace or the end of the word (`~+`, `~-`, `~N`, `~user`, zsh `~NAME`, and `foo~bar`) counts as an unmodelled
+  expansion and taints the root, wherever it appears (`file~` and `~/x` do not);
+  the zsh clobber operators `>!`, `>>!` and `&>!` are redirects (both `!target` and `target` are recorded: bash writes `!target`, zsh `target`);
+  and a string in a non-read-only tool's input is recorded as the raw string and, for a `file://` URL, also as its path and the percent-decoded
+  path (`file:///a/b`, `file://localhost/a/b`, `sp%20ace.md` and `sp ace.md`); a string that is not a file URL is never decoded.
+  Shell spellings outside the modelled set — the verb list, the redirect operators and the expansion characters —
+  are not tracked; six review rounds each found a new one, so assume more exist.
+- Subagent writes are read from the `isSidechain` records of the main transcript and from every `*.jsonl` under
+  `<session>/subagents/` beside it (the harness's current layout); their turns are never kept. A file there that is not valid JSONL is
+  skipped line by line and counted in `bad_lines`.
+- Written paths are compared casefolded (and NFKC-normalised; default APFS and NTFS are case-insensitive; on a case-sensitive filesystem
+  this is an over-approximation that can only make a file untrusted). A symlinked or firmlinked alias of a written file (macOS
+  `/System/Volumes/Data/...`) is not recognised: reading it through another path stays `user_file`; a leading `//` is collapsed to `/`.
+  Subagent writes use the session's first cwd as the root for the root taint and the clamp.
+- Any tool other than `Bash`, the four write tools and a read-only allowlist (`Read`, `Grep`, `Glob`, `LS`, `TodoRead`, `TaskList`, `TaskGet`,
+  `WebSearch`, `WebFetch`, the MCP resource readers, and any MCP tool whose last name segment starts with `read_`, `list_`, `search_`, `get_`,
+  `find_`, `query_` or `describe_` and whose whole name holds no write verb such as `write`, `edit`, `create`, `move`, `copy`, `save`, `put`,
+  `upload`, `patch`, `set`, `update`, `delete`, `clone`, `extract`) is presumed to write: every string anywhere inside its input (nested
+  dicts and lists, dict keys included) that sits under a known path key (`path`, `file_path`, `destination`, `target`, `source`, `from`, `to`,
+  `output`, `file`, `files`, `paths`, `uri` and similar) counts as written whatever its shape, as does any other string that looks like a path (a
+  `/`, a leading `.` or `~`, or a file suffix), and such a string holding `*`, `?`, `[` or `{` also records the directory before the first of them
+  (`docs/*.md` records `docs`; `*.md` the working directory); a tool that writes files it does not name at all is not tracked; a tool_use with
+  over 200 such strings taints the session root. A write through a tool named
+  like a reader without a write verb, or a path under an unknown key that does not look like one, is not tracked. A shell-command string
+  of such a tool (under `command`, `cmd`, `script`, `commands` or `args`) is also analysed as a Bash command; a PowerShell `Set-Content` or any
+  other non-POSIX write form is a residual. Paths are compared NFKC-normalised and casefolded.
+- Write blocks of any tool seen before the first record with a working directory are held back and noted once it is known (or at the end of
+  the transcript if none ever appears).
+- A transcript in which no record carries a working directory has no user files: every Read is `tool_output`.
+- The trust boundary for `user_file` is the session's first cwd. A record whose own cwd is outside it makes its Reads `tool_output`.
+- `shell_output` is decided by the `<bash-input>`, `<bash-stdout>` and `<bash-stderr>` tags of a user record: a user record with any of
+  them in any text block, balanced or not, has every text block turned into `shell_output`, never partly a user message. Output that reaches the transcript
+  another way is not recognised.
+- Shell-mode records no longer count as user turns, so the quote offsets of evidence cards minted before this change (`compile/evidence.py`
+  `_offsets`, an index among user messages) can shift for sessions that held such records.
+
 ## Brief on wake
 
 The brief's Hammerspoon trigger (`hooks/hammerspoon/ace.lua`) has no test here: no Lua interpreter is installed on the build machine, so the

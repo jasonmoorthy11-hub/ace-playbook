@@ -21,9 +21,12 @@ of the lesson store, and the settings and hooks of the agent that consumes it.
 ## Controls in stage 1 (in code, with tests)
 
 1. **Provenance-gated minting.** A lesson needs a verbatim evidence quote found in a user message
-   or in a project file the user owns that the agent did not write. Quotes found only in tool
-   output, assistant text or nowhere are quarantined. The schema also refuses a live status
-   without user-origin evidence.
+   or in a project file the user owns that the agent did not write. The cleaner labels every turn with
+   one of five origins: `user_message` and `user_file` are trusted; `agent_file` (a Read of a file the
+   agent wrote through a write tool, a Bash redirection, copy, download or clone, or a subagent),
+   `shell_output` (the user's `!` shell-mode command and output records) and `tool_output` are not.
+   Quotes found only in an untrusted origin, in assistant text or nowhere are quarantined. The schema
+   also refuses a live status without user-origin evidence. Residuals: LIMITATIONS.md, "Provenance origins".
 2. **Inert, non-authoritative injection.** The injected block is delimited, labelled advisory data,
    capped at 7,000 characters, and built only from lessons that pass an inertness check (no URLs,
    code, shell syntax, markup, override phrases or tool-directed imperatives). A lesson that fails

@@ -7,7 +7,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .transcript import Drops, Parsed, Turn, parse_records, read_records
+from .transcript import Drops, Parsed, Turn, parse_records, read_records, subagent_records
 
 HEAD_CHARS = 25_000
 TAIL_CHARS = 75_000
@@ -35,7 +35,7 @@ class Signals:
             f"- hook_blocks: {self.hook_blocks}\n"
             f"- repeated_failing_commands: {rep}\n"
             f"- dropped: sidechain={d.sidechain} noise_records={d.noise_records} "
-            f"big_results={d.big_results}\n")
+            f"big_results={d.big_results} unparsed_bash={d.unparsed_bash}\n")
 
 
 def compute_signals(parsed: Parsed) -> Signals:
@@ -49,8 +49,9 @@ def compute_signals(parsed: Parsed) -> Signals:
 
 
 def turn_line(t: Turn) -> str:
-    """`R: first line`, every further line of the turn indented: no line of tool output or user text starts at column 0, so none can pose as
-    a `U:` turn (S-1 F15). `splitlines` also breaks at \\r, \\x0b, \\x0c, \\x1c-\\x1e, \\x85 and the Unicode separators, which a reader may take for breaks."""
+    """`R: first line`, every further line of the turn indented: no line of tool output (a Read, an `agent_file`, the user's `shell_output`)
+    or user text starts at column 0, so none can pose as a `U:` turn (S-1 F15).
+    `splitlines` also breaks at \\r, \\x0b, \\x0c, \\x1c-\\x1e, \\x85 and the Unicode separators, which a reader may take for breaks."""
     return f"{PREFIX[t.role]}: " + "\n    ".join(t.text.splitlines() or [""])
 
 
@@ -99,7 +100,7 @@ class Cleaned:
 def clean_file(path: Path, result_max: int = 2000,
                untrusted: tuple[str, ...] = ("upstream/", "node_modules/", ".venv/")) -> Cleaned:
     drops = Drops()
-    parsed = parse_records(read_records(path, drops), result_max, untrusted)
+    parsed = parse_records(read_records(path, drops), result_max, untrusted, subagent_records(path, drops))
     parsed.drops.bad_lines = drops.bad_lines
     signals = compute_signals(parsed)
     body, kept = sample_turns(parsed.turns)

@@ -6,6 +6,7 @@ import pytest
 from ace_playbook.scrub import QuarantineRequired
 from ace_playbook.store import DeltaLog, SchemaError, make_lesson_id, rebuild, search, view
 from ace_playbook.store import rank
+from ace_playbook.store.schema import ORIGINS, USER_ORIGINS
 
 from . import fakes
 from .helpers import GLOBAL, PROJECT, add_draft, evidence
@@ -59,6 +60,19 @@ def test_live_status_requires_user_provenance(log):
         log.append(d)
     q = add_draft(evidence=evidence("tool_output"), status="quarantined")
     log.append(q)
+
+
+@pytest.mark.parametrize("origin", ["agent_file", "shell_output"])
+def test_agent_and_shell_origins_validate_but_cannot_carry_a_live_lesson(log, origin):
+    assert origin in ORIGINS and origin not in USER_ORIGINS
+    d = add_draft(evidence=evidence(origin))
+    with pytest.raises(SchemaError, match="user_message or user_file"):
+        log.append(d)                                                  # provisional is a live status
+    d["fields"]["status"] = "quarantined"
+    log.append(d)
+    assert log.state()[d["lesson_id"]]["evidence"][0]["origin"] == origin
+    with pytest.raises(SchemaError, match="user-origin"):
+        log.append({"op": "PATCH", "lesson_id": d["lesson_id"], "fields": {"status": "active"}})
 
 
 def test_patch_to_active_needs_user_evidence(log):

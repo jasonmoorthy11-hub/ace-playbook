@@ -1,8 +1,8 @@
 """Provenance gate: a lesson is minted only if a verbatim quote comes from the user.
 
 Quotes are matched (whitespace-collapsed, case-folded) against the turns the
-reflector actually saw. A quote found only in tool output, or in no turn at all,
-cannot support a lesson. This is a structural control: the reflector's own claim
+reflector actually saw. A quote found only in tool output, a file the agent wrote, the user's
+shell output, or in no turn at all, cannot support a lesson. This is a structural control: the reflector's own claim
 about where a quote came from is never trusted.
 """
 
@@ -25,7 +25,7 @@ STOPWORDS = frozenset(
     "your yours you can fix the and for not use using are was but has had its our out all any "
     "his her him how who why did get got let may now off one our own say see she too two way yet "
     "don doesn didn isn aren won can".split())
-ORIGIN_PRIORITY = ("user_message", "user_file", "tool_output")
+ORIGIN_PRIORITY = ("user_message", "user_file", "agent_file", "shell_output", "tool_output")
 
 
 def norm(s: str) -> str:

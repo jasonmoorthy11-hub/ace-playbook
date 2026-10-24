@@ -31,7 +31,7 @@ dated SECURITY/README/INSTALL amendments recorded under "Amendments" at the end.
 | Citation ledger holds `[L-id]` strings the agent wrote (agent self-report) | inject/citations.py:11-25 |
 | Inertness check to reuse for proposal messages; **not cheaply importable today** (see 7.2), so it moves to a leaf module in step 1 | inject/sanitize.py:108-120; store/schema.py:64-78 |
 | Lesson evidence = `{quote, origin, session_id}`, live status needs user origin | store/schema.py:106-121, 143-144 |
-| Quote matching is whitespace-collapsed, case-folded; user origins only | reflect/provenance.py:31-32, 65-92 |
+| Quote matching is whitespace-collapsed, case-folded; user origins only (`user_message`, `user_file`; D-169) | reflect/provenance.py:31-32, 65-92 |
 | Scrubber: `scan(text, profile, deny_terms)`, `QuarantineRequired` | scrub/engine.py:192-203; scrub/quarantine.py:20-27 |
 | Transcript file can lag the live conversation; Stop gets `last_assistant_message` | hooks/INSTALL.md:94-95 |
 | SessionEnd default budget 1.5 s; SessionStart output cap 10,000 chars | hooks/INSTALL.md:86-90; report:33 |
@@ -288,7 +288,7 @@ session's last event.
 A card ties one lesson to one externally observed incident. Inputs, in order of authority:
 
 1. **Lesson store**: the lesson's evidence quotes and their `session_id` (store/schema.py:106-121);
-   only `user_message`/`user_file` origins count (schema.py:18).
+   only `user_message`/`user_file` origins count (schema.py:24); `agent_file` and `shell_output` are valid origins that never count.
 2. **Exposure ledger** `injections.jsonl`: whether the lesson was shown or held out in the
    incident session (injector.py:125-134). Harness-written, not agent-written.
 3. **Detector events** `detector_events.jsonl` from the offline tier, plus live `shadow.jsonl` rows.
@@ -301,7 +301,8 @@ Admission rules, standard path (all must hold, else no card): the lesson is `act
 `provisional` with user evidence; the evidence quote is re-located, with `provenance.norm`
 (provenance.py:31-32), inside a *user message* of the originating session's cleaned transcript,
 with compact summaries and
-sidechains dropped as in clean/transcript.py:116-122; at least one detector event mapped to the
+sidechains dropped as in clean/transcript.py:146-155 (shell-mode records are `shell_output`, not user messages);
+at least one detector event mapped to the
 lesson exists. The incident is the first mapped detector event in the originating session, or if
 there is none, the first one in a later session where the lesson was eligible (card field
 `incident_kind: "originating" | "later"`).
@@ -1680,7 +1681,7 @@ became rung-aware and the date is the next rung's, not always warn's. It was nev
 | ace-playbook/ace_playbook/store/schema.py (full), store/log.py (lines 20-40, def list) | 262, 130 |
 | ace-playbook/ace_playbook/inject/sanitize.py, citations.py, ledger.py, injector.py, __main__.py | 120, 26, 38, 140, 68 |
 | ace-playbook/ace_playbook/reflect/provenance.py (full), reflect/runner.py (lines 20-60, def list) | 92, 192 |
-| ace-playbook/ace_playbook/clean/transcript.py (lines 28-60, 84-134) | 189 |
+| ace-playbook/ace_playbook/clean/transcript.py (lines 28-60, 84-134), clean/origins.py, clean/bashwrite.py | 254, 114, 127 |
 | ace-playbook/ace_playbook/scrub/engine.py (lines 192-205, def list), scrub/quarantine.py (lines 20-60) | 230, 84 |
 | ace-playbook/hooks/sessionstart.sh, stop_citation_ledger.sh, sessionend.sh, pre-commit-scrub.sh | 5, 5, 6, 23 |
 | ace-playbook/hooks/INSTALL.md (grep, lines 80-105) | 158 |
