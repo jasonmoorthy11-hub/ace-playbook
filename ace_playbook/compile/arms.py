@@ -4,8 +4,9 @@ Stdlib and sibling modules only, never on the hook path. It computes, per detect
 (fires beyond the first, `agent_id_present` false rows only), D = mean(warn arm) - mean(observe arm), a permutation test with 10,000
 Bernoulli(arm_rate) re-draws under the committed permutation seed (two-sided p = (1 + #{|D*| >= |D|}) / 10,001, intention to treat by
 assigned arm), a percentile-pivot interval for D, and Holm over every detector with an `arm_start`. Both seeds are read from the config at
-call time; only their sha256 is compared with the sealed block and nothing prints a seed. One approved proposal per detector is assumed;
-with more, each proposal is its own hypothesis in the Holm family (conservative). The window (arm start, horizon, eligibility) is `arms_window`.
+call time; only their sha256 is compared with the sealed block and nothing prints a seed. The proposals of a detector are the newest
+non-revoked rows of approvals.jsonl; each is its own hypothesis in the Holm family (conservative); a started detector with no fires enters at
+D = 0, p = 1. An `arm_start` for a detector with no approved proposal is refused, never left pending. The window is `arms_window`.
 
 It REFUSES (ValueError; the CLI exits 1) when a fire row of an eligible session lacks `arm` or `agent_id_present`, or records an `arm` that
 `assign` does not give: the hook must have randomized and flagged every row (PREREGISTRATION.md, Pre-arm-start conditions). Before the analysis
@@ -27,12 +28,13 @@ from typing import Callable
 
 from .. import config as cfgmod
 from ..canon import now_iso
-from . import labels, metrics, report, seal
+from . import approvals, chains, labels, metrics, report, seal
 from .arms_window import (CAP, LAG_DAYS, WEEKS, _dt, _fmt, arm_starts, check_starts, eligible_sessions,  # noqa: F401  (re-exported)
                           first_demotion, horizon_end)
 from .arms_stats import ALPHA, RUNS, holm, permutation_test  # noqa: F401  (the public names of the analysis)
 
 WARN, OBSERVE = "warn", "observe"
+NO_DATA = {"D": 0.0, "p": 1.0, "ci95": [0.0, 0.0], "draws": 0, "degenerate": 0, "note": "an arm has no eligible session: D = 0, p = 1"}
 
 
 def assign(session_hash: str, shadow_seed: str, arm_rate: float, proposal_id: str = "") -> str:
@@ -85,9 +87,26 @@ def _sealed(cfg, text: str) -> str | None:
     return None if cfg.arm_rate is not None else "arm_rate is unset"
 
 
+def _approved(cfg) -> dict[str, list[str]]:
+    """{detector: sorted proposal ids}: the newest row of each proposal in approvals.jsonl, kept unless it is `revoked`. ValueError on a broken
+    or unsafe chain."""
+    try:
+        rows, broken = approvals.read_chain(cfg.data_dir, chains.key_of(cfg))
+    except OSError:
+        raise ValueError("approvals.jsonl is a symlink or not a regular file") from None
+    if broken is not None:
+        raise ValueError("the approvals chain is broken or unreadable; repair it before the analysis")
+    out: dict[str, list[str]] = {}
+    for pid in sorted({r["proposal_id"] for r in rows}):
+        if approvals.newest(rows, pid)["mode"] != "revoked":
+            out.setdefault(report._meta(cfg, pid)[0], []).append(pid)
+    return out
+
+
 def analyse(cfg, now: str | None = None) -> dict:
     """{"status": "not started"} or {"detectors": {proposal: {...}}, "holm": {...}, "pending": N}: the whole report, in plain data.
-    ValueError for an arm_start before sealed_at, a broken demotions chain or rows that `primary` refuses; Refusal for the seeds."""
+    ValueError for an arm_start before sealed_at or without an approved proposal, a broken approvals or demotions chain or rows that
+    `primary` refuses; Refusal for the seeds."""
     text = seal.PREREG.read_text(encoding="utf-8") if seal.PREREG.exists() else ""
     starts = arm_starts(text)
     if not starts:
@@ -97,11 +116,12 @@ def analyse(cfg, now: str | None = None) -> dict:
         raise labels.Refusal(why)
     now = now or now_iso()
     rows, _ = report.read_corpora(cfg)
-    ev_rows, out, ok = report._read(cfg.path(report.EVENTS)), {}, {}
+    ev_rows, out, ok, approved = report._read(cfg.path(report.EVENTS)), {}, {}, _approved(cfg)
     scanned = metrics.latest_sessions(ev_rows)
     for det, t0 in sorted(starts.items()):
-        pids = sorted({r["proposal_id"] for r in rows if report._meta(cfg, r["proposal_id"])[0] == det})
-        demoted, ok[det] = first_demotion(cfg, pids, t0), bool(pids)
+        if not (pids := approved.get(det)):
+            raise ValueError(f"arm_start {det} names a detector with no approved proposal (approve one or do not start the arm)")
+        (demoted, cause), ok[det] = first_demotion(cfg, pids, t0), True
         for pid in pids:
             sess, end, missing = eligible_sessions(ev_rows, t0, None, det, demoted)
             arm_of = lambda s, pid=pid: assign(s, cfg.shadow_seed, cfg.arm_rate, pid)       # noqa: E731
@@ -110,10 +130,11 @@ def analyse(cfg, now: str | None = None) -> dict:
             final = ok[det] = ok[det] and now >= due
             waiting = sum(r["proposal_id"] == pid and metrics._fire(r) and not metrics._scanned(r, scanned) for r in rows)
             row = {"detector": det, "arm_start": t0, "horizon_end": end, "analysis_due": due, "final": now >= due, "eligible": len(sess),
-                   "missing_start": missing, "fires_awaiting_scan": waiting, "demoted_at": demoted}
+                   "missing_start": missing, "fires_awaiting_scan": waiting, "demoted_at": demoted, "demotion_cause": cause}
             if row["final"]:
                 row |= {k: stat[k] for k in ("n", "mean", "rate_ratio", "sessions_with_fire", "subagent_fires")}
-                row["test"] = permutation_test(stat, cfg.arm_rate, cfg.permutation_seed)
+                row["test"] = (permutation_test(stat, cfg.arm_rate, cfg.permutation_seed) if stat["D"] is not None
+                               else {**NO_DATA, "ci95": [0.0, 0.0]})
             out[pid] = row
     pending = sum(not v for v in ok.values())
     if pending:                                                     # the family is every detector with an arm_start: no rejection until all are final
@@ -129,6 +150,8 @@ def render(d: dict) -> str:
     for pid, v in d["detectors"].items():
         head = f"{pid} {v['detector']}: eligible {v['eligible']}, missing start {v['missing_start']}, awaiting scan {v['fires_awaiting_scan']}"
         lines.append(f"{head}; arm start {v['arm_start']}, horizon end {v['horizon_end']}, analysis due {v['analysis_due']}")
+        if v["demoted_at"]:
+            lines.append(f"  horizon ended by demotion {v['demotion_cause']} at {v['demoted_at']}")
         if v["final"]:
             t = v["test"]
             lines.append(f"  n {v['n']}  mean {v['mean']}  D {t['D']}  p {t['p']}  ci95 {t['ci95']}")

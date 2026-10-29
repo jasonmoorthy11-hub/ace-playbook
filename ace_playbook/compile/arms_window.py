@@ -3,8 +3,8 @@ sibling modules only, never on the hook path.
 
 Arm start: a line `arm_start <detector> <UTC stamp>` under the top-level `## Amendments` heading of PREREGISTRATION.md, read nowhere else
 (the first line of a detector wins), and refused when the stamp is earlier than the `sealed_at` of the frozen block. The horizon ends at the
-earliest of 12 weeks after the arm start, the 400th eligible session and the first demotion of the detector's proposals during the phase
-(the harm event, read from demotions.jsonl).
+earliest of 12 weeks after the arm start, the 400th eligible session and the first demotion row of the detector's proposals at or after the
+arm start, whatever its cause (read from demotions.jsonl; the report prints the cause).
 """
 
 from __future__ import annotations
@@ -56,15 +56,16 @@ def check_starts(text: str, starts: dict[str, str]) -> None:
             raise ValueError(f"arm_start of {det} is earlier than sealed_at")
 
 
-def first_demotion(cfg, pids: list[str], arm_start: str) -> str | None:
-    """The stamp of the first demotion row of any of `pids` at or after the arm start, or None. A broken or unsafe chain is a ValueError."""
+def first_demotion(cfg, pids: list[str], arm_start: str) -> tuple[str, str] | tuple[None, None]:
+    """(stamp, cause) of the first demotion row of any of `pids` at or after the arm start, whatever its cause, else (None, None). A broken
+    or unsafe chain is a ValueError."""
     try:
         rows, broken = demotions.read_chain(cfg.data_dir, chains.key_of(cfg))
     except OSError:
         raise ValueError("demotions.jsonl is a symlink or not a regular file") from None
     if broken is not None:
         raise ValueError("the demotions chain is broken or unreadable; repair it before the analysis")
-    return min((r["ts"] for r in rows if r["proposal_id"] in pids and r["ts"] >= arm_start), default=None)
+    return min(((r["ts"], r["cause"]) for r in rows if r["proposal_id"] in pids and r["ts"] >= arm_start), default=(None, None))
 
 
 def horizon_end(arm_start: str, starts: list[str], demoted: str | None = None) -> str:

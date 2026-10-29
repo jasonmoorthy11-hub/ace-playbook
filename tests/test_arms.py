@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from ace_playbook.compile import arms, arms_stats, demotions, labels, labels_queue, metrics, queue, seal
+from ace_playbook.compile import approvals, arms, arms_stats, demotions, evidence, labels, labels_queue, metrics, proposal, queue, seal
 from ace_playbook.compile import state as st
 from ace_playbook.compile.events import Event
 
@@ -270,10 +270,34 @@ def test_holm_boundaries_and_untestable_detectors():
 
 
 # ------------------------------------------------------------------ the whole report, on a synthetic world with known arms
+def approve(w, pid, mode="observe"):
+    """The approvals row `compile approve` appends (the analysis takes the proposals of a detector from approvals.jsonl)."""
+    sha = "-" if mode == "revoked" else json.loads((w.data / "proposals" / "approved" / (pid + ".json")).read_text())["proposal_sha256"]
+    approvals.append(w.data, {"proposal_id": pid, "proposal_sha256": sha, "mode": mode})
+
+
+def add_proposal(w, det, tag):
+    """A second approved proposal (own card, own incident session, no shadow rows) for `det`; returns its id."""
+    payload = json.loads(cs.EXAMPLES.read_text())["detectors"][det]["fire"]
+    inc, ph = evidence.sid(f"sess-{tag}"), evidence.payload_hash(payload)
+    card = {"id": evidence.card_id(cs.RM_LESSON, inc, ph), "v": 1, "lesson_id": cs.RM_LESSON, "provenance": "standard",
+            "origin_session": evidence.sid("sess-live-origin"), "incident_session": inc, "incident_kind": "later", "label_ref": None,
+            "quote_offsets": [{"user_turn": 0, "start": 0, "end": 20, "quote_sha256": "0123456789abcdef"}], "detector": det,
+            "detector_sha256": "0" * 64, "tier": "offline", "incident_ts": "2026-10-01T00:00:00Z", "payload_sha256": ph, "payload_ref": payload,
+            "replayable": True, "lesson_shown_in_incident_session": True, "agent_cited": False, "self_report": True,
+            "scrub": {"profile": "LESSON", "hits": 0}, "created": "2026-10-01T00:00:00Z"}
+    p = proposal.build(w.cfg, cs.RM_LESSON, det, [card])
+    proposal.write(w.cfg, p, {card["id"]: card})
+    cs.approve_file(w.cfg, p)
+    approve(w, p["id"])
+    return p["id"]
+
+
 def world(w, n=20, mutate=None):
     """`n` interactive sessions started in the window. A session in the warn arm fires once (0 repeats), one in the observe arm four times
     (3 repeats): D is exactly -3 whatever the split. `mutate(row)` returns the row to write (it may damage it)."""
     w.cfg.shadow_seed, w.cfg.permutation_seed, w.cfg.arm_rate = SHADOW, PERMUT, 0.5
+    approve(w, w.pid)
     path, k = w.cfg.path("detector_events.jsonl"), 0
     for i in range(n):
         h, day = st.session_hash(f"sess-{i}"), f"2026-11-{1 + i % 20:02d}"
@@ -455,6 +479,8 @@ def test_a_demotion_ends_the_detectors_horizon_in_the_analysis(w, prereg):
     demotions.append(w.data, {**row, "from_mode": "block", "ref": "89abcdef", "ts": "2026-11-10T00:00:00Z"})      # a new ref: not a duplicate
     v = next(iter(arms.analyse(w.cfg, now="2026-11-18T00:00:00Z")["detectors"].values()))
     assert v["horizon_end"] == "2026-11-10T00:00:00Z" and v["demoted_at"] == "2026-11-10T00:00:00Z" and v["eligible"] == 9
+    assert v["demotion_cause"] == "label_fp" and "horizon ended by demotion label_fp at 2026-11-10T00:00:00Z" in arms.render(
+        arms.analyse(w.cfg, now="2026-11-18T00:00:00Z"))
     assert v["analysis_due"] == "2026-11-17T00:00:00Z" and v["final"] and v["test"]["D"] == -3.0           # final 7 days after the demotion
     assert next(iter(arms.analyse(w.cfg, now="2026-11-16T00:00:00Z")["detectors"].values()))["final"] is False
 
@@ -468,9 +494,10 @@ def test_a_broken_demotions_chain_is_refused(w, prereg):
 
 def test_holm_covers_every_detector_with_an_arm_start_and_claims_nothing_until_all_are_final(w, prereg, tmp_path, capsys):
     world(w)
-    prereg.write_text(prereg_text() + "arm_start rm_rf 2026-11-01T00:00:00Z\n")                 # a second detector that has no proposal yet
+    add_proposal(w, "rm_rf", "two")                                                             # a second detector, approved, no fires
+    prereg.write_text(prereg_text() + "arm_start rm_rf 2026-11-10T00:00:00Z\n")                 # its horizon ends later: due 2027-02-09
     d = arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")
-    (v,) = d["detectors"].values()
+    (v,) = [x for x in d["detectors"].values() if x["detector"] == DET]
     assert v["final"] and v["test"]["p"] < 0.01                                                 # the first detector is final and significant ...
     assert d["pending"] == 1 and d["holm"] == {}                                                # ... yet no adjusted p and no rejection
     out = arms.render(d)
@@ -482,3 +509,42 @@ def test_holm_covers_every_detector_with_an_arm_start_and_claims_nothing_until_a
     prereg.write_text(prereg_text())
     d = arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")
     assert d["pending"] == 0 and next(iter(d["holm"].values()))["reject"] is True and "holm-adjusted p" in arms.render(d)
+
+
+# ------------------------------------------------------------------ round 3: the family comes from approvals.jsonl
+@pytest.mark.parametrize("sessions", [False, True])
+def test_a_started_detector_with_no_fires_enters_the_holm_family_at_p_one(w, prereg, sessions):
+    world(w)
+    pid2 = add_proposal(w, "rm_rf", "two")                                   # approved, never fired: no shadow row at all
+    prereg.write_text(prereg_text() + f"arm_start rm_rf {T0}\n")
+    if sessions:                                                             # eligible sessions but no fires: D comes from `primary` as 0.0
+        for i in range(8):
+            cs.append_jsonl(w.cfg.path("detector_events.jsonl"), srow(st.session_hash(f"two-{i}"), f"2026-11-0{1 + i}T10:00:00Z", eligible=("rm_rf",)))
+    d = arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")
+    assert d["pending"] == 0 and set(d["holm"]) == {w.pid, pid2}
+    t = d["detectors"][pid2]["test"]
+    assert d["detectors"][pid2]["final"] is True and t["D"] == 0.0 and t["p"] == 1.0 and t["ci95"][0] <= 0.0 <= t["ci95"][1]
+    first = d["detectors"][w.pid]["test"]["p"]
+    assert first < 0.01 and d["holm"][w.pid] == {"adjusted_p": 2 * first, "reject": True}       # one more hypothesis: the p doubles, still rejected
+    assert d["holm"][pid2] == {"adjusted_p": 1.0, "reject": False} and "holm-adjusted p" in arms.render(d)
+
+
+def test_an_arm_start_for_a_detector_without_an_approved_proposal_is_refused(w, prereg, tmp_path, capsys):
+    world(w)
+    prereg.write_text(prereg_text() + f"arm_start rm_rf {T0}\n")            # nothing approved for rm_rf
+    with pytest.raises(ValueError, match="no approved proposal"):
+        arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")
+    assert arms.main(["--config", config_file(w, tmp_path), "report"]) == 1
+    err = capsys.readouterr().err
+    assert "arm_start rm_rf names a detector with no approved proposal" in err and SHADOW not in err
+
+
+def test_a_revoked_approval_drops_the_proposal_from_the_family(w, prereg):
+    world(w)
+    approve(w, w.pid, "revoked")
+    with pytest.raises(ValueError, match="no approved proposal"):                # the only proposal of the detector is revoked
+        arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")
+    pid2 = add_proposal(w, DET, "second")                                        # a second, still-approved proposal of the same detector
+    d = arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")
+    assert list(d["detectors"]) == [pid2] and list(d["holm"]) == [pid2] and w.pid not in d["detectors"]
+    assert d["detectors"][pid2]["test"]["p"] == 1.0                              # no fires of its own: D = 0

@@ -1349,7 +1349,9 @@ section in PREREGISTRATION.md still says `(DRAFT until sealed)`. The sealing its
 
 - `--dry-run` needs no terminal, asks nothing and writes nothing. It prints the Frozen instruments block with live values:
   `detectors:` (one `name strength sha256` line per `catalogue.source_table()` entry, sorted; the strength is `Detector.strength` of
-  the registry), `report_sha256` (the bytes of `compile/arms.py`, `arms_stats.py`, `arms_window.py`, `labels.py`, `labels_queue.py`, `metrics.py` and `report.py` in name order, joined by a NUL: exactly those seven files, since 2026-10-29;
+  the registry), `report_sha256` (the bytes of `compile/arms.py`, `arms_stats.py`, `arms_window.py`, `labels.py`,
+  `labels_queue.py`, `metrics.py` and `report.py` in name order, joined by a NUL: exactly those seven files, since
+  2026-10-29;
   the detector code is covered by the per-detector hashes), `proposals:` (the newest `approvals.jsonl` row of each proposal id that is
   not revoked, as `id mode proposal_sha256`, sorted; `(none)` when there are none, or a notice line when the chain is unreadable or
   broken, still exit 0), `shadow_seed_sha256`, `permutation_seed_sha256`, `arm_rate`, `measurement_start` (`measure.start_of`, the same value as `status`'s
@@ -1358,10 +1360,14 @@ section in PREREGISTRATION.md still says `(DRAFT until sealed)`. The sealing its
   (2) the file does not hold exactly one `## Shadow-mode additions` heading (counted loosely: an indented or double-spaced heading also
   counts): exit 2; (3) the heading already says SEALED (later changes go in dated amendments; this wins over every later check): exit 1;
   (4) the Frozen instruments subsection (that heading to the next `###`, inside the shadow-mode section) does not hold exactly one
-  `(filled by compile seal)` line: exit 2; (5) the Timing and stopping subsection does not state the entry gate once (`at least <n> human-labelled sessions-with-fire`, with
-  `0 FP` and `0 unlabelled` in the same sentence, n at least 30: the gate counts sessions, not fires) or does not hold exactly one `Horizon ...: <weeks> calendar weeks ...
-  <n> eligible sessions` line, or the old hand-fill placeholder is still in the section: exit 1; (6) the approvals chain is broken or unreadable: exit 1; (7) the
-  config lacks `shadow_seed`, `permutation_seed` or `arm_rate` (the block would hold `-`): exit 1, naming the missing keys; (8) the y/N answer is anything but yes: exit 1; (9) the file
+  `(filled by compile seal)` line: exit 2; (5) the Timing and stopping subsection does not state the entry gate once (`at
+  least <n> human-labelled sessions-with-fire`, with
+  `0 FP` and `0 unlabelled` in the same sentence, n at least 30: the gate counts sessions, not fires) or does not hold
+  exactly one `Horizon ...: <weeks> calendar weeks ...
+  <n> eligible sessions` line, or the old hand-fill placeholder is still in the section: exit 1; (6) the approvals chain is
+  broken or unreadable: exit 1; (7) the
+  config lacks `shadow_seed`, `permutation_seed` or `arm_rate` (the block would hold `-`): exit 1, naming the missing keys;
+  (8) the y/N answer is anything but yes: exit 1; (9) the file
   changed while the prompt was open: exit 1; (10) the write: the matched heading is rewritten by its position (never by text search) to
   `## Shadow-mode additions (SEALED <date> prereg-v1)` and the filler line is replaced with the block in a `text` fence, through a
   fsynced temp file in the same directory and `os.replace`.
@@ -1374,15 +1380,28 @@ section in PREREGISTRATION.md still says `(DRAFT until sealed)`. The sealing its
 ### Arms (as built 2026-10-29)
 
 `python3 -m ace_playbook.compile.arms report [--json]` (`compile/arms.py`, `arms_stats.py`; not in `__main__.py`, not on the hook path) is the
-preregistered analysis of the shadow arm phase. It prints `not started` until the top-level Amendments section of PREREGISTRATION.md holds a line `arm_start <detector> <UTC stamp>`
-(read nowhere else, refused when earlier than the block's `sealed_at`; `arms_window.py` holds the window code). Per detector it computes the eligible sessions (interactive: `prompts` > 0 in the newest
-`_session` row; `start`, the first transcript event, in [arm start, horizon end); the horizon is the earliest of 12 weeks, the 400th eligible session and the first demotion of the detector's proposals during the phase, read from `demotions.jsonl`), the
+preregistered analysis of the shadow arm phase. It prints `not started` until the top-level Amendments section of
+PREREGISTRATION.md holds a line `arm_start <detector> <UTC stamp>`
+(read nowhere else, refused when earlier than the block's `sealed_at`; `arms_window.py` holds the window code). Per detector
+it computes the eligible sessions (interactive: `prompts` > 0 in the newest
+`_session` row; `start`, the first transcript event, in [arm start, horizon end); the horizon is the earliest of 12 weeks,
+the 400th eligible session and the first demotion row of the detector's proposals at or after the arm start, whatever its
+cause, read from `demotions.jsonl`; the report prints the cause), the
 arm of each session (`assign`: HMAC-SHA256 of `session hash|proposal id` under `shadow_seed`, first 4 bytes below `arm_rate` is the warn arm), the
-primary (`primary`: repeat fires per eligible session over rows with `agent_id_present` false; subagent rows are counted apart), D, and `permutation_test` (10,000 Bernoulli(`arm_rate`) re-draws from `random.Random(permutation_seed)`, p = (1 + hits) / 10,001, a
-draw that empties an arm counts as extreme, interval = D minus the 97.5th and 2.5th percentiles of D*), then `holm` over every detector with an `arm_start` (no adjusted p and no rejection is printed until all are final: `pending: N detectors not final`). It refuses (exit 1) when a fire row of an eligible session lacks `arm` or `agent_id_present` or records an `arm` that `assign` does not give,
-when a seed in the config does not hash to the sealed line, when the demotions chain is broken, shows counts only before the analysis day (horizon end + 7 days) and never prints a seed. The `_session`
+primary (`primary`: repeat fires per eligible session over rows with `agent_id_present` false; subagent rows are counted
+apart), D, and `permutation_test` (10,000 Bernoulli(`arm_rate`) re-draws from `random.Random(permutation_seed)`, p = (1 +
+hits) / 10,001, a
+draw that empties an arm counts as extreme, interval = D minus the 97.5th and 2.5th percentiles of D*), then `holm` over
+every detector with an `arm_start` (no adjusted p and no rejection is printed until all are final:
+`pending: N detectors not final`). The proposals of a detector are the newest non-revoked rows of `approvals.jsonl`, each its
+own hypothesis (conservative); a started detector whose proposal has no fires, or no eligible session in an arm, enters at D
+= 0, p = 1, and an `arm_start` for a detector with no approved proposal is refused, never left pending. It refuses (exit 1)
+when a fire row of an eligible session lacks `arm` or `agent_id_present` or records an `arm` that `assign` does not give,
+when a seed in the config does not hash to the sealed line, when the approvals or demotions chain is broken, shows counts
+only before the analysis day (horizon end + 7 days) and never prints a seed. The `_session`
 row gained `start` (rows written before it have none and are reported as missing). `labels_queue.py` (split out of `labels.py` and `queue.py`) hides
-the resolved mode in `label --rows` and the queue card while any detector's phase runs. Still open, and conditions before any `arm_start` (PREREGISTRATION.md, Pre-arm-start conditions): the live hook does not yet
+the resolved mode in `label --rows` and the queue card while any detector's phase runs. Still open, and conditions before any
+`arm_start` (PREREGISTRATION.md, Pre-arm-start conditions): the live hook does not yet
 write `arm` or `agent_id_present` (`shadow.py` holds no arm code, so today `arms report` refuses every row), the offline auto-FP rule (a) is still
 asymmetric, demotion and harm do not yet ignore auto labels during a phase, and the spillover comparison is not built.
 

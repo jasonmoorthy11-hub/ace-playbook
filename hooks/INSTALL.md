@@ -391,9 +391,16 @@ status line and the menu-bar plugin print `DISABLED`. Remove the file to arm the
 (a throwaway state directory), writes `data_dir/shadow.synthetic.jsonl` (never `shadow.jsonl`; `--out` inside `data_dir` is refused unless it is that file) and exits 1 if any expected outcome
 differs; `compile report` then prints the synthetic table apart from the private one.
 
-**Arm analysis.** `python3 -m ace_playbook.compile.arms report [--json]` prints `not started` until PREREGISTRATION.md holds an `arm_start <detector> <UTC stamp>` line; it needs `shadow_seed`, `permutation_seed` and `arm_rate` in the config, whose seeds must hash to the sealed lines, and never prints a seed.
+**Arm analysis.** `python3 -m ace_playbook.compile.arms report [--json]` prints `not started` until PREREGISTRATION.md holds
+an `arm_start <detector> <UTC stamp>` line; it needs `shadow_seed`, `permutation_seed` and `arm_rate` in the config, whose
+seeds must hash to the sealed lines, and never prints a seed. Each detector with an `arm_start` needs a non-revoked approved
+proposal in `approvals.jsonl`, or the report refuses (exit 1).
 
-**Seal preview.** `python3 -m ace_playbook.compile seal --dry-run` prints the pre-registration's Frozen instruments block (detector hashes, report hash, approved proposals, measurement start) and writes nothing; without `--dry-run` it needs a terminal, refuses until the `shadow_seed`, `permutation_seed` (64 hex each, only their sha256 is printed) and `arm_rate` config fields are set and until the pre-registration states the entry gate over sessions (at least 30 human-labelled sessions-with-fire, 0 FP, 0 unlabelled) and a horizon line, and only prints the git tag commands, it never runs git.
+**Seal preview.** `python3 -m ace_playbook.compile seal --dry-run` prints the pre-registration's Frozen instruments block
+(detector hashes, report hash, approved proposals, measurement start) and writes nothing; without `--dry-run` it needs a
+terminal, refuses until the `shadow_seed`, `permutation_seed` (64 hex each, only their sha256 is printed) and `arm_rate`
+config fields are set and until the pre-registration states the entry gate over sessions (at least 30 human-labelled
+sessions-with-fire, 0 FP, 0 unlabelled) and a horizon line, and only prints the git tag commands, it never runs git.
 
 **Status.** `python3 -m ace_playbook.compile status` prints one screen (measurement day, per proposal fires over eligible sessions, tp/fp/unlabelled,
 precision, a verdict, the label queue, heartbeat ages, hook cost against 200 ms, notes) and writes `data_dir/status.json` (0600; `--out PATH` elsewhere,
