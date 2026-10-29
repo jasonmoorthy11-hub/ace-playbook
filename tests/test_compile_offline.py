@@ -181,7 +181,8 @@ def test_cli_prints_one_ascii_count_line_each_and_the_p95_rule_every_run(w, caps
     w.conf = str(conf)
     cs.put_session(w, "s1", [{"human": "please remove /w/src"}, RM])
     cs.put_shadow(w, "s1", CMD)
-    code, out, err = cli_run(w, "--idle-minutes", "0", capsys=capsys)
+    # the fixture rows carry fixed dates (cs.NOW); the default --since 7 is measured from the real clock, so widen it
+    code, out, err = cli_run(w, "--idle-minutes", "0", "--since", "3660", capsys=capsys)
     assert code == 0 and err == "" and all(ch == "\n" or " " <= ch <= "~" for ch in out)
     names = [ln.split(":")[0] for ln in out.splitlines()]
     assert names == ["transcripts", "skipped", "detector_events", "sessions", "labels", *(f"labels.{k}" for k in labels.AUTO),
