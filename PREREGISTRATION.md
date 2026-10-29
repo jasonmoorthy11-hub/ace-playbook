@@ -158,9 +158,10 @@ arm out of default view and does not make it unreadable; the seal records only t
 
 Labelling is symmetric in the randomized phase: a user correction within 2 prompts of any fire, in either
 arm, is a neutral flag, not an automatic false positive, and the label queue hides the mode and the arm
-of every row. Any lowering demotions.jsonl row of the detector's proposals at or after the arm start ends
-the horizon, whatever its cause (an `evasion_pair` flag lowers nothing and does not end the horizon); the
-report prints the cause. Only a `label_fp` or `label_fp_pair` row driven by human labels is the harm
+of every row. Any lowering demotions.jsonl row of the detector's proposals stamped at or after the arm start and before
+the natural end of the horizon (12 weeks, or the 400th eligible session) ends the horizon, whatever its cause.
+An `evasion_pair` flag lowers nothing and does not end the horizon, and a lowering row stamped after the natural end ends nothing.
+The report prints the cause. Only a `label_fp` or `label_fp_pair` row driven by human labels is the harm
 event. Harm = 1 human-labelled FP block, or 2 FP warns within 30 days. A human-labelled FP of an observe-arm fire counts as an FP
 at the proposal's approved mode (offline.py applies no arm filter). Harm is counted symmetrically across arms. The analysis is intention to treat
 by assigned arm, so sessions run in a revoked or kill-file gap stay in their assigned arm, and sessions
@@ -184,10 +185,13 @@ and on status changes of family lessons from `ACE P-` sessions is a binding pre-
 arm start every proposal of the family is approved at `warn` or `block` and no lowering demotion row stamped before the arm start
 is in force (`modes.in_force` over those rows at the arm start is empty); `arms report` refuses otherwise; (7) the delivered path
 (the warn/block output writes of the hook) logs its failures as `error:delivered:<Type>` lines of `shadow.log`.
-The analysis already counts those lines inside the horizon window and prints the count whenever an `error_rate` row ends a horizon
-(`unknown`, never 0, when the log is missing, unreadable or full). That code is built and hashed before the seal.
-During a phase no status change (retire, supersede, deactivate) of a family lesson is written from a session whose transcript
-carries `ACE P-`.
+The hook writes each line through `shadow._log`: `<YYYY-MM-DDTHH:MM:SSZ> error:delivered:<Type>` (a 20-character UTC stamp, a space, the tag).
+The analysis already counts those lines stamped in [arm start, horizon end], the end included
+(the eligibility window itself stays half-open).
+It prints the count whenever an `error_rate` row ends a horizon (`unknown`, never 0, when the log is missing, unreadable or full).
+That code is built and hashed before the seal.
+During a phase no status change (retire, supersede, deactivate) of a family lesson is written, and no lesson is minted,
+from a session whose transcript carries `ACE P-`.
 
 ### Spillover
 
@@ -195,9 +199,9 @@ Lessons are not arm-specific, so the "without" arm is contaminated by the prompt
 the same incident produced, and the operator also sees the stderr echo. The estimand is "the
 within-session effect of the warning given cross-session contamination"; it is biased toward 1.
 Lesson minting and status changes of family lessons from sessions carrying `ACE P-` are frozen during the phase (condition (7)).
-The report flags every
-lesson whose originating session holds an `ACE P-` message and reports the arm comparison
-separately for sessions where such a lesson was shown. The flag is reported, not corrected.
+The report flags every lesson whose originating session holds an `ACE P-` message and reports the arm comparison
+separately for sessions where such a lesson was shown.
+The flag is reported, not corrected.
 
 ### Timing and stopping
 
@@ -301,7 +305,8 @@ Source: the second hostile-statistician pass (verdict SEALABLE WITH THE BLOCKING
 - `arms report` refuses (exit 1) a fire row of an eligible session that lacks `arm` or `agent_id_present`, or whose recorded `arm` differs
   from `arms.assign`; without this the analysis would split sessions that all received the same treatment and return D = 0, p = 1. The text
   now states the pre-arm-start conditions (hook randomizes and flags every row, `shadow.py`/`offline.py`/`events.py` hashes recorded in the
-  `arm_start` amendment, symmetric `offline.classify`, human labels only for harm and demotion, spillover and minting freeze exploratory).
+  `arm_start` amendment, symmetric `offline.classify`, human labels only for harm and demotion, spillover and minting freeze exploratory)
+  (superseded by round 7).
 - `arm_start` lines are read only under the top-level Amendments heading and are refused when earlier than the block's `sealed_at`.
 - I2 is settled one way: a demotion ends the detector's horizon (the harm event) (superseded by round 3); the
   "demoted gaps kept in arm" sentences are removed and `arms_window.horizon_end` takes the first demotion from demotions.jsonl.
@@ -384,21 +389,31 @@ Source: the sixth hostile-statistician pass (verdict SEALABLE WITH THE BLOCKING 
 
 ### 2026-10-29 - round-7 statistician pass (SEALABLE AS IS; made before the seal, so they edit the draft)
 
-Source: the seventh hostile-statistician pass (verdict SEALABLE AS IS). Text and docstring edits only, no behaviour change. What changed:
+Source: the seventh hostile-statistician pass (verdict SEALABLE AS IS).
+Text and docstring edits, plus one new output: the delivered-path error count (arms.py, arms_window.py). What changed:
 
 - P6 (important, text): `error_rate` and `lesson_inactive` are not arm-symmetric under the null, because the delivered-path writes of the hook and
-  the model-visible `ACE P-` text exist only in treated-arm sessions. New pre-arm-start condition (7): the delivered path logs its failures
-  as `error:delivered:<Type>` lines, and the analysis prints their count whenever an `error_rate` row ends a horizon. During a phase no status
-  change (retire, supersede, deactivate) of a family lesson is written from a session whose transcript carries `ACE P-`. The minting freeze of
-  the spillover section now covers status changes of family lessons too. The hook's emission of the tag and the freeze are post-seal build items.
+  the model-visible `ACE P-` text exist only in treated-arm sessions.
+  New pre-arm-start condition (7): the delivered path logs its failures as `error:delivered:<Type>` lines.
+  The analysis prints their count whenever an `error_rate` row ends a horizon.
+  During a phase no status change (retire, supersede, deactivate) of a family lesson is written from a session whose transcript carries `ACE P-`.
+  The minting freeze of the spillover section now covers status changes of family lessons too.
+  The hook's emission of the tag and the freeze are post-seal build items.
 - P5 (text): the harm paragraph now says a human-labelled FP of an observe-arm fire counts as an FP at the proposal's approved mode.
   Harm is counted symmetrically across arms.
 - P7 (`hooks/INSTALL.md`, outside the hash): a demotion in force before the arm start is lifted only by a re-approval that differs from
-  the newest `approvals.jsonl` row of the proposal; the same proposal hash and mode as that row appends nothing.
+  the newest `approvals.jsonl` row of the proposal.
+  The same proposal hash and mode as that row appends nothing.
 - Docs-lens on the round-7 wave: condition (7) rewritten so nothing hashed changes after the seal (the `error:delivered:` tag defined; the
-  analysis counts it now); condition (5) narrowed to the spillover comparison; the re-approval note corrected (the mode must differ from the
-  newest approvals row); wording minors.
-- Wording: "lowering" added to the docstrings of `arms_window.py` (`family`, `horizon_end`) and `arms.py`, and "sessions that start after a lowering
-  demotion" in the labelling paragraph. `docs/design/compiler.md` (Arms section) lists the hook side of condition (7) among the open conditions.
+  analysis counts it now).
+  Condition (5) narrowed to the spillover comparison; the re-approval note corrected (the mode must differ from the newest approvals row);
+  wording minors.
+  Round 2: the Amendments wording, the inclusive end stated, minting named in (7), the log line format fixed.
+  A lowering row after the natural end no longer counts as the horizon's demotion.
+  Three edge tests were added (outside the hash).
+- Wording: "lowering" added to the docstrings of `arms_window.py` (`family`, `horizon_end`) and `arms.py`.
+  The labelling paragraph now says "sessions that start after a lowering demotion".
+  `docs/design/compiler.md` (Arms section) lists the hook side of condition (7) among the open conditions.
 - `report_sha256` changed from c064b599fdc370ccf5029eb9813321fe0f6419f50e3e716cfb552602bd99febf to
-  f5752268d1021a14d9761b6da7216056bb666c022e1d6f3ff7aefa142ce60280 (seven files: `arms.py` and `arms_window.py` changed; the delivered-error count is new).
+  615fe3dd3a517fe7de5ac572b9c1e3a1b17d0c41a678d6df13953de9245ddbc3 (seven files: `arms.py` and `arms_window.py` changed;
+  the delivered-error count and the natural-end rule are new).

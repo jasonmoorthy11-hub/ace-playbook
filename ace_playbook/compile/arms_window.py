@@ -138,7 +138,8 @@ def horizon_end(arm_start: str, starts: list[str], demoted: str | None = None) -
 def delivered_errors(cfg, arm_start: str, end: str) -> int | None:
     """Lines of shadow.log stamped in [arm start, horizon end] whose message starts `error:delivered:` (the delivered path of the hook, the
     warn/block output writes, logs its failures under that tag). None (printed `unknown`, never 0) for a log that is missing, unreadable or
-    at the hook's size cap (it has stopped recording), so a silent miss cannot pass as zero."""
+    at the hook's size cap (it has stopped recording), so a silent miss cannot pass as zero. The cap is `shadow.LOG_CAP`, outside `report_sha256`
+    and pinned by the arm_start hash of shadow.py."""
     from . import shadow
     try:
         raw = chains.read_regular(cfg.path("shadow.log"), 2 * shadow.LOG_CAP)
