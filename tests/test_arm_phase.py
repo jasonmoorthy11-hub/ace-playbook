@@ -337,6 +337,61 @@ def test_the_same_transcript_mints_without_a_marker(rcfg, tmp_path):
     assert res["status"] == "ok" and len(t.calls) == 1 and minted(rcfg) == ["Run uv sync before pytest in this repo"]
 
 
+def sweep_world(rcfg, tmp_path):
+    """Three idle transcripts under the root, the two frozen ones OLDEST (the sweep takes the oldest first); two carry `ACE P-`."""
+    import time
+    rcfg.transcripts_root = tmp_path / "projects"
+    rcfg.transcripts_root.mkdir()
+    now = time.time()
+    for n, (name, tagged) in enumerate((("fa", True), ("fb", True), ("clean", False))):
+        recs = [user(f"message {i} for {name} " + "pad " * 40, sessionId=name) for i in range(8)]
+        recs[1] = assistant(("ACE P-3f9a0c12: do not rm -rf outside scratch " if tagged else "ok ") * 30)
+        p = write(rcfg.transcripts_root / f"{name}.jsonl", recs)
+        os.utime(p, (now - 9000 + n, now - 9000 + n))
+    t = FakeTransport(*[api('{"insights":[],"tags":[]}')] * 6)
+    return ReflectorClient(rcfg, transport=t, sleep=lambda s: None), t
+
+
+def test_frozen_transcripts_do_not_consume_sweep_slots_and_are_counted(rcfg, tmp_path):
+    from ace_playbook.sweep import run_sweep
+    client, t = sweep_world(rcfg, tmp_path)
+    mark(rcfg.data_dir, **{DET: STARTED})
+    dry = run_sweep(rcfg, client, max_n=2, dry_run=True)
+    assert [d["path"] for d in dry if "path" in d] == ["clean.jsonl"] and dry[-1] == {"status": "frozen_arm_phase", "count": 2}
+    out = run_sweep(rcfg, client, max_n=2)                                      # the two oldest are frozen: the clean one still gets a slot
+    assert [o for o in out if o.get("path")] == [{"path": "clean.jsonl", "source": "scan", "status": "ok"}]
+    assert out[-1] == {"status": "frozen_arm_phase", "count": 2} and len(t.calls) == 1             # no API call for the frozen two
+    assert {r["session_id"] for r in read_jsonl(rcfg.reflections)} == {"clean"}
+
+
+def test_without_the_marker_all_three_are_sweep_candidates(rcfg, tmp_path):
+    from ace_playbook.sweep import run_sweep
+    client, t = sweep_world(rcfg, tmp_path)
+    mark(rcfg.data_dir, **{DET: STARTED})
+    run_sweep(rcfg, client, max_n=2)
+    (rcfg.data_dir / phase.FILE).unlink()                                        # the phase ended
+    out = run_sweep(rcfg, client, max_n=5)
+    assert sorted(o["path"] for o in out) == ["fa.jsonl", "fb.jsonl"] and all(o["status"] == "ok" for o in out)
+    assert not any(o.get("status") == "frozen_arm_phase" for o in out) and len(t.calls) == 3
+
+
+def test_a_sweep_of_only_frozen_transcripts_makes_no_call_and_needs_no_key(rcfg, tmp_path):
+    from ace_playbook.sweep import run_sweep
+    client, t = sweep_world(rcfg, tmp_path)
+    (rcfg.transcripts_root / "clean.jsonl").unlink()
+    rcfg.api_key_path = None
+    mark(rcfg.data_dir, **{DET: STARTED})
+    assert run_sweep(rcfg, client) == [{"status": "frozen_arm_phase", "count": 2}] and t.calls == []
+
+
+def test_a_marker_that_has_not_started_makes_the_sweep_output_unchanged(rcfg, tmp_path):
+    from ace_playbook.sweep import run_sweep
+    client, _ = sweep_world(rcfg, tmp_path)
+    mark(rcfg.data_dir, **{DET: "2099-01-01T00:00:00Z"})
+    out = run_sweep(rcfg, client, max_n=5)
+    assert len(out) == 3 and all(o["status"] == "ok" for o in out)
+
+
 def test_a_marker_that_has_not_started_freezes_nothing(rcfg, tmp_path):
     mark(rcfg.data_dir, **{DET: "2099-01-01T00:00:00Z"})
     assert reflect(rcfg, tmp_path, True)[0]["status"] == "ok"

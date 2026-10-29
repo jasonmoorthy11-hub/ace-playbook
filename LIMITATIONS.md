@@ -90,8 +90,10 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
   `source_sha256` and the `evasion_pair` flag still act. `neutral_corrections` is in the offline summary dict, not in the CLI's printed lines.
 - The minting freeze is enforced at the only session-driven writer of lessons, `reflect_transcript`: during a phase a transcript whose raw bytes
   carry `ACE P-` (or that is unreadable or over 64 MiB) mints nothing and writes NO reflections ledger row (a `status=frozen_arm_phase` line in
-  `reflect.log` only), so the freeze defers: the nightly sweep offers the transcript again each night during the phase and mints it after the
-  phase ends. Frozen transcripts occupy sweep candidate slots (`max_n`) while the phase runs.
+  `reflect.log` only), so the freeze defers: the nightly sweep (`sweep._sweep`) decides "frozen" with the same `runner.arm_frozen` before it fills
+  its `max_n` slots, so frozen transcripts take no slot, and reports the ones it set aside as a final `{"status": "frozen_arm_phase", "count": n}`
+  entry (counted among the candidates it examined before the cap filled); it reads each examined transcript once (bounded, 64 MiB fail-closed) and
+  re-examines them every night during the phase. After the phase (marker gone) they are ordinary candidates and are minted.
   No production code path writes RETIRE, PATCH, MERGE or NARROW from a session
   (`store/promote.py` and `store/__main__.py` are operator-driven); tests/test_arm_phase.py fails if one appears elsewhere. The NOOP counters
   of a frozen session are not written either.

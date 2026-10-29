@@ -13,7 +13,7 @@ from .config import Config
 from .filelock import locked
 from .inject.ledger import read_jsonl
 from .reflect.client import ReflectorClient, log_line
-from .reflect.runner import reflect_transcript
+from .reflect.runner import FROZEN, arm_frozen, reflect_transcript
 from .store import DeltaLog, SchemaError
 
 MIN_BYTES = 2000
@@ -94,13 +94,21 @@ def run_sweep(cfg: Config, client: ReflectorClient | None = None, max_n: int = 2
 
 def _sweep(cfg: Config, client: ReflectorClient | None, max_n: int, dry_run: bool,
            idle_minutes: float, now: float | None, problems: list[str]) -> list[dict]:
-    cands = find_candidates(cfg, idle_minutes, now)[:max_n]
+    cands, frozen = [], 0
+    for c in find_candidates(cfg, idle_minutes, now):          # the frozen ones (runner.arm_frozen, the rule reflect_transcript applies) take no slot
+        if len(cands) >= max_n:
+            break
+        if arm_frozen(cfg, c.path):
+            frozen += 1
+        else:
+            cands.append(c)
+    note = [{"status": FROZEN, "count": frozen}] if frozen else []   # not a reflection: the sweep summary says how many it set aside
     if dry_run:
-        return [{"path": c.path.name, "source": c.source, "status": "would_reflect"} for c in cands]
+        return [{"path": c.path.name, "source": c.source, "status": "would_reflect"} for c in cands] + note
     if cands and not (cfg.api_key_path and Path(cfg.api_key_path).exists()):
         log_line(cfg, f"sweep SKIPPED no-api-key candidates={len(cands)}")
         problems.append(f"skipped_no_key: {len(cands)} candidates, no api key file")
-        return [{"status": "skipped_no_key", "candidates": len(cands)}]
+        return [{"status": "skipped_no_key", "candidates": len(cands)}, *note]
     try:
         if cfg.deltas.exists():
             DeltaLog(cfg.deltas).verify()
@@ -116,5 +124,5 @@ def _sweep(cfg: Config, client: ReflectorClient | None, max_n: int, dry_run: boo
         if res["status"] in FAILED:
             problems.append(f"{res['status']}: {res.get('error', '')}")
     prune_queue(cfg)
-    log_line(cfg, f"sweep done processed={len(out)}")
-    return out
+    log_line(cfg, f"sweep done processed={len(out)}" + (f" {FROZEN}={frozen}" if frozen else ""))
+    return out + note
