@@ -1410,7 +1410,8 @@ row gained `start` (rows written before it have none and are reported as missing
 the resolved mode in `label --rows` and the queue card while any detector's phase runs. Still open, and conditions before any
 `arm_start` (PREREGISTRATION.md, Pre-arm-start conditions): the live hook does not yet
 write `arm` or `agent_id_present` (`shadow.py` holds no arm code, so today `arms report` refuses every row), the offline auto-FP rule (a) is still
-asymmetric, demotion and harm do not yet ignore auto labels during a phase, and the spillover comparison is not built.
+asymmetric, demotion and harm do not yet ignore auto labels during a phase, the spillover comparison is not built, and condition (7)
+(a delivered-path error tag; no family-lesson status change from a session carrying `ACE P-` in a phase) is not built.
 
 ### 8.x Brief (as built)
 

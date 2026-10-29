@@ -102,7 +102,7 @@ def first_demotion(cfg, pids: list[str], arm_start: str) -> tuple[str, str] | tu
 def family(cfg, starts: dict[str, str], heads: dict[str, str]) -> dict[str, list[str]]:
     """{detector: sorted proposal ids} of every started detector, as fixed at its arm start from the approvals chain prefix that ends at
     the row whose hash is `heads[detector]` (later rows, back-dated or not, are ignored). ValueError for a head that is not in the chain, a
-    member whose proposal file cannot be read, or one not approved at `warn` or `block` with no demotion row stamped before the start in force."""
+    member whose proposal file cannot be read, or one not approved at `warn` or `block` with no lowering demotion row stamped before the start in force."""
     arows, drows = _rows(cfg, approvals, "approvals"), _rows(cfg, demotions, "demotions")
     out: dict[str, list[str]] = {}
     for started, t0 in starts.items():

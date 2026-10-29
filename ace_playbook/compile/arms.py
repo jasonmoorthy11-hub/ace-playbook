@@ -7,7 +7,7 @@ assigned arm), a percentile-pivot interval for D, and Holm over every detector w
 call time; only their sha256 is compared with the sealed block and nothing prints a seed. The proposals of a detector are fixed at its arm
 start (`arms_window.family`, intention to treat: later approvals rows and rows appended after the head named on its `arm_start` line change
 nothing); each is its own hypothesis in the Holm family (conservative); a started detector with no fires enters at D = 0, p = 1. An
-`arm_start` for a detector with no approved proposal at that start, a member not approved at warn or block with no demotion in force, an
+`arm_start` for a detector with no approved proposal at that start, a member not approved at warn or block with no lowering demotion in force, an
 approved proposal with no readable file, or a line without a valid approvals head is refused.
 
 It REFUSES (ValueError; the CLI exits 1) when a fire row of an eligible session lacks `arm` or `agent_id_present`, or records an `arm` that
