@@ -2,7 +2,8 @@
 redirect is followed only to the SAME host, scheme and port, at most MAX_HOPS times.
 
 `blocked_address(host)` checks an IP literal with `ipaddress` and resolves a name with `socket.getaddrinfo`, refusing when ANY answer is
-unsafe or the name does not resolve (fail closed). `open_url` is the default opener of `fetch`: `urllib.request` with `SameHost` installed.
+unsafe or the name does not resolve (fail closed). `resolve_failed(host)` tells the second case from the first, so `scan` can wait once for DNS.
+`open_url` is the default opener of `fetch`: `urllib.request` with `SameHost` installed.
 The DNS answer can differ between this check and the connect (rebinding); the redirect rule and the address check bound the exposure but
 do not remove that race. Network-using, so off the hook path like the rest of the package.
 """
@@ -41,6 +42,22 @@ def blocked_address(host: str | None) -> bool:
     try:
         answers = {a[4][0] for a in RESOLVE(host, None)}
         return not answers or any(_unsafe(ipaddress.ip_address(str(a).split("%")[0])) for a in answers)
+    except (OSError, ValueError, UnicodeError):
+        return True
+
+
+def resolve_failed(host: str | None) -> bool:
+    """True only when `host` is a name that did not resolve: `RESOLVE` raised OSError, ValueError or UnicodeError, or gave no answer (a
+    network that is not up yet). An unsafe answer, an IP literal and an empty host are False. One more lookup; `blocked_address` is unchanged."""
+    if not host:
+        return False
+    try:
+        ipaddress.ip_address(host.strip("[]").split("%")[0])
+        return False
+    except ValueError:
+        pass
+    try:
+        return not RESOLVE(host, None)
     except (OSError, ValueError, UnicodeError):
         return True
 

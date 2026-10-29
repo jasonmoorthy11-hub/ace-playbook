@@ -233,7 +233,9 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   `claude --version`. There is no separate `acewatch` user and no egress allowlist until W2, so a fetch that is fooled (a redirect the guard
   misjudges, a rebinding answer) runs with the operator's network and file reach. The SSRF guard checks the address before the connection,
   not on the connected socket, so a DNS-rebinding race remains: a name that resolves to a public address at the check and to a private one at
-  the connect is not caught.
+  the connect is not caught. After a sleep and wake the first lookups can fail before DNS is up: a scan waits ONCE (20 s, bounded) for the first
+  source whose name did not resolve and tries that source again; the others in the same scan are not retried, so a second scan of the day still
+  catches up (a dropped source keeps no stamp and stays due).
 - Watcher, Reader (W2, built, not live, off by default): a tool-less single-turn model call reads one sanitized tier-1 feed item and may
   only answer a fixed JSON schema that code validates; the result is a `lead` with no diff, whatever the item says. The residual is the
   title: it is the one model-touched free text (at most 120 characters, control, invisible and line-separator characters removed, never in

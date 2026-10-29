@@ -489,7 +489,8 @@ network, and it is never on a hook path.
    ```
 3. `compile watch scan` fetches the sources that are due (tier 0 daily, tier 1 weekly, by the stamps in `seen.json`; `--force` ignores the
    cadence, `--tier 0|1|all` picks, `--dry-run` fetches and matches but writes nothing), rebuilds `inventory.json` and prints one line per
-   new proposal and a summary line. It exits 0 except for a configuration error or a store write failure (an `OSError` on `watch_dir`,
+   new proposal and a summary line. When the first source it drops fails only because the name did not resolve (DNS is often not up yet after a
+   wake), it waits 20 seconds once, tries that source again and notes `dns wait 20s: <id> recovered|still dropped`; it never waits twice in a scan. It exits 0 except for a configuration error or a store write failure (an `OSError` on `watch_dir`,
    printed as its type only): both exit 2. A scan holds an exclusive lock on `<watch_dir>/scan.lock`; a second scan that starts meanwhile
    prints `watch: scan running` and exits 0 without doing anything. Run it by hand or from a scheduler of your own; nothing is installed for
    you. For the terminal run, set `ACE_PLAYBOOK_CONFIG` in your shell profile (the same file the hooks and the status line read), or the
