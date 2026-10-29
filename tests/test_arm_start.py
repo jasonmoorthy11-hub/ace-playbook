@@ -444,21 +444,42 @@ def test_a_failed_append_is_one_line_and_nothing_is_written(world, capsys, monke
     assert world.prereg.read_text() == before and not (world.data / phase.FILE).exists() and not (world.data / f"arm_start_{DET}.txt").exists()
 
 
-def test_a_failed_append_on_a_read_only_file_never_names_the_amendments_entry(world, capsys, monkeypatch):
-    before = world.prereg.read_text()
-
-    def boom(path, text):
-        raise OSError("read-only")
-    monkeypatch.setattr(seal, "_write", boom)                                       # the append and the restore of the file would both fail
-    world.prereg.chmod(0o444)
+def test_a_failed_append_into_a_read_only_directory_never_names_the_amendments_entry(world, capsys):
+    before, folder = world.prereg.read_text(), world.prereg.parent
+    folder.chmod(0o555)                                                             # the REAL `seal._write` cannot create its temp file here
     try:
         assert world.go(DET, "--at", STAMP) == 1
         err = capsys.readouterr().err
         assert err.count("\n") == 1 and "Traceback" not in err and "Amendments entry" not in err and "left in place" not in err
         assert world.prereg.read_text() == before
     finally:
-        world.prereg.chmod(0o644)
+        folder.chmod(0o755)
     assert not (world.data / phase.FILE).exists() and not (world.data / f"arm_start_{DET}.txt").exists()
+    assert sorted(p.name for p in folder.glob("*PREREG*")) == ["PREREGISTRATION.md"]
+
+
+@pytest.mark.parametrize("restore_ok", [True, False])
+def test_an_unreadable_file_after_a_failed_append_counts_as_changed_and_the_restore_is_attempted(world, capsys, monkeypatch, restore_ok):
+    before, real, calls = world.prereg.read_text(), seal._write, []
+
+    def write(path, text):                                                          # the append fails, then the restore either lands or fails
+        calls.append(text)
+        if len(calls) == 1 or not restore_ok:
+            raise OSError("write fails")
+        return real(path, text)
+    real_read = Path.read_bytes
+
+    def read(self, *a, **k):                                                        # only the restore decision's read fails
+        if calls and self == world.prereg:
+            raise PermissionError("cannot read")
+        return real_read(self, *a, **k)
+    monkeypatch.setattr(seal, "_write", write)
+    monkeypatch.setattr(Path, "read_bytes", read)
+    rc = world.go(DET, "--at", STAMP)
+    err = capsys.readouterr().err
+    monkeypatch.undo()
+    assert rc == 1 and err.count("\n") == 1 and "Traceback" not in err and len(calls) == 2 and calls[1] == before
+    assert ("Amendments entry" in err) is (not restore_ok) and world.prereg.read_text() == before
 
 
 def test_a_marker_still_as_before_is_not_named_as_left_in_place(world, capsys, monkeypatch):

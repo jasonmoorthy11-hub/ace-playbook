@@ -3,11 +3,11 @@ assignment and Pre-arm-start conditions (2) and (6); the Amendments entry "arm_s
 
 Refuses (exit 1, one line, never a value) an unknown detector, an unsealed pre-registration, a stamp earlier than `sealed_at` (and, with `--at`, one already
 in the past), a detector that already has an `arm_start` line, unset config seeds, `holdout_enabled` true, an unreadable, broken or empty approvals chain, a
-family that `arms_window.family` rejects and uncommitted changes to the thirteen files. It prints the dated entry and asks y/N (`--dry-run` stops there). It
-stamps the next whole second after the `y`, appends the entry, writes the one-line file (for `ots stamp`) and the signed phase marker (phase.py). Sessions
-starting in the stamp's second before the writes land are eligible yet ran with output in both arms: the window between the stamp and the writes landing is
-under 1 s, and zero when they land before the stamp; the verb refuses when they finish 1 s or more after it. If a write fails, or the writes are too late, it
-RESTORES the file, the one-line file and the old marker and refuses. Prints the operator lines; off the hook path.
+family that `arms_window.family` rejects and uncommitted changes to the thirteen files. It prints the dated entry and asks y/N (`--dry-run` stops before
+asking). It stamps `--at`, or the next whole second after the `y`, appends the entry, writes the one-line file (for `ots stamp`) and the signed phase marker
+(phase.py). Sessions starting in the stamp's second before the writes land are eligible yet ran with output in both arms: the window between the stamp and the
+writes landing is under 1 s, and zero when they land before the stamp; the verb refuses when they finish 1 s or more after it. If a write fails, or the writes
+are too late, it RESTORES the file, the one-line file and the old marker and refuses. Prints the operator lines; off the hook path.
 """
 
 from __future__ import annotations
