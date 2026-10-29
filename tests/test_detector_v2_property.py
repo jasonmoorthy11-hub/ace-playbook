@@ -3,8 +3,9 @@
 Every world has ONE effective deletion root: the generator picks the root (a scratch root or one outside scratch), then
 spells the delete one of many ways (plain, `./*` after `cd`, `$VAR`, `${VAR}/sub`, quoted, wrapped in sudo/env/nice, `--`,
 split flags, `bash -c`/`sh -c`/`eval`, `ls | xargs`, `find -delete`, one or two `cd`s, `&&`/`;`/newline joins). The oracle is
-"fires iff the root is outside scratch". Seeded (`random.Random(1234)`, override with PYTEST_SEED); stdlib only; the
-commands are DATA fed to the detector, nothing runs.
+"fires iff the root is outside scratch, or the world relies on something v2 does not trust": a relative target after a `cd` that
+is not joined by `&&` (the cwd is unknown after `;`, `||` or a newline: build() reports it as `forced`). Seeded
+(`random.Random(1234)`, override with PYTEST_SEED); stdlib only; the commands are DATA fed to the detector, nothing runs.
 """
 
 import os
@@ -32,21 +33,26 @@ LEAD = ["", "", "echo start; ", "echo start\n", "true && "]
 SUB = ["", "", "/x1", "/pkg/y"]
 
 
-def fires(cmd: str) -> bool:
+def fires(cmd) -> bool:
+    cmd = cmd[0] if isinstance(cmd, tuple) else cmd
     ev = event_from_hook(cs.pre_payload(cmd), probe=lambda _p: False)
     out, _state, errors = cat.evaluate(ev, None, names=[NAME], strict=False)
     assert errors == []
     return any(f.detector == NAME and f.count > 0 for f in out)
 
 
-def build(seed: int, root: str) -> str:
-    """One generated command whose effective deletion root is `root` (same seed -> same shape, only the root differs)."""
+def build(seed: int, root: str) -> tuple[str, bool]:
+    """(command, forced): a generated command whose effective deletion root is `root` (same seed -> same shape, only the root
+    differs). `forced` = the world is unprovable by design (a `cd` joined by something other than `&&`) and must fire."""
     r = random.Random(seed)
     rm = lambda target: f"{r.choice(WRAP)}rm {r.choice(FLAGS)} {target}"   # noqa: E731
     join, sub = r.choice(JOIN), r.choice(SUB)
     rel = r.choice(["./*", "*", ".", "./"]) if not sub else "."
     kind = r.choice(["plain", "quoted", "cd", "cd2", "cd_sub", "var", "brace", "export", "pipe", "find", "findexec", "cdls"])
     other = r.choice(SCRATCH_ROOTS + OUTSIDE_ROOTS)
+    forced = kind in ("cd", "cd2", "cd_sub", "cdls") and join.strip() != "&&"
+    if kind in ("var", "brace", "export") and "$" in root:      # a binding with an unresolved value is dropped: same class, plain spelling
+        root = "/tmp/vars" if d.SCRATCH.search(root) else "/srv/vars"
     if kind == "plain":
         cmd = rm(root + sub)
     elif kind == "quoted":
@@ -71,12 +77,12 @@ def build(seed: int, root: str) -> str:
     elif kind == "findexec":
         cmd = f"find {root} -exec rm -rf {{}} +"
     else:
-        cmd = f"cd {root}{join}ls | xargs rm -rf"
+        cmd = f"cd {root}{join}ls -d * | xargs rm -rf"
     if kind in ("plain", "quoted", "cd", "cd2", "cd_sub", "var", "brace", "export") and r.random() < 0.3:
         # `bash -c '...'`, `sh -c '...'` and `eval '...'` hold the command in single quotes (the quoting the generator avoids inside)
         inner = cmd.replace("'", "")
         cmd = r.choice(["bash -c '%s'", "sh -c '%s'", "eval '%s'", "bash -lc '%s'"]) % inner
-    return r.choice(LEAD) + cmd
+    return r.choice(LEAD) + cmd, forced
 
 
 def worlds(n: int, salt: int):
@@ -88,23 +94,24 @@ def worlds(n: int, salt: int):
 def test_generated_commands_fire_exactly_when_the_root_is_outside_scratch():
     seen = {True: 0, False: 0}
     for seed, scratch, outside in worlds(N, 1):
-        for root, oracle in ((outside, True), (scratch, False)):
-            cmd = build(seed, root)
+        for root, scratchy in ((outside, False), (scratch, True)):
+            cmd, forced = build(seed, root)
+            oracle = forced or not scratchy
             assert fires(cmd) is oracle, (seed, root, cmd)
             seen[oracle] += 1
-    assert seen[True] >= N and seen[False] >= N
+    assert seen[True] >= N and seen[False] >= N // 2
 
 
 def test_swapping_the_root_of_a_fire_world_to_scratch_gives_a_twin_that_does_not_fire():
     for seed, scratch, outside in worlds(N, 2):
-        fire, twin = build(seed, outside), build(seed, scratch)
-        assert fires(fire) and not fires(twin), (seed, fire, twin)
+        (fire, forced), (twin, _) = build(seed, outside), build(seed, scratch)
+        assert fires(fire) and (forced or not fires(twin)), (seed, fire, twin)
 
 
 def test_the_world_grammar_covers_every_shape_and_wrapper():
     shapes = set()
     for seed, scratch, _outside in worlds(N, 3):
-        cmd = build(seed, scratch)
+        cmd = build(seed, scratch)[0]
         shapes |= {s for s in ("bash -c", "sh -c", "eval", "xargs", "find", "export", "cd ", "${D}", " -- ", "sudo", "nice", "\n")
                    if s in cmd}
     assert shapes == {"bash -c", "sh -c", "eval", "xargs", "find", "export", "cd ", "${D}", " -- ", "sudo", "nice", "\n"}
@@ -127,7 +134,7 @@ def test_the_canonicalizer_is_idempotent_on_generated_commands():
     checked = 0
     for seed, scratch, outside in worlds(N, 4):
         for root in (scratch, outside):
-            for group in canon(build(seed, root)):
+            for group in canon(build(seed, root)[0]):
                 for path, verdict in group:
                     again = canon(f"rm -rf {path}")
                     assert again == [[(path, verdict)]], (seed, root, path, again)
@@ -137,7 +144,7 @@ def test_the_canonicalizer_is_idempotent_on_generated_commands():
 
 def test_the_canonicalizer_is_pure_it_gives_the_same_answer_twice():
     for seed, scratch, outside in worlds(N, 5):
-        cmd = build(seed, outside)
+        cmd = build(seed, outside)[0]
         assert canon(cmd) == canon(cmd) != []
 
 
@@ -176,4 +183,5 @@ def test_other_seeds_agree_with_the_oracle(seed):
     rng = random.Random(seed)
     for _ in range(100):
         s, scratch, outside = rng.randrange(1 << 30), rng.choice(SCRATCH_ROOTS), rng.choice(OUTSIDE_ROOTS)
-        assert fires(build(s, outside)) and not fires(build(s, scratch)), (seed, s)
+        (fire, forced), (twin, _) = build(s, outside), build(s, scratch)
+        assert fires(fire) and (forced or not fires(twin)), (seed, s)

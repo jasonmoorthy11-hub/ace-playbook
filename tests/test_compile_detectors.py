@@ -407,7 +407,7 @@ V2_SCRATCH = [
     ("worktree-added-then-removed", "git worktree add /w/wt -b nb && rm -rf /w/wt", False),
     ("worktree-child-path", "git worktree add /w/wt && rm -rf /w/wt/src/x", False),
     ("worktree-option-value-skipped", "git worktree add -b feat /w/wt HEAD && rm -rf /w/wt", False),
-    ("worktree-git-C-base", "git -C /w/repo worktree add ../wt && rm -rf /w/wt", False),
+    ("worktree-git-C-base", "git -C /w/repo worktree add wt b && rm -rf /w/repo/wt", False),
     ("worktree-sibling-is-not-scratch", "git worktree add /w/wt && rm -rf /w/other", True),
     ("worktree-prefix-lookalike", "git worktree add /w/wt && rm -rf /w/wt2", True),
     ("worktree-remove-is-not-add", "git worktree remove /w/wt && rm -rf /w/wt", True),

@@ -300,12 +300,12 @@ def targets(cmd):
     ("rm -rf /w/src", [[("/w/src", False)]]),
     ("rm -rf /tmp/a /w/b", [[("/tmp/a", True), ("/w/b", False)]]),
     ("cd /tmp/w && rm -rf ./*", [[("/tmp/w/*", True)]]),
-    ("cd /w; rm -rf ./*", [[("/w/*", False)]]),
-    ("cd /w\nrm -rf .", [[("/w", False)]]),
+    ("cd /w; rm -rf ./*", [[("*", False)]]),
+    ("cd /w\nrm -rf .", [[(".", False)]]),
     ("cd /tmp/w && cd sub && rm -rf .", [[("/tmp/w/sub", True)]]),
     ("cd /tmp/w && cd /w && rm -rf .", [[("/w", False)]]),
     ("cd /tmp/w && cd .. && rm -rf .", [[("/tmp", True)]]),
-    ("cd /tmp/w || rm -rf .", [[("/tmp/w", True)]]),
+    ("cd /tmp/w || rm -rf .", [[(".", False)]]),
     ("pushd /tmp/w && rm -rf .", [[("/tmp/w", True)]]),
     ("cd && rm -rf ./*", [[("$HOME/*", False)]]),
     ("cd /tmp/w && cd - && rm -rf ./*", [[("*", False)]]),
@@ -348,15 +348,15 @@ def test_canonical_targets(cmd, want):
     ("sudo bash -c 'rm -rf /w/src'", [[("/w/src", False)]]),
     ("cd /tmp/w && bash -c 'rm -rf .'", [[("/tmp/w", True)]]),
     ("D=/tmp/w; bash -c 'rm -rf $D'", [[("/tmp/w", True)]]),
-    ("cd /tmp/w; bash -c 'cd /w'; rm -rf .", [[("/tmp/w", True)]]),
+    ("cd /tmp/w && bash -c 'cd /w' && rm -rf .", [[("/tmp/w", True)]]),
     ("bash -c \"bash -c 'rm -rf /w/src'\"", []),
     ("bash script.sh -c 'rm -rf /w/src'", []),
     ("bash -c", []),
     ("bash -c ''", []),
     ("ls -d /tmp/w/* | xargs rm -rf", [[("/tmp/w/*", True)]]),
     ("ls -d /w/a /w/b | xargs rm -rf", [[("/w/a", False), ("/w/b", False)]]),
-    ("ls | xargs rm -rf", [[(".", False)]]),
-    ("cd /tmp/w && ls | xargs rm -rf", [[("/tmp/w", True)]]),
+    ("ls | xargs rm -rf", [[("$UNKNOWN", False)]]),
+    ("cd /tmp/w && ls | xargs rm -rf", [[("$UNKNOWN", False)]]),
     ("find /w/a /tmp/b -type d | xargs rm -rf", [[("/w/a", False), ("/tmp/b", True)]]),
     ("cat list | xargs rm -rf", []),
     ("ls /w; xargs rm -rf", []),
@@ -395,3 +395,81 @@ def test_resolution_is_linear_on_hostile_input():
         t0 = time.monotonic()
         resolve.canonical_targets(shell.command_stream(cmd), det.SCRATCH)
         assert time.monotonic() - t0 <= TIME_BUDGET, name
+
+
+# ------------------------------------------------------------------ v2 fails closed (security review of run 1): a non-scratch delete is never read as scratch
+def bad(cmd):
+    return any(not s for g in targets(cmd) for _p, s in g)
+
+
+FAIL_CLOSED = [   # (case, command, fires)
+    # 1. the cwd carries only across `&&`
+    ("cd-or-true-then-rm", "cd /tmp/w || true; rm -rf ./*", True),
+    ("cd-or-then-rm", "cd /tmp/w || rm -rf ./*", True),
+    ("cd-semicolon-rm", "cd /tmp/w; rm -rf ./*", True),
+    ("cd-newline-rm", "cd /tmp/w\nrm -rf ./*", True),
+    ("cd-if-then-rm", "if cd /tmp/w; then rm -rf ./*; fi", True),
+    ("cd-while-body", "while true; do cd /tmp/w; rm -rf ./*; done", True),
+    ("cd-and-rm", "cd /tmp/w && rm -rf ./*", False),
+    ("cd-and-cd-and-rm", "cd /tmp/w && cd sub && rm -rf ./*", False),
+    ("cd-and-chain-in-a-loop", "for i in 1 2; do cd /tmp/w && rm -rf ./*; done", False),
+    ("cd-and-subshell", "cd /tmp/w && (rm -rf ./*)", False),
+    ("cd-in-subshell-and", "(cd /tmp/w && rm -rf ./*)", False),
+    ("cd-pipe-rm", "cd /tmp/w | cat && rm -rf ./*", True),
+    ("cd-and-then-semicolon-chain", "cd /tmp/w && true; rm -rf ./*", True),
+    ("bash-c-inherits-the-and-chain", "cd /tmp/w && bash -c 'rm -rf ./*'", False),
+    ("bash-c-semicolon-inside", "bash -c 'cd /tmp/w; rm -rf ./*'", True),
+    # 2. a binding that later text may change is dropped
+    ("plain-binding", 'D=/tmp/w; rm -rf "$D"', False),
+    ("unset", 'D=/tmp/w; unset D; rm -rf "$D"', True),
+    ("append", 'D=/tmp/w; D+=/../../w; rm -rf "$D"', True),
+    ("array-element", 'D=/tmp/w; D[0]=/w; rm -rf "$D"', True),
+    ("for-loop", 'D=/tmp/w; for D in /w/a; do rm -rf "$D"; done', True),
+    ("read", 'D=/tmp/w; read D; rm -rf "$D"', True),
+    ("read-flags", 'D=/tmp/w; read -r -p ask D; rm -rf "$D"', True),
+    ("printf-v", 'D=/tmp/w; printf -v D %s /w; rm -rf "$D"', True),
+    ("declare-n", 'D=/tmp/w; declare -n D=OTHER; rm -rf "$D"', True),
+    ("mapfile", 'D=/tmp/w; mapfile D < f; rm -rf "$D"', True),
+    ("getopts", 'D=/tmp/w; getopts ab D; rm -rf "$D"', True),
+    ("command-substitution", 'D=/tmp/w; D=$(pwd); rm -rf "$D"', True),
+    ("backticks", 'D=/tmp/w; D=`pwd`; rm -rf "$D"', True),
+    ("unresolved-rhs", 'D=/tmp/w; D=$OTHER; rm -rf "$D"', True),
+    ("default-expansion-rhs", 'D=${X:-/tmp/w}; rm -rf "$D"', True),
+    ("eval-rebinds", 'D=/tmp/w; eval "D=/w"; rm -rf "$D"', True),
+    ("source-rebinds", 'D=/tmp/w; source ./env.sh; rm -rf "$D"', True),
+    ("dot-rebinds", 'D=/tmp/w; . ./env.sh; rm -rf "$D"', True),
+    ("resolved-rhs-is-kept", 'A=/tmp/w; D=$A/x; rm -rf "$D"', False),
+    ("bash-c-keeps-the-parent-binding", 'D=/tmp/w; bash -c \'unset D\'; rm -rf "$D"', False),
+    # 3. a worktree is scratch only inside the same && chain, and never a wide or odd path
+    ("worktree-same-chain", "git worktree add /w/wt b && rm -rf /w/wt", False),
+    ("worktree-home", "git worktree add ~/x && rm -rf ~/x", True),
+    ("worktree-home-sub", "git worktree add ~/x/y && rm -rf ~/x/y", True),
+    ("worktree-semicolon", "git worktree add /w/wt b; rm -rf /w/wt", True),
+    ("worktree-or", "git worktree add /w/wt b || rm -rf /w/wt", True),
+    ("worktree-newline", "git worktree add /w/wt b\nrm -rf /w/wt", True),
+    ("worktree-dotdot", "git worktree add /w/../wt && rm -rf /w/../wt", True),
+    ("worktree-dotdot-relative", "git worktree add ../wt && rm -rf ../wt", True),
+    ("worktree-dollar", "git worktree add $X/wt && rm -rf $X/wt", True),
+    ("worktree-root", "git worktree add / && rm -rf /", True),
+    ("worktree-dot", "git worktree add . && rm -rf .", True),
+    ("worktree-one-component", "git worktree add /wt && rm -rf /wt", True),
+    ("worktree-relative-one-component", "git worktree add wt && rm -rf wt", True),
+    ("worktree-the-repo-itself", "cd /w/repo && git worktree add /w/repo b && rm -rf /w/repo", True),
+    ("worktree-an-ancestor-of-the-repo", "git -C /w/repo/sub worktree add /w/repo b && rm -rf /w/repo", True),
+    ("worktree-under-the-repo", "git -C /w/repo worktree add wt b && rm -rf /w/repo/wt", False),
+    ("worktree-then-semicolon-chain", "git worktree add /w/wt b && true; rm -rf /w/wt", True),
+    # 4. an `ls` producer resolves only as `ls -d <paths>`
+    ("ls-d-glob-scratch", "ls -d /tmp/w/* | xargs rm -rf", False),
+    ("ls-d-glob-outside", "ls -d /w/src/* | xargs rm -rf", True),
+    ("ls-dir-names", "ls /tmp/w | xargs rm -rf", True),
+    ("ls-bare", "cd /tmp/w && ls | xargs rm -rf", True),
+    ("ls-l-names", "ls -l /tmp/w | xargs rm -rf", True),
+    ("ls-d-without-an-argument", "ls -d | xargs rm -rf", True),
+    ("find-keeps-the-root-rule", "find /tmp/w -type f | xargs rm -rf", False),
+    ("eval-keeps-the-state", 'eval "cd /tmp/w" && rm -rf ./*', False),
+]
+
+
+@pytest.mark.parametrize("cmd,fires", [(c, f) for _n, c, f in FAIL_CLOSED], ids=[n for n, _c, _f in FAIL_CLOSED])
+def test_v2_fails_closed(cmd, fires):
+    assert bad(cmd) is fires

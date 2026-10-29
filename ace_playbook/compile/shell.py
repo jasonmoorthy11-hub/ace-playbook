@@ -28,6 +28,9 @@ _SIMPLE = re.compile(r"^[\w./~$@%+=:,-]*$")
 _SPLIT = re.compile(r"&&|\|\||;|\||\n|\(|\)|`|(?<![>&])&(?![>&])")
 _ASSIGN = re.compile(r"^\w+=\S*$")
 _KEEP = re.compile(r"^[\w./~$@%+=:,{}-]*$")   # v2 keeps `{}` inline as well ("${D}/x" is one word, not prose)
+HOLE = re.compile(r"\x00(\d+)\x00")           # a quoted string `command_stream` kept aside: \x00N\x00 -> quotes[N]
+_SH_C = re.compile(r"^-[a-zA-Z]*c[a-zA-Z]*$")
+_REBIND = re.compile(r"^(\w+)(?:\+=|\[)")      # NAME+=x and NAME[i]=x change a variable without a plain `NAME=value`
 _SEP = re.compile(r"(&&|\|\||;|\||\n|\(|\)|`|(?<![>&])&(?![>&]))")
 _REDIR = re.compile(r"^[0-9]*&?[<>]{1,2}&?(\S*)$")
 _LEAD = frozenset("{ } ! if then elif else while until do".split())
@@ -227,6 +230,39 @@ def command_stream(cmd: str | None) -> tuple[list[tuple[str, list[str]]], list[t
 
     parts = _SEP.split(_scan((cmd or "").replace("\x00", " "), mask))
     return [(p, []) if i % 2 else ("", p.split()) for i, p in enumerate(parts) if i % 2 or p.split()], quotes
+
+
+def script(front: list[str], quotes: list) -> str | None:
+    """The string `bash -c` / `sh -c` / `eval` would run, quotes opened; None for any other command."""
+    name = posixpath.basename(front[0].replace("\\", "")) if front else ""
+    unmask = lambda t: HOLE.sub(lambda m: quotes[int(m.group(1))][1], t)   # noqa: E731
+    if name == "eval":
+        return " ".join(unmask(t) for t in front[1:])
+    k = 1
+    while name in ("bash", "sh") and k < len(front) - 1 and front[k].startswith("-"):
+        if _SH_C.match(front[k]):
+            return unmask(front[k + 1])
+        k += 2 if front[k] in ("-o", "-O") else 1
+    return None
+
+
+def rebinds(raw: list[str], front: list[str]) -> set[str]:
+    """Variable names a command may change other than by a plain `NAME=value`: `NAME+=`, `NAME[i]=`, unset, for/select, read,
+    mapfile/readarray, getopts, `printf -v` and `declare -n`. resolve.py forgets what it knew about them."""
+    names = {m.group(1) for t in (*raw, *front) if (m := _REBIND.match(t))}
+    cmd, args = (posixpath.basename(front[0]) if front else ""), front[1:]
+    plain = [a for a in args if not a.startswith("-")]
+    if cmd in ("unset", "read", "mapfile", "readarray"):
+        names |= set(plain)
+    elif cmd in ("for", "select"):
+        names |= set(plain[:1])
+    elif cmd == "getopts":
+        names |= set(plain[1:2])
+    elif cmd == "printf" and "-v" in args[:-1]:
+        names.add(args[args.index("-v") + 1])
+    elif cmd in ("declare", "typeset", "local") and any(a.startswith("-") and "n" in a for a in args):
+        names |= {a.split("=")[0] for a in plain}
+    return names
 
 
 def git_subcommand(toks: list[str]) -> tuple[str | None, list[str]]:

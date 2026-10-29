@@ -3,14 +3,17 @@
 Week 1 read 0 TP / 36 FP: every fire was a subagent cleaning its own scratch (`cd <scratch> && rm -rf ./*`, a shell variable, a
 worktree it had just made). v1 judged the literal token; v2 resolves what the command deletes. Pure functions over ONE command
 (`shell.command_stream`); nothing is executed, expanded by a shell or read from the environment.
-cwd: `cd`/`pushd` carry forward over `&&`, `||`, `;` and newline; a bare `cd` is $HOME (never scratch); `cd -`, `popd` and a piped
-or backgrounded `cd` leave it unknown (v1's literal reading); `( )` and backticks scope the cwd and the variables.
+Fails closed: whatever it cannot prove is scratch is not scratch. cwd: `cd`/`pushd` carry forward ONLY across `&&` (the delete then
+runs only if the cd worked); after `||`, `;`, a newline or `&` the cwd is unknown and a relative target fires; a bare `cd` is
+$HOME (never scratch); `cd -` and `popd` leave it unknown; `( )` and backticks scope the cwd and the variables.
 Variables: earlier `NAME=value` and `export NAME=value` fill `$NAME` / `${NAME}` (not inside single quotes); an unassigned name,
-`$HOME` and `$PWD` stay unresolved and are NOT scratch; `$TMPDIR` keeps v1's literal-prefix rule; a command substitution is `Q`.
+`$HOME` and `$PWD` stay unresolved and are NOT scratch; `$TMPDIR` keeps v1's literal-prefix rule; a binding is dropped when its value
+stays unresolved (`$`, backticks, `$(`) or when the name is rebound (shell.rebinds), `source` or `.` runs; a command substitution is `Q`.
 Scratch is the caller's SCRATCH pattern (it covers /private/tmp/claude-501/, the agent scratch tree) plus a path made by
-`git [-C repo] worktree add` EARLIER IN THE SAME COMMAND (no memory across tool calls). `bash -c`, `sh -c` and `eval` are re-scanned
-one level deep; `ls|find ... | xargs rm -rf`, `find -delete` and `find -exec rm -rf` delete the producer's paths or the find roots.
-Everything else (interpreters, scripts, `$IFS`, `$(echo rm)`, other producers) stays a documented miss.
+`git [-C repo] worktree add` in the same `&&` chain (never `~`, `..`, `$`, `/`, `.`, the repo or an ancestor, or fewer than two
+components; no memory across tool calls). `bash -c` and `sh -c` (own copy of the state) and `eval` (shared state) are re-scanned
+one level deep; `ls -d <paths>` / `find ... | xargs rm -rf`, `find -delete` and `find -exec rm -rf` delete the producer's paths or the
+find roots; any other `ls` producer is unknown (fires). Interpreters, scripts, `$IFS`, `$(echo rm)` and other producers stay misses.
 """
 
 from __future__ import annotations
@@ -20,10 +23,8 @@ import re
 
 from . import shell
 
-_HOLE = re.compile(r"\x00(\d+)\x00")
 _REF = re.compile(r"\$(\w+)|\$\{(\w+)\}")
 _SET = re.compile(r"^(\w+)=(.*)$", re.S)
-_SH_C = re.compile(r"^-[a-zA-Z]*c[a-zA-Z]*$")
 _KEYWORDS = frozenset(("export", "declare", "typeset", "local", "readonly"))
 _BARRIER = frozenset(("|", "&"))                  # a cd beside these runs in a subshell or the background: the cwd stays
 _EXEC, _FIND_OPTS, _WT_VALUE = frozenset(("-exec", "-execdir", "-ok", "-okdir")), frozenset(("-H", "-L", "-P")), ("-b", "-B", "--reason")
@@ -62,7 +63,7 @@ def _expand(s: str, env: dict) -> str:
 def _text(tok: str, st: _State, quotes: list) -> str | None:
     """The word with its variables and quoted holes filled; None if a quoted part holds a command substitution."""
     out = []
-    for i, piece in enumerate(_HOLE.split(tok)):
+    for i, piece in enumerate(shell.HOLE.split(tok)):
         if i % 2 == 0:
             out.append(_expand(piece, st.env))
             continue
@@ -84,7 +85,7 @@ def _assign(toks: list[str], st: _State, quotes: list) -> None:
     for t in toks:
         m = _SET.match(t)
         val = _text(m.group(2), st, quotes) if m else None
-        if m and (val is None or len(val) > MAX_VALUE or (m.group(1) not in st.env and len(st.env) >= MAX_ENV)):
+        if m and (val is None or "$" in val or "`" in val or len(val) > MAX_VALUE or (m.group(1) not in st.env and len(st.env) >= MAX_ENV)):
             st.env.pop(m.group(1), None)         # unresolvable: the name goes back to "unassigned"
         elif m:
             st.env[m.group(1)] = val
@@ -106,7 +107,11 @@ def _worktree(front: list[str], st: _State, quotes: list) -> None:
     rest, j = args[1:], 0
     while j < len(rest) and rest[j].startswith("-"):
         j += 2 if rest[j] in _WT_VALUE else 1
-    if j < len(rest) and (p := _path(rest[j], repo, quotes)) not in ("/", ".", "Q", HOME):
+    if j >= len(rest):
+        return
+    text, p = _text(rest[j], repo, quotes) or "$", _path(rest[j], repo, quotes)
+    wide = repo.cwd is not None and (p == repo.cwd or repo.cwd.startswith(p.rstrip("/") + "/"))   # the repo itself or an ancestor
+    if not (text.startswith(("~", "$")) or ".." in text.split("/") or wide or p in ("/", ".", "Q") or len(p.strip("/").split("/")) < 2):
         st.made.add(p)
 
 
@@ -119,8 +124,11 @@ def _roots(args: list[str]) -> list[str]:
 def _fed(events: list, i: int) -> list[str]:
     """`<producer> | xargs rm -rf`: the paths the producer (ls or find, directly before the pipe) lists."""
     src = shell.front(events[i - 2][1]) if i >= 2 and events[i - 1][0] == "|" and not events[i - 2][0] else []
-    name = _base(src[0]) if src else ""
-    return _roots(src[1:] if name == "find" else [a for a in src[1:] if not a.startswith("-")]) if name in ("find", "ls") else []
+    name, flags = (_base(src[0]) if src else ""), [a for a in src[1:] if a.startswith("-") and not a.startswith("--")]
+    pos = [a for a in src[1:] if not a.startswith("-")]
+    if name == "ls":                             # `ls DIR` lists names inside DIR, not paths: only `ls -d <paths>` is understood
+        return pos if pos and any("d" in f for f in flags) else ["$UNKNOWN"]
+    return _roots(src[1:]) if name == "find" else []
 
 
 def _victims(raw: list[str], front: list[str], events: list, i: int) -> list[str]:
@@ -134,20 +142,6 @@ def _victims(raw: list[str], front: list[str], events: list, i: int) -> list[str
     return _fed(events, i) if xargs and not args else args
 
 
-def _script(front: list[str], quotes: list) -> str | None:
-    """The string `bash -c` / `sh -c` / `eval` would run, quotes opened; None for any other command."""
-    name = _base(front[0]) if front else ""
-    unmask = lambda t: _HOLE.sub(lambda m: quotes[int(m.group(1))][1], t)   # noqa: E731
-    if name == "eval":
-        return " ".join(unmask(t) for t in front[1:])
-    k = 1
-    while name in ("bash", "sh") and k < len(front) - 1 and front[k].startswith("-"):
-        if _SH_C.match(front[k]):
-            return unmask(front[k + 1])
-        k += 2 if front[k] in ("-o", "-O") else 1
-    return None
-
-
 def _run(events: list, quotes: list, st: _State, depth: int, scratch, out: list) -> None:
     stack = []                                   # (opener, cwd, env) of the open `(` / backtick scopes
     for i, (sep, raw) in enumerate(events):
@@ -159,6 +153,8 @@ def _run(events: list, quotes: list, st: _State, depth: int, scratch, out: list)
                 stack.append((sep, st.cwd, dict(st.env)))
             elif stack and stack[-1][0] == {")": "(", "`": "`"}.get(sep):
                 _, st.cwd, st.env = stack.pop()
+            elif sep not in ("&&", "|"):         # `;` `||` newline `&`: the cd (or the worktree add) may not have worked
+                st.cwd, st.made = None, set()
             continue
         front = shell.front(raw)
         if not front:
@@ -173,13 +169,18 @@ def _run(events: list, quotes: list, st: _State, depth: int, scratch, out: list)
             _assign(front[1:], st, quotes)
         elif name == "git":
             _worktree(front, st, quotes)
-        elif (script := _script(front, quotes)) is not None:
+        elif name in ("source", "."):
+            st.env.clear()                       # a sourced file may rebind anything and change the directory
+            st.cwd = None
+        elif (script := shell.script(front, quotes)) is not None:
             if depth == 0 and script.strip():
                 sub, subq = shell.command_stream(script)
-                _run(sub, subq, st.copy(), 1, scratch, out)
+                _run(sub, subq, st if name == "eval" else st.copy(), 1, scratch, out)
         elif targets := _victims(raw, front, events, i):
             paths = [_path(t, st, quotes) for t in targets]
             out.append([(p, bool(scratch.search(p)) or any(p == w or p.startswith(w + "/") for w in st.made)) for p in paths])
+        for n in shell.rebinds(raw, front):
+            st.env.pop(n, None)
 
 
 def canonical_targets(parsed, scratch) -> list[list[tuple[str, bool]]]:
