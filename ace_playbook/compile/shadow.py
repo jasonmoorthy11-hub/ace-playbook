@@ -3,10 +3,10 @@
 hooks/shadow.sh calls `main(["pre"|"stop"])`: one payload on stdin (cap 256 KiB; a larger one logs `error:oversize` and fires every applicable
 `on_truncated: "fire"` proposal, the tool name read by a raw scan and an unreadable one meaning every proposal of the event), the approved proposals
 re-validated, their detectors run, one `shadow.jsonl` row per fire; ALWAYS returns 0, failures are type-only lines in `shadow.log`. Observe prints
-nothing; warn echoes the message on stderr and prints ONE `additionalContext` JSON on stdout (a Stop one re-prompts the model, so `stop_hook_active`
-is honoured); block prints the deny/block JSON and wins. `modes.resolve` decides the mode (approvals.jsonl and demotions.jsonl, read with the chain
-key: chains.py). With the kill file `proposals/DISABLED` nothing is printed, rows are written with mode `disabled` and `disabled:kill_file` is
-logged. Rows hold enums, ids, hashes, a timestamp and `dur_ms`, never payload text. Stdlib plus this package; no inject/keys/reflect/network.
+nothing (nor an observe-arm session in a phase); warn echoes the message on stderr and prints ONE `additionalContext` JSON on stdout (a Stop one re-prompts the
+model, so `stop_hook_active` is honoured); block prints the deny/block JSON and wins. `modes.resolve` decides the mode (approvals.jsonl and demotions.jsonl,
+keyed: chains.py). With the kill file `proposals/DISABLED` nothing is printed, rows are written with mode `disabled` and `disabled:kill_file` is logged. Rows
+hold enums, ids, hashes, a timestamp and `dur_ms`, no payload text. Stdlib plus this package; no inject/keys/reflect/network.
 """
 
 from __future__ import annotations
@@ -280,7 +280,8 @@ def _run(cfg, argv: list, log) -> None:
                     json.dumps(_row(cfg, p, mode, cause, event, ev, sid, raw, t0, tool or "", payload), sort_keys=True) + "\n")
         except OSError as exc:                                # still act on the decision below
             log(f"error:row:{type(exc).__name__}")
-    shadow_arm.deliver(cfg, *guard.decision(event, hits, active), _log)    # stderr echo, then the stdout decision (design 11 question 1)
+    heard = shadow_arm.audible(cfg, hits, state_mod.session_hash(sid), _Once(cfg, log))    # an observe-arm session in a phase hears nothing
+    shadow_arm.deliver(cfg, *guard.decision(event, heard, active), _log)    # stderr echo, then the stdout decision (design 11 question 1)
 
 
 def main(argv: list, cfg=None) -> int:

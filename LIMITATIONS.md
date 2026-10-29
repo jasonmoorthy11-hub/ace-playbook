@@ -57,7 +57,8 @@ an effect (randomization inference, the spillover flag), the review packet (`pac
 go/no-go, and the seal refuses until the `shadow_seed`, `permutation_seed` and `arm_rate` config fields are set and the text
 states the session-based entry gate and the horizon; the arm analysis (`python3 -m ace_playbook.compile.arms report`) is
 built and hashed in `report_sha256`, with the hook's `arm` and `agent_id_present` fields (without which `arms report`
-refuses), the symmetric auto-FP rule and the spillover comparison still open (design section 8, Arms). The arm analysis refuses as a whole when any approved
+refuses), the phase marker, the observe-arm silence, the symmetric correction rule, human-only demotion and the minting freeze built, and the
+arm-start verb and the spillover comparison still open (design section 8, Arms). The arm analysis refuses as a whole when any approved
 proposal's file is missing, even one of a
 detector that has not started (it fails closed; `unapprove` keeps the file, so it can be restored). The arm analysis reads the whole demotions chain,
 not only the part before the `approvals=` head: a demotion stamped before the arm start but appended after the head refuses the family (it fails
@@ -68,6 +69,19 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
 ## Compiler (stage 2)
 
 - `agent_id_present` on a shadow row records only whether the hook payload carried an `agent_id` key, never its value (False for an over-cap payload).
+- The arm phase has two views that the arm-start verb (the next wave) must keep equal: the `arm_start` line in PREREGISTRATION.md, which only
+  the analysis reads, and `data_dir/arm_phase.json`, which only the hook, the offline pass and the minting freeze read. A marker without a
+  matching line silences nothing in the analysis (the hook, the corrections and the freeze behave as in a phase, `arms report` still says
+  `not started`); a line without a marker leaves the hook delivering in both arms (`arms report` refuses on the rows it finds, which is the
+  only backstop). A missing, unreadable or malformed marker means no phase, silently.
+- Only the correction rule of the offline pass is arm-sensitive: in a phase it labels nothing in either arm, so a corrected fire waits for a
+  human label (the other three auto rules are unchanged). Demotion in a phase counts only human labels; `error_rate`, `lesson_inactive`,
+  `source_sha256` and the `evasion_pair` flag still act. `neutral_corrections` is in the offline summary dict, not in the CLI's printed lines.
+- The minting freeze is enforced at the only session-driven writer of lessons, `reflect_transcript`: during a phase a transcript whose raw bytes
+  carry `ACE P-` (or that is unreadable or over 64 MiB) mints nothing and closes its session in the reflections ledger as `frozen_arm_phase`, so
+  the nightly sweep does not reflect it later (`--force` does). No production code path writes RETIRE, PATCH, MERGE or NARROW from a session
+  (`store/promote.py` and `store/__main__.py` are operator-driven); tests/test_arm_phase.py fails if one appears elsewhere. The NOOP counters
+  of a frozen session are not written either.
 - The command scanner is a best-effort linear tokenizer, not a shell parser. Known shapes it does
   not see: `find ... -delete` and `-exec rm -rf`, `xargs` fed from a pipe, `bash -c`, `eval` and
   `bash <<EOF` bodies, shell functions and aliases, and anything past the 64 KB cap (reported as

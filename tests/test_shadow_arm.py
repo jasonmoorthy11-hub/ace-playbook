@@ -2,15 +2,18 @@
 
 The hook may not import `arms` (analysis code, hashed in `report_sha256`), so `shadow_arm.assign` is a copy; these tests pin it to the
 sealed function on generated inputs and by source text, pin the two new row keys and the `error:delivered:<Type>` log lines, and check
-that the seed is never written anywhere. Timing: test_hook_conformance.py only bounds single runs by FAST; the p95 test below reuses
-its `hook` harness and `FAST` budget (no other test bounds the hook across many runs).
+that the seed is never written anywhere. The pipe tests run the real hook with a closed reader; the phase tests (delivery by arm) come last.
+Timing: test_hook_conformance.py only bounds single runs by FAST; the p95 test below reuses its `hook` harness and `FAST` budget (no other
+test bounds the hook across many runs).
 """
 
 import ast
 import hashlib
 import inspect
 import json
+import os
 import re
+import subprocess
 import textwrap
 from types import SimpleNamespace
 
@@ -21,7 +24,7 @@ from ace_playbook.compile import state as st
 
 from . import compile_support as cs
 from .test_compile_shadow import Runner
-from .test_hook_conformance import FAST, hook
+from .test_hook_conformance import FAST, ROOT, env_of, hook
 
 SEED = "ab" * 32
 RM = "rm -rf /w/src"
@@ -217,10 +220,133 @@ def test_the_seed_never_reaches_a_row_the_log_stdout_or_stderr(w):
 
 
 def test_the_p95_of_50_hook_runs_stays_under_the_conformance_budget(w):
+    """The bound is FAST, a ceiling for slow CI machines (about 40 ms is typical): this catches a hang or a gross regression, not a small one."""
     armed(w)
     secs = []
     for i in range(50):
         p, took = hook(w, json.dumps(cs.pre_payload(RM, sid=f"sess-p95-{i}")).encode())
         assert (p.returncode, p.stdout, p.stderr) == (0, b"", b"")
         secs.append(took)
-    assert sorted(secs)[int(0.95 * 50) - 1] < FAST and len(cs.shadow_rows(w.data)) == 50
+    assert sorted(secs)[47] < FAST and len(cs.shadow_rows(w.data)) == 50              # index 47 of 50 is about the 95th percentile
+
+
+# ------------------------------------------------------------------ a real pipe whose reader is gone (stdout is block-buffered on a pipe)
+def closed_reader_run(w, which: str, payload: dict):
+    """Run hooks/shadow.sh with `which` (stdout or stderr) on a pipe whose read end is closed and the other on a capture pipe."""
+    rd, wr = os.pipe()
+    os.close(rd)
+    kw = {"stdout": wr, "stderr": subprocess.PIPE} if which == "stdout" else {"stdout": subprocess.PIPE, "stderr": wr}
+    try:
+        return subprocess.run([str(ROOT / "hooks" / "shadow.sh"), "pre"], input=json.dumps(payload).encode(), env=env_of(w), timeout=60, **kw)
+    finally:
+        os.close(wr)
+
+
+@pytest.mark.parametrize("which", ["stdout", "stderr"])
+def test_a_channel_whose_pipe_reader_is_closed_logs_exactly_one_line_writes_the_row_and_exits_0(w, which):
+    message = warn_world(w)
+    p = closed_reader_run(w, which, cs.pre_payload(RM))
+    (line,) = delivered(w)
+    assert p.returncode == 0 and len(cs.shadow_rows(w.data)) == 1
+    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ error:delivered:BrokenPipeError", line)
+    if which == "stdout":
+        assert p.stderr == (message + "\n").encode()                        # the echo arrived; nothing from the exit flush ("Exception ignored")
+    else:
+        assert json.loads(p.stdout)["hookSpecificOutput"]["additionalContext"] == message
+
+
+def test_a_block_decision_on_a_closed_stdout_pipe_is_logged_and_exits_0(w):
+    cs.approve_file(w.cfg, w.props["rm_rf_nonscratch"], "block", row=True)
+    p = closed_reader_run(w, "stdout", cs.pre_payload(RM))
+    assert p.returncode == 0 and p.stderr == b"" and len(delivered(w)) == 1 and [r["mode"] for r in cs.shadow_rows(w.data)] == ["block"]
+
+
+# ------------------------------------------------------------------ the phase: an observe-arm session hears nothing
+STARTED = "2026-10-01T00:00:00Z"
+DET = "rm_rf_nonscratch"
+
+
+def sid_in(arm: str, pid: str) -> str:
+    """A session id whose hash lands in `arm` for this proposal at rate 0.5 under SEED."""
+    return next(f"sess-ph-{i}" for i in range(1000) if arms.assign(st.session_hash(f"sess-ph-{i}"), SEED, 0.5, pid) == arm)
+
+
+def phase_marker(w, body=None):
+    (w.data / "arm_phase.json").write_text(json.dumps({DET: STARTED} if body is None else body))
+
+
+def phased(w, mode="warn"):
+    armed(w)
+    cs.approve_file(w.cfg, w.props[DET], mode, row=True)
+    return w.props[DET]["message"], w.props[DET]["id"]
+
+
+def test_in_a_phase_the_observe_arm_session_is_silent_and_the_warn_arm_session_hears_the_warn(w, run):
+    message, pid = phased(w)
+    phase_marker(w)
+    code, out, err = run(cs.pre_payload(RM, sid=sid_in("observe", pid)))
+    assert (code, out, err) == (0, "", "")
+    (row,) = run.rows
+    assert (row["mode"], row["arm"], row["would_fire"]) == ("warn", "observe", True)
+    code, out, err = run(cs.pre_payload(RM, sid=sid_in("warn", pid)))
+    assert code == 0 and err == message + "\n" and json.loads(out)["hookSpecificOutput"]["additionalContext"] == message
+    assert [r["arm"] for r in run.rows] == ["observe", "warn"] and delivered(w) == []
+
+
+def test_in_a_phase_a_block_mode_proposal_denies_the_warn_arm_and_nothing_the_observe_arm(w, run):
+    _, pid = phased(w, "block")
+    phase_marker(w)
+    assert run(cs.pre_payload(RM, sid=sid_in("observe", pid))) == (0, "", "")
+    code, out, _ = run(cs.pre_payload(RM, sid=sid_in("warn", pid)))
+    assert code == 0 and json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert [(r["mode"], r["arm"]) for r in run.rows] == [("block", "observe"), ("block", "warn")]
+
+
+@pytest.mark.parametrize("marker", [None, {DET: "2099-01-01T00:00:00Z"}, {"user_correction": STARTED}, "[]", "{"])
+def test_without_a_usable_started_marker_for_the_detector_both_arms_deliver(w, run, marker):
+    message, pid = phased(w)
+    if marker is not None:
+        (w.data / "arm_phase.json").write_text(marker if isinstance(marker, str) else json.dumps(marker))
+    for arm in ("observe", "warn"):
+        code, out, err = run(cs.pre_payload(RM, sid=sid_in(arm, pid)))
+        assert code == 0 and err == message + "\n" and out
+
+
+def test_an_unreadable_marker_a_directory_delivers_in_both_arms_and_the_hook_stays_within_budget(w):
+    message, pid = phased(w)
+    (w.data / "arm_phase.json").mkdir()
+    for arm in ("observe", "warn"):
+        p, took = hook(w, json.dumps(cs.pre_payload(RM, sid=sid_in(arm, pid))).encode())
+        assert p.returncode == 0 and p.stderr == (message + "\n").encode() and p.stdout and took < FAST
+
+
+def test_the_real_hook_is_silent_for_the_observe_arm_in_a_phase(w):
+    _, pid = phased(w)
+    phase_marker(w)
+    p, _ = hook(w, json.dumps(cs.pre_payload(RM, sid=sid_in("observe", pid))).encode())
+    assert (p.returncode, p.stdout, p.stderr) == (0, b"", b"") and [r["arm"] for r in cs.shadow_rows(w.data)] == ["observe"]
+
+
+def test_an_unassigned_row_in_a_phase_delivers_and_logs_arm_unassigned_once_without_an_error_prefix(w, run):
+    message = warn_world(w)                                      # no seed or rate: every row is unassigned
+    phase_marker(w)
+    for i in range(3):
+        code, out, err = run(cs.pre_payload(RM, sid=f"sess-un-{i}"))
+        assert code == 0 and err == message + "\n" and out
+    lines = [ln[21:] for ln in log_lines(w)]
+    assert lines.count("arm:unassigned") == 1 and not any(ln.startswith("error:") for ln in lines)
+    assert [r["arm"] for r in run.rows] == ["unassigned"] * 3
+
+
+def test_no_arm_unassigned_line_outside_a_phase(w, run):
+    warn_world(w)
+    run(cs.pre_payload(RM))
+    assert "arm:unassigned" not in "\n".join(log_lines(w))
+
+
+def test_audible_delivers_everything_when_anything_goes_wrong(w):
+    cfg = SimpleNamespace(data_dir=w.data, shadow_seed=SEED, arm_rate=0.5)
+    hits = [({"id": "P-00000001"}, "warn", "detector")]                   # no "check" key: the filter raises, the hits stand
+    phase_marker(w)
+    assert shadow_arm.audible(cfg, hits, "sh", lambda msg: None, "2026-10-19T00:00:00Z") == hits
+    assert shadow_arm.audible(cfg, [], "sh", lambda msg: None) == []

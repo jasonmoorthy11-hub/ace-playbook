@@ -28,7 +28,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     result = reflect_transcript(cfg, args.transcript, ReflectorClient(cfg), args.force)
     print(json.dumps({k: v for k, v in result.items() if k != "usage"}, sort_keys=True))
-    return 0 if result["status"] in ("ok", "already_reflected", "skipped_short") else 1
+    return 0 if result["status"] in ("ok", "already_reflected", "skipped_short", "frozen_arm_phase") else 1
 
 
 if __name__ == "__main__":

@@ -207,6 +207,7 @@ def test_the_keyed_chain_modules_stay_within_their_line_budgets():
     for path, cap in ((top / "canon.py", 60), (COMPILE / "chains.py", 150), (COMPILE / "chains_io.py", 150), (COMPILE / "chains_cli.py", 150), (COMPILE / "approvals.py", 150),
                       (COMPILE / "demotions.py", 150), (COMPILE / "modes.py", 150), (COMPILE / "shadow.py", 300),
                       (COMPILE / "__main__.py", 300), (COMPILE / "ladder.py", 300), (COMPILE / "offline.py", 300),
+                      (COMPILE / "offline_demote.py", 200),
                       (Path(__file__), 400), (Path(__file__).with_name("test_compile_keyed_heads.py"), 400),
                       (Path(__file__).with_name("test_compile_keyed_marker.py"), 400)):
         assert len(path.read_text().splitlines()) <= cap, path.name
