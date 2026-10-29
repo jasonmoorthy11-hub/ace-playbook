@@ -57,7 +57,9 @@ an effect (randomization inference, the spillover flag), the review packet (`pac
 go/no-go, and the seal refuses until the `shadow_seed`, `permutation_seed` and `arm_rate` config fields are set and the text
 states the session-based entry gate and the horizon; the arm analysis (`python3 -m ace_playbook.compile.arms report`) is
 built and hashed in `report_sha256`, with the hook's `arm` and `agent_id_present` fields (without which `arms report`
-refuses), the symmetric auto-FP rule and the spillover comparison still open (design section 8, Arms). `PREREGISTRATION.md`
+refuses), the symmetric auto-FP rule and the spillover comparison still open (design section 8, Arms). The arm analysis refuses as a whole when any approved
+proposal's file is missing, even one of a
+detector that has not started (it fails closed; `unapprove` keeps the file, so it can be restored). `PREREGISTRATION.md`
 describes the rest as plans only.
 
 ## Compiler (stage 2)

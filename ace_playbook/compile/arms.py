@@ -5,9 +5,10 @@ Stdlib and sibling modules only, never on the hook path. It computes, per detect
 Bernoulli(arm_rate) re-draws under the committed permutation seed (two-sided p = (1 + #{|D*| >= |D|}) / 10,001, intention to treat by
 assigned arm), a percentile-pivot interval for D, and Holm over every detector with an `arm_start`. Both seeds are read from the config at
 call time; only their sha256 is compared with the sealed block and nothing prints a seed. The proposals of a detector are fixed at its arm
-start (`arms_window.family`, intention to treat: later approvals rows change nothing); each is its own hypothesis in the Holm family
-(conservative); a started detector with no fires enters at D = 0, p = 1. An `arm_start` for a detector with no approved proposal at that
-start, a member not approved at warn or block with no demotion in force, or an approved proposal with no readable file is refused.
+start (`arms_window.family`, intention to treat: later approvals rows and rows appended after the head named on its `arm_start` line change
+nothing); each is its own hypothesis in the Holm family (conservative); a started detector with no fires enters at D = 0, p = 1. An
+`arm_start` for a detector with no approved proposal at that start, a member not approved at warn or block with no demotion in force, an
+approved proposal with no readable file, or a line without a valid approvals head is refused.
 
 It REFUSES (ValueError; the CLI exits 1) when a fire row of an eligible session lacks `arm` or `agent_id_present`, or records an `arm` that
 `assign` does not give: the hook must have randomized and flagged every row (PREREGISTRATION.md, Pre-arm-start conditions). Before the analysis
@@ -30,7 +31,7 @@ from typing import Callable
 from .. import config as cfgmod
 from ..canon import now_iso
 from . import labels, metrics, report, seal
-from .arms_window import (CAP, LAG_DAYS, WEEKS, _dt, _fmt, arm_starts, check_starts, eligible_sessions,  # noqa: F401  (re-exported)
+from .arms_window import (CAP, LAG_DAYS, WEEKS, _dt, _fmt, arm_heads, arm_starts, check_starts, eligible_sessions,  # noqa: F401  (re-exported)
                           family, first_demotion, horizon_end)
 from .arms_stats import ALPHA, RUNS, holm, permutation_test  # noqa: F401  (the public names of the analysis)
 
@@ -101,7 +102,7 @@ def analyse(cfg, now: str | None = None) -> dict:
         raise labels.Refusal(why)
     now = now or now_iso()
     rows, _ = report.read_corpora(cfg)
-    ev_rows, out, ok, fam = report._read(cfg.path(report.EVENTS)), {}, {}, family(cfg, starts)
+    ev_rows, out, ok, fam = report._read(cfg.path(report.EVENTS)), {}, {}, family(cfg, starts, arm_heads(text))
     scanned = metrics.latest_sessions(ev_rows)
     for det, t0 in sorted(starts.items()):
         if not (pids := fam.get(det)):

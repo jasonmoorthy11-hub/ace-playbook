@@ -4,6 +4,7 @@ Everything is invented: session hashes, seeds, stamps. The permutation test is c
 labelling of a small world; the seeds must never appear in any output."""
 
 import json
+import re
 import subprocess
 import sys
 from itertools import product
@@ -12,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from ace_playbook.compile import approvals, arms, arms_stats, demotions, evidence, labels, labels_queue, metrics, proposal, queue, seal
+from ace_playbook.compile import approvals, arms, arms_stats, chains, demotions, evidence, labels, labels_queue, metrics, proposal, queue, seal
 from ace_playbook.compile import state as st
 from ace_playbook.compile.events import Event
 
@@ -33,9 +34,19 @@ def srow(h, start, prompts=2, eligible=(DET,), ts=SCANNED):
             "start": start}
 
 
-def prereg_text(arm_line=True):
+def head(w=None):
+    """The approvals head the `arm_start` line records: the `hash` of the last row of the chain (a placeholder before there is one)."""
+    rows = approvals.read_chain(w.data, chains.key_of(w.cfg))[0] if w is not None else []
+    return rows[-1]["hash"] if rows else "0" * 64
+
+
+def arm(det, w=None, t0=T0):
+    return f"arm_start {det} {t0} approvals={head(w)}\n"
+
+
+def prereg_text(arm_line=True, w=None):
     block = f"shadow_seed_sha256 {seal._sha(SHADOW)}\npermutation_seed_sha256 {seal._sha(PERMUT)}\narm_rate 0.5\nsealed_at {SEALED_AT}\n"
-    return "# test copy\n\n```text\n" + block + "```\n\n## Amendments\n\n" + (f"arm_start {DET} {T0}\n" if arm_line else "(none)\n")
+    return "# test copy\n\n```text\n" + block + "```\n\n## Amendments\n\n" + (arm(DET, w) if arm_line else "(none)\n")
 
 
 @pytest.fixture
@@ -271,13 +282,18 @@ def test_holm_boundaries_and_untestable_detectors():
 
 
 # ------------------------------------------------------------------ the whole report, on a synthetic world with known arms
-def approve(w, pid, mode="warn", ts=APPROVED):
+def approve(w, pid, mode="warn", ts=APPROVED, refresh=True):
     """The approvals row `compile approve` appends, stamped `ts` (the analysis takes the family of a detector from approvals.jsonl)."""
     sha = "-" if mode == "revoked" else json.loads((w.data / "proposals" / "approved" / (pid + ".json")).read_text())["proposal_sha256"]
     approvals.append(w.data, {"proposal_id": pid, "proposal_sha256": sha, "mode": mode, "ts": ts})
+    if refresh and seal.PREREG.exists():                       # the arm_start lines record the head: keep them at the end of the chain
+        text = seal.PREREG.read_text()
+        new = re.sub(r"approvals=[0-9a-f]{64}", f"approvals={head(w)}", text)
+        if new != text:
+            seal.PREREG.write_text(new)
 
 
-def add_proposal(w, det, tag, ts=APPROVED):
+def add_proposal(w, det, tag, ts=APPROVED, refresh=True):
     """A second approved proposal (own card, own incident session, no shadow rows) for `det`; returns its id."""
     payload = json.loads(cs.EXAMPLES.read_text())["detectors"][det]["fire"]
     inc, ph = evidence.sid(f"sess-{tag}"), evidence.payload_hash(payload)
@@ -290,7 +306,7 @@ def add_proposal(w, det, tag, ts=APPROVED):
     p = proposal.build(w.cfg, cs.RM_LESSON, det, [card])
     proposal.write(w.cfg, p, {card["id"]: card})
     cs.approve_file(w.cfg, p)
-    approve(w, p["id"], ts=ts)
+    approve(w, p["id"], ts=ts, refresh=refresh)
     return p["id"]
 
 
@@ -379,7 +395,7 @@ def test_the_report_says_not_started_until_an_arm_start_line_exists(w, tmp_path,
     conf.write_text(json.dumps({"data_dir": str(w.data)}))
     assert arms.main(["--config", str(conf), "report"]) == 0 and capsys.readouterr().out == "not started\n"
     assert arms.main(["--config", str(conf), "report", "--json"]) == 0 and json.loads(capsys.readouterr().out) == {"status": "not started"}
-    path.write_text(prereg_text() + f"arm_start {DET} 2027-01-01T00:00:00Z\n")                      # a second line for a detector does not win
+    path.write_text(prereg_text() + arm(DET, t0="2027-01-01T00:00:00Z"))                      # a second line for a detector does not win
     assert arms.arm_starts(path.read_text()) == {DET: T0}
 
 
@@ -448,11 +464,11 @@ def test_a_damaged_row_of_an_ineligible_session_does_not_refuse(w, prereg):
 
 
 def test_arm_start_lines_count_only_under_the_amendments_heading(tmp_path):
-    above = f"arm_start {DET} 2026-11-05T00:00:00Z\n\n"
+    above = arm(DET, t0="2026-11-05T00:00:00Z") + "\n"
     text = prereg_text(arm_line=False).replace("```text\n", "```text\n" + above, 1)
     assert arms.arm_starts(text) == {}                                      # above the heading: ignored
-    assert arms.arm_starts(text.replace("(none)", f"arm_start {DET} {T0}")) == {DET: T0}
-    sub = prereg_text(arm_line=False).replace("```\n\n## Amendments", f"```\n\n### Amendments\n\narm_start {DET} {T0}\n\n## Amendments")
+    assert arms.arm_starts(text.replace("(none)", arm(DET).strip())) == {DET: T0}
+    sub = prereg_text(arm_line=False).replace("```\n\n## Amendments", f"```\n\n### Amendments\n\n{arm(DET)}\n## Amendments")
     assert arms.arm_starts(sub) == {}                                       # a ### heading is not the top-level one
     assert arms.arm_starts("arm_start rm_rf 2026-11-05T00:00:00Z\n") == {}
 
@@ -497,7 +513,7 @@ def test_a_broken_demotions_chain_is_refused(w, prereg):
 def test_holm_covers_every_detector_with_an_arm_start_and_claims_nothing_until_all_are_final(w, prereg, tmp_path, capsys):
     world(w)
     add_proposal(w, "rm_rf", "two")                                                             # a second detector, approved, no fires
-    prereg.write_text(prereg_text() + "arm_start rm_rf 2026-11-10T00:00:00Z\n")                 # its horizon ends later: due 2027-02-09
+    prereg.write_text(prereg_text(w=w) + arm("rm_rf", w, "2026-11-10T00:00:00Z"))                 # its horizon ends later: due 2027-02-09
     d = arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")
     (v,) = [x for x in d["detectors"].values() if x["detector"] == DET]
     assert v["final"] and v["test"]["p"] < 0.01                                                 # the first detector is final and significant ...
@@ -508,7 +524,7 @@ def test_holm_covers_every_detector_with_an_arm_start_and_claims_nothing_until_a
     assert json.loads(capsys.readouterr().out)["holm"] == {}
     d = arms.analyse(w.cfg, now="2027-01-30T00:00:00Z")                                         # not final in time: also pending
     assert d["pending"] == 2 and d["holm"] == {}
-    prereg.write_text(prereg_text())
+    prereg.write_text(prereg_text(w=w))
     d = arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")
     assert d["pending"] == 0 and next(iter(d["holm"].values()))["reject"] is True and "holm-adjusted p" in arms.render(d)
 
@@ -518,7 +534,7 @@ def test_holm_covers_every_detector_with_an_arm_start_and_claims_nothing_until_a
 def test_a_started_detector_with_no_fires_enters_the_holm_family_at_p_one(w, prereg, sessions):
     world(w)
     pid2 = add_proposal(w, "rm_rf", "two")                                   # approved, never fired: no shadow row at all
-    prereg.write_text(prereg_text() + f"arm_start rm_rf {T0}\n")
+    prereg.write_text(prereg_text(w=w) + arm("rm_rf", w))
     if sessions:                                                             # eligible sessions but no fires: D comes from `primary` as 0.0
         for i in range(8):
             cs.append_jsonl(w.cfg.path("detector_events.jsonl"), srow(st.session_hash(f"two-{i}"), f"2026-11-0{1 + i}T10:00:00Z", eligible=("rm_rf",)))
@@ -534,7 +550,7 @@ def test_a_started_detector_with_no_fires_enters_the_holm_family_at_p_one(w, pre
 
 def test_an_arm_start_for_a_detector_without_an_approved_proposal_is_refused(w, prereg, tmp_path, capsys):
     world(w)
-    prereg.write_text(prereg_text() + f"arm_start rm_rf {T0}\n")            # nothing approved for rm_rf
+    prereg.write_text(prereg_text(w=w) + arm("rm_rf", w))            # nothing approved for rm_rf
     with pytest.raises(ValueError, match="no approved proposal"):
         arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")
     assert arms.main(["--config", config_file(w, tmp_path), "report"]) == 1
@@ -553,7 +569,7 @@ DEMOTION = {"from_mode": "warn", "to_mode": "observe", "cause": "label_fp", "ref
 def test_a_revocation_after_the_arm_start_changes_nothing(w, prereg):
     world(w)
     pid2 = add_proposal(w, "rm_rf", "two")
-    prereg.write_text(prereg_text() + f"arm_start rm_rf {T0}\n")
+    prereg.write_text(prereg_text(w=w) + arm("rm_rf", w))
     before = arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")
     assert set(before["holm"]) == {w.pid, pid2}
     revoke(w, w.pid)                                                      # the only proposal of the first started detector, after t0
@@ -575,7 +591,7 @@ def test_a_proposal_approved_after_the_arm_start_is_not_in_the_family(w, prereg,
     d = arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")
     assert set(d["holm"]) == {w.pid} and late not in d["detectors"]
     only = add_proposal(w, "rm_rf", "only", ts=LATE)                      # the only proposal of its detector, approved after t0
-    prereg.write_text(prereg_text() + f"arm_start rm_rf {T0}\n")
+    prereg.write_text(prereg_text(w=w) + arm("rm_rf", w))
     with pytest.raises(ValueError, match="no approved proposal at the arm start"):
         arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")
     assert only and arms.main(["--config", config_file(w, tmp_path), "report"]) == 1
@@ -585,7 +601,7 @@ def test_a_proposal_approved_after_the_arm_start_is_not_in_the_family(w, prereg,
 def test_an_approved_proposal_without_a_readable_proposal_file_is_refused(w, prereg, tmp_path, capsys):
     world(w)
     pid2 = add_proposal(w, "rm_rf", "two")
-    prereg.write_text(prereg_text() + f"arm_start rm_rf {T0}\n")
+    prereg.write_text(prereg_text(w=w) + arm("rm_rf", w))
     proposal.proposal_path(w.cfg, pid2).unlink()
     with pytest.raises(ValueError, match=f"approved proposal {pid2} has no readable proposal file"):
         arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")
@@ -624,3 +640,81 @@ def test_a_broken_approvals_chain_is_refused(w, prereg, tmp_path, capsys):
     with pytest.raises(ValueError, match="approvals chain is broken"):
         arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")
     assert arms.main(["--config", config_file(w, tmp_path), "report"]) == 1 and "approvals chain is broken" in capsys.readouterr().err
+
+
+# ------------------------------------------------------------------ round 5: the arm_start line records the approvals head (chain prefix)
+def test_the_arm_start_line_has_three_fields_and_arm_heads_reads_the_head(w):
+    world(w)
+    text = prereg_text(w=w) + "arm_start rm_rf 2026-11-10T00:00:00Z approvals=xyz\narm_start other 2026-11-10T00:00:00Z\n"
+    assert arms.arm_starts(text) == {DET: T0, "rm_rf": "2026-11-10T00:00:00Z", "other": "2026-11-10T00:00:00Z"}
+    assert arms.arm_heads(text) == {DET: head(w), "rm_rf": "", "other": ""}              # malformed or missing field: no head
+
+
+@pytest.mark.parametrize("field", ["", " approvals=xyz", " approvals=" + "AB" * 32, " approvals=" + "ab" * 31, " head=" + "ab" * 32])
+def test_an_arm_start_line_without_a_valid_approvals_head_is_refused(w, prereg, tmp_path, capsys, field):
+    world(w)
+    prereg.write_text(prereg_text(w=w).replace(f" approvals={head(w)}", field))
+    with pytest.raises(ValueError, match=f"arm_start {DET} lacks a valid approvals head"):
+        arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")
+    assert arms.main(["--config", config_file(w, tmp_path), "report"]) == 1 and "lacks a valid approvals head" in capsys.readouterr().err
+
+
+def test_a_head_that_is_not_the_hash_of_a_chain_row_is_refused(w, prereg, tmp_path, capsys):
+    world(w)
+    prereg.write_text(prereg_text(w=w).replace(head(w), "ab" * 32))
+    with pytest.raises(ValueError, match=f"arm_start {DET} names an approvals head that is not in the chain"):
+        arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")
+    assert arms.main(["--config", config_file(w, tmp_path), "report"]) == 1 and "not in the chain" in capsys.readouterr().err
+
+
+def test_a_warn_row_stamped_before_the_arm_start_but_appended_after_the_head_changes_nothing(w, prereg):     # probe BF
+    world(w)
+    before = arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")
+    new = add_proposal(w, DET, "backfill", ts="2026-10-15T00:00:00Z", refresh=False)                       # appended after the head, stamped before t0
+    after = arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")
+    assert set(before["holm"]) == {w.pid} == set(after["holm"]) and new not in after["detectors"] and after == before
+    prereg.write_text(prereg_text(w=w))                                                                    # the head moved on: now it is a member
+    assert set(arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")["holm"]) == {w.pid, new}
+
+
+def test_an_observe_row_stamped_before_the_arm_start_but_appended_after_the_head_does_not_refuse(w, prereg):    # probe BF2
+    world(w)
+    before = arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")
+    approve(w, w.pid, "observe", ts="2026-10-31T06:00:00Z", refresh=False)
+    assert arms.analyse(w.cfg, now="2027-02-01T00:00:00Z") == before
+    prereg.write_text(prereg_text(w=w))
+    with pytest.raises(ValueError, match="is approved at observe"):                                         # with the head after it: refused
+        arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")
+
+
+def test_a_head_row_stamped_after_the_arm_start_only_bounds_the_prefix(w, prereg):
+    world(w)
+    approve(w, w.pid, "block", ts=LATE)                                   # the head row itself is stamped after t0: the anchor stays t0
+    v = next(iter(arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")["detectors"].values()))
+    assert v["eligible"] == 20 and v["test"]["p"] < 0.01
+
+
+def test_a_re_approval_stamped_at_the_demotion_stamp_does_not_lift_it(w, prereg):
+    world(w)
+    demotions.append(w.data, {"proposal_id": w.pid, **DEMOTION, "ts": "2026-10-31T12:00:00Z"})
+    approve(w, w.pid, "block", ts="2026-10-31T12:00:00Z")                 # a tie keeps the demotion in force
+    with pytest.raises(ValueError, match=f"proposal {w.pid} is approved at block / has 1 demotion\\(s\\) in force"):
+        arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")
+
+
+def test_a_proposal_revoked_exactly_at_the_arm_start_is_excluded(w, prereg):
+    world(w)
+    revoke(w, w.pid, ts=T0)                                               # the newest row at or before t0 is the revocation
+    with pytest.raises(ValueError, match="no approved proposal at the arm start"):
+        arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")
+    pid2 = add_proposal(w, DET, "sibling")                                # with a sibling the revoked one is dropped, not refused
+    d = arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")
+    assert set(d["holm"]) == {pid2} and w.pid not in d["detectors"]
+
+
+def test_a_revocation_after_the_arm_start_with_the_approved_copy_unlinked_changes_nothing(w, prereg):
+    world(w)
+    before = arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")
+    revoke(w, w.pid)
+    (w.data / "proposals" / "approved" / (w.pid + ".json")).unlink()      # what `unapprove` does
+    assert arms.analyse(w.cfg, now="2027-02-01T00:00:00Z") == before

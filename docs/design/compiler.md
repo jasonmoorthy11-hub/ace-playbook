@@ -1381,8 +1381,10 @@ section in PREREGISTRATION.md still says `(DRAFT until sealed)`. The sealing its
 
 `python3 -m ace_playbook.compile.arms report [--json]` (`compile/arms.py`, `arms_stats.py`; not in `__main__.py`, not on the hook path) is the
 preregistered analysis of the shadow arm phase. It prints `not started` until the top-level Amendments section of
-PREREGISTRATION.md holds a line `arm_start <detector> <UTC stamp>`
-(read nowhere else, refused when earlier than the block's `sealed_at`; `arms_window.py` holds the window code). Per detector
+PREREGISTRATION.md holds a line `arm_start <detector> <UTC stamp> approvals=<64 hex>` (the field is the `hash` of the last row of the
+verified approvals chain at that moment)
+(read nowhere else, refused when earlier than the block's `sealed_at` or when the head is missing, malformed or not in the chain;
+`arms_window.py` holds the window code). Per detector
 it computes the eligible sessions (interactive: `prompts` > 0 in the newest
 `_session` row; `start`, the first transcript event, in [arm start, horizon end); the horizon is the earliest of 12 weeks,
 the 400th eligible session and the first demotion row of the detector's proposals at or after the arm start, whatever its
@@ -1395,7 +1397,9 @@ draw that empties an arm counts as extreme, interval = D minus the 97.5th and 2.
 every detector with an `arm_start` (no adjusted p and no rejection is printed until all are final:
 `pending: N detectors not final`). The family is fixed at the arm start (intention to treat): a proposal of a started detector belongs when its newest
 `approvals.jsonl` row stamped at or before the arm start is not `revoked`, and it must then be approved at `warn` or `block` with no
-demotion row in force at that start; rows stamped later (a revocation, a re-approval) change nothing. Each member is its own
+demotion row in force at that start; rows stamped later (a revocation, a re-approval) change nothing, and the rows read are the chain prefix ending at
+the head row, so a row
+appended after it, even one stamped before the arm start, is ignored. Each member is its own
 hypothesis (conservative); a started detector whose proposal has no fires, or no eligible session in an arm, enters at D
 = 0, p = 1. Three refusals (exit 1): an `arm_start` for a detector with no approved proposal at the arm start, a member approved at
 `observe` or with a demotion in force, and an approved proposal with no readable proposal file. It refuses (exit 1)

@@ -112,8 +112,10 @@ eligible sessions, drawn from `random.Random(permutation_seed)` under a committe
 10,001, where D* is D under a re-draw. The analysis is by assigned arm (intention to treat). The
 interval for D is the permutation interval [D - q97.5(D*), D - q2.5(D*)] from the same re-draws,
 which assumes a constant additive effect. Holm across detectors, family alpha 0.05 two-sided. The
-Holm family holds one hypothesis per approved proposal of every started detector (a detector with
-two approved proposals contributes two), which is conservative.
+Holm family holds one hypothesis per proposal approved at the arm start (its newest approvals row at or
+before the start, read from the chain prefix the `arm_start` line names, not `revoked`); a detector with
+two such proposals contributes two, which is conservative; rows written later change nothing (intention
+to treat).
 
 Secondary, with no p-values: evasion, sessions-with-fire and friction. Sessions-with-fire gets a
 Wilson 95 % interval per arm (`metrics.wilson`); a Wilson interval is never put on fires per
@@ -143,9 +145,11 @@ offline scan; sessions still unscanned are counted and reported as missing, neve
 Each (session, proposal) pair is assigned by `arms.assign`: the first 4 bytes of HMAC-SHA256 under
 `shadow_seed` of `session hash|proposal id`, read as a fraction of 2**32, below `arm_rate` means the
 warn arm; `arm_rate` is 0.5. The arm start of a detector is a line `arm_start <detector> <UTC
-stamp>` under the top-level Amendments heading, added before its first randomized session (the sealed block cannot
-hold it); the report reads `arm_start` lines nowhere else, refuses a stamp earlier than the block's
-`sealed_at`, says "not started" without one, and shows no effect before the analysis day.
+stamp> approvals=<64 hex>` under the top-level Amendments heading, added before its first randomized session (the sealed
+block cannot hold it; the field is the `hash` of the last row of the verified `approvals.jsonl` chain at that moment);
+the report reads `arm_start` lines nowhere else, refuses a stamp earlier than the block's `sealed_at` and a line whose
+head is missing, malformed or not the hash of a chain row, says "not started" without one, and shows no effect before the
+analysis day.
 The seeds are private and only their sha256 is sealed, the same
 commitment as `holdout_seed` above. The shadow seed's value lives only in the private config
 file, outside anything the agent reads by default (not in the repository, the transcripts, a
@@ -167,15 +171,16 @@ Pre-arm-start conditions. Before any `arm_start` line exists: (1) the hook appli
 `arms.assign(session hash, shadow_seed, arm_rate, proposal id)` and writes `arm` and
 `agent_id_present` on every shadow row, and `arms report` refuses (exit 1) when a fire row of an
 eligible session lacks either field or records an `arm` that `arms.assign` does not give; (2) the
-`arm_start` amendment records the sha256 of `shadow.py`, `offline.py`, `events.py` and
-`demotions.py` at that commit, and is anchored like the seal: a signed tag `arm-<detector>` on that
+`arm_start` amendment records the sha256 of `shadow.py`, `offline.py`, `events.py`, `demotions.py`, `modes.py` and
+`approvals.py` at that commit, carries `approvals=<head hash>` (the Holm family is read from the approvals chain prefix
+ending at that row), and is anchored like the seal: a signed tag `arm-<detector>` on that
 commit plus an OpenTimestamps proof of the amendment line's sha256 (a commit time alone proves
 nothing, the author sets it); (3) `offline.classify` is made symmetric (the correction rule
 above); (4) harm and demotion during a phase count human labels only, never auto labels; (5) the
 spillover comparison and the freeze on lesson minting are built after the seal, are exploratory
 and carry no p-values; (6) at the arm start every proposal of the family is approved at `warn` or
-`block` and has no demotion in force (`modes.in_force` at the arm start is empty); `arms report`
-refuses otherwise.
+`block` and no demotion row stamped before the arm start is in force (`modes.in_force` over those rows at the arm start is
+empty); `arms report` refuses otherwise.
 
 ### Spillover
 
@@ -232,7 +237,9 @@ does not move it) and `sealed_at`. `report_sha256` covers exactly seven files in
 `arms_window.py`, `labels.py`, `labels_queue.py`, `metrics.py` and `report.py` (their bytes in name order, joined by a NUL byte); the
 detector code is covered by the per-detector hashes, not by `report_sha256`. `shadow.py`, `offline.py` and `events.py` are not in it,
 because they must still change before the first `arm_start` (the hook's arm and flag fields, the symmetric `offline.classify`); the
-`arm_start` amendment records their sha256 instead, and that of `demotions.py` (its causes decide what ends a horizon). The arm
+`arm_start` amendment records their sha256 instead, and those of `demotions.py` (its causes decide what ends a horizon), `modes.py`
+and `approvals.py` (they decide
+the family and condition (6)). The arm
 analysis that computes the primary (`arms.py`, `arms_stats.py`) is built and hashed here before the seal, never written after it.
 
 (filled by compile seal)
@@ -304,7 +311,8 @@ Source: the second hostile-statistician pass (verdict SEALABLE WITH THE BLOCKING
 
 Source: the third hostile-statistician pass (verdict SEALABLE WITH TWO SMALL BLOCKING FIXES). What changed:
 
-- A (`arms.py`): the proposals of a detector are taken from the newest non-revoked rows of `approvals.jsonl`, not from the shadow rows. A
+- A (`arms.py`): the proposals of a detector are taken from the newest non-revoked rows of `approvals.jsonl` (superseded by round 4),
+  not from the shadow rows. A
   detector with an `arm_start` whose approved proposal never fired (or whose fires the warn arm suppressed) had no rows and stayed
   pending for good, so no Holm result was ever shown. It now enters the family at D = 0, p = 1 (also when an arm has no eligible session).
   An `arm_start` for a detector with no approved proposal is refused (exit 1), never left pending. The report prints the cause of a
@@ -331,3 +339,24 @@ Source: the fourth hostile-statistician pass (verdict SEALABLE WITH THE BLOCKING
 - Minor (text): the two history entries that still called a demotion "the harm event" are marked superseded by round 3.
 - `report_sha256` changed from acb09a3f4e9f7c95c583e16de5f00813d4460d3702cb4706bbb7f76cdc030692 to
   37a311cf7ca5e8e9a323da09c7ba6bc74d777e309805f76fb564be2b0f387143 (seven files: `arms.py` and `arms_window.py` changed).
+
+### 2026-10-29 - round-5 statistician pass (made before the seal, so they edit the draft)
+
+Source: the fifth hostile-statistician pass (verdict SEALABLE WITH THE BLOCKING FIXES). What changed:
+
+- S1 (text): `modes.py` and `approvals.py` decide the family and condition (6) (`modes.anchor`, `modes.in_force`, `approvals.read_chain`), so
+  the `arm_start` amendment also records their sha256 (the list is now `shadow.py`, `offline.py`, `events.py`, `demotions.py`, `modes.py`,
+  `approvals.py`); "Frozen instruments" names the same six. Condition (6) now reads "no demotion row stamped before the arm start is in
+  force", which is what the code filters.
+- S2 (`arms.py`, `arms_window.py`): the `arm_start` line gains a third field, `approvals=<64 hex>`, the `hash` of the last row of the verified
+  approvals chain at the arm start. The family is read from the chain prefix ending at that row (append order); a row appended later, even
+  one stamped before the arm start (`compile approve` back-fill), is ignored. A line without the field, with a malformed one, or naming a hash
+  that is not in the chain is refused. The head row may itself be stamped after the arm start (it only bounds the prefix); membership is
+  still anchored at the arm start stamp.
+- S3 (text): the Holm sentence now says "approved at the arm start", read from the chain prefix the line names, later rows change nothing.
+- Minor (text): the round-3 line "newest non-revoked rows" is marked superseded by round 4.
+- Tests added: the back-dated append (probes BF, BF2), a head not in the chain, a line without or with a malformed head, a head row stamped
+  after the arm start, the tie of a re-approval at the demotion stamp, a revocation exactly at the arm start (sole: refused; with a sibling:
+  dropped), and a revocation after the start with the approved copy unlinked.
+- `report_sha256` changed from 37a311cf7ca5e8e9a323da09c7ba6bc74d777e309805f76fb564be2b0f387143 to
+  5029fd0b52f410abbbd2ae18d28b8d6746270072b523406da3151e1b770f1058 (seven files: `arms.py` and `arms_window.py` changed).
