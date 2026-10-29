@@ -147,14 +147,14 @@ def _run(events: list, quotes: list, st: _State, depth: int, scratch, out: list)
             _assign(raw, st, quotes)             # a bare `NAME=value` segment (the tokenizer's front drops it)
             continue
         name = _base(front[0])
-        if wrapped and name in shell.BUILTINS:   # `env cd X`, `sudo export D=x`: an external program, the shell state is untouched
+        blind = wrapped and name in shell.BUILTINS   # `env cd X`, `sudo export D=x`, `time cd X`: the effect is not read, the state is unknown
+        if blind:                                # (a wrapped builtin is still scanned below: `sudo eval "..."` and its targets count)
             st.cwd, st.env = None, {}
-            continue
         piped = any(events[j][0] in _BARRIER for j in (i - 1, i + 1) if 0 <= j < len(events))
-        if name in ("cd", "pushd", "popd"):
+        if name in ("cd", "pushd", "popd") and not blind:
             if not piped:
                 _cd(front[1:] if name != "popd" else ["-"], st, quotes)
-        elif name in _KEYWORDS:
+        elif name in _KEYWORDS and not blind:
             _assign(front[1:], st, quotes)
         elif name == "git":
             _worktree(front, st, quotes)

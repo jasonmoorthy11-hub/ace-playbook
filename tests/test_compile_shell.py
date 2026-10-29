@@ -528,3 +528,34 @@ TAINT_AND_REBINDS = [   # (case, command, fires)
 @pytest.mark.parametrize("cmd,fires", [(c, f) for _n, c, f in TAINT_AND_REBINDS], ids=[n for n, _c, _f in TAINT_AND_REBINDS])
 def test_v2_fails_closed_on_tainted_chains_and_glued_or_wrapped_rebinds(cmd, fires):
     assert bad(cmd) is fires
+
+
+# ------------------------------------------------------------------ v2 fails closed, round 3: a wrapped builtin resets the state but is still scanned
+WRAPPED_BUILTINS = [   # (case, command, fires)
+    ("time-eval", 'time eval "rm -rf /w/src"', True),
+    ("sudo-eval", 'sudo eval "rm -rf /w/src"', True),
+    ("env-eval", 'env eval "rm -rf /w/src"', True),
+    ("command-eval", 'command eval "rm -rf /w/src"', True),
+    ("env-bash-c", "env bash -c 'rm -rf /w/src'", True),
+    ("sudo-bash-c", "sudo bash -c 'rm -rf /w/src'", True),
+    ("time-bash-c", "time bash -c 'rm -rf /w/src'", True),
+    ("nice-sh-c", "nice sh -c 'rm -rf /w/src'", True),
+    ("time-eval-twin", 'time eval "rm -rf /tmp/w/x"', False),
+    ("sudo-eval-twin", 'sudo eval "rm -rf /tmp/w/x"', False),
+    ("env-eval-twin", 'env eval "rm -rf /tmp/w/x"', False),
+    ("command-eval-twin", 'command eval "rm -rf /tmp/w/x"', False),
+    ("eval-twin", 'eval "rm -rf /tmp/w/x"', False),
+    ("env-bash-c-twin", "env bash -c 'rm -rf /tmp/w/x'", False),
+    ("wrapped-eval-forgets-the-cwd", 'cd /tmp/w && sudo eval "rm -rf ./*"', True),
+    ("wrapped-eval-forgets-the-binding", 'D=/tmp/w; sudo eval "rm -rf $D"', True),
+    ("wrapped-eval-own-cd-still-works", 'sudo eval "cd /tmp/w && rm -rf ./*"', False),
+    ("time-cd-is-unknown-and-conservative", "time cd /tmp/w && rm -rf ./*", True),
+    ("time-export-is-unknown", 'time export D=/tmp/w && rm -rf "$D"', True),
+    ("wrapped-source-forgets-then-deletes", "env source x && rm -rf /w/src", True),
+    ("wrapped-builtin-then-target", "env cd /tmp/w && rm -rf /w/src", True),
+]
+
+
+@pytest.mark.parametrize("cmd,fires", [(c, f) for _n, c, f in WRAPPED_BUILTINS], ids=[n for n, _c, _f in WRAPPED_BUILTINS])
+def test_v2_a_wrapped_builtin_resets_the_state_but_is_still_scanned(cmd, fires):
+    assert bad(cmd) is fires
