@@ -1,5 +1,5 @@
 """The delivered-path error count of the arm analysis (`arms_window.delivered_errors`, condition (7) of PREREGISTRATION.md) and the
-natural end of the horizon: a lowering demotion row stamped after it is not the horizon's demotion. Invented stamps and logs only."""
+natural end of the horizon: a lowering demotion row stamped at or after it is not the horizon's demotion. Invented stamps and logs only."""
 
 import os
 

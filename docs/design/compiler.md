@@ -1388,7 +1388,8 @@ verified approvals chain at that moment)
 it computes the eligible sessions (interactive: `prompts` > 0 in the newest
 `_session` row; `start`, the first transcript event, in [arm start, horizon end); the horizon is the earliest of 12 weeks,
 the 400th eligible session and the first lowering demotion row of the detector's proposals at or after the arm start, whatever its
-cause, read from `demotions.jsonl`; the report prints the cause; an `evasion_pair` row keeps the mode and is not a demotion here), the
+cause, read from `demotions.jsonl`; the report prints the cause; an `evasion_pair` row keeps the mode and is not a demotion here;
+a lowering row at or after the natural end ends nothing and prints no cause), the
 arm of each session (`assign`: HMAC-SHA256 of `session hash|proposal id` under `shadow_seed`, first 4 bytes below `arm_rate` is the warn arm), the
 primary (`primary`: repeat fires per eligible session over rows with `agent_id_present` false; subagent rows are counted
 apart), D, and `permutation_test` (10,000 Bernoulli(`arm_rate`) re-draws from `random.Random(permutation_seed)`, p = (1 +
