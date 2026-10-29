@@ -1,17 +1,13 @@
 """`python -m ace_playbook.compile.arm_start <detector> [--dry-run] [--at <UTC stamp>]`: start a detector's arm phase (PREREGISTRATION.md, Arm
 assignment and Pre-arm-start conditions (2) and (6); the Amendments entry "arm_start hash list" makes the hash list THIRTEEN files).
 
-Refuses (exit 1, one line, never a value) an unknown detector, an unsealed pre-registration, a stamp earlier than `sealed_at` (and, with `--at`,
-one already in the past), a detector that already has an `arm_start` line, unset config seeds, `holdout_enabled` true, an
-approvals chain that is unreadable, broken or empty, a family that `arms_window.family` (the hashed analysis's own function) rejects (no approved
-proposal at `warn`/`block`, one at `observe`, a lowering demotion in force, a broken demotions chain) and uncommitted changes to the thirteen
-files (a working-tree check, not a proof of the commit). It prints the dated entry, asks y/N (`--dry-run` stops there), stamps the next whole
-second after the `y`, appends the entry, writes the one-line file the OpenTimestamps proof stamps and the signed phase marker (phase.py; written
-nowhere else). Sessions starting in the stamp's second before the writes land are eligible yet ran with output in both arms:
-the window between the stamp and the writes landing is under 1 s, and zero when they land before the stamp; the verb refuses when they
-finish 1 s or more after it.
-If a write fails, or the writes are too late, it RESTORES the file, the one-line file and the old marker and refuses (one line naming what stays).
-Then it prints the operator lines (commit, signed tag, push of the current branch, the line's sha256, `ots stamp`, `arms report`); off the hook path.
+Refuses (exit 1, one line, never a value) an unknown detector, an unsealed pre-registration, a stamp earlier than `sealed_at` (and, with `--at`, one already
+in the past), a detector that already has an `arm_start` line, unset config seeds, `holdout_enabled` true, an unreadable, broken or empty approvals chain, a
+family that `arms_window.family` rejects and uncommitted changes to the thirteen files. It prints the dated entry and asks y/N (`--dry-run` stops there). It
+stamps the next whole second after the `y`, appends the entry, writes the one-line file (for `ots stamp`) and the signed phase marker (phase.py). Sessions
+starting in the stamp's second before the writes land are eligible yet ran with output in both arms: the window between the stamp and the writes landing is
+under 1 s, and zero when they land before the stamp; the verb refuses when they finish 1 s or more after it. If a write fails, or the writes are too late, it
+RESTORES the file, the one-line file and the old marker and refuses. Prints the operator lines; off the hook path.
 """
 
 from __future__ import annotations
@@ -22,6 +18,7 @@ import subprocess
 import sys
 import textwrap
 from collections.abc import Callable
+from contextlib import suppress
 from datetime import timedelta
 from pathlib import Path
 
@@ -178,18 +175,21 @@ def run(cfg, args: argparse.Namespace, ask: Callable[[str], str], need_tty: Call
     except (OSError, ValueError):
         why = "the write failed"
     if why:                                                      # restore everything: the entry, the one-line file and the previous marker
-        steps = (("the Amendments entry", lambda: seal._write(seal.PREREG, text)), ("the one-line file", lambda: one.unlink(missing_ok=True)),
-                 ("the marker", lambda: None if (mark.read_bytes() if mark.is_file() else None) == old       # a marker still as before is not left
-                  else write_private(mark, old.decode("utf-8")) if old is not None else mark.unlink(missing_ok=True)))
+        steps = (("the Amendments entry", seal.PREREG, text.encode("utf-8"), lambda: seal._write(seal.PREREG, text)),
+                 ("the one-line file", one, None, lambda: one.unlink(missing_ok=True)),
+                 ("the marker", mark, old, lambda: write_private(mark, old.decode("utf-8")) if old is not None else mark.unlink(missing_ok=True)))
         left = []
-        for what, undo in steps:
+        for what, path, want, undo in steps:                     # a file still as before the verb needs no restore and is never "left in place"
+            same = False
+            with suppress(OSError):                              # a file that cannot be read counts as changed
+                same = (path.read_bytes() if path.is_file() else None) == want
             try:
-                undo()
+                if not same:
+                    undo()
             except (OSError, ValueError):
                 left.append(what)
-        if left:
-            return _fail(1, f"{why}, and the restore failed; left in place: {', '.join(left)}; restore them by hand, then rerun")
-        return _fail(1, f"{why}: PREREGISTRATION.md, the one-line file and the marker are restored, nothing is written; fix the cause and rerun")
+        return _fail(1, f"{why}, and the restore failed; left in place: {', '.join(left)}; restore them by hand, then rerun" if left else
+                     f"{why}: PREREGISTRATION.md, the one-line file and the marker are restored, nothing is written; fix the cause and rerun")
     vcs = f"git -C {REPO}"
     print(f'{vcs} add PREREGISTRATION.md && {vcs} commit -m "arm start: {det} {stamp}"\n{vcs} tag -s arm-{det} -m "arm start {det} {stamp}"\n'
           f"{vcs} push origin {branch} arm-{det}\nprintf '%s' '{line}' | shasum -a 256\nots stamp {one}\npython3 -m ace_playbook.compile.arms report")

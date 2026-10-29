@@ -439,8 +439,26 @@ def test_a_failed_append_is_one_line_and_nothing_is_written(world, capsys, monke
     monkeypatch.setattr(seal, "_write", boom)
     assert world.go(DET, "--at", STAMP) == 1
     err = capsys.readouterr().err
-    assert err.count("\n") == 1 and "Traceback" not in err and "read-only" not in err and "Amendments entry" in err
+    assert err.count("\n") == 1 and "Traceback" not in err and "read-only" not in err and "Amendments entry" not in err
+    assert "restored, nothing is written" in err
     assert world.prereg.read_text() == before and not (world.data / phase.FILE).exists() and not (world.data / f"arm_start_{DET}.txt").exists()
+
+
+def test_a_failed_append_on_a_read_only_file_never_names_the_amendments_entry(world, capsys, monkeypatch):
+    before = world.prereg.read_text()
+
+    def boom(path, text):
+        raise OSError("read-only")
+    monkeypatch.setattr(seal, "_write", boom)                                       # the append and the restore of the file would both fail
+    world.prereg.chmod(0o444)
+    try:
+        assert world.go(DET, "--at", STAMP) == 1
+        err = capsys.readouterr().err
+        assert err.count("\n") == 1 and "Traceback" not in err and "Amendments entry" not in err and "left in place" not in err
+        assert world.prereg.read_text() == before
+    finally:
+        world.prereg.chmod(0o644)
+    assert not (world.data / phase.FILE).exists() and not (world.data / f"arm_start_{DET}.txt").exists()
 
 
 def test_a_marker_still_as_before_is_not_named_as_left_in_place(world, capsys, monkeypatch):
