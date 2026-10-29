@@ -1467,8 +1467,9 @@ lines: `git add` and `commit`, `tag -s arm-<detector>`, the push of the current 
 `arms report` command (never run by the verb). The hash list is THIRTEEN files, by the dated Amendments entry "arm_start hash list" of 2026-10-29
 (`shadow.py`, `offline.py`, `events.py`, `demotions.py`, `modes.py`, `approvals.py` of condition (2), plus `shadow_arm.py`, `shadow_guard.py`,
 `phase.py`, `offline_demote.py`, and on the operator's ruling `chains.py`, `reflect/runner.py` and `sweep.py`); the sealed block and
-`report_sha256` are unchanged. The writes land before the stamp's second begins (bounded by the write latency,
-under a second). If a write fails, or they finish 1 s or more after the stamp, the verb restores the file, the one-line file and the previous
+`report_sha256` are unchanged. Sessions starting in the stamp's second before the writes land are eligible yet ran with output in both arms:
+the window between the stamp and the writes landing is under 1 s, and zero when they land before the stamp;
+the verb refuses when they finish 1 s or more after it. If a write fails, or they are too late, the verb restores the file, the one-line file and the previous
 marker, exits 1, and a rerun is clean.
 
 *Still open.* The spillover comparison, and the operator's tag and OpenTimestamps proof at the arm start.

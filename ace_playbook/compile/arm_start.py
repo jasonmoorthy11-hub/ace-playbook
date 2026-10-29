@@ -7,9 +7,10 @@ approvals chain that is unreadable, broken or empty, a family that `arms_window.
 proposal at `warn`/`block`, one at `observe`, a lowering demotion in force, a broken demotions chain) and uncommitted changes to the thirteen
 files (a working-tree check, not a proof of the commit). It prints the dated entry, asks y/N (`--dry-run` stops there), stamps the next whole
 second after the `y`, appends the entry, writes the one-line file the OpenTimestamps proof stamps and the signed phase marker (phase.py; written
-nowhere else). The writes land before that second begins (bounded by the write latency, under a second); if they fail, or finish 1 s or more
-after the stamp, it RESTORES the file, the one-line file and the old marker and refuses (one line naming what stays if a restore step fails).
-Sessions starting in the stamp's second before the write lands are eligible yet ran with output in both arms (bounded by the write latency).
+nowhere else). Sessions starting in the stamp's second before the writes land are eligible yet ran with output in both arms:
+the window between the stamp and the writes landing is under 1 s, and zero when they land before the stamp; the verb refuses when they
+finish 1 s or more after it.
+If a write fails, or the writes are too late, it RESTORES the file, the one-line file and the old marker and refuses (one line naming what stays).
 Then it prints the operator lines (commit, signed tag, push of the current branch, the line's sha256, `ots stamp`, `arms report`); off the hook path.
 """
 
@@ -169,8 +170,8 @@ def run(cfg, args: argparse.Namespace, ask: Callable[[str], str], need_tty: Call
         print(ent, end="")
     one, mark = Path(cfg.data_dir) / f"arm_start_{det}.txt", Path(cfg.data_dir) / phase.FILE
     old = mark.read_bytes() if mark.is_file() else None
-    seal._write(seal.PREREG, new)
     try:
+        seal._write(seal.PREREG, new)
         write_private(one, line)                                 # no trailing newline: its sha256 is the line's (`printf '%s' | shasum`)
         phase.write(cfg, {det: stamp}, now_iso())
         why = "the writes finished after the stamp" if now_iso() > stamp else ""
@@ -178,7 +179,8 @@ def run(cfg, args: argparse.Namespace, ask: Callable[[str], str], need_tty: Call
         why = "the write failed"
     if why:                                                      # restore everything: the entry, the one-line file and the previous marker
         steps = (("the Amendments entry", lambda: seal._write(seal.PREREG, text)), ("the one-line file", lambda: one.unlink(missing_ok=True)),
-                 ("the marker", lambda: write_private(mark, old.decode("utf-8")) if old is not None else mark.unlink(missing_ok=True)))
+                 ("the marker", lambda: None if (mark.read_bytes() if mark.is_file() else None) == old       # a marker still as before is not left
+                  else write_private(mark, old.decode("utf-8")) if old is not None else mark.unlink(missing_ok=True)))
         left = []
         for what, undo in steps:
             try:

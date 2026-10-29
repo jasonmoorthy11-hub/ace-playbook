@@ -297,7 +297,7 @@ def test_help_works_and_the_module_stays_under_its_line_cap():
     out = subprocess.run([sys.executable, "-m", "ace_playbook.compile.arm_start", "--help"], capture_output=True, text=True, cwd=ROOT)
     assert out.returncode == 0 and "--dry-run" in out.stdout and "--at" in out.stdout and "detector" in out.stdout
     src = (ROOT / "ace_playbook" / "compile" / "arm_start.py").read_text().splitlines()
-    assert len(src) <= 220 and max(map(len, src)) <= 160
+    assert len(src) <= 210 and max(map(len, src)) <= 160
 
 
 # ------------------------------------------------------------------ Opus round 2: --at, holdout, the stamp after y, the repair line, the branch
@@ -394,7 +394,7 @@ def test_the_help_and_the_docstring_say_what_the_code_does_about_the_stamp_windo
     help_text = " ".join(arm_start.parser().format_help().split())
     assert "next whole second" in help_text and "default: now" not in help_text
     doc = " ".join(arm_start.__doc__.split())
-    assert "moment the marker is written" not in doc and "next whole second after the `y`" in doc and "1 s or more after the stamp" in doc
+    assert "moment the marker is written" not in doc and "next whole second after the `y`" in doc and "refuses when they finish 1 s or more after it" in doc
     assert "(`--at` is now or later)" not in doc and "one already in the past" in doc
 
 
@@ -414,6 +414,7 @@ def test_a_restore_that_also_fails_is_one_line_naming_what_is_left_and_no_traceb
     assert world.go(DET, "--at", STAMP) == 1
     err = capsys.readouterr().err
     assert err.startswith("error: ") and err.count("\n") == 1 and "Traceback" not in err and "disk" not in err
+    assert f"arm_start {DET}" in world.prereg.read_text()                           # the entry it reports as left in place is there
     assert "Amendments entry" in err and "one-line file" not in err and "marker" not in err.split("left in place", 1)[1]
     assert not (world.data / f"arm_start_{DET}.txt").exists() and not (world.data / phase.FILE).exists()
 
@@ -428,3 +429,35 @@ def test_a_failed_one_line_file_write_says_the_write_failed_and_does_not_blame_t
     err = capsys.readouterr().err
     assert err.count("\n") == 1 and "the write failed" in err and "marker write" not in err and "Traceback" not in err
     assert world.prereg.read_text() == before and not (world.data / phase.FILE).exists()
+
+
+def test_a_failed_append_is_one_line_and_nothing_is_written(world, capsys, monkeypatch):
+    before = world.prereg.read_text()
+
+    def boom(path, text):
+        raise OSError("read-only")
+    monkeypatch.setattr(seal, "_write", boom)
+    assert world.go(DET, "--at", STAMP) == 1
+    err = capsys.readouterr().err
+    assert err.count("\n") == 1 and "Traceback" not in err and "read-only" not in err and "Amendments entry" in err
+    assert world.prereg.read_text() == before and not (world.data / phase.FILE).exists() and not (world.data / f"arm_start_{DET}.txt").exists()
+
+
+def test_a_marker_still_as_before_is_not_named_as_left_in_place(world, capsys, monkeypatch):
+    phase.write(world.cfg, {"other_detector": "2026-10-01T00:00:00Z"}, NOW)
+    marker, real, calls = (world.data / phase.FILE).read_bytes(), seal._write, []
+
+    def flaky(path, text):                                                          # the append lands, the restore of the file fails
+        calls.append(path)
+        if len(calls) > 1:
+            raise OSError("disk gone")
+        return real(path, text)
+
+    def boom(path, text):                                                           # the one-line write fails: the old marker is untouched
+        raise OSError("no space")
+    monkeypatch.setattr(seal, "_write", flaky)
+    monkeypatch.setattr(arm_start, "write_private", boom)
+    assert world.go(DET, "--at", STAMP) == 1
+    err = capsys.readouterr().err
+    assert err.count("\n") == 1 and err.split("left in place: ", 1)[1].startswith("the Amendments entry; restore")
+    assert (world.data / phase.FILE).read_bytes() == marker

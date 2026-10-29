@@ -83,8 +83,9 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
   that differ from `assign` and a seed that does not hash to the sealed line). The verb appends the line first and writes the marker last: if
   a write fails, or the writes finish 1 s or more after the stamp, the verb itself restores PREREGISTRATION.md, deletes the one-line file and puts
   the previous marker back, exits 1 and says to fix the cause and rerun. `--at` may only be now or later, and the default stamp is the NEXT whole
-  second after the `y`. Sessions starting in that stamp's second before the write lands are eligible yet ran with output in both arms: the
-  window is always under 1 s, never zero: the verb refuses (and restores) only when the writes finish at least 1 s after the stamp.
+  second after the `y`. Sessions starting in that stamp's second before the writes land are eligible yet ran with output in both arms:
+  the window between the stamp and the writes landing is under 1 s, and zero when they land before the stamp;
+  the verb refuses when they finish 1 s or more after it.
 - The marker is signed with the chain key (`chains.seal`, as approvals rows): an unsigned, malformed, other-key or tampered marker is no phase
   and the hook logs `arm:phase:unverified`. That protects against a file an agent can write, not against an agent that can read the chain key
   (a Bash tool reads any file the operator can) and not on an unkeyed install, where the signature is the plain record hash and anyone can
