@@ -1289,10 +1289,12 @@ the stem and that `records.check(rec)` (no body) accepts, and (`watch/vet.py`) w
 URL of `watch_inventory_map`, a source id of `watch_sources`, or `claude_version`; both files are required). An imported record is evidence plus
 title: `change.diff` and `diff_sha256` are ALWAYS dropped (null; the id does not depend on them, and `records.check` still passes the stored
 record) because only the operator's own scan computes a diff, and the title carries a visible ` (imported)` (a title too long to carry it is
-rejected, reason `title`); `watch status`, the digest and the queue card show it. `status` is forced to `open`, and past the cap of five open (leads excepted) the
+rejected, reason `title`); `watch status`, the digest and the queue card show it. `status` is forced to `open`, and past the cap of five open (leads
+excepted) the
 record is written `queued` in ranking order. A record whose `reconcile.key` is in the store, or whose id exists (`write_proposal` is
 write-once), is a duplicate. The work holds `fsio.lock(watch_dir, blocking=True)` and ends with `store.rebalance`; a `DISABLED` file or an
-unsafe watch directory refuses (exit 2). Output is `import: N imported, N duplicate, N rejected` (plus `; N imported without diff` when a diff was dropped), one `rejected <stem>: <reason>` per
+unsafe watch directory refuses (exit 2). Output is `import: N imported, N duplicate, N rejected` (plus `; N imported without diff` when a diff was
+dropped), one `rejected <stem>: <reason>` per
 rejection (a fixed word -- name, symlink, size, json, shape, id, unreadable -- or the `check` reason; never file content) and `- <title>` per
 imported record; `--dry-run` writes nothing and prints the same. The copy is never modified. The import trusts the validation, not the
 copy's origin, which is why a diff is never taken from it.
@@ -1580,10 +1582,13 @@ Order W3 of the watcher and cockpit design (section 7, "The brief"). Not on the 
   `_unknown_tools`, the count of the others), `ledger <before> <after> <stage> <result>`,
   `state-mark` (writes `brief_state.json`: `last_brief`, `needs_you_count`), `tools-audit <stream> --allow <file>` (exit 2 on drift), `timeout-mark
   <stage>` (a ledger row `{ts, stage, timeout}`), `refusal <reason>` (a ledger row `{ts, stage: "run", refused: <reason>}`; the reason is checked against the
-  FIXED set `brief_audit.REASONS`, the `fail` literals of `brief.sh` and `brief_lib.sh` without the `(exit N)` tail, and anything else is written as `other`, never
-  free text; `fail` calls it best effort before it exits, except for a stage timeout, which has its own row, and the quiet exits -- lock held, not due -- leave no row)
+  FIXED set `brief_audit.REASONS`, the `fail` literals of `brief.sh` and `brief_lib.sh` without the `(exit N)` tail, and anything else is written as
+  `other`, never
+  free text; `fail` calls it best effort before it exits, except for a stage timeout, which has its own row, and the quiet exits -- lock held, not due --
+  leave no row)
   and `status` (prints `last refusal: <reason> <age>` between `ledger rows:` and `last stage costs:`: the LAST row that carries `drift`, shown as `tool drift`,
-  `timeout`, as `stage<N> timeout`, or `refused`; `none` when there is no such row). They print counts and field paths, never mail content. A usage error (an unknown verb
+  `timeout`, as `stage<N> timeout`, or `refused`; `none` when there is no such row). They print counts and field paths, never mail content. A usage error
+  (an unknown verb
   or argument, a missing one) is ONE stderr line,
   `brief: usage: ...`, exit 2; `brief.sh` takes only `--force` and answers anything else with `brief: usage: brief.sh [--force]`, exit 2, before it
   reads the config or takes the lock. A number that is not finite (`Infinity`, `NaN` in a result file) is missing in a ledger row. Stream lines are split

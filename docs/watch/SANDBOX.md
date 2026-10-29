@@ -322,7 +322,8 @@ mode 0755; edit the three variables at its top: the acewatch user, the venv pyth
 it as `<script> --check` like `backup_check` and `brain_check`, keeps the first line (80 characters at most, no `/`) as a note, and `compile status`
 shows it: `acewatch open 3  leads 1  oldest 2d  last scan 4h` (or `acewatch none` / `acewatch disabled`); a failed or empty run shows
 `acewatch check failed`. The script runs `sudo -n -u acewatch <venv python> -m ace_playbook.compile --config <acewatch config> watch status`, so it needs
-ONE sudoers line, written by you with `sudo visudo -f /etc/sudoers.d/acewatch-check` (nothing installs it): `<operator> ALL=(acewatch) NOPASSWD: ` followed by that
+ONE sudoers line, written by you with `sudo visudo -f /etc/sudoers.d/acewatch-check` (nothing installs it): `<operator> ALL=(acewatch) NOPASSWD: ` followed
+by that
 exact command (python path, `-m ace_playbook.compile --config` and the config path, `watch status`). It reads state only; it needs no write access.
 
 ## How to rotate the token

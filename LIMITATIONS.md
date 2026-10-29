@@ -528,16 +528,20 @@ used because it drops the claude.ai
 connectors (probed 2026-10-22), so `disableAllHooks` keeps the operator's hooks out, which also disables the PreToolUse guard. Isolating
 with a private `CLAUDE_CONFIG_DIR` does not work: credentials are bound to the config dir, so a fresh one is "Not logged in". The window figures in its
 ledger are one reading per stream, so a single run cannot show its own cost in plan share; only the trend over consecutive rows does.
-The `last refusal:` line of `brief status` names only a reason from a fixed list (a stage timeout and a tool drift are the other two kinds, each from its own row); a run
-whose config or brief directory cannot be read has no ledger to write to, so its refusal stays on stderr only, and a quiet exit (another run holding the lock, not due) is not a refusal.
+The `last refusal:` line of `brief status` names only a reason from a fixed list (a stage timeout and a tool drift are the other two kinds, each from its
+own row); a run
+whose config or brief directory cannot be read has no ledger to write to, so its refusal stays on stderr only, and a quiet exit (another run holding the
+lock, not due) is not a refusal.
 
 ## Nightly check notes
 
-The three optional config keys `backup_check`, `brain_check` and `acewatch_check` name local scripts that the nightly runs as `<script> --check`. A note is text
+The three optional config keys `backup_check`, `brain_check` and `acewatch_check` name local scripts that the nightly runs as
+`<script> --check`. A note is text
 from a local script the operator configured, not from the network; first line, 80 chars, failures are reported as `check failed` without
 detail (a script that is missing or not a regular file at run time, a non-zero exit, a timeout of 20 s, a start error, an empty or unprintable first
 line and a line that contains a `/` all give
-`backup check failed`, `brain check failed` or `acewatch check failed`: never stderr, the script path or an exception text). The script's own line is shown as it
+`backup check failed`, `brain check failed` or `acewatch check failed`: never stderr, the script path or an exception text). The script's own line is shown
+as it
 wrote it, so what it prints is only as good as the script (a check line is shown as a plain note; a line whose first word carries a colon is
 rejected so it cannot pose as a digest category such as `silent:`); `compile status` shows at most four notes, each cut to 80 characters.
 

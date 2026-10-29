@@ -1,4 +1,5 @@
-"""The brief's last refusal reason: `brief refusal <reason>` ledger rows, the fail() paths of hooks/brief.sh, and the `last refusal:` line of `brief status`."""
+"""The brief's last refusal reason: `brief refusal <reason>` ledger rows, the fail() paths of hooks/brief.sh, and the `last refusal:` line of
+`brief status`."""
 
 import json
 import os

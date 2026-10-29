@@ -172,10 +172,12 @@ edit its three variables, add the one sudoers line it documents yourself): it pr
 
 Each night, before the sweep, `nightly_sweep.py` runs each configured script as `<script> --check` (20 s limit, only `PATH` and `HOME` in its
 environment), keeps the first line it prints (80 characters at most) and stores it in `health.json` under `notes`; `compile status` then
-shows it in its `notes:` line, for example `backup 7h`, `backup missing`, `brain drift: 0 files (1 skipped, 16 entropy)` or `acewatch open 3  leads 1  oldest 2d  last scan 4h`. The line is
+shows it in its `notes:` line, for example `backup 7h`, `backup missing`, `brain drift: 0 files (1 skipped, 16 entropy)` or `acewatch open 3  leads 1 
+oldest 2d  last scan 4h`. The line is
 whatever your script prints, so print no path (a line with a `/` is dropped). A script that is missing or not a regular file, exits non-zero, times
 out, prints nothing or starts its
-first word with a `:`-bearing token such as `silent:x` shows `backup check failed`, `brain check failed` or `acewatch check failed`, with no detail. A failing note never
+first word with a `:`-bearing token such as `silent:x` shows `backup check failed`, `brain check failed` or `acewatch check failed`, with no detail. A
+failing note never
 fails the night. Leave both keys out and nothing changes.
 
 ## 5. Optional: git pre-commit scrub
@@ -490,7 +492,8 @@ network, and it is never on a hook path.
 3. `compile watch scan` fetches the sources that are due (tier 0 daily, tier 1 weekly, by the stamps in `seen.json`; `--force` ignores the
    cadence, `--tier 0|1|all` picks, `--dry-run` fetches and matches but writes nothing), rebuilds `inventory.json` and prints one line per
    new proposal and a summary line. When the first source it drops fails only because the name did not resolve (DNS is often not up yet after a
-   wake), it waits 20 seconds once, tries that source again and notes `dns wait 20s: <id> recovered|still dropped`; it never waits twice in a scan. It exits 0 except for a configuration error or a store write failure (an `OSError` on `watch_dir`,
+   wake), it waits 20 seconds once, tries that source again and notes `dns wait 20s: <id> recovered|still dropped`; it never waits twice in a scan. It
+   exits 0 except for a configuration error or a store write failure (an `OSError` on `watch_dir`,
    printed as its type only): both exit 2. A scan holds an exclusive lock on `<watch_dir>/scan.lock`; a second scan that starts meanwhile
    prints `watch: scan running` and exits 0 without doing anything. Run it by hand or from a scheduler of your own; nothing is installed for
    you. For the terminal run, set `ACE_PLAYBOOK_CONFIG` in your shell profile (the same file the hooks and the status line read), or the
@@ -696,7 +699,8 @@ Tool scope), `unknown_tools` (how many other names the model called), and the pl
 the stream's `rate_limit_event`: `five_hour_before/after` and `seven_day_before/after` (utilization, 0 to 1; both readings come from the
 same stream, so compare consecutive rows for the share of a week). `uv run python -m ace_playbook.compile.brief status` prints the last
 brief, the needs-you count, the ledger row count, the last refusal and the last cost of each stage. Every `fail` path of `brief.sh` leaves
-a ledger row `{ts, stage: "run", refused: <reason>}` (the reason is one of a fixed list, else `other`; a stage timeout and a tool drift keep their own rows; the quiet
+a ledger row `{ts, stage: "run", refused: <reason>}` (the reason is one of a fixed list, else `other`; a stage timeout and a tool drift keep their own
+rows; the quiet
 exits leave none), and `status` shows the newest of these three kinds: `last refusal: tool drift 2h`, `stage1 timeout 1d`, `digest refused 5m` or `none`.
 
 The raw streams of a run hold mail the exclusion list has not seen, so `brief.sh` deletes them when it exits, also on SIGTERM, SIGINT or

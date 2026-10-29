@@ -175,7 +175,8 @@ def test_stage_one_failure_stops_the_run_and_still_logs_its_cost(w):
 def test_stage_two_failure_leaves_no_page_and_no_state_so_the_next_wake_retries(w):
     p = w.run("--force", ACE_FAKE_FAIL="stage2")
     assert p.returncode == 1 and p.stderr == "brief: stage 2 failed (exit 1)\n"
-    assert [r["stage"] for r in w.ledger()] == ["stage1", "stage2", "run"] and not (w.dir / "brief.html").exists() and not (w.dir / "brief_state.json").exists()
+    assert [r["stage"] for r in w.ledger()] == ["stage1", "stage2", "run"]
+    assert not (w.dir / "brief.html").exists() and not (w.dir / "brief_state.json").exists()
     assert w.run().returncode == 0 and (w.dir / "brief.html").exists()
 
 
