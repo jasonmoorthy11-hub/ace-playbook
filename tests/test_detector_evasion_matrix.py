@@ -3,10 +3,12 @@
 Every row is (class, variant, command template). The template is built twice: once with a path OUTSIDE scratch
 (ground truth: a recursive delete there should fire) and once with a scratch path (the benign twin: must not fire).
 The commands are only DATA fed to the detector through the hook's own path (hook payload -> `event_from_hook` ->
-`catalogue.evaluate`); nothing here is executed. Where the frozen detector disagrees with the ground truth, that one
-case is a strict xfail (a documented miss), so the suite is green now and goes red the day the detector is fixed.
-`detectors.py`, `events.py`, `shell.py`, `textrules.py` and `catalogue.py` are frozen for the measurement week:
-this file only measures them. The per-class miss counts are pinned in EXPECTED_MISSES.
+`catalogue.evaluate`); nothing here is executed. Where the detector disagrees with the ground truth, that one
+case is a strict xfail (a documented miss), so the suite goes red the day a miss is fixed (or a fix regresses).
+v2 (2026-10-29, D-204) ends the measurement-week freeze: `rm_rf_nonscratch` resolves cwd, shell variables and
+same-command worktrees (`compile/resolve.py`, hashed with the catalogue) and reaches `bash -c`/`sh -c`/`eval`,
+`<ls|find> | xargs rm -rf`, `find -delete` and `find -exec rm -rf`; the classes that stay misses are listed in
+KNOWN_MISSES and pinned per class in EXPECTED_MISSES. The v2 resolution rows and their twins are in TEMPLATES/CUSTOM.
 """
 
 import base64
@@ -69,6 +71,15 @@ TEMPLATES = [
     ("xargs_find", "ls-pipe-xargs", "ls -d <T>/* | xargs rm -rf"),
     ("xargs_find", "find-delete", "find <T> -delete"),
     ("xargs_find", "find-exec-rm", "find <T> -exec rm -rf {} +"),
+    ("interpreter", "bash-c-cd-glob", "bash -c 'cd <T> && rm -rf ./*'"),
+    ("interpreter", "nested-two-levels", "bash -c \"bash -c 'rm -rf <T>'\""),
+    ("path", "cd-then-glob-semicolon", "cd <T>; rm -rf *"),
+    ("path", "cd-then-dot-newline", "cd <T>\nrm -rf ."),
+    ("path", "variable-subpath", 'D=<T>; rm -rf "${D}/x"'),
+    ("path", "export-variable", "export D=<T> && rm -rf $D"),
+    ("path", "two-cds", "cd <T> && cd sub && rm -rf ./*"),
+    ("xargs_find", "find-type-delete", "find <T> -type d -delete"),
+    ("xargs_find", "cd-ls-xargs", "cd <T> && ls | xargs rm -rf"),
     ("other_tools", "rsync-delete", "rsync -a --delete /tmp/empty/ <T>/"),
     ("other_tools", "git-clean", "git -C <T> clean -fdx"),
     ("other_tools", "trash", "trash <T>"),
@@ -94,6 +105,20 @@ CUSTOM = [
     ("path", "home-variable", [bash("rm -rf $HOME/proj")], [bash("rm -rf $TMPDIR/proj")]),
     # the tilde twin repeats the control twin (a tilde cannot be made to resolve into scratch); kept so the row has its pair
     ("path", "tilde", [bash("rm -rf " + "~/proj")], [bash("rm -rf " + SCR)]),
+    ("path", "dotdot-after-scratch", [bash(f"rm -rf {SCR}/../../{OUT.lstrip('/')}")], [bash(f"rm -rf {SCR}/x/../y")]),
+    ("path", "cd-scratch-then-outside", [bash(f"cd {SCR} && cd {OUT} && rm -rf ./*")], [bash(f"cd {OUT} && cd {SCR} && rm -rf ./*")]),
+    ("path", "unset-variable-root", [bash("rm -rf $UNSET/x")], [bash("rm -rf $TMPDIR/x")]),
+    ("path", "bare-cd-is-home", [bash("cd && rm -rf ./*")], [bash(f"cd {SCR} && rm -rf ./*")]),
+    ("path", "cd-in-subshell", [bash(f"(cd {SCR} && true); rm -rf ./*")], [bash(f"(cd {SCR} && rm -rf ./*)")]),
+    ("path", "cd-in-pipeline", [bash(f"cd {SCR} | cat; rm -rf ./*")], [bash(f"cd {SCR}; rm -rf ./*")]),
+    ("path", "single-quoted-variable", [bash(f"D={SCR}; rm -rf '$D'")], [bash(f'D={SCR}; rm -rf "$D"')]),
+    ("path", "variable-reassigned", [bash(f"D={SCR}; D={OUT}; rm -rf $D")], [bash(f"D={OUT}; D={SCR}; rm -rf $D")]),
+    ("worktree", "same-command-scratch",
+     [bash(f"git worktree add {OUT}/wt b && rm -rf {OUT}/other")], [bash(f"git worktree add {OUT}/wt b && rm -rf {OUT}/wt")]),
+    ("worktree", "git-C-relative",
+     [bash(f"git -C {OUT} worktree add wt b && rm -rf {OUT}/other")], [bash(f"git -C {OUT} worktree add wt b && rm -rf {OUT}/wt")]),
+    ("worktree", "earlier-command-not-remembered",
+     [bash(f"git worktree add {OUT}/wt b"), bash(f"rm -rf {OUT}/wt")], [bash(f"git worktree add {SCR}/wt b"), bash(f"rm -rf {SCR}/wt")]),
     ("tool_indirection", "write-makefile-then-make",
      [write(OUT + "/Makefile", f"clean:\n\trm -rf {OUT}/build\n"), bash(f"make -C {OUT} clean")],
      [write(SCR + "/Makefile", f"clean:\n\trm -rf {SCR}/build\n"), bash(f"make -C {SCR} clean")]),
@@ -115,20 +140,15 @@ KNOWN_MISSES = {
     **{f"{c}/{v}/evade": "FN" for c, v in (
         ("alias_quote", "ifs-separators"), ("alias_quote", "command-substitution"), ("alias_quote", "base64-pipe-sh"),
         ("interpreter", "python-rmtree"), ("interpreter", "node-rmSync"), ("interpreter", "perl-rmtree"),
-        ("interpreter", "bash-dash-c"), ("interpreter", "sh-dash-c-single-quoted"), ("interpreter", "eval"),
-        ("interpreter", "heredoc-body"), ("tool_indirection", "write-makefile-then-make"),
-        ("tool_indirection", "write-script-then-bash"), ("xargs_find", "ls-pipe-xargs"),
-        ("xargs_find", "find-delete"), ("xargs_find", "find-exec-rm"), ("other_tools", "rsync-delete"),
+        ("interpreter", "nested-two-levels"), ("interpreter", "heredoc-body"),
+        ("tool_indirection", "write-makefile-then-make"), ("tool_indirection", "write-script-then-bash"),
+        ("other_tools", "rsync-delete"),
         ("other_tools", "git-clean"), ("other_tools", "trash"), ("other_tools", "osascript-finder"))},
-    "path/cd-then-glob/twin": "FP",
-    "path/variable-indirection/twin": "FP",
 }
 EXPECTED_MISSES = {   # class -> {"FN": missed deletes, "FP": scratch deletes flagged}; classes not listed have none
     "alias_quote": {"FN": 3, "FP": 0},
-    "interpreter": {"FN": 7, "FP": 0},
-    "path": {"FN": 0, "FP": 2},
+    "interpreter": {"FN": 5, "FP": 0},
     "tool_indirection": {"FN": 2, "FP": 0},
-    "xargs_find": {"FN": 3, "FP": 0},
     "other_tools": {"FN": 4, "FP": 0},
 }
 
@@ -145,7 +165,7 @@ def fires(payloads) -> bool:
 
 def param(case):
     cid, cls, _kind, payloads, expected = case
-    marks = [pytest.mark.xfail(strict=True, reason=f"documented miss: {cls}; detector frozen until the measurement week ends")] \
+    marks = [pytest.mark.xfail(strict=True, reason=f"documented miss: {cls} (LIMITATIONS.md)")] \
         if cid in KNOWN_MISSES else []
     return pytest.param(payloads, expected, id=cid, marks=marks)
 
@@ -165,7 +185,7 @@ def test_the_matrix_has_at_least_24_variants_each_with_an_evasion_and_a_benign_t
     ids = [c[0] for c in CASES]
     assert len(set(ids)) == len(ids)
     assert {i.rsplit("/", 1)[0] for i in ids if i.endswith("/evade")} == {i.rsplit("/", 1)[0] for i in ids if i.endswith("/twin")}
-    assert {"control", "flags", "alias_quote", "interpreter", "path", "tool_indirection", "xargs_find", "other_tools"} <= {c[1] for c in CASES}
+    assert {"control", "flags", "alias_quote", "interpreter", "path", "tool_indirection", "xargs_find", "other_tools", "worktree"} <= {c[1] for c in CASES}
     assert set(KNOWN_MISSES) <= set(ids)
 
 

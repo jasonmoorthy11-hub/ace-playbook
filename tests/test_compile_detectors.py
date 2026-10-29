@@ -100,8 +100,8 @@ def test_source_sha256_changes_with_the_leaf_modules(monkeypatch):
     before = {n: r.source_sha256 for n, r in cat.CATALOGUE.items()}
     assert all(re.fullmatch(r"[0-9a-f]{64}", h) for h in before.values()) and len(set(before.values())) == len(before)
     texts = cat._source_texts()
-    assert len(texts) == 3 and all(texts)
-    for i in range(len(texts)):          # events, shell, textrules: any edit moves every hash (per-detector rules: test_compile_srchash)
+    assert len(texts) == 4 and all(texts)
+    for i in range(len(texts)):          # events, shell, textrules, resolve: any edit moves every hash (per-detector rules: test_compile_srchash)
         changed = tuple(t + "# edit" if j == i else t for j, t in enumerate(texts))
         monkeypatch.setattr(cat, "_source_texts", lambda changed=changed: changed)
         assert all(r.source_sha256 != before[n] for n, r in cat.CATALOGUE.items()), i
@@ -396,3 +396,76 @@ def test_a_raising_detector_is_reported_and_strict_mode_reraises(monkeypatch):
     assert [f.detector for f in fires] == ["rm_rf_nonscratch"] and errors == [("rm_rf", "RuntimeError")]
     with pytest.raises(RuntimeError):
         cat.evaluate(bash("rm -rf /w/src"), state_mod.new_state("s"), strict=True)
+
+
+# ------------------------------------------------------------------ v2: the scratch table for resolved targets (compile/resolve.py)
+# command -> does rm_rf_nonscratch fire? The agent scratch tree, a worktree made in the SAME command, and quoted targets.
+V2_SCRATCH = [
+    ("agent-scratchpad-tree", "rm -rf /private/tmp/claude-501/-w-proj/abc123/scratchpad/out", False),
+    ("agent-scratchpad-cd-glob", "cd /private/tmp/claude-501/proj/sess/scratchpad && rm -rf ./*", False),
+    ("agent-tree-dotdot-out", "cd /private/tmp/claude-501/proj && rm -rf ../../../w/src", True),
+    ("worktree-added-then-removed", "git worktree add /w/wt -b nb && rm -rf /w/wt", False),
+    ("worktree-child-path", "git worktree add /w/wt && rm -rf /w/wt/src/x", False),
+    ("worktree-option-value-skipped", "git worktree add -b feat /w/wt HEAD && rm -rf /w/wt", False),
+    ("worktree-git-C-base", "git -C /w/repo worktree add ../wt && rm -rf /w/wt", False),
+    ("worktree-sibling-is-not-scratch", "git worktree add /w/wt && rm -rf /w/other", True),
+    ("worktree-prefix-lookalike", "git worktree add /w/wt && rm -rf /w/wt2", True),
+    ("worktree-remove-is-not-add", "git worktree remove /w/wt && rm -rf /w/wt", True),
+    ("worktree-root-is-never-scratch", "git worktree add / b && rm -rf /srv/x", True),
+    ("worktree-made-after-the-delete", "rm -rf /w/wt && git worktree add /w/wt", True),
+    ("quoted-target-with-a-space", 'rm -rf "/tmp/my dir"', False),
+    ("quoted-target-outside", 'rm -rf "/w/my dir"', True),
+    ("quoted-command-substitution", 'rm -rf "/tmp/$(cat /w/x)"', True),
+    ("single-quoted-variable-is-literal", "D=/tmp/x; rm -rf '$D'", True),
+    ("variable-in-the-value", "A=/tmp; B=$A/x; rm -rf $B", False),
+    ("variable-reassigned-outside", "D=/tmp/x; D=/w/src; rm -rf $D", True),
+    ("variable-with-command-substitution", "D=$(pwd); rm -rf $D", True),
+    ("tmpdir-assigned-outside", "TMPDIR=/w/src; rm -rf $TMPDIR/a", True),
+    ("inline-assignment-is-not-in-scope", "D=/tmp/x rm -rf $D", True),
+]
+
+
+@pytest.mark.parametrize("cmd,expected", [(c, e) for _n, c, e in V2_SCRATCH], ids=[n for n, _c, _e in V2_SCRATCH])
+def test_v2_scratch_table(cmd, expected):
+    steps = [{"human": "x"}, {"tool": "Bash", "input": {"command": cmd}}]
+    assert (cs.run_offline(steps).get("rm_rf_nonscratch", 0) > 0) is expected
+    assert (cs.run_live(steps).get("rm_rf_nonscratch", 0) > 0) is expected
+
+
+@pytest.mark.parametrize("cmd", [c for _n, c, _e in V2_SCRATCH if "rm -rf" in c and "worktree add /w/wt" not in c])
+def test_the_weak_detector_still_counts_every_recursive_force_delete(cmd):
+    steps = [{"human": "x"}, {"tool": "Bash", "input": {"command": cmd}}]
+    assert cs.run_offline(steps).get("rm_rf", 0) == 1
+
+
+def test_the_weak_rm_rf_keeps_its_literal_reading_where_v2_resolves():
+    steps = [{"human": "x"}, {"tool": "Bash", "input": {"command": "cd /tmp/x && rm -rf ./*"}}]
+    got = cs.run_offline(steps)
+    assert got.get("rm_rf") == 1 and not got.get("rm_rf_nonscratch")
+
+
+def test_resolve_rm_args_agrees_with_the_detectors_flag_logic():
+    from ace_playbook.compile import resolve
+    for toks in (["rm", "-rf", "x"], ["rm", "-fr", "a", "b"], ["rm", "-r", "x"], ["rm", "-f", "x"], ["rm", "--recursive", "--force", "x"],
+                 ["\\rm", "-Rf", "x"], ["/bin/rm", "-rf", "-v", "x"], ["ls", "-rf", "x"], [], ["rm"]):
+        assert (resolve.rm_args(toks) or None) == d._rm_rf_targets(toks), toks
+
+
+def test_the_key_of_a_v2_fire_is_the_hash_of_the_resolved_target():
+    fires, _, _ = cat.evaluate(bash("cd /w/src && rm -rf ./*"), state_mod.new_state("s"), strict=True)
+    (fire,) = [f for f in fires if f.detector == "rm_rf_nonscratch"]
+    assert fire.key == ev.hash16("/w/src/*") and fire.count == 1
+
+
+V2_PAYLOADS = FX["v2"]
+
+
+@pytest.mark.parametrize("p", V2_PAYLOADS, ids=ids(V2_PAYLOADS))
+def test_v2_payloads(p):
+    want = p["expect"] == "fire"
+    assert (cs.run_offline(p["steps"]).get("rm_rf_nonscratch", 0) > 0) is want
+    assert (cs.run_live(p["steps"]).get("rm_rf_nonscratch", 0) > 0) is want
+
+
+def test_the_v2_payloads_stay_out_of_the_step0_parity_set():
+    assert {p["id"] for p in V2_PAYLOADS}.isdisjoint(cs.scenarios()) and len(V2_PAYLOADS) >= 12

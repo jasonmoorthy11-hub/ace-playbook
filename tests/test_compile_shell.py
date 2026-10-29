@@ -252,3 +252,146 @@ def test_a_subshell_is_not_arithmetic():
 
 def test_arithmetic_spanning_lines_stays_open():
     assert rm_fires("echo $((1+\n1<<2))\nrm -rf /w/src\n2")
+
+
+# ------------------------------------------------------------------ v2: command_stream and canonical_targets (compile/resolve.py)
+from ace_playbook.compile import detectors as det, resolve, shell   # noqa: E402
+
+STREAM_CORPUS = [
+    "ls", "rm -rf /w/src", "cd /w && rm -rf build; echo done", "echo start\nrm -rf /w/src", "sudo -u root rm -rf /w/src",
+    "FOO=1 rm -rf /w/src", "cat <<EOF\nrm -rf /w/src\nEOF\nls", "echo $(( (1+2) << 3 ))\nrm -rf /w/src", "f() { rm -rf /w/src; }; f",
+    "a | b & c", "echo 'x' | xargs rm -rf", "rm -rf /w/a /w/b # comment", "if true; then rm -rf /w/x; fi", "x=$'a\\tb'; rm -rf /w/x",
+]
+
+
+@pytest.mark.parametrize("cmd", STREAM_CORPUS)
+def test_command_stream_carries_exactly_the_segments_command_segments_returns(cmd):
+    events, _quotes = shell.command_stream(cmd)
+    assert [f for sep, raw in events if not sep and (f := shell.front(raw))] == shell.command_segments(cmd)
+
+
+def test_command_segments_output_is_unchanged_for_the_braces_v2_keeps_inline():
+    assert shell.command_segments('rm -rf "${D}/x"') == [["rm", "-rf", "Q"]]
+    assert shell.command_stream('rm -rf "${D}/x"')[0] == [("", ["rm", "-rf", "${D}/x"])]
+
+
+def test_command_stream_events_separators_and_holes():
+    events, quotes = shell.command_stream("cd /tmp/x && D='a b' ; echo \"p q\"\nls | wc")
+    assert events == [("", ["cd", "/tmp/x"]), ("&&", []), ("", ["D=\x000\x00"]), (";", []), ("", ["echo", "\x001\x00"]),
+                      ("\n", []), ("", ["ls"]), ("|", []), ("", ["wc"])]
+    assert quotes == [("'", "a b"), ('"', "p q")]
+
+
+def test_command_stream_keeps_single_quoted_dollar_as_a_hole_and_a_double_quoted_one_inline():
+    assert shell.command_stream("echo '$D' \"$D\"") == ([("", ["echo", "\x000\x00", "$D"])], [("'", "$D")])
+
+
+def test_command_stream_ansi_quoted_words_and_nul_bytes():
+    events, quotes = shell.command_stream("echo $'a b'\x00c")
+    assert events == [("", ["echo", "\x000\x00", "c"])] and quotes == [("$'", "a b")]
+    assert shell.command_stream(None) == ([], []) and shell.command_stream("") == ([], [])
+
+
+def targets(cmd):
+    return [[(p, s) for p, s in g] for g in resolve.canonical_targets(shell.command_stream(cmd), det.SCRATCH)]
+
+
+@pytest.mark.parametrize("cmd,want", [
+    ("rm -rf /w/src", [[("/w/src", False)]]),
+    ("rm -rf /tmp/a /w/b", [[("/tmp/a", True), ("/w/b", False)]]),
+    ("cd /tmp/w && rm -rf ./*", [[("/tmp/w/*", True)]]),
+    ("cd /w; rm -rf ./*", [[("/w/*", False)]]),
+    ("cd /w\nrm -rf .", [[("/w", False)]]),
+    ("cd /tmp/w && cd sub && rm -rf .", [[("/tmp/w/sub", True)]]),
+    ("cd /tmp/w && cd /w && rm -rf .", [[("/w", False)]]),
+    ("cd /tmp/w && cd .. && rm -rf .", [[("/tmp", True)]]),
+    ("cd /tmp/w || rm -rf .", [[("/tmp/w", True)]]),
+    ("pushd /tmp/w && rm -rf .", [[("/tmp/w", True)]]),
+    ("cd && rm -rf ./*", [[("$HOME/*", False)]]),
+    ("cd /tmp/w && cd - && rm -rf ./*", [[("*", False)]]),
+    ("cd /tmp/w && popd && rm -rf x", [[("x", False)]]),
+    ("cd -P /tmp/w && rm -rf .", [[("/tmp/w", True)]]),
+    ("cd $TMPDIR/w && rm -rf ./*", [[("$TMPDIR/w/*", True)]]),
+    ("cd $UNSET && rm -rf ./*", [[("$UNSET/*", False)]]),
+    ("(cd /tmp/w && rm -rf .)", [[("/tmp/w", True)]]),
+    ("(cd /tmp/w); rm -rf .", [[(".", False)]]),
+    ("cd /tmp/w | cat; rm -rf .", [[(".", False)]]),
+    ("cd /tmp/w & rm -rf .", [[(".", False)]]),
+    ("`cd /tmp/w`; rm -rf .", [[(".", False)]]),
+    ("D=/tmp/w; rm -rf $D", [[("/tmp/w", True)]]),
+    ('D=/tmp/w; rm -rf "${D}/x"', [[("/tmp/w/x", True)]]),
+    ("export D=/w && rm -rf $D", [[("/w", False)]]),
+    ("declare D=/w; rm -rf $D", [[("/w", False)]]),
+    ("A=/tmp; B=$A/x; rm -rf $B", [[("/tmp/x", True)]]),
+    ("rm -rf $HOME/x $PWD/y ${NOPE}", [[("$HOME/x", False), ("$PWD/y", False), ("${NOPE}", False)]]),
+    ("rm -rf $TMPDIR/x ${TMPDIR}/y", [[("$TMPDIR/x", True), ("${TMPDIR}/y", True)]]),
+    ("D=/tmp/w; ( D=/w; true ); rm -rf $D", [[("/tmp/w", True)]]),
+    ("D=/w; D=$(pwd); rm -rf $D", [[("$D", False)]]),
+    ("rm -rf -- /w/src", [[("/w/src", False)]]),
+    ("rm -rf '' /w/src", [[("/w/src", False)]]),
+    ('rm -rf "a b"', [[("a b", False)]]),
+    ("cd /tmp/w && rm -rf node_modules", [[("/tmp/w/node_modules", True)]]),
+    ("git worktree add /w/wt b && cd /w/wt && rm -rf .", [[("/w/wt", True)]]),
+    ("git worktree add /w/wt b && rm -rf /w/wt/a /w/o", [[("/w/wt/a", True), ("/w/o", False)]]),
+])
+def test_canonical_targets(cmd, want):
+    assert targets(cmd) == want
+
+
+@pytest.mark.parametrize("cmd,want", [
+    ("bash -c 'cd /tmp/w && rm -rf ./*'", [[("/tmp/w/*", True)]]),
+    ('sh -c "rm -rf /w/src"', [[("/w/src", False)]]),
+    ("eval 'rm -rf /w/src'", [[("/w/src", False)]]),
+    ("eval rm -rf /w/src", [[("/w/src", False)]]),
+    ("bash -lc 'rm -rf /w/src'", [[("/w/src", False)]]),
+    ("bash --norc -o pipefail -c 'rm -rf /w/src'", [[("/w/src", False)]]),
+    ("sudo bash -c 'rm -rf /w/src'", [[("/w/src", False)]]),
+    ("cd /tmp/w && bash -c 'rm -rf .'", [[("/tmp/w", True)]]),
+    ("D=/tmp/w; bash -c 'rm -rf $D'", [[("/tmp/w", True)]]),
+    ("cd /tmp/w; bash -c 'cd /w'; rm -rf .", [[("/tmp/w", True)]]),
+    ("bash -c \"bash -c 'rm -rf /w/src'\"", []),
+    ("bash script.sh -c 'rm -rf /w/src'", []),
+    ("bash -c", []),
+    ("bash -c ''", []),
+    ("ls -d /tmp/w/* | xargs rm -rf", [[("/tmp/w/*", True)]]),
+    ("ls -d /w/a /w/b | xargs rm -rf", [[("/w/a", False), ("/w/b", False)]]),
+    ("ls | xargs rm -rf", [[(".", False)]]),
+    ("cd /tmp/w && ls | xargs rm -rf", [[("/tmp/w", True)]]),
+    ("find /w/a /tmp/b -type d | xargs rm -rf", [[("/w/a", False), ("/tmp/b", True)]]),
+    ("cat list | xargs rm -rf", []),
+    ("ls /w; xargs rm -rf", []),
+    ("xargs rm -rf /w/src", [[("/w/src", False)]]),
+    ("find /w/src -delete", [[("/w/src", False)]]),
+    ("find /tmp/w -name '*.o' -delete", [[("/tmp/w", True)]]),
+    ("find -L /w/src -delete", [[("/w/src", False)]]),
+    ("find -delete", [[(".", False)]]),
+    ("find /w/src -exec rm -rf {} +", [[("/w/src", False)]]),
+    ("find /w/src -execdir rm -rf {} \\;", [[("/w/src", False)]]),
+    ("find /w/src -exec rm {} +", []),
+    ("find /w/src -name x", []),
+    ("rm -r /w/src", []),
+    ("rm /w/src", []),
+])
+def test_canonical_targets_wrappers_xargs_and_find(cmd, want):
+    assert targets(cmd) == want
+
+
+def test_a_hostile_quoted_value_is_unresolvable_not_scratch():
+    assert targets('rm -rf "/tmp/$(cat /w/x)" "/tmp/`id`"') == [[("Q", False), ("Q", False)]]
+    assert targets('D="/tmp/`id`"; rm -rf "$D"') == [[("$D", False)]]
+
+
+def test_the_environment_is_bounded():
+    cmd = "; ".join(f"V{i}=/tmp/{i}" for i in range(resolve.MAX_ENV + 5)) + "; rm -rf $V0 $V%d" % (resolve.MAX_ENV + 1)
+    assert targets(cmd) == [[("/tmp/0", True), ("$V%d" % (resolve.MAX_ENV + 1), False)]]
+    big = "A=" + "x" * (resolve.MAX_VALUE + 1) + "; rm -rf $A"
+    assert targets(big) == [[("$A", False)]]
+
+
+def test_resolution_is_linear_on_hostile_input():
+    for name, cmd in {"cd-flood": "cd /tmp/a && " * 5000 + "rm -rf .", "paren-flood": "( cd /w; " * 5000 + "rm -rf .",
+                      "assign-flood": "A=$A$A; " * 5000 + "rm -rf $A", "backtick-flood": "` cd /w " * 5000 + "rm -rf .",
+                      "wrapper-flood": "bash -c 'rm -rf /w' ; " * 3000}.items():
+        t0 = time.monotonic()
+        resolve.canonical_targets(shell.command_stream(cmd), det.SCRATCH)
+        assert time.monotonic() - t0 <= TIME_BUDGET, name

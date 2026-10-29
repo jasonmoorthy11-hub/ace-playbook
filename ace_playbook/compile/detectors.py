@@ -4,6 +4,10 @@ Ported from Step 0; `ace_playbook/fixtures/parity/step0_parity.json` freezes its
 every hardening that changes one under `deviations`. No I/O, clock or environment: a detector
 never mutates its state; `advance` returns the next one (catalogue.evaluate runs both). Live events
 (hook payloads) carry `tier == "live"`, offline ones (transcript records) `tier == "offline"`.
+
+`rm_rf_nonscratch` is v2 since 2026-10-29 (D-204): it judges the RESOLVED target (compile/resolve.py: cwd, shell variables,
+same-command worktrees, `bash -c`/`sh -c`/`eval`, xargs, find), not the literal token. `rm_rf` (weak) still counts the literal
+recursive force deletes of Step 0. resolve.py is hashed with the catalogue, so this change moved all nine detector hashes.
 """
 
 from __future__ import annotations
@@ -12,7 +16,7 @@ import posixpath
 import re
 from dataclasses import dataclass
 
-from . import shell
+from . import resolve, shell
 from .events import EDIT_TOOLS, Event, hash16
 
 MAX_PATHS = 5000
@@ -70,12 +74,17 @@ def _rm_rf_targets(toks: list[str]) -> list[str] | None:
 
 
 def _rm_hits(event: Event, nonscratch: bool) -> tuple[int, str]:
+    """(segments that delete, key). The weak `rm_rf` counts every recursive force delete with a target, as Step 0 did;
+    `rm_rf_nonscratch` (v2) counts those with a target that is not scratch AFTER resolve.canonical_targets has
+    followed the cwd, shell variables, same-command worktrees, `bash -c`/`sh -c`/`eval`, xargs and find."""
     count, key = 0, ""
-    for toks in _segments(event):
-        targets = _rm_rf_targets(toks)
-        if not targets:
-            continue
-        bad = [t for t in targets if not SCRATCH.search(posixpath.normpath(t))] if nonscratch else targets
+    if nonscratch:
+        groups = [g for tu in event.tool_uses if tu.name == "Bash" and isinstance(tu.input.get("command"), str)
+                  for g in resolve.canonical_targets(shell.command_stream(tu.input["command"]), SCRATCH)]
+    else:
+        groups = [[(t, False) for t in targets] for toks in _segments(event) if (targets := _rm_rf_targets(toks))]
+    for group in groups:
+        bad = [t for t, scratch in group if not scratch]
         if bad:
             count += 1
             key = key or hash16(bad[0])
