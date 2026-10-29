@@ -330,8 +330,10 @@ def test_the_sample_script_passes_bash_n_and_is_short():
 
 def test_the_sample_script_prints_acewatch_and_the_first_status_line(tmp_path):
     argv = tmp_path / "argv"
-    done = sample(tmp_path, f'printf "%s " "$@" > {argv}\nprintf "proposals\\nopen 3  leads 1  oldest 2d  last scan 4h\\n- a title\\n"\n')
+    where = tmp_path / "cwd"
+    done = sample(tmp_path, f'pwd > {where}\nprintf "%s " "$@" > {argv}\nprintf "proposals\\nopen 3  leads 1  oldest 2d  last scan 4h\\n- a title\\n"\n')
     assert (done.returncode, done.stdout) == (0, AW_LINE + "\n")
+    assert where.read_text().strip() == "/"                                  # not the caller's working directory
     words = argv.read_text().split()
     assert words[:3] == ["-n", "-u", "acewatch"] and words[-2:] == ["watch", "status"]
     for first in ("none", "disabled"):

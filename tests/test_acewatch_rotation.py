@@ -29,10 +29,10 @@ def test_the_template_names_exactly_the_four_log_paths_the_two_plists_write():
     assert all(p.startswith(HOME + "/logs/") for p in paths)
 
 
-def test_every_line_has_seven_fields_owner_mode_600_keep_5_1024_kib_compress():
+def test_every_line_has_seven_fields_owner_mode_600_keep_5_1024_kib_compress_no_signal():
     for ln in lines():
         path, owner, mode, count, size, when, flags = ln.split()
-        assert path.startswith(HOME) and (owner, mode, count, size, when, flags) == ("acewatch:staff", "600", "5", "1024", "*", "J"), ln
+        assert path.startswith(HOME) and (owner, mode, count, size, when, flags) == ("acewatch:acewatch", "600", "5", "1024", "*", "JN"), ln
 
 
 def test_the_comments_do_not_hide_a_second_set_of_fields():

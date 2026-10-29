@@ -11,6 +11,7 @@ ACEWATCH_PY=/opt/acewatch/copy/.venv/bin/python
 ACEWATCH_CONFIG=/var/acewatch/.config/ace-playbook/config.json
 
 [ "${1:-}" = "--check" ] || exit 1
+cd / || exit 1      # python -m must not run from a working directory the caller chose
 out=$(sudo -n -u "$ACEWATCH_USER" "$ACEWATCH_PY" -m ace_playbook.compile --config "$ACEWATCH_CONFIG" watch status 2>/dev/null) || exit 1
 line=$(printf '%s\n' "$out" | grep -m1 -E '^(open |none|disabled)') || exit 1
 printf 'acewatch %s\n' "$line"

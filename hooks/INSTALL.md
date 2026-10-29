@@ -173,7 +173,9 @@ edit its three variables, add the one sudoers line it documents yourself): it pr
 Each night, before the sweep, `nightly_sweep.py` runs each configured script as `<script> --check` (20 s limit, only `PATH` and `HOME` in its
 environment), keeps the first line it prints (80 characters at most) and stores it in `health.json` under `notes`; `compile status` then
 shows it in its `notes:` line, for example `backup 7h`, `backup missing`, `brain drift: 0 files (1 skipped, 16 entropy)` or `acewatch open 3  leads 1 
-oldest 2d  last scan 4h`. The line is
+oldest 2d  last scan 4h`. `compile status` shows only the first four nightly
+notes (the arm notes come first), so two arm notes plus a backup and a brain note push the acewatch note out of that line; it is still in
+`health.json`. The line is
 whatever your script prints, so print no path (a line with a `/` is dropped). A script that is missing or not a regular file, exits non-zero, times
 out, prints nothing or starts its
 first word with a `:`-bearing token such as `silent:x` shows `backup check failed`, `brain check failed` or `acewatch check failed`, with no detail. A

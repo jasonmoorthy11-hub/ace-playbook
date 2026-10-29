@@ -155,3 +155,8 @@ def test_a_run_whose_config_fails_leaves_stderr_only(tmp_path):
     (tmp_path / "bad.json").write_text("{")
     p = w.run("--force", ACE_PLAYBOOK_CONFIG=str(tmp_path / "bad.json"))
     assert p.returncode == 1 and p.stderr.endswith("brief: config\n") and not (w.dir / "brief_ledger.jsonl").exists()
+
+
+def test_the_refusal_call_goes_through_run_bg_so_a_signal_is_not_deferred():
+    lib = (ROOT / "hooks" / "brief_lib.sh").read_text()
+    assert 'py refusal "$1"' in lib and "ace_playbook.compile.brief refusal" not in lib and len(lib.splitlines()) <= 80

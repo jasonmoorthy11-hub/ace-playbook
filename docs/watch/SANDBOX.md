@@ -240,8 +240,16 @@ install and the `inputs.legacy-<date>` name are written from that run, not paste
   connection. A `pf` rule (an anchor that allows `acewatch` to reach only the source hosts) or a local proxy is the operator's optional step;
   without it, treat the egress as open.
 - Moving proposals from `acewatch`'s watch directory to the operator's own is a copy, then an import (`compile watch queue` appends
-  decisions, so the operator reviews proposals in a watch directory of their own). Copy only `proposals/W-*.json`, as the operator, into
-  a new real directory (for example `cp /var/acewatch/watch/proposals/W-*.json ~/acewatch-copy/` from a shell that may read it), then run
+  decisions, so the operator reviews proposals in a watch directory of their own). Copy only `proposals/W-*.json` into a new
+  real directory of the operator's own, through `acewatch` (the operator cannot list `/var/acewatch`, and `sudo cp` would leave root-owned 0600 files that
+  every import rejects as `unreadable`); the archive is written by `acewatch` and unpacked by the operator, so the files end up operator-owned (0600):
+
+  ```
+  mkdir -m 700 ~/acewatch-copy
+  sudo -u acewatch sh -c 'cd /var/acewatch/watch/proposals && tar -cf - W-*.json' | tar -xf - -C ~/acewatch-copy
+  ```
+
+  (`/var/acewatch/watch` is the `watch_dir` of step 4; change it if yours differs.) Then run
   `python3 -m ace_playbook.compile watch import ~/acewatch-copy` (add `--dry-run` to see the counts first). The import validates each file
   with the same record check, counts duplicates, keeps the cap of five open, never changes the copy, and prints `rejected <stem>: <reason>`
   for anything else; then `compile watch queue` reviews them. An imported record is evidence plus title: its stamps, URLs and target are checked
@@ -302,8 +310,9 @@ items read`, and with zero compliance it prints no proposals line. A call that r
 ## Log rotation
 
 launchd appends `acewatch.out.log`, `acewatch.err.log` and `acewatch.weekly.out.log` / `.err.log` in `/var/acewatch/logs/` forever; the scan itself writes
-no log file. `hooks/acewatch/newsyslog.acewatch.conf` is a newsyslog(8) template, one line per file (owner `acewatch:staff`, mode 600, keep 5, rotate
-at 1024 KiB, compressed). Install it as root, by hand, once: replace the placeholder with acewatch's home and put the result where newsyslog reads it:
+no log file. `hooks/acewatch/newsyslog.acewatch.conf` is a newsyslog(8) template, one line per file (owner `acewatch:acewatch`, mode 600, keep 5, rotate
+at 1024 KiB, compressed, flags `JN`: no signal to syslogd).
+Install it as root, by hand, once: replace the placeholder with acewatch's home and put the result where newsyslog reads it:
 
 ```
 f=$(mktemp) && sed "s#__ACEWATCH_HOME__#/var/acewatch#g" hooks/acewatch/newsyslog.acewatch.conf > "$f"

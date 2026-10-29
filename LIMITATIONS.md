@@ -545,7 +545,8 @@ line and a line that contains a `/` all give
 `backup check failed`, `brain check failed` or `acewatch check failed`: never stderr, the script path or an exception text). The script's own line is shown
 as it
 wrote it, so what it prints is only as good as the script (a check line is shown as a plain note; a line whose first word carries a colon is
-rejected so it cannot pose as a digest category such as `silent:`); `compile status` shows at most four notes, each cut to 80 characters.
+rejected so it cannot pose as a digest category such as `silent:`); `compile status` shows at most four notes, each cut to 80 characters;
+the arm notes come first, so with two of them plus the backup and brain notes the `acewatch` note is not shown there (it stays in `health.json`).
 
 The sandbox logs in `/var/acewatch/logs` are rotated only if the operator installs the newsyslog template (`hooks/acewatch/newsyslog.acewatch.conf`) as
 root; nothing in this repository installs it, and the other launchd jobs' logs (nightly, brief) are not covered by it.

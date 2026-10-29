@@ -7,6 +7,9 @@ with the candidates (dedupe, auto-close, reopen, the cap) is `reconcile.py`. A s
 a second one prints `watch: scan running` and exits 0. Writes go to `watch_dir` only; `dry_run` writes nothing (the network is still read).
 With `watch_reader` on (default off), no `READER_DISABLED` and no `--dry-run`, tier-1 feed items also go through the quarantined Reader
 (`model.py`): leads only. A title is printed quoted (`!r`).
+A name that fails to resolve (DNS is often not up right after a wake) costs ONE bounded wait per scan: on the first `address` drop whose lookup
+failed (`netguard.resolve_failed`: one extra lookup, also for an unsafe answer, which is then not waited for) the scan sleeps `DNS_WAIT` seconds,
+fetches that one source again and adds the note `dns wait <N>s: <id> recovered|still dropped`; later address drops never wait.
 """
 
 from __future__ import annotations
