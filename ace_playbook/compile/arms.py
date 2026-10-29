@@ -108,7 +108,7 @@ def analyse(cfg, now: str | None = None) -> dict:
         if not (pids := fam.get(det)):
             raise ValueError(f"arm_start {det} names a detector with no approved proposal at the arm start (approve one or do not start the arm)")
         (demoted, cause), ok[det] = first_demotion(cfg, pids, t0), True
-        if demoted and demoted >= eligible_sessions(ev_rows, t0, None, det)[1]:     # a lowering row after the natural end ends nothing
+        if demoted and demoted >= eligible_sessions(ev_rows, t0, None, det)[1]:     # a lowering row at or after the natural end ends nothing
             demoted = cause = None
         for pid in pids:
             sess, end, missing = eligible_sessions(ev_rows, t0, None, det, demoted)

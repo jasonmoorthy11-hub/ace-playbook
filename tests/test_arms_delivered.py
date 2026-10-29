@@ -88,3 +88,24 @@ def test_a_lowering_row_after_the_natural_end_is_not_the_horizons_demotion(w, pr
     assert "delivered_errors" not in v
     text = arms.render(arms.analyse(w.cfg, now="2027-02-20T00:00:00Z"))
     assert "horizon ended by demotion" not in text and "delivered-path" not in text
+
+
+# ------------------------------------------------------------------ round 3 docs-lens: a row exactly at the natural end (12 weeks, or the 400th session)
+@pytest.mark.parametrize("n, ts, ends", [
+    (20, "2027-01-24T00:00:00Z", False),       # exactly the 12-week end: ignored
+    (20, "2027-01-23T23:59:59Z", True),        # one second before it: the horizon's demotion
+    (400, "2026-11-20T10:00:01Z", False),      # the 400th session starts 10:00:00, so its natural end is 10:00:01: ignored
+    (400, "2026-11-20T10:00:00Z", True),       # the 400th session's own start: ends the horizon
+])
+def test_a_lowering_row_at_the_natural_end_is_ignored_and_one_second_before_it_is_not(w, prereg, n, ts, ends):
+    world(w, n=n)
+    demotions.append(w.data, {"proposal_id": w.pid, **DEMOTION, "cause": "error_rate", "ts": ts})
+    w.cfg.path("shadow.log").write_text(COUNTED)
+    out = arms.analyse(w.cfg, now="2027-02-20T00:00:00Z")
+    v, text = next(iter(out["detectors"].values())), arms.render(out)
+    if ends:
+        assert v["demoted_at"] == ts and v["demotion_cause"] == "error_rate" and v["horizon_end"] == ts and v["delivered_errors"] == 1
+        assert "delivered-path errors in the horizon: 1\n" in text
+    else:
+        assert v["demoted_at"] is None and v["demotion_cause"] is None and "delivered_errors" not in v
+        assert "horizon ended by demotion" not in text and "delivered-path" not in text

@@ -1412,7 +1412,8 @@ the resolved mode in `label --rows` and the queue card while any detector's phas
 write `arm` or `agent_id_present` (`shadow.py` holds no arm code, so today `arms report` refuses every row), the offline auto-FP rule (a) is still
 asymmetric, demotion and harm do not yet ignore auto labels during a phase, the spillover comparison is not built, and condition (7) is half built: the
 analysis counts `error:delivered:` lines of `shadow.log` in the horizon of an `error_rate` demotion (`arms_window.delivered_errors`, `unknown` for a
-missing, unreadable or full log), but the hook does not yet log them and no family-lesson status change from a session carrying `ACE P-` is frozen.
+missing, unreadable or full log), but the hook does not yet log them and no family-lesson status change from a session carrying `ACE P-`
+and no lesson minting is frozen.
 
 ### 8.x Brief (as built)
 
