@@ -5,6 +5,9 @@ committed with the fields marked TBD filled in and tagged `prereg-v1`, before th
 randomized session that will count as confirmatory. After the tag, changes are dated amendments
 appended at the bottom; the sealed text is never edited. Any run made before the tag is
 labelled exploratory and is excluded from the confirmatory analysis.
+`prereg-v1` seals only "Shadow-mode additions"; the injection RER experiment (the sections from
+"Question" to "Compiled path") stays a draft, and no session counts toward it. `holdout_enabled`
+stays false during any shadow arm phase.
 
 ## Question
 
@@ -47,10 +50,10 @@ mistake the lesson targets recurs in that session. Reported as a rate ratio, sho
 
 ## Timing and stopping (planned)
 
-Confirmatory read at 16 weeks, with group-sequential looks at 8, 16 and 24 weeks and early
-stopping for harm only. The boundary values (about 0.0005, 0.014 and 0.045, O'Brien-Fleming
-style) are textbook figures that have not been verified for this design; TBD: confirm before
-sealing.
+Group-sequential looks at 8, 16 and 24 weeks, with early stopping for harm only. The 24-week look
+is the final look and the only confirmatory read. The two-sided boundaries are z 3.471, 2.454 and
+2.004 (p 0.0005, 0.0141 and 0.0451, O'Brien-Fleming style), verified by the 2026-10-29
+statistician pass.
 
 ## Gate before any live experiment (Step 0)
 
@@ -92,65 +95,111 @@ are binding only once `compile seal` has frozen the block below and the reposito
 ### Effect estimate (compiled path, descriptive)
 
 The compiled-path primary stays the false-block rate and friction, with recurrence reported
-descriptively, as the "Compiled path" section above says; nothing here replaces it. The descriptive
-effect is fires per eligible session with versus without the check, per detector: the "with" arm
-runs the proposal in its approved mode, the "without" arm runs it in observe. It is reported as a
-rate ratio, with randomization inference over 10,000 seeded permutations of the arm labels and a
-Wilson 95 % interval per arm (`metrics.wilson`). A hook has no memory across sessions, so the first
-attempt in a session cannot differ between arms. The leading contrast is therefore REPEAT fires per
-eligible session and evasion; sessions-with-fire is reported descriptively.
+descriptively, as the "Compiled path" section above says; nothing here replaces it. The shadow arm
+phase estimates one effect per detector: the "with" arm (the warn arm) runs the proposal in its
+approved mode, the "without" arm (the observe arm) runs it in observe. A hook has no memory across
+sessions, so the first attempt in a session cannot differ between arms.
+
+One primary per detector: repeat fires per eligible session. A session's value is its fires beyond
+the first (`max(0, fires - 1)`), counting only rows with `agent_id_present` false; subagent fires
+(`agent_id_present` true) are secondary, and so are rows that do not record the field. Test
+statistic: D = (mean of the primary, warn arm) - (mean of the primary, observe arm). The rate ratio
+is reported but not used for the test (it is undefined when the observe-arm mean is 0).
+
+Test: a permutation test with 10,000 Bernoulli(`arm_rate`) re-draws of the arm labels over the
+eligible sessions, drawn from `random.Random(permutation_seed)` under a committed permutation seed
+(only its sha256 is sealed, as `permutation_seed_sha256`). Two-sided p = (1 + #{|D*| >= |D|}) /
+10,001, where D* is D under a re-draw. The analysis is by assigned arm (intention to treat). The
+interval for D is the permutation interval [D - q97.5(D*), D - q2.5(D*)] from the same re-draws,
+which assumes a constant additive effect. Holm across detectors, family alpha 0.05 two-sided.
+
+Secondary, with no p-values: evasion, sessions-with-fire and friction. Sessions-with-fire gets a
+Wilson 95 % interval per arm (`metrics.wilson`); a Wilson interval is never put on fires per
+session, which can exceed 1. Friction is reported descriptively: messages per 100 calls is 0 in
+observe by construction (a manipulation check, not an outcome), and corrections per 100 prompts is
+not specific to any detector.
 
 ### Eligibility
 
-A session is eligible for a detector if it has at least one event that detector consumes: the
-detector is listed in the `eligible` field of the newest `_session` row of that session in
-`detector_events.jsonl` (the last row in file order wins). Interactive and automated sessions alike;
-the scan does not distinguish them. It reads `*.jsonl` transcripts and `offline.discover` skips subagent
+A session is eligible for a detector if it is an interactive session (the definition of
+`step0/measure.py:79`: a human prompt or a plan start; in the `_session` row, `prompts` above 0) and
+has at least one event that detector consumes: the detector is listed in the `eligible` field of
+the newest `_session` row of that session in `detector_events.jsonl` (the last row in file order
+wins). Its first transcript event must fall in [arm start, horizon end) for that detector.
+Automated sessions are not eligible. Revoked, kill-file and demoted gaps are kept in their assigned
+arm and reported. The scan reads `*.jsonl` transcripts and `offline.discover` skips subagent
 transcripts, non-regular files (symlinks included), names that do not match the session-id pattern,
 transcripts older than the `since_days` look-back, already-scanned transcripts that have not changed,
-oversized transcripts (over 64 MiB) and sessions idle for less than the configured idle time. Excluded: the synthetic corpus, fires with
-`cause: truncated`, and sessions still awaiting the offline scan at report time.
+oversized transcripts (over 64 MiB) and sessions idle for less than the configured idle time.
+Excluded: the synthetic corpus, fires with `cause: truncated`, and sessions still awaiting the
+offline scan at analysis time. The analysis runs 7 days after the horizon ends, after one forced
+offline scan; sessions still unscanned are counted and reported as missing, never silently dropped.
 
 ### Arm assignment
 
 Each (session, proposal) pair is assigned by `coin(shadow_seed, session_id, proposal_id) <
-arm_rate`, with `arm_rate` 0.5. The seed is private and only its sha256 is sealed, the same
-commitment as `holdout_seed` above. The true-positive and false-positive rules of design section 7.3
-and the promotion and demotion ladder are frozen by reference to the section numbers of the design
-document and to the report code hash (`report_sha256`) in the block below.
+arm_rate`, with `arm_rate` 0.5. The seeds are private and only their sha256 is sealed, the same
+commitment as `holdout_seed` above. The shadow seed's value lives only in the private config
+file, outside anything the agent reads by default (not in the repository, the transcripts, a
+CLAUDE.md or a rules file). Limit: a Bash tool can read any file the operator can, so this keeps the
+arm out of default view and does not make it unreadable; the seal records only the sha256.
+
+Labelling is symmetric in the randomized phase: a user correction within 2 prompts of any fire,
+in either arm, is a neutral flag, not an automatic false positive, and the label queue hides the
+mode and the arm of every row. A demotion ends that detector's phase and is the harm event; harm =
+1 human-labelled FP block, or 2 FP warns within 30 days. The analysis is intention to treat by
+assigned arm, so sessions run in a demoted or revoked gap stay in their assigned arm. The
+true-positive and false-positive rules of design section 7.3 and the promotion and demotion ladder
+are frozen by reference to the section numbers of the design document and to the report code hash
+(`report_sha256`) in the block below. holdout_enabled stays false during any shadow arm phase.
 
 ### Spillover
 
 Lessons are not arm-specific, so the "without" arm is contaminated by the prompt-level lesson that
-the same incident produced. The report flags every lesson whose originating session holds an `ACE P-`
-message and reports the arm comparison separately for sessions where such a lesson was shown. The
-flag is reported, not corrected.
+the same incident produced, and the operator also sees the stderr echo. The estimand is "the
+within-session effect of the warning given cross-session contamination"; it is biased toward 1.
+Lesson minting is frozen from sessions carrying `ACE P-` during the phase. The report flags every
+lesson whose originating session holds an `ACE P-` message and reports the arm comparison
+separately for sessions where such a lesson was shown. The flag is reported, not corrected.
 
 ### Timing and stopping
 
-A fixed horizon of N eligible sessions per detector, or 4 weeks, whichever comes first. No interim
-looks; stopping early is allowed for harm only.
+Entry gate (per detector, observe mode): at least 30 human-labelled sessions-with-fire (the first
+fire per session counts), 0 FP, 0 unlabelled. Fires within a session share one label, so the gate
+counts sessions, not fires. At the week-1 rates (7.2 % of sessions, 2.4 interactive sessions a
+day) a valid detector needs about 25 weeks to reach it.
 
-N per detector: (filled by hand before the seal)
+Horizon (randomized phase): 12 calendar weeks from the detector's arm start or 400 eligible
+sessions, whichever comes first. No interim looks; the analysis after the horizon is the final and
+only look. Stopping early is allowed for harm only (the demotion rule above).
 
-The operator fills N from the week-1 rates with the power note of design section 8, before running
-`compile seal`; the real seal refuses while the placeholder above is still present.
+Power note: the repeat-fire mean is 0.47 per eligible session with a variance-to-mean ratio of 3.65
+(assumed). A rate ratio of 0.5 needs about 366 eligible sessions per arm, 0.67 about 935. At about
+95 per arm in 4 weeks the minimum detectable rate ratio is about 0.14. A detector that passes the
+0-FP gate fires less often, which lowers power further. Week 1 is exploratory and not part of any
+confirmatory analysis: v1 had 0 human-confirmed TPs among 23 fires in 7 sessions (95 % upper bound
+on per-session precision 35 %). Every fire matched one pattern, agent-created scratch or worktree
+cleanup, so v1 does not separate it from the target hazard.
+
+The seal refuses unless this subsection holds the entry gate (at least 30) and a horizon line, and
+the block below holds `permutation_seed_sha256`, `shadow_seed_sha256` and `arm_rate`.
 
 ### Null handling
 
-A rate ratio whose permutation p-value is at least 0.05 is reported as "no detectable effect at
-this N", never as "no effect".
+A permutation p-value (Holm-adjusted across detectors) at or above 0.05 is reported as "no
+detectable effect at this horizon", never as "no effect".
 
 ### Frozen instruments
 
 Filled by `compile seal`: one line per detector (`name strength sha256`: the strength from the
 catalogue registry and the hash from `catalogue.source_table()`), `report_sha256`, one line per
 approved proposal (`P-id mode proposal_sha256`, from the newest non-revoked row of
-`approvals.jsonl`), `shadow_seed_sha256`, `arm_rate`, `measurement_start` (the greatest, over those proposals, of each one's newest
-`observe` row of `approvals.jsonl`: the restart point of the promotion ladder, so a warn promotion does not move it) and `sealed_at`.
-`report_sha256` covers exactly two files, `ace_playbook/compile/metrics.py` and
-`ace_playbook/compile/report.py` (their bytes in that order, joined by a NUL byte); the detector
-code is covered by the per-detector hashes, not by `report_sha256`.
+`approvals.jsonl`), `shadow_seed_sha256`, `permutation_seed_sha256`, `arm_rate`, `measurement_start` (the greatest, over those
+proposals, of each one's newest `observe` row of `approvals.jsonl`: the restart point of the promotion ladder, so a warn promotion
+does not move it) and `sealed_at`. `report_sha256` covers exactly three files, `ace_playbook/compile/labels.py`,
+`ace_playbook/compile/metrics.py` and `ace_playbook/compile/report.py` (their bytes in name order, joined by a NUL byte); the
+detector code is covered by the per-detector hashes, not by `report_sha256`. The arm analysis that computes the primary
+must be built and hashed here before the seal, never written after it.
 
 (filled by compile seal)
 
@@ -161,4 +210,34 @@ below, never as edits of sealed text.
 
 ## Amendments
 
-(none)
+### 2026-10-29 - amendments from the section 9.10 statistician pass (made before the seal, so they edit the draft)
+
+Source: the hostile-statistician review of 2026-10-29 (verdict NOT SEALABLE; blocking B1-B6, important I1-I8, minor M1-M2) and the
+operator's decisions D-184 (week 1: no arms yet, seal later) and D-186 (the entry gate and the horizon below). Nothing was sealed, so
+these are edits of the draft, recorded here so that the reasons survive. What changed:
+
+- B1, B2: "N" is no longer a free number. The entry gate is at least 30 human-labelled sessions-with-fire (first fire per session
+  counts), 0 FP, 0 unlabelled, counted over sessions because fires within a session share one label (effective n is about 9, not 30,
+  if fires are counted). At the week-1 rates a valid detector needs about 25 weeks to reach it. The horizon is 12 calendar weeks
+  from the detector's arm start or 400 eligible sessions, whichever comes first. `compile seal` now refuses without both.
+- B3: the analysis is stated in the text (one primary per detector, D, a permutation test with 10,000 Bernoulli(`arm_rate`) re-draws
+  under a committed permutation seed, two-sided p = (1 + #{|D*| >= |D|}) / 10,001, intention to treat, Holm). `labels.py` joins the
+  `report_sha256` file set (it shapes the TP/FP numbers). The arm analysis code must be built and hashed before the seal.
+  `report_sha256` changed from 5c9cb343d93adbbe9519bacdad03f9fb0e4afe32c332d489f390c4e64404ed24 (metrics.py + report.py) to
+  399061fa96eafd4ec0c7cfe628878ba974dd7249a9782c2886e1850ffe908c89 (labels.py + metrics.py + report.py). The value that counts is the
+  one `compile seal --dry-run` prints on the day of the seal.
+- B4: prereg-v1 seals only "Shadow-mode additions"; the injection RER experiment stays a draft and `holdout_enabled` stays false
+  during any shadow arm phase (line 7 of this file). The 16-versus-24-week to-do of the injection experiment is dropped: the 24-week
+  look is the final one, with the verified boundaries z 3.471, 2.454 and 2.004.
+- B5, B6: eligibility has a time window ([arm start, horizon end), by the first transcript event), counts interactive sessions only,
+  and keeps revoked, kill-file and demoted gaps in the assigned arm. The primary counts only rows with `agent_id_present` false;
+  subagent fires are secondary. The analysis runs 7 days after the horizon, after one forced offline scan; unscanned sessions are
+  reported as missing.
+- I1-I3: a symmetric correction rule and a label queue that hides mode and arm; a demotion ends the phase and is the harm event;
+  one primary per detector with Holm across detectors; evasion, sessions-with-fire and friction are secondary with no p-values.
+- I4-I8: friction is descriptive; the power note is in "Timing and stopping"; the spillover estimand is stated and lesson minting is
+  frozen from sessions carrying `ACE P-` during the phase; Wilson only for sessions-with-fire, a permutation interval for D.
+- M1: the week-1 result is stated as exploratory (0 human-confirmed TPs among 23 fires in 7 sessions; one pattern; not separated from
+  the target hazard). M2: the shadow seed value lives outside anything the agent reads by default; a Bash tool can read any file
+  the operator can, so the limit is documented and the seal records only sha256 values (`shadow_seed_sha256`,
+  `permutation_seed_sha256`).

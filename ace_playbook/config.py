@@ -21,6 +21,7 @@ MAX_INJECT_CHARS = 7000
 
 CHECK_FIELDS = ("backup_check", "brain_check", "watch_claude")   # optional scripts and binaries, type-checked only: nightly notes, the watcher Reader's claude
 READER_MODEL = re.compile(r"claude-[A-Za-z0-9][A-Za-z0-9._-]*")
+SEED_HEX = re.compile(r"[0-9a-f]{64}")
 
 
 def check_value(key: str, value: Any) -> None:
@@ -80,6 +81,11 @@ class Config:
     # the nightly's optional health notes (ace_playbook/nightly_notes.py): two operator scripts run as `<script> --check`; None means none
     backup_check: Path | None = None
     brain_check: Path | None = None
+    # the shadow arm phase (PREREGISTRATION.md, Shadow-mode additions): two private seeds (64 hex; only their sha256 is ever printed or sealed)
+    # and the arm rate; None means not set yet, and `compile seal` refuses until all three are
+    shadow_seed: str | None = field(default=None, repr=False)
+    permutation_seed: str | None = field(default=None, repr=False)
+    arm_rate: float | None = None
     source: ClassVar[Path | None] = None  # not a config key: the file `load` read (or would have read), set on the instance by `load`
 
     def __post_init__(self) -> None:
@@ -95,6 +101,17 @@ class Config:
             raise ValueError("watch_reader must be true or false")
         if not (isinstance(self.watch_reader_model, str) and READER_MODEL.fullmatch(self.watch_reader_model)):
             raise ValueError("watch_reader_model must look like claude-<id>")
+        self.check_arms()
+
+    def check_arms(self) -> None:
+        """Raise ValueError when a set arm field is unusable; the message names the key and never the value."""
+        for key in ("shadow_seed", "permutation_seed"):
+            value = getattr(self, key)
+            if value is not None and not (isinstance(value, str) and SEED_HEX.fullmatch(value)):
+                raise ValueError(f"{key} must be 64 lowercase hex characters (or absent)")
+        rate = self.arm_rate
+        if rate is not None and not (isinstance(rate, (int, float)) and not isinstance(rate, bool) and 0.0 < rate < 1.0):
+            raise ValueError("arm_rate must be a number strictly between 0 and 1 (or absent)")
 
     def check_holdout(self) -> None:
         """Raise ValueError if holdout is on without a usable private seed."""

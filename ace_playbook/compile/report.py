@@ -45,11 +45,11 @@ RATE_HEADS = ("proposal", "detector", "eligible", "fire_sessions", "fire_rate", 
 NOT_COMPUTED = "not computed here: arms, randomization inference, spillover flag (they need the randomized phase, design 8)"
 
 
-HASHED = tuple(sorted((Path(__file__), Path(metrics.__file__)), key=lambda p: p.name))      # metrics.py decides every rate
+HASHED = tuple(sorted((Path(__file__), Path(metrics.__file__), Path(labels.__file__)), key=lambda p: p.name))   # metrics decides the rates, labels the TP/FP
 
 
 def source_sha256() -> str:
-    """sha256 of the bytes of metrics.py and report.py, in that order, joined by a NUL: the design commits the report code hash
+    """sha256 of the bytes of labels.py, metrics.py and report.py (name order), joined by a NUL: the design commits the report code hash
     before observe starts."""
     return hashlib.sha256(b"\0".join(p.read_bytes() for p in HASHED)).hexdigest()
 

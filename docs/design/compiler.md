@@ -1349,26 +1349,27 @@ section in PREREGISTRATION.md still says `(DRAFT until sealed)`. The sealing its
 
 - `--dry-run` needs no terminal, asks nothing and writes nothing. It prints the Frozen instruments block with live values:
   `detectors:` (one `name strength sha256` line per `catalogue.source_table()` entry, sorted; the strength is `Detector.strength` of
-  the registry), `report_sha256` (the bytes of `compile/metrics.py` then `compile/report.py`, joined by a NUL: exactly those two files;
+  the registry), `report_sha256` (the bytes of `compile/labels.py`, `compile/metrics.py` and `compile/report.py` in name order, joined by a NUL: exactly those three files, since 2026-10-29;
   the detector code is covered by the per-detector hashes), `proposals:` (the newest `approvals.jsonl` row of each proposal id that is
   not revoked, as `id mode proposal_sha256`, sorted; `(none)` when there are none, or a notice line when the chain is unreadable or
-  broken, still exit 0), `shadow_seed_sha256`, `arm_rate`, `measurement_start` (`measure.start_of`, the same value as `status`'s
+  broken, still exit 0), `shadow_seed_sha256`, `permutation_seed_sha256`, `arm_rate`, `measurement_start` (`measure.start_of`, the same value as `status`'s
   `measurement.start`: the greatest, over the listed proposals, of each one's newest `observe` row `ts`; `-` when none qualifies) and `sealed_at -`.
 - Without `--dry-run` the checks run in this order, and the first failure ends the command with nothing written: (1) no terminal: exit 2;
   (2) the file does not hold exactly one `## Shadow-mode additions` heading (counted loosely: an indented or double-spaced heading also
   counts): exit 2; (3) the heading already says SEALED (later changes go in dated amendments; this wins over every later check): exit 1;
   (4) the Frozen instruments subsection (that heading to the next `###`, inside the shadow-mode section) does not hold exactly one
-  `(filled by compile seal)` line: exit 2; (5) the Timing and stopping subsection does not hold exactly one line `N per detector: <value>` (a value containing a number)
-  that is not the placeholder `(filled by hand before the seal)` (a deleted line, the placeholder or a second line all refuse), or the
-  placeholder is still anywhere in the shadow-mode section: exit 1; (6) the approvals chain is broken or unreadable: exit 1; (7) the
-  block holds `shadow_seed_sha256 -` or `arm_rate 0.5 (planned)`: exit 1; (8) the y/N answer is anything but yes: exit 1; (9) the file
+  `(filled by compile seal)` line: exit 2; (5) the Timing and stopping subsection does not state the entry gate once (`at least <n> human-labelled sessions-with-fire`, with
+  `0 FP` and `0 unlabelled` in the same sentence, n at least 30: the gate counts sessions, not fires) or does not hold exactly one `Horizon ...: <weeks> calendar weeks ...
+  <n> eligible sessions` line, or the old hand-fill placeholder is still in the section: exit 1; (6) the approvals chain is broken or unreadable: exit 1; (7) the
+  config lacks `shadow_seed`, `permutation_seed` or `arm_rate` (the block would hold `-`): exit 1, naming the missing keys; (8) the y/N answer is anything but yes: exit 1; (9) the file
   changed while the prompt was open: exit 1; (10) the write: the matched heading is rewritten by its position (never by text search) to
   `## Shadow-mode additions (SEALED <date> prereg-v1)` and the filler line is replaced with the block in a `text` fence, through a
   fsynced temp file in the same directory and `os.replace`.
 - It prints the two commands `git -C <repo> tag -a prereg-v1 -m "pre-registration sealed <date>"` and `git -C <repo> push origin prereg-v1`
   for the operator to run; it never runs git and imports no `subprocess`.
-- Until the `shadow_seed` and `arm_rate` config fields land with the executed seal (the next version), `shadow_seed_sha256` is `-` and
-  `arm_rate` prints `0.5 (planned)`, and the real seal refuses (exit 1, naming `shadow_seed_sha256` and `arm_rate`) before it asks anything.
+- Config (since 2026-10-29): `shadow_seed` and `permutation_seed` (each 64 lowercase hex, `repr` hidden, the value never printed, logged or
+  written; only `sha256(seed)` appears in the block) and `arm_rate` (a number strictly between 0 and 1); all three default to unset, and the
+  real seal refuses (exit 1, naming the unset keys) before it asks anything. A bad value is a config error that names the key and never the value.
 
 ### 8.x Brief (as built)
 
