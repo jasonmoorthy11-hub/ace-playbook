@@ -504,9 +504,11 @@ network, and it is never on a hook path.
    `proposals/W-*.json` (made by you, into a real directory) into your own store: every file is validated, a duplicate (same id or same
    proposal key) is counted and not written, the cap of five open still holds, and the summary reads `import: N imported, N duplicate, N rejected`
    with a `rejected <stem>: <reason>` line per rejection. An imported record is evidence plus title: its stamps, URLs and target are checked
-   against your own `watch_sources` and `watch_inventory_map` (both required), its diff is dropped (`; N imported without diff`; your own scan computes
-   diffs) and its title shows ` (imported)`. `--dry-run` writes nothing; the copy is never changed; exit 2 for a symlinked
-   directory, a `DISABLED` file or an unsafe `watch_dir`. Review the imported proposals with `watch queue`.
+   against your own `watch_sources` and `watch_inventory_map` (both required), a diff is never taken from the copy (for a model pin it is computed
+   again from YOUR inventory, else dropped: `; N imported without diff`) and its title shows ` (imported)`; your own scan's diff always takes
+   priority over a diff-less imported twin. `--dry-run` writes nothing; the copy is never changed; exit 2 for a symlinked directory
+   (also `<link>/sub/..`), a `DISABLED` file or an unsafe `watch_dir`;
+   a FIFO or any other non-file in the copy is rejected, never waited for. Review the imported proposals with `watch queue`.
 4. Kill switch: `touch <watch_dir>/DISABLED`. While it exists `scan` prints `watch: disabled` and fetches and writes nothing; remove it to resume.
 5. The Reader (W2, optional, off by default). Without it nothing above calls a model. With it, tier-1 feed items go one by one to a tool-less,
    single-turn `claude -p` call whose answer code validates; the only result is a `lead` with no diff. **The Reader is for the `acewatch` user

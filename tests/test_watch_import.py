@@ -3,6 +3,8 @@
 import hashlib
 import json
 import os
+import signal
+import time
 import stat
 from pathlib import Path
 
@@ -224,7 +226,7 @@ def test_stamps_urls_and_targets_are_checked_against_the_operators_own_config(w,
     notstr = bad(5, **{"evidence.0.url": 5})
     code, out, _ = w.run(capsys)
     got = {ln.split()[1].rstrip(":"): ln.split(": ", 1)[1] for ln in reasons(out)}
-    assert got[long_window] == "dates" and got[odd_stamp] == "dates" and got[ftp] == "url" and got[nohost] == "url" and got[notstr] in ("url", "evidence")
+    assert got[long_window] == "dates" and got[odd_stamp] == "dates" and got[ftp] == "url" and got[nohost] == "url" and got[notstr] in ("url", "shape")
     assert w.stored() == []
 
 
@@ -252,3 +254,96 @@ def test_import_needs_the_sources_file_and_the_inventory_map(w, capsys, monkeypa
     monkeypatch.setenv("ACE_PLAYBOOK_CONFIG", str(conf))
     code, out, err = w.run(capsys)
     assert code == 2 and "watch_sources" in err and not w.wd.exists()
+
+
+def test_a_fifo_named_like_a_proposal_is_refused_not_waited_for_and_the_lock_is_released(w, capsys):
+    name = make(1)["id"]
+    os.mkfifo(w.src / (name + ".json"))
+    w.put(make(2))
+
+    def boom(*a):
+        raise TimeoutError("the import blocked on a FIFO")
+
+    signal.signal(signal.SIGALRM, boom)
+    signal.alarm(10)
+    began = time.monotonic()
+    try:
+        code, out, _ = w.run(capsys)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, signal.SIG_DFL)
+    assert code == 0 and time.monotonic() - began < 5 and f"rejected {name}: not a file" in out
+    assert out[0] == "import: 1 imported, 0 duplicate, 1 rejected" and fsio_free(w)
+
+
+def fsio_free(w):
+    from ace_playbook.compile.watch import fsio
+    fd = fsio.lock(w.wd)
+    if fd is not None:
+        os.close(fd)
+    return fd is not None
+
+
+def test_a_device_or_a_directory_named_like_a_proposal_is_not_a_file(w, capsys):
+    (w.src / (make(1)["id"] + ".json")).mkdir()
+    code, out, _ = w.run(capsys)
+    assert out[:2] == ["import: 0 imported, 0 duplicate, 1 rejected", f"rejected {make(1)['id']}: not a file"]
+
+
+@pytest.mark.parametrize("field, value", [
+    ("inventory_hits", "k1"), ("inventory_hits", [{"x": 1}, 5]), ("inventory_hits", ["k"] * 51), ("inventory_hits", ["x" * 201]),
+    ("inventory_hits", ["bell\x07"]), ("inventory_hits", None)])
+def test_a_record_the_stores_own_readers_would_skip_is_rejected_as_shape(w, capsys, field, value):
+    rec = make(1)
+    rec[field] = value
+    w.put(rec)
+    code, out, _ = w.run(capsys)
+    assert out[:2] == ["import: 0 imported, 0 duplicate, 1 rejected", f"rejected {rec['id']}: shape"] and w.stored() == []
+
+
+@pytest.mark.parametrize("tier", [True, False, 1.0])
+def test_a_tier_that_is_a_bool_or_a_float_is_a_shape(w, capsys, tier):
+    rec = make(1)
+    rec["evidence"][0]["tier"] = tier
+    w.put(rec)
+    assert w.run(capsys)[1][:2] == ["import: 0 imported, 0 duplicate, 1 rejected", f"rejected {rec['id']}: shape"]
+
+
+def test_everything_imported_is_read_back_by_the_stores_own_readers(w, capsys):
+    for n in (1, 2, 3):
+        w.put(make(n))
+    assert w.run(capsys)[1][0].startswith("import: 3 imported")
+    props, bad = store.scan_proposals(w.wd)
+    assert len(props) == 3 and bad == 0
+
+
+def test_a_created_stamp_in_the_future_is_a_dates_rejection_and_a_day_ahead_is_tolerated(w, capsys):
+    from datetime import datetime, timedelta, timezone
+    fmt = "%Y-%m-%dT%H:%M:%SZ"
+    far = make(1)
+    far["created"], far["expires"] = "2099-01-01T00:00:00Z", "2099-01-30T00:00:00Z"
+    soon = make(2)
+    soon["created"] = (datetime.now(timezone.utc) + timedelta(hours=12)).strftime(fmt)
+    soon["expires"] = (datetime.now(timezone.utc) + timedelta(days=20)).strftime(fmt)
+    later = make(3)
+    later["created"] = (datetime.now(timezone.utc) + timedelta(days=3)).strftime(fmt)
+    later["expires"] = (datetime.now(timezone.utc) + timedelta(days=20)).strftime(fmt)
+    for r in (far, soon, later):
+        w.put(r)
+    code, out, _ = w.run(capsys)
+    got = {ln.split()[1].rstrip(":"): ln.split(": ", 1)[1] for ln in reasons(out)}
+    assert got == {far["id"]: "dates", later["id"]: "dates"} and w.stored() == [soon["id"] + ".json"]
+
+
+def test_a_symlink_with_a_dotdot_behind_it_is_refused_and_a_symlinked_ancestor_is_not_a_reason_to_refuse(w, capsys, tmp_path):
+    w.put(make(1))
+    link = tmp_path / "lnk"
+    link.symlink_to(w.src)
+    (w.src / "sub").mkdir()
+    for src in (str(link) + "/sub/..", str(link) + "/", str(link)):
+        code, out, err = w.run(capsys, src=src)
+        assert code == 2 and "directory" in err and not w.wd.exists(), src
+    parent = tmp_path / "parentlink"
+    parent.symlink_to(tmp_path)
+    code, out, err = w.run(capsys, src=str(parent / "copy"))
+    assert code == 0 and out[0].startswith("import: 1 imported")

@@ -1282,22 +1282,30 @@ lines, `none` or `disabled`); the status line ends with `watch N`. Nothing here 
 files or the live measurement.
 
 `compile watch import <dir> [--dry-run]` (`watch/carry.py`, loaded only when it runs; `__main__` is untouched) moves a copy of `acewatch`'s
-`proposals/W-*.json` that the operator made into the operator's own store. `<dir>` must be a real directory (not a link; exit 2). Taken are
-only regular files named `W-*.json` whose stem matches `store.ID`, at most 64 KiB, never links, that parse as a JSON object whose `id` is
-the stem and that `records.check(rec)` (no body) accepts, and (`watch/vet.py`) whose stamps are in the store's format and at most 30 days apart
-(`dates`), whose evidence URLs are http(s) (`url`) and whose `change.target` is one the operator's own config knows (`target`: a key or mapped docs
-URL of `watch_inventory_map`, a source id of `watch_sources`, or `claude_version`; both files are required). An imported record is evidence plus
-title: `change.diff` and `diff_sha256` are ALWAYS dropped (null; the id does not depend on them, and `records.check` still passes the stored
-record) because only the operator's own scan computes a diff, and the title carries a visible ` (imported)` (a title too long to carry it is
-rejected, reason `title`); `watch status`, the digest and the queue card show it. `status` is forced to `open`, and past the cap of five open (leads
-excepted) the
-record is written `queued` in ranking order. A record whose `reconcile.key` is in the store, or whose id exists (`write_proposal` is
-write-once), is a duplicate. The work holds `fsio.lock(watch_dir, blocking=True)` and ends with `store.rebalance`; a `DISABLED` file or an
-unsafe watch directory refuses (exit 2). Output is `import: N imported, N duplicate, N rejected` (plus `; N imported without diff` when a diff was
-dropped), one `rejected <stem>: <reason>` per
-rejection (a fixed word -- name, symlink, size, json, shape, id, unreadable -- or the `check` reason; never file content) and `- <title>` per
-imported record; `--dry-run` writes nothing and prints the same. The copy is never modified. The import trusts the validation, not the
-copy's origin, which is why a diff is never taken from it.
+`proposals/W-*.json` that the operator made into the operator's own store. `<dir>` is normalised, then opened with `O_NOFOLLOW | O_DIRECTORY` (a link, also
+`<link>/sub/..`, is refused: exit 2) and its entries are read through that descriptor. Taken are only regular files named `W-*.json` whose stem matches
+`store.ID` (`vet.read`: an `lstat` for a regular file before the open, `O_NOFOLLOW | O_NONBLOCK`, an `fstat` of the same inode, so a FIFO is refused and
+never waited for), at most 64 KiB, that parse as a JSON object whose `id` is the stem and that `records.check(rec)` (no body) accepts, and (`watch/vet.py`)
+that are shaped as the store's own readers need (`shape`: `store._shaped`, `inventory_hits` a list of at most 50 clean strings of at most 200 characters,
+an int `tier` that is not a bool), whose stamps are in the store's format, at most 30 days apart and `created` at most a day ahead of now (`dates`), whose
+evidence URLs are http(s) (`url`) and whose `change.target` is one the operator's own config knows (`target`: a key or mapped docs URL of
+`watch_inventory_map`, a source id of `watch_sources`, or `claude_version`; both files are required). An imported record is evidence plus title: a diff is
+never taken from the copy. For a `model_pin` that names a successor the diff and the `verify` command are computed again from the operator's OWN inventory
+by `pin.derived` (the function the scan's rule uses) and stored with their sha256; when that gives nothing, or for any other class, `change.diff` and
+`diff_sha256` are null (the id does not depend on them, and `records.check` passes the stored record). The summary counts `N imported without diff` for a
+copy's diff that was dropped. The title carries a visible ` (imported)` (a title too long to carry it is rejected, reason `title`); `watch status`, the
+digest and the queue card show it. `status` is forced to `open`, and past the cap of five open (leads excepted) the record is written `queued` in ranking
+order. A record whose `reconcile.key` is in the store, or whose id exists (`write_proposal` is write-once), is a duplicate. The work holds
+`fsio.lock(watch_dir, blocking=True)` and ends with `store.rebalance`; a `DISABLED` file or an unsafe watch directory refuses (exit 2). Output is
+`import: N imported, N duplicate, N rejected` (plus `; N imported without diff`), one `rejected <stem>: <reason>` per rejection (the reason is one of
+`name`, `symlink`, `not a file`, `size`, `unreadable`, `json`, `shape`, `id`, `dates`, `url`, `target`, `title` or a `records.check` reason such as `evidence`,
+`quote`, `diff hash`, `verify`; never file content) and `- <title>` per imported record; `--dry-run` writes nothing and prints the same. The copy is never
+modified. The import trusts the validation, not the copy's origin, which is why a diff is never taken from it.
+
+An import does not hide the operator's own finding: `reconcile` gives a candidate of an own scan that HAS a diff priority over a live twin (same key) whose
+diff is null. With the same id the twin's file is replaced in place by the candidate (atomic; the id does not depend on the diff, a second file is
+impossible, the twin's decision rows stay; the scan's `new` count does not include it); with another id the twin is closed as `superseded` (a decision row)
+and the candidate is written.
 
 The sandbox logs (`acewatch.out.log`, `acewatch.err.log`, `acewatch.weekly.out.log`, `acewatch.weekly.err.log`, written by launchd from the two plists)
 are rotated by `hooks/acewatch/newsyslog.acewatch.conf`, a root-installed newsyslog(8) template (mode 600, keep 5, 1024 KiB, compressed; SANDBOX.md "Log
