@@ -401,4 +401,4 @@ Source: the seventh hostile-statistician pass (verdict SEALABLE AS IS). Text and
 - Wording: "lowering" added to the docstrings of `arms_window.py` (`family`, `horizon_end`) and `arms.py`, and "sessions that start after a lowering
   demotion" in the labelling paragraph. `docs/design/compiler.md` (Arms section) lists the hook side of condition (7) among the open conditions.
 - `report_sha256` changed from c064b599fdc370ccf5029eb9813321fe0f6419f50e3e716cfb552602bd99febf to
-  NEWHASH (seven files: `arms.py` and `arms_window.py` changed; the delivered-error count is new).
+  f5752268d1021a14d9761b6da7216056bb666c022e1d6f3ff7aefa142ce60280 (seven files: `arms.py` and `arms_window.py` changed; the delivered-error count is new).
