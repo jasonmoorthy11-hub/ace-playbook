@@ -1239,8 +1239,8 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   a `model_pin` whose target file is `truncated` (or too large, or has a cut or U+FFFD line) is written as a `lead` with no diff.
 - `reconcile.py`: what one scan does with its candidates. Dedupe keys: a `model_pin` by (class, target, model id, successor), so editing
   the row of the deprecations table (a new date, "(extended)") opens nothing; a model_pin whose target and model a candidate also names
-  with another successor, and every older duplicate of the candidate's key, is closed with the note `superseded` when the candidate
-  opens; any other state-based class by (class, target, quote, model id), i.e. the state it reports, so two ids in one table cell stay two
+  with another successor, and every duplicate of the candidate's key but the diffed (else the newest) one, is closed with the note `superseded`
+  when the candidate opens; any other state-based class by (class, target, quote, model id), i.e. the state it reports, so two ids in one table cell stay two
   proposals (the id of a record hashes the model id when its title names one); a `docs` proposal by (class, target, evidence sha256), so
   a page that changes again after a dismissal is new. A `version` proposal auto-closes only when `claude --version` printed a real
   version (`match._ver` finds `N.N.N`; garbage with exit 0 closes nothing). A state-based proposal that expired or auto-closed while
@@ -1317,7 +1317,9 @@ the twin's own dates and stays out until a slot frees after any queued proposal 
 whatever its key (a forged successor in the copy's title; a dismissed or accepted one of another key is replaced and reopened, or waits for a slot
 after any queued proposal is promoted),
 not for a twin that was accepted or dismissed under the SAME
-key. An expired or auto-closed twin of ANOTHER id and the same key stays closed; the candidate is written beside it. `queue` writes `diff_sha256
+key. An expired or auto-closed twin of ANOTHER id and the same key stays closed; the candidate is written beside it. An expired or auto-closed
+OWN record that already has its diff is reopened even when a diff-less same-key import of another id exists, whatever the import's `created` (a live
+import is closed `superseded` first; with five open both wait and the scan after a free slot swaps them). `queue` writes `diff_sha256
 <hash|none>` as the note of an `accepted` row, so an
 accept of a record that was replaced afterwards is visibly stale.
 

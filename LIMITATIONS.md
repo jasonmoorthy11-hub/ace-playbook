@@ -260,7 +260,8 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   `created` stamps; an expired, auto-closed or forged-key twin is replaced too). A dismissal or an accept of an imported twin is a
   decision about ITS key and is not undone: dismissing an imported twin hides the own scan's diff for that key (same model and successor) for good. A
   dismissed or accepted twin of the same id with ANOTHER key (a forged successor) is replaced by the own candidate and reopened, or waits for a free slot
-  (after any queued proposal is promoted) when five are open. The accept row records the `diff_sha256` that
+  (after any queued proposal is promoted) when five are open. An expired or auto-closed own record that already has its diff is reopened even
+  when a diff-less same-key import of another id exists, whatever the import's `created`. The accept row records the `diff_sha256` that
   the operator saw (`diff_sha256 none` for a record without a diff), so a queue session left open across a scan that replaced the file leaves an accept of
   a hash that no longer matches the file; nothing is applied by either.
 - Watcher, sanitizer coverage: `strip_hidden` reads inline `style` attributes and simple single-selector `<style>` rules (a tag, `.class` or
