@@ -1431,8 +1431,9 @@ off switch; the marker is not one. The sealed `arm_start` line stays
 the analysis's authority (hashed `arms.py` reads only that); the marker is the runtime's view of it, and the verb writes both in one step. A
 marker without a line silences nothing in the analysis; a line without a marker leaves the hook delivering in both arms, and `arms report`
 does NOT see that (deleting or corrupting the marker removes the silence and the rows are accepted): `compile/arm_check.py`, run by the nightly,
-is the detector, as the health notes `arm phase missing: <detector>` / `arm phase unverified` (and `holdout on during an arm phase`), never
-failing the night; a changed `shadow_seed` or `arm_rate` IS caught, by `primary`. Four things read it: (1) delivery: for a proposal whose detector is
+is the detector, as the health notes, listed first, `arm phase missing: <detector>` / `arm phase unverified: <detector>` / `arm phase stamp differs: <detector>`
+(and `holdout on during an arm phase`; `arm check failed` if the check crashes), never failing the night; a changed `shadow_seed` or `arm_rate` IS
+caught, by `primary`. Four things read it: (1) delivery: for a proposal whose detector is
 active, a row of an `observe`-arm session is
 written as ever (`mode` the effective mode, `would_fire` true) but nothing is delivered, no echo and no decision, so the session proceeds as if in
 observe, and the hook logs `arm:phase:<detector>` (through `_Once`: once per run, and not again while it is in the log's last 8 KiB);
@@ -1458,7 +1459,7 @@ operator-driven; `tests/test_arm_phase.py` fails if another appears), which is w
 empty approvals chain, a family with no member at `warn`/`block`
 or with a member at `observe` or with a lowering demotion in force, and a working tree with uncommitted changes to the thirteen files. It prints the
 dated entry (`### <date> - arm start: <detector>`, the `arm_start <detector> <stamp> approvals=<head>` line at column 0, thirteen `sha256 <path> <hex>`
-lines (paths from the repository root), the family ids, `tree <HEAD>`, the marker line), asks y/N, takes the default stamp after the `y`, appends it
+lines (paths from the repository root), the family ids, `tree <HEAD>`, the marker line), asks y/N, stamps the next whole second after the `y`, appends it
 under the top-level `## Amendments` heading, writes the signed marker
 and `data_dir/arm_start_<detector>.txt` (the line without a newline: `printf '%s' <line> | shasum -a 256` is its sha256; `sha256sum` is the coreutils
 alternative to `shasum -a 256`) and prints the operator
@@ -1466,7 +1467,8 @@ lines: `git add` and `commit`, `tag -s arm-<detector>`, the push of the current 
 `arms report` command (never run by the verb). The hash list is THIRTEEN files, by the dated Amendments entry "arm_start hash list" of 2026-10-29
 (`shadow.py`, `offline.py`, `events.py`, `demotions.py`, `modes.py`, `approvals.py` of condition (2), plus `shadow_arm.py`, `shadow_guard.py`,
 `phase.py`, `offline_demote.py`, and on the operator's ruling `chains.py`, `reflect/runner.py` and `sweep.py`); the sealed block and
-`report_sha256` are unchanged. If the marker write fails after the append the verb exits 1 naming the line to delete.
+`report_sha256` are unchanged. If the marker write fails, or finishes after the stamp, the verb restores the file, the one-line file and the previous
+marker, exits 1, and a rerun is clean.
 
 *Still open.* The spillover comparison, and the operator's tag and OpenTimestamps proof at the arm start.
 

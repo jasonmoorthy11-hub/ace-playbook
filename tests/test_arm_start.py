@@ -321,15 +321,36 @@ def test_a_dry_run_also_refuses_a_stamp_that_has_passed(world, capsys):
     assert world.go(DET, "--at", "2026-10-31T11:00:00Z", "--dry-run", tty=False) == 1 and "already passed" in capsys.readouterr().err
 
 
-def test_the_default_stamp_is_taken_after_the_y_and_appended_and_signed_under_it(world, capsys):
+def test_the_default_stamp_is_the_next_whole_second_after_the_y_and_appended_and_signed_under_it(world, capsys):
     world.after_prompt = "2026-10-31T12:00:09Z"                                  # the operator took nine seconds to answer
+    stamp = "2026-10-31T12:00:10Z"                                               # the y time rounded UP to the next whole second
     assert world.go(DET) == 0
     out = capsys.readouterr().out
     assert f"arm_start {DET} {NOW} approvals=" in out and out.count("### ") == 2          # the first entry shown, the final one printed again
-    assert arms_window.arm_starts(world.prereg.read_text()) == {DET: world.after_prompt}
-    assert phase.load(world.cfg) == ({DET: world.after_prompt}, False)
-    assert (world.data / f"arm_start_{DET}.txt").read_text().startswith(f"arm_start {DET} {world.after_prompt} ")
-    assert f'commit -m "arm start: {DET} {world.after_prompt}"' in out
+    assert arms_window.arm_starts(world.prereg.read_text()) == {DET: stamp} and stamp > world.after_prompt
+    assert phase.load(world.cfg) == ({DET: stamp}, False)
+    assert (world.data / f"arm_start_{DET}.txt").read_text().startswith(f"arm_start {DET} {stamp} ")
+    assert f'commit -m "arm start: {DET} {stamp}"' in out
+
+
+def test_a_write_that_lands_after_the_stamp_is_refused_and_everything_is_restored(world, capsys, monkeypatch):
+    phase.write(world.cfg, {"other_detector": "2026-10-01T00:00:00Z"}, NOW)         # an earlier marker must survive the rollback
+    before, marker = world.prereg.read_text(), (world.data / phase.FILE).read_bytes()
+    real = phase.write
+
+    def slow(cfg, add, ts):                                                          # the write takes longer than the stamp's second
+        world.clock = "2026-10-31T12:00:05Z"
+        return real(cfg, add, ts)
+    monkeypatch.setattr(phase, "write", slow)
+    assert world.go(DET) == 1                                                        # stamp 12:00:01, finished 12:00:05
+    err = capsys.readouterr().err
+    assert err.startswith("error: ") and err.count("\n") == 1 and "after the stamp" in err and "restored" in err
+    assert world.prereg.read_text() == before and (world.data / phase.FILE).read_bytes() == marker
+    assert not (world.data / f"arm_start_{DET}.txt").exists()
+
+
+def test_a_write_that_fits_in_the_stamps_second_is_accepted(world):
+    assert world.go(DET) == 0 and arms_window.arm_starts(world.prereg.read_text()) == {DET: "2026-10-31T12:00:01Z"}
 
 
 def test_an_at_that_passes_while_the_prompt_is_open_is_refused_and_nothing_is_written(world, capsys):
@@ -343,16 +364,17 @@ def test_refuses_while_holdout_is_enabled(world, capsys):
     assert "holdout_enabled" in refused(world, capsys, "holdout")
 
 
-def test_a_marker_write_that_fails_after_the_append_prints_the_line_to_delete(world, capsys, monkeypatch):
+def test_a_marker_write_that_fails_after_the_append_restores_the_file_and_a_rerun_works(world, capsys, monkeypatch):
+    before = world.prereg.read_text()
+
     def boom(cfg, add, ts):
         raise ValueError("chain key missing")
     monkeypatch.setattr(phase, "write", boom)
     assert world.go(DET, "--at", STAMP) == 1
     err = capsys.readouterr().err
-    assert err.startswith("error: ") and err.count("\n") == 1 and world.line in err and "delete" in err and "rerun" in err and "Traceback" not in err
-    assert arms_window.arm_starts(world.prereg.read_text()) == {DET: STAMP}
-    text = world.prereg.read_text().replace(world.line + "\n", "")               # the repair: delete that line, rerun
-    world.prereg.write_text(text)
+    assert err.startswith("error: ") and err.count("\n") == 1 and "restored" in err and "rerun" in err and "Traceback" not in err
+    assert world.prereg.read_text() == before and not (world.data / phase.FILE).exists()      # the file is restored by the verb itself
+    assert not (world.data / f"arm_start_{DET}.txt").exists()
     monkeypatch.undo()
     monkeypatch.setattr(seal, "PREREG", world.prereg)
     monkeypatch.setattr(arm_start, "REPO", world.repo)

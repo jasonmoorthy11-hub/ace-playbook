@@ -75,12 +75,16 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
   matching line silences nothing in the analysis (the hook, the corrections and the freeze behave as in a phase, `arms report` still says
   `not started`); a line without a marker leaves the hook delivering in both arms, and `arms report` does NOT see that: deleting or corrupting
   the marker removes the silence, the rows are accepted as they are, and only the nightly check (`compile/arm_check.py`, run by
-  `hooks/nightly_sweep.py`) flags it, as the notes `arm phase missing: <detector>` or `arm phase unverified` of `compile status`, until the next
-  nightly (a failing check never fails the night). The same check notes `holdout on during an arm phase`; the verb refuses to start with
+  `hooks/nightly_sweep.py`) flags it, as the notes `arm phase missing: <detector>`, `arm phase unverified: <detector>` or `arm phase stamp differs: <detector>`
+  (first in the list, so `compile status`'s four shown never lose them to the backup and brain notes), until the next nightly; a check that
+  itself crashes is the note `arm check failed`, and it never fails the night. The same check notes `holdout on during an arm phase`; the verb
+refuses to start with
   `holdout_enabled` true. A change of `shadow_seed` or `arm_rate` in the config, by contrast, IS caught by the analysis (`primary` refuses rows
   that differ from `assign` and a seed that does not hash to the sealed line). The verb appends the line first and writes the marker last: if
-  the marker write fails it prints the line to delete from PREREGISTRATION.md and exits 1; delete it, fix the cause and rerun. `--at` may only be
-  now or later, and the default stamp is taken after the `y`, so no session before the marker was written is eligible.
+  the marker write fails, or the writes finish after the stamp, the verb itself restores PREREGISTRATION.md, deletes the one-line file and puts
+  the previous marker back, exits 1 and says to fix the cause and rerun. `--at` may only be now or later, and the default stamp is the NEXT whole
+  second after the `y`. Sessions starting in that stamp's second before the write lands are eligible yet ran with output in both arms: the
+  window is bounded by the write latency (a fraction of a second; the verb refuses when it is longer), not zero.
 - The marker is signed with the chain key (`chains.seal`, as approvals rows): an unsigned, malformed, other-key or tampered marker is no phase
   and the hook logs `arm:phase:unverified`. That protects against a file an agent can write, not against an agent that can read the chain key
   (a Bash tool reads any file the operator can) and not on an unkeyed install, where the signature is the plain record hash and anyone can

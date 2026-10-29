@@ -443,8 +443,8 @@ Text and docstring edits, plus two behaviour changes: the delivered-path error c
 Pre-arm-start condition (2) names six files for the sha256 record of an `arm_start` amendment: `shadow.py`, `offline.py`, `events.py`,
 `demotions.py`, `modes.py` and `approvals.py`.
 The output decision (`shadow_guard.decision`) was already outside `shadow.py` at the seal (298b06d).
-After the seal, the randomization (`shadow_arm.assign`), the delivered path (`shadow_arm.deliver`) and the phase marker that silences the observe
-arm (`phase.py`) moved outside `shadow.py`, and the human-only demotion rule moved out of `offline.py` into `offline_demote.py`.
+After the seal the delivered path moved from `shadow.py` to `shadow_arm.deliver`, `demote` moved from `offline.py` to `offline_demote.py`
+(where the human-only rule was added), and the randomization (`shadow_arm.assign`) and the phase marker (`phase.py`) were added outside `shadow.py`.
 Every `arm_start` amendment therefore records the sha256 of THIRTEEN files, each named by its path from the repository root: the six named by
 condition (2), plus `shadow_arm.py`, `shadow_guard.py`, `phase.py` and `offline_demote.py` (all in `ace_playbook/compile/`).
 Three more were added on the operator's ruling: `ace_playbook/compile/chains.py` (it verifies the signed phase marker, so it decides silence),

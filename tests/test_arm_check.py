@@ -48,7 +48,7 @@ def test_a_started_phase_without_a_marker_is_noted_per_detector(tmp_path, prereg
 def test_a_marker_that_is_present_but_unverified_is_noted_first(tmp_path, prereg):
     (tmp_path / "data").mkdir()
     (tmp_path / "data" / phase.FILE).write_text(json.dumps({DET: STAMP}))          # hand-written, unsigned
-    assert arm_check.check(cfg_of(tmp_path), AFTER) == ["arm phase unverified", f"arm phase missing: {DET}"]
+    assert arm_check.check(cfg_of(tmp_path), AFTER) == [f"arm phase unverified: {DET}"]               # one line per detector, not two
 
 
 def test_a_verified_marker_gives_no_note(tmp_path, prereg):
@@ -85,7 +85,45 @@ def test_a_failing_check_never_fails_the_nightly(tmp_path, monkeypatch, prereg):
     monkeypatch.setattr(arm_check, "check", boom)
     assert mod.main() == 0
     rec = health.read(cfg)
-    assert rec is not None and rec["ok"] is True and "notes" not in rec
+    assert rec is not None and rec["ok"] is True and rec["notes"] == ["arm check failed"]
+
+
+def test_an_unreadable_pre_registration_is_the_note_arm_check_failed_and_not_a_failed_night(tmp_path, monkeypatch, prereg):
+    (tmp_path / "adir").mkdir()
+    monkeypatch.setattr(seal, "PREREG", tmp_path / "adir")                      # exists, but reading it raises
+    mod, cfg = load_nightly(tmp_path, monkeypatch, {}, "--dry-run")
+    assert mod.main() == 0
+    rec = health.read(cfg)
+    assert rec is not None and rec["ok"] is True and rec["notes"] == ["arm check failed"]
+
+
+def test_a_verified_marker_whose_stamp_differs_from_the_line_is_noted(tmp_path, prereg):
+    phase.write(cfg_of(tmp_path), {DET: "2026-01-02T00:00:00Z"}, STAMP)
+    assert arm_check.check(cfg_of(tmp_path), AFTER) == [f"arm phase stamp differs: {DET}"]
+    phase.write(cfg_of(tmp_path), {DET: STAMP}, STAMP)
+    assert arm_check.check(cfg_of(tmp_path), AFTER) == []
+
+
+def script(tmp_path, name, body):
+    path = tmp_path / name
+    path.write_text("#!/bin/bash\n" + body)
+    path.chmod(0o755)
+    return path
+
+
+def test_the_arm_notes_come_first_so_status_shows_them_among_its_four(tmp_path, monkeypatch, prereg, w):  # noqa: F811
+    prereg.write_text(prereg.read_text() + f"arm_start other_detector {STAMP} approvals={'b' * 64}\n")
+    extra = {"backup_check": str(script(tmp_path, "b.sh", 'echo "backup 7h"\n')), "brain_check": str(script(tmp_path, "n.sh", 'echo "brain ok"\n')),
+             "holdout_enabled": True, "holdout_seed": "s" * 32}
+    mod, cfg = load_nightly(tmp_path, monkeypatch, extra, "--dry-run")
+    assert mod.main() == 0
+    notes = health.read(cfg)["notes"]
+    arm = ["arm phase missing: other_detector", f"arm phase missing: {DET}", "holdout on during an arm phase"]
+    assert notes == [*arm, "backup 7h", "brain ok"]                              # five candidate notes, the arm ones first
+    w.cfg.path("health.json").write_text(json.dumps({"last_run": "2026-10-20T03:00:00Z", "ok": True, "consecutive_failures": 0,
+                                                     "last_error": "", "notes": notes}))
+    shown = build(w)["heartbeat"]["notes"]                                       # status keeps the first four of the record
+    assert all(n in shown for n in arm) and "brain ok" not in shown
 
 
 def test_the_nightly_script_stays_within_80_lines():

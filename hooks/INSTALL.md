@@ -401,7 +401,8 @@ While a detector's stamp has passed, an observe-arm session gets no warn echo an
 the approved mode), `compile offline` writes no auto label for it in either arm and demotes on human labels only, and `reflect` mints nothing from a
 transcript carrying `ACE P-` (it writes no ledger row, so the nightly sweep mints that transcript after the phase ends); a suppressed observe-arm
 hit logs `arm:phase:<detector>`. A phase with no `shadow_seed`/`arm_rate` logs `arm:unassigned` once and delivers as before. The nightly
-(`hooks/nightly_sweep.py`) adds the notes `arm phase missing: <detector>` / `arm phase unverified` (a started phase whose signed marker is gone
+(`hooks/nightly_sweep.py`) adds the notes `arm phase missing: <detector>` / `arm phase unverified: <detector>` / `arm phase stamp differs:
+<detector>` (a started phase whose signed marker is gone
 or fails verification: nothing else notices, `arms report` does not) and `holdout on during an arm phase` to the health record that
 `compile status` shows.
 
@@ -409,7 +410,7 @@ or fails verification: nothing else notices, `arms report` does not) and `holdou
 (`shadow.py`, `offline.py`, `events.py`, `demotions.py`, `modes.py`, `approvals.py`, `shadow_arm.py`, `shadow_guard.py`, `phase.py`,
 `offline_demote.py`, `chains.py` in `ace_playbook/compile/`, `ace_playbook/reflect/runner.py` and `ace_playbook/sweep.py`; the verb refuses a
 working tree with uncommitted changes to them, and prints each as `sha256 <path from the repository root> <hex>`). `holdout_enabled` must be
-false, and `--at` may only be now or later (the default stamp is taken after your `y`). Then:
+false, and `--at` may only be now or later (the default stamp is the next whole second after your `y`). Then:
 1. `python3 -m ace_playbook.compile.arm_start <detector> --dry-run` prints the entry and refuses for the reasons the analysis would.
 2. `python3 -m ace_playbook.compile.arm_start <detector>`, at a terminal, answer `y`: it appends the dated entry under `## Amendments`
    and writes the signed marker and `data_dir/arm_start_<detector>.txt`. The marker is written here and nowhere else.
