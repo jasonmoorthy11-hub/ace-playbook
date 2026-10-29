@@ -97,6 +97,16 @@ def test_an_unreadable_pre_registration_is_the_note_arm_check_failed_and_not_a_f
     assert rec is not None and rec["ok"] is True and rec["notes"] == ["arm check failed"]
 
 
+def test_a_missing_pre_registration_is_noted_and_through_the_nightly_is_arm_check_failed(tmp_path, monkeypatch, prereg):
+    monkeypatch.setattr(seal, "PREREG", tmp_path / "no_such_file.md")
+    with pytest.raises(OSError):                                                # raising is the contract: the nightly maps it to the note
+        arm_check.check(cfg_of(tmp_path), AFTER)
+    mod, cfg = load_nightly(tmp_path, monkeypatch, {}, "--dry-run")
+    assert mod.main() == 0
+    rec = health.read(cfg)
+    assert rec is not None and rec["ok"] is True and rec["notes"] == ["arm check failed"]
+
+
 def test_a_verified_marker_whose_stamp_differs_from_the_line_is_noted(tmp_path, prereg):
     phase.write(cfg_of(tmp_path), {DET: "2026-01-02T00:00:00Z"}, STAMP)
     assert arm_check.check(cfg_of(tmp_path), AFTER) == [f"arm phase stamp differs: {DET}"]

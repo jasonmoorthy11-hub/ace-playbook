@@ -1455,7 +1455,7 @@ operator-driven; `tests/test_arm_phase.py` fails if another appears), which is w
 *The arm-start verb (built, wave H3).* `python -m ace_playbook.compile.arm_start <detector> [--dry-run] [--at <UTC stamp>]`
 (`compile/arm_start.py`, not in `__main__.py`, not on the hook path). It refuses, by the hashed analysis's own functions (`arms_window.family`,
 `arm_starts`, `check_starts`, `approvals.read_chain`), a detector unknown to the catalogue, an unsealed pre-registration, a stamp earlier than
-`sealed_at` or than the moment the marker is written, an existing `arm_start` line, unset seeds, `holdout_enabled` true, an unreadable, broken or
+`sealed_at` (with `--at`, also one already in the past), an existing `arm_start` line, unset seeds, `holdout_enabled` true, an unreadable, broken or
 empty approvals chain, a family with no member at `warn`/`block`
 or with a member at `observe` or with a lowering demotion in force, and a working tree with uncommitted changes to the thirteen files. It prints the
 dated entry (`### <date> - arm start: <detector>`, the `arm_start <detector> <stamp> approvals=<head>` line at column 0, thirteen `sha256 <path> <hex>`
@@ -1467,7 +1467,8 @@ lines: `git add` and `commit`, `tag -s arm-<detector>`, the push of the current 
 `arms report` command (never run by the verb). The hash list is THIRTEEN files, by the dated Amendments entry "arm_start hash list" of 2026-10-29
 (`shadow.py`, `offline.py`, `events.py`, `demotions.py`, `modes.py`, `approvals.py` of condition (2), plus `shadow_arm.py`, `shadow_guard.py`,
 `phase.py`, `offline_demote.py`, and on the operator's ruling `chains.py`, `reflect/runner.py` and `sweep.py`); the sealed block and
-`report_sha256` are unchanged. If the marker write fails, or finishes after the stamp, the verb restores the file, the one-line file and the previous
+`report_sha256` are unchanged. The writes land before the stamp's second begins (bounded by the write latency,
+under a second). If a write fails, or they finish 1 s or more after the stamp, the verb restores the file, the one-line file and the previous
 marker, exits 1, and a rerun is clean.
 
 *Still open.* The spillover comparison, and the operator's tag and OpenTimestamps proof at the arm start.
