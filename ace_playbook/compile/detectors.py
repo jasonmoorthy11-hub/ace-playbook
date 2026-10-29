@@ -5,9 +5,10 @@ every hardening that changes one under `deviations`. No I/O, clock or environmen
 never mutates its state; `advance` returns the next one (catalogue.evaluate runs both). Live events
 (hook payloads) carry `tier == "live"`, offline ones (transcript records) `tier == "offline"`.
 
-`rm_rf_nonscratch` is v2 since 2026-10-29 (D-204): it judges the RESOLVED target (compile/resolve.py: cwd, shell variables,
-same-command worktrees, `bash -c`/`sh -c`/`eval`, xargs, find), not the literal token. `rm_rf` (weak) still counts the literal
-recursive force deletes of Step 0. resolve.py is hashed with the catalogue, so this change moved all nine detector hashes.
+`rm_rf_nonscratch` is v2 since 2026-10-29 (D-204, narrowed by D-209): a command that is, in full, one of three exact scratch shapes
+(compile/grammar.py: `cd <scratch> && rm -rf <rel>`, `NAME=<scratch>; rm -rf "$NAME"`, `git worktree add <p> && rm -rf <p>`) is
+proven scratch and does not fire; every other command takes v1's literal rule unchanged. `rm_rf` (weak) still counts the literal
+recursive force deletes of Step 0. grammar.py is hashed with the catalogue, so this change moved all nine detector hashes.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import posixpath
 import re
 from dataclasses import dataclass
 
-from . import resolve, shell
+from . import grammar, shell
 from .events import EDIT_TOOLS, Event, hash16
 
 MAX_PATHS = 5000
@@ -75,19 +76,20 @@ def _rm_rf_targets(toks: list[str]) -> list[str] | None:
 
 def _rm_hits(event: Event, nonscratch: bool) -> tuple[int, str]:
     """(segments that delete, key). The weak `rm_rf` counts every recursive force delete with a target, as Step 0 did;
-    `rm_rf_nonscratch` (v2) counts those with a target that is not scratch AFTER resolve.canonical_targets has
-    followed the cwd, shell variables, same-command worktrees, `bash -c`/`sh -c`/`eval`, xargs and find."""
+    `rm_rf_nonscratch` counts those with a target that is not scratch by v1's literal rule, unless the whole command is one of
+    the three shapes grammar.proven_scratch proves (a command cut by the length cap is never proven)."""
     count, key = 0, ""
-    if nonscratch:
-        groups = [g for tu in event.tool_uses if tu.name == "Bash" and isinstance(tu.input.get("command"), str)
-                  for g in resolve.canonical_targets(shell.command_stream(tu.input["command"]), SCRATCH)]
-    else:
-        groups = [[(t, False) for t in targets] for toks in _segments(event) if (targets := _rm_rf_targets(toks))]
-    for group in groups:
-        bad = [t for t, scratch in group if not scratch]
-        if bad:
-            count += 1
-            key = key or hash16(bad[0])
+    for tu in event.tool_uses:
+        if nonscratch and not tu.truncated and grammar.proven_scratch(tu.input.get("command"), SCRATCH):
+            continue
+        for toks in tu.segments():
+            targets = _rm_rf_targets(toks)
+            if not targets:
+                continue
+            bad = [t for t in targets if not SCRATCH.search(posixpath.normpath(t))] if nonscratch else targets
+            if bad:
+                count += 1
+                key = key or hash16(bad[0])
     return count, key
 
 

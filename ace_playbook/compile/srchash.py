@@ -22,7 +22,7 @@ from ..canon import canonical
 
 _HERE = Path(__file__).parent
 _FUNCS = (ast.FunctionDef, ast.AsyncFunctionDef)
-_LEAVES = ("events", "shell", "textrules", "resolve", "resolve_pre", "resolve_chain")
+_LEAVES = ("events", "shell", "textrules", "grammar")
 
 
 @lru_cache(maxsize=None)

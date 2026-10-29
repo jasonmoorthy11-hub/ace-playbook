@@ -100,9 +100,8 @@ def test_source_sha256_changes_with_the_leaf_modules(monkeypatch):
     before = {n: r.source_sha256 for n, r in cat.CATALOGUE.items()}
     assert all(re.fullmatch(r"[0-9a-f]{64}", h) for h in before.values()) and len(set(before.values())) == len(before)
     texts = cat._source_texts()
-    assert len(texts) == 6 and all(texts)
-    for i in range(len(texts)):          # events, shell, textrules, resolve, resolve_pre, resolve_chain: any edit moves every hash
-        # (per-detector rules: test_compile_srchash)
+    assert len(texts) == 4 and all(texts)
+    for i in range(len(texts)):          # events, shell, textrules, grammar: any edit moves every hash (per-detector rules: test_compile_srchash)
         changed = tuple(t + "# edit" if j == i else t for j, t in enumerate(texts))
         monkeypatch.setattr(cat, "_source_texts", lambda changed=changed: changed)
         assert all(r.source_sha256 != before[n] for n, r in cat.CATALOGUE.items()), i
@@ -399,30 +398,43 @@ def test_a_raising_detector_is_reported_and_strict_mode_reraises(monkeypatch):
         cat.evaluate(bash("rm -rf /w/src"), state_mod.new_state("s"), strict=True)
 
 
-# ------------------------------------------------------------------ v2: the scratch table for resolved targets (compile/resolve.py)
-# command -> does rm_rf_nonscratch fire? The agent scratch tree, a worktree made in the SAME command, and quoted targets.
+# ------------------------------------------------------------------ v2 (D-209): the three exact scratch shapes of compile/grammar.py
+# command -> does rm_rf_nonscratch fire? Everything that is not one of the shapes takes v1's literal rule. Paths are invented.
 V2_SCRATCH = [
-    ("agent-scratchpad-tree", "rm -rf /private/tmp/claude-501/-w-proj/abc123/scratchpad/out", False),
-    ("agent-scratchpad-cd-glob", "cd /private/tmp/claude-501/proj/sess/scratchpad && rm -rf ./*", False),
-    ("agent-tree-dotdot-out", "cd /private/tmp/claude-501/proj && rm -rf ../../../w/src", True),
-    ("worktree-added-then-removed", "git worktree add /w/wt -b nb && rm -rf /w/wt", False),
-    ("worktree-child-path", "git worktree add /w/wt && rm -rf /w/wt/src/x", False),
-    ("worktree-option-value-skipped", "git worktree add -b feat /w/wt HEAD && rm -rf /w/wt", False),
-    ("worktree-git-C-base", "git -C /w/repo worktree add wt b && rm -rf /w/repo/wt", False),
-    ("worktree-sibling-is-not-scratch", "git worktree add /w/wt && rm -rf /w/other", True),
-    ("worktree-prefix-lookalike", "git worktree add /w/wt && rm -rf /w/wt2", True),
-    ("worktree-remove-is-not-add", "git worktree remove /w/wt && rm -rf /w/wt", True),
-    ("worktree-root-is-never-scratch", "git worktree add / b && rm -rf /srv/x", True),
-    ("worktree-made-after-the-delete", "rm -rf /w/wt && git worktree add /w/wt", True),
-    ("quoted-target-with-a-space", 'rm -rf "/tmp/my dir"', False),
-    ("quoted-target-outside", 'rm -rf "/w/my dir"', True),
-    ("quoted-command-substitution", 'rm -rf "/tmp/$(cat /w/x)"', True),
-    ("single-quoted-variable-is-literal", "D=/tmp/x; rm -rf '$D'", True),
-    ("variable-in-the-value-is-not-a-literal", "A=/tmp; B=$A/x; rm -rf $B", True),
-    ("variable-reassigned-outside", "D=/tmp/x; D=/w/src; rm -rf $D", True),
-    ("variable-with-command-substitution", "D=$(pwd); rm -rf $D", True),
-    ("tmpdir-assigned-outside", "TMPDIR=/w/src; rm -rf $TMPDIR/a", True),
-    ("inline-assignment-is-not-in-scope", "D=/tmp/x rm -rf $D", True),
+    ("s1-cd-scratch-glob", "cd /tmp/work && rm -rf ./*", False),
+    ("s1-agent-scratchpad", "cd /private/tmp/claude-501/proj/sess/scratchpad && rm -rf ./*", False),
+    ("s1-split-flags-ddash", "cd /tmp/work && rm -r -f -- sub/* other", False),
+    ("s1-outside-cd", "cd /w/src && rm -rf ./*", True),
+    ("s1-semicolon-is-not-the-shape", "cd /tmp/work; rm -rf ./*", True),
+    ("s1-dotdot-target", "cd /tmp/work && rm -rf ../x", True),
+    ("s1-second-command", "cd /tmp/work && rm -rf ./x && ls", True),
+    ("s1-trailing-newline", "cd /tmp/work && rm -rf ./x\n", True),
+    ("s1-scratch-then-outside", "cd /tmp/work && cd /w/src && rm -rf ./*", True),
+    ("s2-variable-scratch", 'D=/tmp/work; rm -rf "$D"', False),
+    ("s2-braced-subpath", 'D=/tmp/work; rm -rf "${D}/x"', False),
+    ("s2-and-unquoted", "D=/tmp/work && rm -rf $D/x", False),
+    ("s2-variable-outside", 'D=/w/src; rm -rf "$D"', True),
+    ("s2-other-name", 'D=/tmp/work; rm -rf "$E"', True),
+    ("s2-path-name", 'PATH=/tmp/work; rm -rf "$PATH"', True),
+    ("s2-single-quoted-is-literal", "D=/tmp/work; rm -rf '$D'", True),
+    ("s2-reassigned", "D=/tmp/work; D=/w/src; rm -rf $D", True),
+    ("s3-worktree-added-then-removed", "git worktree add -b nb /w/wt && rm -rf /w/wt", False),
+    ("s3-option-after-the-path-is-not-the-shape", "git worktree add /w/wt -b nb && rm -rf /w/wt", True),
+    ("s3-worktree-child-path-is-not-the-shape", "git worktree add /w/wt && rm -rf /w/wt/src/x", True),
+    ("s3-worktree-option-and-commit", "git worktree add -b feat /w/wt HEAD && rm -rf /w/wt", False),
+    ("s3-worktree-git-C-relative", "git -C /w/repo worktree add wt b && rm -rf /w/repo/wt", True),
+    ("s3-worktree-sibling", "git worktree add /w/wt && rm -rf /w/other", True),
+    ("s3-worktree-prefix-lookalike", "git worktree add /w/wt && rm -rf /w/wt2", True),
+    ("s3-worktree-remove-is-not-add", "git worktree remove /w/wt && rm -rf /w/wt", True),
+    ("s3-worktree-made-after-the-delete", "rm -rf /w/wt && git worktree add /w/wt", True),
+    ("s3-worktree-semicolon", "git worktree add /w/wt; rm -rf /w/wt", True),
+    ("v1-scratch-literal", "rm -rf /private/tmp/claude-501/-w-proj/abc123/scratchpad/out", False),
+    ("v1-outside-literal", "rm -rf /w/src", True),
+    ("v1-quoted-target-with-a-space-is-masked", 'rm -rf "/tmp/my dir"', True),    # a precision residual of v1: prose in quotes reads as Q
+    ("v1-quoted-target-outside", 'rm -rf "/w/my dir"', True),
+    ("v1-tmpdir-prefix", "rm -rf $TMPDIR/a", False),
+    ("v1-variable-is-literal", "D=/tmp/x; E=$D; rm -rf $E", True),
+    ("v1-command-substitution", 'rm -rf "/tmp/$(cat /w/x)"', True),
 ]
 
 
@@ -439,23 +451,24 @@ def test_the_weak_detector_still_counts_every_recursive_force_delete(cmd):
     assert cs.run_offline(steps).get("rm_rf", 0) == 1
 
 
-def test_the_weak_rm_rf_keeps_its_literal_reading_where_v2_resolves():
+def test_the_weak_rm_rf_keeps_its_literal_reading_where_v2_proves_the_shape():
     steps = [{"human": "x"}, {"tool": "Bash", "input": {"command": "cd /tmp/x && rm -rf ./*"}}]
     got = cs.run_offline(steps)
     assert got.get("rm_rf") == 1 and not got.get("rm_rf_nonscratch")
 
 
-def test_resolve_rm_args_agrees_with_the_detectors_flag_logic():
-    from ace_playbook.compile import resolve
-    for toks in (["rm", "-rf", "x"], ["rm", "-fr", "a", "b"], ["rm", "-r", "x"], ["rm", "-f", "x"], ["rm", "--recursive", "--force", "x"],
-                 ["\\rm", "-Rf", "x"], ["/bin/rm", "-rf", "-v", "x"], ["ls", "-rf", "x"], [], ["rm"]):
-        assert (resolve.rm_args(toks) or None) == d._rm_rf_targets(toks), toks
-
-
-def test_the_key_of_a_v2_fire_is_the_hash_of_the_resolved_target():
+def test_the_key_of_a_v2_fire_is_the_hash_of_the_first_literal_offending_target():
     fires, _, _ = cat.evaluate(bash("cd /w/src && rm -rf ./*"), state_mod.new_state("s"), strict=True)
     (fire,) = [f for f in fires if f.detector == "rm_rf_nonscratch"]
-    assert fire.key == ev.hash16("/w/src/*") and fire.count == 1
+    assert fire.key == ev.hash16("./*") and fire.count == 1      # v1's key: the raw token, never a resolved path
+
+
+def test_a_command_cut_by_the_length_cap_is_never_proven():
+    cut = "cd /tmp/work && rm -rf " + " ".join(["a"] * 40000)        # a valid S1 shape, longer than MAX_CMD: the tail was cut
+    e = ev.event_from_hook(cs.pre_payload(cut), probe=lambda _p: False)
+    assert e.tool_uses[0].truncated
+    fires, _, _ = cat.evaluate(e, state_mod.new_state("s"), strict=True)
+    assert "unparseable" in [f.detector for f in fires]
 
 
 V2_PAYLOADS = FX["v2"]
@@ -469,4 +482,4 @@ def test_v2_payloads(p):
 
 
 def test_the_v2_payloads_stay_out_of_the_step0_parity_set():
-    assert {p["id"] for p in V2_PAYLOADS}.isdisjoint(cs.scenarios()) and len(V2_PAYLOADS) >= 12
+    assert {p["id"] for p in V2_PAYLOADS}.isdisjoint(cs.scenarios()) and len(V2_PAYLOADS) >= 8

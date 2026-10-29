@@ -136,7 +136,7 @@ def test_the_hot_path_runs_the_contract_too(ctx):
 def test_a_stale_detector_is_what_the_contract_catches(ctx, monkeypatch):
     """The point of the key: a detector edit that breaks a world refuses the proposal, whoever else still passes."""
     real = prop.fires
-    monkeypatch.setattr(prop, "fires", lambda chk, x: False if "xargs" in x["tool_input"]["command"] else real(chk, x))
+    monkeypatch.setattr(prop, "fires", lambda chk, x: False if "env -C" in x["tool_input"]["command"] else real(chk, x))
     rep = check(ctx, ctx.p)
     assert rep.failed == "regressions" and rep.detail("regressions").startswith("contract must_fire example(s) [")
 

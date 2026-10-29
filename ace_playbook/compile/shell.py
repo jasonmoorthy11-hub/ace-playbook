@@ -27,9 +27,6 @@ _ANSI_RUN = re.compile(r"(?:[^'\\]+|\\[\s\S])*")
 _SIMPLE = re.compile(r"^[\w./~$@%+=:,-]*$")
 _SPLIT = re.compile(r"&&|\|\||;|\||\n|\(|\)|`|(?<![>&])&(?![>&])")
 _ASSIGN = re.compile(r"^\w+=\S*$")
-HOLE = re.compile(r"\x00(\d+)\x00")           # a quoted string `command_stream` kept aside: \x00N\x00 -> quotes[N]
-_REBIND = re.compile(r"^(\w+)(?:\+=|\[)")      # NAME+=x and NAME[i]=x change a variable without a plain `NAME=value`
-_SEP = re.compile(r"(&&|\|\||;|\||\n|\(|\)|`|(?<![>&])&(?![>&]))")
 _REDIR = re.compile(r"^[0-9]*&?[<>]{1,2}&?(\S*)$")
 _LEAD = frozenset("{ } ! if then elif else while until do".split())
 _WRAPPERS = frozenset("sudo time nohup command exec env nice xargs doas busybox timeout stdbuf ionice chroot".split())
@@ -90,16 +87,13 @@ def _parens(run: str, paren: int, arith: list[int]) -> int:
     return paren
 
 
-def _scan(s: str, mask=None) -> str:
+def _scan(s: str) -> str:
     """Mask quoted strings (single tokens stay, prose becomes Q), drop comments and heredoc bodies.
-
-    `mask(inner, kind)` (default: `_mask(inner)`) decides what a quoted string leaves behind; kind is `"`, `'` or `$'`.
 
     A heredoc opener is queued and its body is cut when the scan reaches the real end of the command
     line, the first newline that is not backslash-continued, quoted or inside a comment.
     """
     out: list[str] = []
-    put = (lambda inner, kind: _mask(inner)) if mask is None else mask
     n, i, dead, ansi_dead, attempts, paren = len(s), 0, 0, 0, 0, 0
     arith: list[int] = []              # paren levels of the open arithmetic expressions
     pending: list[str] = []            # heredoc delimiters waiting for the end of their command line
@@ -140,7 +134,7 @@ def _scan(s: str, mask=None) -> str:
             if end >= 0:
                 if run.endswith("$") and not _escaped(s, p - 1):      # $"..": the $ is part of the quoting
                     out[-1] = run[:-1]
-                out.append(put(s[p + 1:end], '"'))
+                out.append(_mask(s[p + 1:end]))
                 i = end + 1
             else:
                 out.append('"')
@@ -150,13 +144,13 @@ def _scan(s: str, mask=None) -> str:
                 q = _ANSI_RUN.match(s, p + 1).end()
                 if q < n and s[q] == "'":
                     out[-1] = run[:-1]
-                    out.append(put(_ansi(s[p + 1:q]), "$'"))
+                    out.append(_mask(_ansi(s[p + 1:q])))
                     i = q + 1
                     continue
                 ansi_dead = q
             end = s.find("'", p + 1)
             if end >= 0:
-                out.append(put(s[p + 1:end], "'"))
+                out.append(_mask(s[p + 1:end]))
                 i = end + 1
             else:
                 out.append("'")
@@ -201,87 +195,6 @@ def _front(toks: list[str]) -> list[str]:
 def command_segments(cmd: str | None) -> list[list[str]]:
     """Split a Bash command into token lists, ignoring comments, heredoc bodies and quoted prose."""
     return [toks for part in _SPLIT.split(_scan(cmd or "")) if (toks := _front(part.split()))]
-
-
-front = _front   # the command word and its arguments: what `command_segments` keeps of one raw token list
-
-
-def command_stream(cmd: str | None) -> tuple[list[tuple[str, list[str]]], list[tuple[str, str]]]:
-    """(events, quotes) for compile/resolve.py: ("", raw tokens) per command, (sep, []) per separator, in order. Prose in quotes, or a `$`
-    inside single quotes, becomes a hole `\\x00N\\x00` in its word and quotes[N] = (kind, inner) keeps the text; `command_segments` is unchanged."""
-    quotes: list[tuple[str, str]] = []
-
-    def mask(inner: str, kind: str) -> str:
-        if _SIMPLE.match(inner) and not (kind == "'" and "$" in inner):
-            return inner
-        quotes.append((kind, inner))
-        return f"\x00{len(quotes) - 1}\x00"
-
-    parts = _SEP.split(_scan((cmd or "").replace("\x00", " "), mask))
-    return [(p, []) if i % 2 else ("", p.split()) for i, p in enumerate(parts) if i % 2 or p.split()], quotes
-
-
-def roots(args: list[str]) -> list[str]:
-    """The start points of a `find`/`ls` argument list: the words before its first option or predicate."""
-    args = args[1:] if args and args[0] in ("-H", "-L", "-P") else args
-    return args[:next((k for k, a in enumerate(args) if a.startswith("-") or a in ("(", "!")), len(args))] or ["."]
-
-
-def fed(events: list, i: int) -> list[str]:
-    """`<producer> | xargs rm -rf`: the paths the producer (ls or find, directly before the pipe) lists."""
-    src = _front(events[i - 2][1]) if i >= 2 and events[i - 1][0] == "|" and not events[i - 2][0] else []
-    name, flags = (posixpath.basename(src[0]) if src else ""), [a for a in src[1:] if a.startswith("-") and not a.startswith("--")]
-    pos = [a for a in src[1:] if not a.startswith("-")]
-    if name == "ls":                             # `ls DIR` lists names inside DIR, not paths: only `ls -d <paths>` is understood
-        return pos if pos and any("d" in f for f in flags) else ["$UNKNOWN"]
-    return roots(src[1:]) if name == "find" else []
-
-
-def script(front: list[str], quotes: list) -> str | None:
-    """The string `bash -c` / `sh -c` / `eval` would run, quotes opened; None for any other command."""
-    name = posixpath.basename(front[0].replace("\\", "")) if front else ""
-    unmask = lambda t: HOLE.sub(lambda m: quotes[int(m.group(1))][1], t)   # noqa: E731
-    if name == "eval":
-        return " ".join(unmask(t) for t in front[1:])
-    k = 1
-    while name in ("bash", "sh") and k < len(front) - 1 and front[k].startswith("-"):
-        if re.fullmatch(r"-[a-zA-Z]*c[a-zA-Z]*", front[k]):
-            return unmask(front[k + 1])
-        k += 2 if front[k] in ("-o", "-O") else 1
-    return None
-
-
-BUILTINS = frozenset("cd pushd popd source . export declare typeset local readonly read printf mapfile readarray getopts let unset eval".split())
-_FLAGS = {"unset": "vfn", "read": "rse", "export": "nfp", "mapfile": "t", "readarray": "t", "getopts": "", "printf": "v"}   # option letters understood
-
-
-def words(raw: list[str]) -> tuple[list[str], bool]:
-    """(front without a leading `builtin`, whether a wrapper such as `env` precedes it: `env cd X` runs an external cd)."""
-    f = _front(raw)
-    wrapped = any(posixpath.basename(t.replace("\\", "")) in _WRAPPERS - {"command", "exec"} for t in raw[:len(raw) - len(f)])
-    return (f[1:] if f[:1] == ["builtin"] else f), wrapped
-
-
-def rebinds(raw: list[str], front: list[str]) -> set[str] | None:
-    """Names a command may rebind besides a plain `NAME=value` (`+=`, `[i]=`, unset, for, read, mapfile, getopts, let, printf -v/-vNAME,
-    declare -n); None = a binding builtin with an option shape not understood: forget everything."""
-    names = {m.group(1) for t in (*raw, *front) if (m := _REBIND.match(t))}
-    cmd, args = (posixpath.basename(front[0]) if front else ""), front[1:]
-    plain, flags = [a for a in args if not a.startswith(("-", "+"))], [a for a in args if a.startswith(("-", "+"))]
-    if cmd == "let":
-        return None if any(not re.match(r"\w", a) for a in args) else names | {re.match(r"\w+", a).group() for a in args}
-    if cmd in ("declare", "typeset", "local"):
-        if any(not re.fullmatch(r"-[a-zA-Z]+", f) for f in flags):
-            return None
-        return names | ({a.split("=")[0] for a in plain} if any("n" in f for f in flags) else set())
-    if cmd in _FLAGS:
-        if any(not (f.startswith("-v") if cmd == "printf" else re.fullmatch(r"-[%s]+" % _FLAGS[cmd], f) if _FLAGS[cmd] else False) for f in flags):
-            return None
-        names |= {f[2:] or (args[k + 1:k + 2] or [""])[0] for k, f in enumerate(args) if cmd == "printf" and f.startswith("-v")}
-        names |= set(plain) if cmd in ("unset", "read", "mapfile", "readarray") else set(plain[1:2]) if cmd == "getopts" else set()
-    elif cmd in ("for", "select"):
-        names |= set(plain[:1])
-    return names
 
 
 def git_subcommand(toks: list[str]) -> tuple[str | None, list[str]]:
