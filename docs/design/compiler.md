@@ -1309,8 +1309,12 @@ diff is null (every imported record). With the same id the twin's file is replac
 a second file is
 impossible, the twin's decision rows stay; the scan's `new` count does not include it); with another id the twin is closed as `superseded` (a decision row)
 and the candidate is written. The scan reports each replacement as a line `diffed <id>` and ends its summary line with `; diffed N` (only when N > 0;
-the text before is unchanged). It holds for an expired or auto-closed twin (reopened) and for a twin of the candidate's id whatever its key (a forged
-successor in the copy's title), not for a twin that was accepted or dismissed. `queue` writes `diff_sha256 <hash|none>` as the note of an `accepted` row, so an
+the text before is unchanged). It holds for an expired or auto-closed twin of the same id (replaced and reopened by a fresh `reopened` row; with five open
+the replacement keeps
+the twin's own dates and stays out until a slot frees), for a twin of the candidate's id whatever its key (a forged successor in the copy's title; a
+dismissed or accepted one of another key is replaced and reopened, or waits for a slot), not for a twin that was accepted or dismissed under the SAME
+key. An expired or auto-closed twin of ANOTHER id and the same key stays closed; the candidate is written beside it. `queue` writes `diff_sha256
+<hash|none>` as the note of an `accepted` row, so an
 accept of a record that was replaced afterwards is visibly stale.
 
 The sandbox logs (`acewatch.out.log`, `acewatch.err.log`, `acewatch.weekly.out.log`, `acewatch.weekly.err.log`, written by launchd from the two plists)

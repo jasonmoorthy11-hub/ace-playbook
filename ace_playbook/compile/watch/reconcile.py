@@ -14,7 +14,9 @@ and never closes anything.
 A candidate WITH a diff for a live twin of the same key whose diff is null (every imported record) always wins: the same id REPLACES the
 twin's file (atomic, `fsio.write_private`; the id does not depend on the diff, so a second file is impossible, and the twin's decision rows stay;
 `diffed` lists those ids); another id closes the twin as `superseded` and is written. This holds for an expired or auto-closed twin too (it is
-reopened), and for a twin of the candidate's id whatever its key; a dismissed or accepted twin is a decision and is not replaced.
+reopened by a fresh `reopened` row, or, with five open already, replaced with the twin's own dates so it stays out and the reopen path takes it when a slot
+frees), and for a twin of the candidate's id whatever its key; a dismissed or accepted twin of the SAME key is a decision and is not replaced, one of another
+key (a forged successor) is replaced and reopened.
 """
 
 from __future__ import annotations
@@ -88,22 +90,27 @@ def reconcile(wd: Path, cands: list[dict], results: list[dict], now: str, dry: b
     renewed = (datetime.strptime(now, STAMP) + timedelta(days=DAYS)).strftime(STAMP)
     by_id = {p["id"]: (p, s) for p, s in live}
     for c in cands:
-        mine, old = by_id.get(c["id"]), by_key.get(key(c))
-        if c["change"]["diff"] is not None and mine is not None and mine[0]["change"]["diff"] is None and mine[1] not in ("accepted", "dismissed"):
-            twin, tstat = mine                                              # the file of this id has no diff (an import): the own candidate replaces it,
-            diffed.append(c["id"])                                          # whatever its key and status (a forged key or a closed twin hides nothing)
-            back = tstat in ("expired", "auto-closed") and c["class"] != "lead"
-            queued = back and n_open >= store.CAP
-            n_open += back and not queued
-            if not dry:
-                keep = twin.get("status", "open") if tstat in LIVE else "open"
-                text = json.dumps({**c, "status": "queued" if queued else keep}, indent=1, sort_keys=True) + "\n"
-                fsio.write_private(wd / store.PROPOSALS / (c["id"] + ".json"), text)
-                if tstat == "auto-closed" and not queued:                   # closed by a decision row: reopened by one (the file is the candidate now)
-                    store.append_decision(wd, c["id"], "reopened", renewed, now)
-                    reopened.append(c["id"])
+        if c["id"] in diffed:                                               # the same id twice in one run: once
             continue
-        if c["change"]["diff"] is not None and old is not None and old[0]["change"]["diff"] is None and old[1] not in ("accepted", "dismissed"):
+        twin, tstat = by_id.get(c["id"], (None, None))
+        old, undone = by_key.get(key(c)), tstat in ("accepted", "dismissed")
+        if c["change"]["diff"] is not None and twin is not None and twin["change"]["diff"] is None and (not undone or key(twin) != key(c)):
+            back = tstat not in LIVE                                        # the file of this id has no diff (an import): the own candidate replaces it,
+            held = back and c["class"] != "lead" and n_open >= store.CAP    # whatever its key and status; a decision about the SAME key stays one
+            if not (held and undone):                                       # (a dismissed other-key twin waits for a free slot instead)
+                diffed.append(c["id"])
+                n_open += back and c["class"] != "lead" and not held
+                if not dry:
+                    rec = {**c, "status": "open" if back else twin.get("status", "open")}
+                    if held:                                                # cap full: the twin's own dates keep it not live; the reopen path below takes it
+                        rec = {**rec, "created": twin["created"], "expires": twin["expires"], "status": twin.get("status", "open")}
+                    fsio.write_private(wd / store.PROPOSALS / (c["id"] + ".json"), json.dumps(rec, indent=1, sort_keys=True) + "\n")
+                    if back and not held:                                   # a fresh `reopened` row ends the old rows (stale, closed, dismissed)
+                        store.append_decision(wd, c["id"], "reopened", renewed, now)
+                        reopened.append(c["id"])
+                continue
+        if (c["change"]["diff"] is not None and old is not None and old[0]["change"]["diff"] is None and old[1] not in ("accepted", "dismissed")
+                and old[0]["id"] != c["id"]):
             twin = old[0]                                                   # another id, the same key: closed as superseded if live, candidate written
             if old[1] in LIVE:
                 closed.append(twin["id"])

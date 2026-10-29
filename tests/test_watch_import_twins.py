@@ -159,3 +159,124 @@ def test_a_file_swapped_between_the_lstat_and_the_open_is_refused_as_not_a_file(
     code, out, _ = iw.run(capsys)
     assert out[:2] == ["import: 0 imported, 0 duplicate, 1 rejected", f"rejected {rec['id']}: not a file"] and iw.stored() == []
 
+
+
+# ------------------------------------------------------------------ round 3
+def fill(mine, n=5):
+    store.ensure(mine.wd)
+    for i in range(n):
+        assert store.write_proposal(mine.wd, {**make(100 + i), "status": "open"})
+
+
+def free_slots(mine):
+    """Two slots: the scan's own queued `version` proposal takes the first one (rebalance runs before the reopen path)."""
+    for n in (100, 101):
+        store.append_decision(mine.wd, make(n)["id"], "dismissed", "free a slot", "2026-10-29T00:00:00Z")
+
+
+def statuses(mine):
+    return store.statuses(mine.wd, datetime.now(timezone.utc).strftime(FMT))
+
+
+def pin_status(mine):
+    return [s for p, s in statuses(mine) if p["class"] == "model_pin"]
+
+
+def test_dismissing_a_forged_successor_copy_hides_nothing_but_the_same_key_dismissal_stays(tmp_path, monkeypatch, capsys):
+    pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
+    forged = {**pin, "title": pin["title"].replace(NEW, "claude-evil-9") + " (imported)", "change": {**pin["change"], "diff": None, "diff_sha256": None}}
+    store.ensure(mine.wd)
+    store.write_proposal(mine.wd, forged)
+    store.append_decision(mine.wd, pin["id"], "dismissed", "wrong successor", "2026-10-28T00:00:00Z")
+    for _ in range(2):
+        mine.run(capsys, "scan", "--force")
+        [own] = live_with_diff(mine)
+        assert own["id"] == pin["id"] and NEW in own["title"] and pin_status(mine) == ["open"]
+    (tmp_path / "same").mkdir()
+    twin_world = World(tmp_path / "same", monkeypatch)
+    plant(twin_world, pin)                                                       # the SAME key, dismissed: a decision about this very finding
+    store.append_decision(twin_world.wd, pin["id"], "dismissed", "not wanted", "2026-10-28T00:00:00Z")
+    twin_world.run(capsys, "scan", "--force")
+    assert pin_status(twin_world) == ["dismissed"]
+
+
+def test_a_dismissed_forged_twin_waits_for_a_free_slot_when_five_are_open(tmp_path, monkeypatch, capsys):
+    pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
+    forged = {**pin, "title": pin["title"].replace(NEW, "claude-evil-9") + " (imported)", "change": {**pin["change"], "diff": None, "diff_sha256": None}}
+    store.ensure(mine.wd)
+    store.write_proposal(mine.wd, forged)
+    store.append_decision(mine.wd, pin["id"], "dismissed", "wrong successor", "2026-10-28T00:00:00Z")
+    fill(mine)
+    mine.run(capsys, "scan", "--force")
+    assert pin_status(mine) == ["dismissed"] and store.open_count(statuses(mine)) == 5
+    free_slots(mine)
+    mine.run(capsys, "scan", "--force")
+    assert pin_status(mine) == ["open"] and store.open_count(statuses(mine)) == 5 and len(live_with_diff(mine)) == 1
+
+
+def test_an_auto_closed_twin_with_the_cap_full_stays_out_until_a_slot_frees(tmp_path, monkeypatch, capsys):
+    pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
+    plant(mine, pin)
+    store.append_decision(mine.wd, pin["id"], "closed", "trigger vanished", "2026-10-28T00:00:00Z")
+    fill(mine)
+    code, out, _ = mine.run(capsys, "scan", "--force")
+    assert f"diffed {pin['id']}" in out.splitlines() and pin_status(mine) == ["auto-closed"] and store.open_count(statuses(mine)) == 5
+    assert stored(mine)[pin["id"]]["change"]["diff"] and records.check(stored(mine)[pin["id"]]) is None
+    free_slots(mine)
+    mine.run(capsys, "scan", "--force")
+    assert pin_status(mine) == ["open"] and store.open_count(statuses(mine)) == 5
+
+
+def test_an_expired_twin_with_a_promoted_row_and_the_cap_full_does_not_exceed_the_cap(tmp_path, monkeypatch, capsys):
+    pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
+    plant(mine, pin, created="2026-09-01T00:00:00Z", expires="2026-09-30T00:00:00Z")
+    store.append_decision(mine.wd, pin["id"], "promoted", "slot freed", "2026-09-02T00:00:00Z")
+    fill(mine)
+    mine.run(capsys, "scan", "--force")
+    assert pin_status(mine) == ["expired"] and store.open_count(statuses(mine)) == 5
+    free_slots(mine)
+    mine.run(capsys, "scan", "--force")
+    assert pin_status(mine) == ["open"] and store.open_count(statuses(mine)) == 5 and live_with_diff(mine)[0]["change"]["diff"]
+
+
+def test_an_expired_twin_with_a_stale_reopened_row_is_live_at_once(tmp_path, monkeypatch, capsys):
+    pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
+    plant(mine, pin, created="2026-08-01T00:00:00Z", expires="2026-08-30T00:00:00Z")
+    store.append_decision(mine.wd, pin["id"], "reopened", "2026-09-29T00:00:00Z", "2026-08-30T00:00:00Z")
+    assert pin_status(mine) == ["expired"]
+    mine.run(capsys, "scan", "--force")
+    assert pin_status(mine) == ["open"] and len(live_with_diff(mine)) == 1
+
+
+@pytest.mark.parametrize("how", ["expired", "auto-closed"])
+def test_a_non_live_twin_of_another_id_and_the_same_key_stays_closed_and_the_candidate_is_written_beside_it(world, capsys, how):
+    from .test_watch_import_own import forged_twin
+    rec = forged_twin(world, diff=None)
+    over = {"created": "2026-09-01T00:00:00Z", "expires": "2026-09-30T00:00:00Z"} if how == "expired" else {}
+    store.ensure(world.wd)
+    assert store.write_proposal(world.wd, {**rec, **over})
+    if how == "auto-closed":
+        store.append_decision(world.wd, rec["id"], "closed", "trigger vanished", "2026-10-28T00:00:00Z")
+    world.run(capsys, "scan", "--force")
+    by_id = {p["id"]: (p, s) for p, s in statuses(world) if p["class"] == "model_pin"}
+    assert by_id[rec["id"]][1] == how and len(by_id) == 2
+    [(own, status)] = [v for i, v in by_id.items() if i != rec["id"]]
+    assert status == "open" and own["change"]["diff"] and not any(d["note"] == "superseded" for d in store.read_decisions(world.wd))
+
+
+def test_the_same_id_twice_in_one_run_is_replaced_and_listed_once(tmp_path, monkeypatch, capsys):
+    from ace_playbook.compile.watch import reconcile
+    pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
+    plant(mine, pin, created="2026-09-01T00:00:00Z", expires="2026-09-30T00:00:00Z")
+    now = datetime.now(timezone.utc).strftime(FMT)
+    out = reconcile.reconcile(mine.wd, [pin, pin], [], now, False, None)
+    assert out["diffed"] == [pin["id"]] and out["reopened"] == [pin["id"]]
+    assert [d["decision"] for d in store.read_decisions(mine.wd) if d["id"] == pin["id"]] == ["reopened"]
+
+
+def test_an_accept_of_a_record_without_a_diff_hash_key_does_not_raise(world, capsys):
+    store.ensure(world.wd)
+    rec = {**make(1), "change": {"target": "k1", "diff": None}}
+    assert store.write_proposal(world.wd, rec)
+    assert cli.queue(cfgmod.load(), 5, lambda prompt: "1", lambda what: True) == 0
+    assert [d["note"] for d in store.read_decisions(world.wd)] == ["diff_sha256 none"]
