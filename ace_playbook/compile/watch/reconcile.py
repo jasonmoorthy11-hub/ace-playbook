@@ -22,7 +22,9 @@ frees after any queued proposal is promoted), and for a twin of the candidate's 
 key is a decision and is not replaced, one of another key (a forged successor) is replaced and reopened.
 An own record that already HAS its diff and is expired or auto-closed is reopened even when a diff-less same-key import of another id exists,
 whatever the import's `created`: `by_key` ranks live first, then the diffed record, and the other-id branch closes a live import and hands the
-reopen path the own record; with five open the own record and the import both wait, and the scan after a free slot closes the import and reopens it.
+reopen path the own record. With five open the swap of an OPEN import for the own record keeps the open count and runs at once; a QUEUED import
+and the own record both wait, and the scan after a free slot (`rebalance` promotes the import first, which the guard counts) swaps them. A
+dismissed or accepted forged own-id twin still waits for a free slot.
 """
 
 from __future__ import annotations
@@ -125,8 +127,8 @@ def reconcile(wd: Path, cands: list[dict], results: list[dict], now: str, dry: b
                 and old[0]["id"] != c["id"]):
             twin, own = old[0], by_id.get(c["id"])                          # another id, the same key: closed as superseded if live, candidate written
             own = own if own and key(own[0]) == key(c) and own[0]["change"]["diff"] is not None else None       # the own diffed record, if it exists
-            if own and own[1] in ("expired", "auto-closed") and c["class"] != "lead" and n_open >= store.CAP:
-                continue                                                    # cap full: the own record waits, the twin stays; the scan after a free slot swaps
+            if own and own[1] in ("expired", "auto-closed") and c["class"] != "lead" and n_open - (old[1] == "open") >= store.CAP:
+                continue                                                    # cap full, no open twin to swap with: the own record waits
             if old[1] in LIVE:
                 closed.append(twin["id"])
                 n_open -= old[1] == "open" and twin["class"] != "lead"

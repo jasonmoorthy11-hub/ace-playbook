@@ -306,7 +306,9 @@ def scan(mine, capsys):
 
 
 def one_own_diff(mine, pin):
+    from ace_playbook.compile.watch import reconcile
     assert [p["id"] for p in live_with_diff(mine)] == [pin["id"]]
+    assert [p["id"] for p, s in statuses(mine) if s in ("open", "queued") and reconcile.key(p) == reconcile.key(pin)] == [pin["id"]]   # no diff-less twin
     assert dict((p["id"], s) for p, s in statuses(mine))[pin["id"]] == "open" and store.open_count(statuses(mine)) <= 5
 
 
@@ -425,7 +427,7 @@ def test_an_expired_own_record_without_an_import_is_reopened(tmp_path, monkeypat
 
 
 @pytest.mark.parametrize("how", ["expired", "auto-closed"])
-@pytest.mark.parametrize("twin", ["auto-closed", "live newer"])
+@pytest.mark.parametrize("twin", ["auto-closed", "expired", "live newer"])
 def test_an_expired_or_auto_closed_own_record_is_reopened_beside_a_later_created_import(tmp_path, monkeypatch, capsys, how, twin):
     pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
     own_diffed(mine, pin, how)
@@ -484,3 +486,69 @@ def test_a_lead_never_carries_a_diff_so_the_diff_gated_import_branches_cannot_ap
     scan(mine, capsys)                                              # every branch that closes or reopens for an import is gated on a diff;
     leads = [r for r in stored(mine).values() if r["class"] == "lead"]                       # no code path gives a lead one
     assert leads and all(r["change"]["diff"] is None and r["change"]["diff_sha256"] is None for r in leads)
+
+
+# ------------------------------------------------------------------ Track M2 wave 4: the cap guard, the cap-neutral swap and the by_key ranking are pinned
+@pytest.mark.parametrize("other", ["live older", "live newer"])
+@pytest.mark.parametrize("own", ["expired", "auto-closed"])
+def test_an_own_diffed_record_swaps_with_an_open_import_at_once_when_the_cap_is_full(tmp_path, monkeypatch, capsys, own, other):
+    pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
+    own_diffed(mine, pin, own)                                                               # the own record already HAS its diff (the other-id branch)
+    other_twin(mine, pin, other)
+    fill(mine, 4)                                                                            # the open import is the fifth open record
+    seen = scan(mine, capsys)
+    one_own_diff(mine, pin)                                                                  # a swap closes one open record and reopens one: the count stays 5
+    assert store.open_count(statuses(mine)) == 5 and superseded_ids(mine) == [OTHER] and scan(mine, capsys) == seen
+    one_own_diff(mine, pin)
+
+
+@pytest.mark.parametrize("own", ["expired", "auto-closed"])
+def test_the_cap_guard_keeps_a_held_own_diffed_record_and_a_queued_import_untouched(tmp_path, monkeypatch, capsys, own):      # kills the guard mutant
+    pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
+    own_diffed(mine, pin, own)
+    plant(mine, pin, id=OTHER, status="queued", created=stamp(hours=12), expires=stamp(days=20))
+    fill(mine, 5)
+    before = rows(mine)
+    scan(mine, capsys)                                                       # closing the queued import frees no slot: the own record could not reopen
+    assert rows(mine) == before and live_with_diff(mine) == [] and store.open_count(statuses(mine)) == 5
+    assert dict((p["id"], s) for p, s in statuses(mine))[OTHER] == "queued"
+    free_slots(mine)
+    seen = scan(mine, capsys)
+    one_own_diff(mine, pin)
+    assert OTHER in superseded_ids(mine) and scan(mine, capsys) == seen
+
+
+@pytest.mark.parametrize("own", ["expired_diff", "autoclosed_diff", "expired_import", "autoclosed_import", "expired_forged", "queued_import"])
+def test_a_queued_import_taking_the_freed_slot_does_not_keep_the_own_diffed_record_out(tmp_path, monkeypatch, capsys, own):
+    pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
+    if own.endswith("_diff"):
+        own_diffed(mine, pin, own.split("_")[0].replace("autoclosed", "auto-closed"))
+    elif own == "expired_forged":
+        plant(mine, pin, title=pin["title"].replace(NEW, "claude-evil-9") + " (imported)", **OLD)
+    else:
+        plant(mine, pin, **(OLD if own == "expired_import" else {"status": "queued"} if own == "queued_import" else {}))
+        if own == "autoclosed_import":
+            store.append_decision(mine.wd, pin["id"], "closed", "trigger vanished", "2026-10-28T00:00:00Z")
+    plant(mine, pin, id=OTHER, status="queued", created=stamp(hours=12), expires=stamp(days=20))      # a newer same-key import waiting for a slot
+    fill(mine, 5)                                                                            # the cap is full without it
+    scan(mine, capsys)
+    assert live_with_diff(mine) == [] and store.open_count(statuses(mine)) == 5
+    free_slots(mine)                                                                         # ONE free: rebalance promotes the import, the swap is cap-neutral
+    seen = scan(mine, capsys)
+    one_own_diff(mine, pin)
+    assert OTHER in superseded_ids(mine) and scan(mine, capsys) == seen
+    one_own_diff(mine, pin)
+
+
+@pytest.mark.parametrize("with_import", [False, True])
+def test_the_older_own_scan_record_is_reopened_not_duplicated_whatever_the_import(tmp_path, monkeypatch, capsys, with_import):     # world D
+    pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
+    older = "W-" + "b" * 8                                                                   # another own-scan id of the same key, expired, WITH a diff
+    store.ensure(mine.wd)
+    assert store.write_proposal(mine.wd, {**pin, "id": older, **OLD})
+    if with_import:
+        other_twin(mine, pin, "expired")                                                     # a newer expired diff-less import under a third id
+    seen = scan(mine, capsys)
+    assert (older, "reopened", "") in rows(mine) and pin["id"] not in stored(mine) and superseded_ids(mine) == []
+    assert [p["id"] for p in live_with_diff(mine)] == [older] and dict((p["id"], s) for p, s in statuses(mine))[older] == "open"
+    assert scan(mine, capsys) == seen and pin["id"] not in stored(mine)
