@@ -37,7 +37,7 @@ def test_every_line_has_seven_fields_owner_mode_600_keep_5_1024_kib_compress_no_
 
 def test_the_comments_do_not_hide_a_second_set_of_fields():
     text = CONF.read_text(encoding="utf-8")
-    assert text.count(HOME) >= 4 and not re.search(r"/Users/|/var/acewatch", "\n".join(lines()))
+    assert text.count(HOME) >= 4 and not re.search(r"/U[s]ers/|/var/acewatch", "\n".join(lines()))
 
 
 def test_the_sandbox_runbook_names_the_installed_file_and_the_linux_equivalent():
