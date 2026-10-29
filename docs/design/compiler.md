@@ -488,7 +488,7 @@ registration only resets per-turn state and logs observe rows.
    symlinks), hash must match `approvals.jsonl`, message re-checked with `inert_reason`
    (`textrules`). Any failure skips that proposal and logs the reason by type only (as inject/__main__.py:18-25).
 4. Effective mode = min(approved mode, any cap in `demotions.jsonl`, arm). The arm comes from
-   `coin(shadow_seed, session_id, proposal_id) < arm_rate` (injector.py:35-38) during a randomized
+   `arms.assign(session hash, shadow_seed, arm_rate, proposal_id)` (HMAC-SHA256, `compile/arms.py`) during a randomized
    phase; outside one the arm is always "active".
 5. Build the Event, run each matching detector with the session state, update state.
 6. Append one row per evaluated proposal to `shadow.jsonl` (below), then act on the strongest
@@ -940,7 +940,7 @@ inference, the spillover flag (they need the randomized phase).
 **Effect estimate.** For the compiled path, blocking prevents the action by construction, so the
 primary is false-block rate and friction, with recurrence descriptive (PREREGISTRATION.md:78-84).
 The descriptive effect is fires per eligible session with versus without the check, using a
-per-(session, proposal) arm drawn with the seeded coin (injector.py:35-38) at `arm_rate` 0.5 during
+per-(session, proposal) arm drawn with the HMAC coin of `arms.assign` at `arm_rate` 0.5 during
 the randomized phase: "without" sessions run in observe, "with" sessions run the approved mode. A
 hook has no memory across sessions, so the first attempt in a session cannot differ between arms;
 any real effect shows in **repeat fires** and evasion, and the report leads with those. The
@@ -1349,7 +1349,7 @@ section in PREREGISTRATION.md still says `(DRAFT until sealed)`. The sealing its
 
 - `--dry-run` needs no terminal, asks nothing and writes nothing. It prints the Frozen instruments block with live values:
   `detectors:` (one `name strength sha256` line per `catalogue.source_table()` entry, sorted; the strength is `Detector.strength` of
-  the registry), `report_sha256` (the bytes of `compile/arms.py`, `arms_stats.py`, `labels.py`, `labels_queue.py`, `metrics.py` and `report.py` in name order, joined by a NUL: exactly those six files, since 2026-10-29;
+  the registry), `report_sha256` (the bytes of `compile/arms.py`, `arms_stats.py`, `arms_window.py`, `labels.py`, `labels_queue.py`, `metrics.py` and `report.py` in name order, joined by a NUL: exactly those seven files, since 2026-10-29;
   the detector code is covered by the per-detector hashes), `proposals:` (the newest `approvals.jsonl` row of each proposal id that is
   not revoked, as `id mode proposal_sha256`, sorted; `(none)` when there are none, or a notice line when the chain is unreadable or
   broken, still exit 0), `shadow_seed_sha256`, `permutation_seed_sha256`, `arm_rate`, `measurement_start` (`measure.start_of`, the same value as `status`'s
@@ -1374,17 +1374,17 @@ section in PREREGISTRATION.md still says `(DRAFT until sealed)`. The sealing its
 ### Arms (as built 2026-10-29)
 
 `python3 -m ace_playbook.compile.arms report [--json]` (`compile/arms.py`, `arms_stats.py`; not in `__main__.py`, not on the hook path) is the
-preregistered analysis of the shadow arm phase. It prints `not started` until PREREGISTRATION.md holds a line `arm_start <detector> <UTC stamp>`
-(a dated amendment: the sealed block cannot hold it). Per detector it computes the eligible sessions (interactive: `prompts` > 0 in the newest
-`_session` row; `start`, the first transcript event, in [arm start, horizon end); the horizon is 12 weeks or the 400th eligible session), the
+preregistered analysis of the shadow arm phase. It prints `not started` until the top-level Amendments section of PREREGISTRATION.md holds a line `arm_start <detector> <UTC stamp>`
+(read nowhere else, refused when earlier than the block's `sealed_at`; `arms_window.py` holds the window code). Per detector it computes the eligible sessions (interactive: `prompts` > 0 in the newest
+`_session` row; `start`, the first transcript event, in [arm start, horizon end); the horizon is the earliest of 12 weeks, the 400th eligible session and the first demotion of the detector's proposals during the phase, read from `demotions.jsonl`), the
 arm of each session (`assign`: HMAC-SHA256 of `session hash|proposal id` under `shadow_seed`, first 4 bytes below `arm_rate` is the warn arm), the
-primary (`primary`: repeat fires per eligible session over rows with `agent_id_present` false; subagent rows and rows without the field are
-counted apart), D, and `permutation_test` (10,000 Bernoulli(`arm_rate`) re-draws from `random.Random(permutation_seed)`, p = (1 + hits) / 10,001, a
-draw that empties an arm counts as extreme, interval = D minus the 97.5th and 2.5th percentiles of D*), then `holm`. It refuses when a seed in the
-config does not hash to the sealed line, shows counts only before the analysis day (horizon end + 7 days) and never prints a seed. The `_session`
+primary (`primary`: repeat fires per eligible session over rows with `agent_id_present` false; subagent rows are counted apart), D, and `permutation_test` (10,000 Bernoulli(`arm_rate`) re-draws from `random.Random(permutation_seed)`, p = (1 + hits) / 10,001, a
+draw that empties an arm counts as extreme, interval = D minus the 97.5th and 2.5th percentiles of D*), then `holm` over every detector with an `arm_start` (no adjusted p and no rejection is printed until all are final: `pending: N detectors not final`). It refuses (exit 1) when a fire row of an eligible session lacks `arm` or `agent_id_present` or records an `arm` that `assign` does not give,
+when a seed in the config does not hash to the sealed line, when the demotions chain is broken, shows counts only before the analysis day (horizon end + 7 days) and never prints a seed. The `_session`
 row gained `start` (rows written before it have none and are reported as missing). `labels_queue.py` (split out of `labels.py` and `queue.py`) hides
-the resolved mode in `label --rows` and the queue card while any detector's phase runs. Still open: the live shadow rows do not yet record
-`agent_id_present` (the row schema above specifies it), the offline auto-FP rule (a) is still asymmetric, and the spillover flag is not computed.
+the resolved mode in `label --rows` and the queue card while any detector's phase runs. Still open, and conditions before any `arm_start` (PREREGISTRATION.md, Pre-arm-start conditions): the live hook does not yet
+write `arm` or `agent_id_present` (`shadow.py` holds no arm code, so today `arms report` refuses every row), the offline auto-FP rule (a) is still
+asymmetric, demotion and harm do not yet ignore auto labels during a phase, and the spillover comparison is not built.
 
 ### 8.x Brief (as built)
 

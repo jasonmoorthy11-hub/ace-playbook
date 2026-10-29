@@ -19,7 +19,7 @@ from . import compile_support as cs
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "ace_playbook" / "compile" / "report.py"
 METRICS = SOURCE.with_name("metrics.py")
-FILES = ("arms.py", "arms_stats.py", "labels.py", "labels_queue.py", "metrics.py", "report.py")
+FILES = ("arms.py", "arms_stats.py", "arms_window.py", "labels.py", "labels_queue.py", "metrics.py", "report.py")
 CODE_HASH = hashlib.sha256(b"\0".join(SOURCE.with_name(n).read_bytes() for n in FILES)).hexdigest()      # name order, NUL-joined
 RM = "rm -rf /w/src"
 TODAY = "2026-10-20T12:00:00Z"

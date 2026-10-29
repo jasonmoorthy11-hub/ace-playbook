@@ -7,11 +7,12 @@ import json
 import subprocess
 import sys
 from itertools import product
+from math import sqrt
 from pathlib import Path
 
 import pytest
 
-from ace_playbook.compile import arms, arms_stats, labels, labels_queue, metrics, queue, seal
+from ace_playbook.compile import arms, arms_stats, demotions, labels, labels_queue, metrics, queue, seal
 from ace_playbook.compile import state as st
 from ace_playbook.compile.events import Event
 
@@ -22,6 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SHADOW, PERMUT = "ab" * 32, "cd" * 32                              # invented private seeds; only their sha256 may appear anywhere
 T0, DET = "2026-11-01T00:00:00Z", "rm_rf_nonscratch"
 DUE = "2027-01-31T00:00:00Z"                                      # arm start + 84 days = the horizon end 2027-01-24, + 7 days
+SEALED_AT = "2026-10-30T00:00:00Z"
 SCANNED = "2027-02-15T00:00:00Z"                                  # a `_session` row stamp later than every fire
 
 
@@ -31,8 +33,8 @@ def srow(h, start, prompts=2, eligible=(DET,), ts=SCANNED):
 
 
 def prereg_text(arm_line=True):
-    block = f"shadow_seed_sha256 {seal._sha(SHADOW)}\npermutation_seed_sha256 {seal._sha(PERMUT)}\narm_rate 0.5\n"
-    return "# test copy\n\n```text\n" + block + "```\n" + (f"\narm_start {DET} {T0}\n" if arm_line else "")
+    block = f"shadow_seed_sha256 {seal._sha(SHADOW)}\npermutation_seed_sha256 {seal._sha(PERMUT)}\narm_rate 0.5\nsealed_at {SEALED_AT}\n"
+    return "# test copy\n\n```text\n" + block + "```\n\n## Amendments\n\n" + (f"arm_start {DET} {T0}\n" if arm_line else "(none)\n")
 
 
 @pytest.fixture
@@ -77,6 +79,18 @@ def test_the_horizon_is_twelve_weeks_unless_the_400th_session_comes_first():
     assert arms.horizon_end(T0, many[:399]) == "2027-01-24T00:00:00Z"
 
 
+def test_a_demotion_ends_the_horizon_when_it_comes_first():
+    few = [f"2026-11-0{d}T00:00:00Z" for d in range(1, 9)]
+    assert arms.horizon_end(T0, few, "2026-11-15T00:00:00Z") == "2026-11-15T00:00:00Z"
+    assert arms.horizon_end(T0, few, "2027-03-01T00:00:00Z") == "2027-01-24T00:00:00Z"            # after the 12 weeks: the weeks end it
+    many = [arms._fmt(arms._dt(T0) + arms.timedelta(minutes=n)) for n in range(450)]
+    assert arms.horizon_end(T0, many, "2026-11-01T01:00:00Z") == "2026-11-01T01:00:00Z"           # before the 400th session
+    assert arms.horizon_end(T0, many, "2026-11-02T00:00:00Z") == "2026-11-01T06:39:01Z"           # after it: the cap ends it
+    ev = [srow("a", "2026-11-01T10:00:00Z"), srow("b", "2026-11-20T10:00:00Z")]
+    got, end, _ = arms.eligible_sessions(ev, T0, None, DET, "2026-11-15T00:00:00Z")
+    assert sorted(got) == ["a"] and end == "2026-11-15T00:00:00Z"
+
+
 # ------------------------------------------------------------------ eligibility
 def test_the_window_edges_are_half_open():
     end = "2026-11-08T00:00:00Z"
@@ -109,26 +123,52 @@ def test_the_session_row_records_the_first_event_stamp():
 
 
 # ------------------------------------------------------------------ the primary
+ARM = {"a": arms.WARN, "b": arms.WARN, "c": arms.OBSERVE, "d": arms.OBSERVE}
+
+
 def frow(s, n, flag=False, **kw):
     return {"ts": f"2026-12-01T00:00:{n:02d}Z", "session": s, "proposal_id": "P-00000001", "payload_sha256": f"{n:064x}", "would_fire": True,
-            "cause": "detector", "agent_id_present": flag, **kw}
+            "cause": "detector", "agent_id_present": flag, "arm": ARM.get(s, arms.WARN), **kw}
 
 
 def test_the_primary_counts_repeat_fires_of_non_subagent_rows_per_eligible_session():
     elig = {s: srow(s, T0) for s in ("a", "b", "c", "d")}
-    arm_of = {"a": arms.WARN, "b": arms.WARN, "c": arms.OBSERVE, "d": arms.OBSERVE}.get
+    arm_of = ARM.get
     rows = [frow("a", 1), frow("a", 2), frow("a", 3),                      # a: 3 fires -> 2 repeats
             frow("b", 4),                                                  # b: 1 fire -> 0
             frow("c", 5), frow("c", 6), frow("c", 7), frow("c", 8), frow("c", 9),  # c: 5 -> 4
             frow("d", 10, True), frow("d", 11, True),                      # d: subagent fires only -> secondary
-            frow("c", 12, True), frow("a", 13, None), {k: v for k, v in frow("a", 14).items() if k != "agent_id_present"},
-            frow("a", 15, would_fire=False), frow("a", 16, cause="truncated"), frow("zz", 17)]   # none of these count
+            frow("c", 12, True),
+            {k: v for k, v in frow("a", 14, would_fire=False).items() if k not in ("arm", "agent_id_present")},    # not a fire: nothing required
+            {k: v for k, v in frow("a", 16, cause="truncated").items() if k != "arm"},                              # truncated: not a detector fire
+            {k: v for k, v in frow("zz", 17).items() if k != "arm"}]                                                # not an eligible session
     got = arms.primary(rows, arm_of, elig)
     assert dict(zip(got["sessions"], got["values"])) == {"a": 2, "b": 0, "c": 4, "d": 0}
     assert got["n"] == {arms.WARN: 2, arms.OBSERVE: 2} and got["mean"] == {arms.WARN: 1.0, arms.OBSERVE: 2.0} and got["D"] == -1.0
-    assert got["rate_ratio"] == 0.5 and got["subagent_fires"] == {arms.WARN: 0, arms.OBSERVE: 3} and got["fires_without_agent_flag"] == 2
+    assert got["rate_ratio"] == 0.5 and got["subagent_fires"] == {arms.WARN: 0, arms.OBSERVE: 3}
     assert got["sessions_with_fire"][arms.WARN] == {"k": 2, "n": 2, "wilson95": metrics.wilson(2, 2)}
     assert got["sessions_with_fire"][arms.OBSERVE]["k"] == 1
+
+
+ROWS = [frow("a", 1), frow("c", 2)]
+
+
+@pytest.mark.parametrize("bad, needle", [
+    ({"agent_id_present": None}, "agent_id_present"), ({"agent_id_present": "false"}, "agent_id_present"), ({"agent_id_present": 0}, "agent_id_present"),
+    ({"arm": None}, "arm"), ({"arm": "block"}, "arm"), ({"arm": arms.OBSERVE}, "arm differs from assign")])
+def test_the_primary_refuses_a_fire_row_that_is_unflagged_or_mis_assigned(bad, needle):
+    elig = {s: srow(s, T0) for s in ("a", "c")}
+    with pytest.raises(ValueError) as err:
+        arms.primary([*ROWS, frow("a", 3, **bad)], ARM.get, elig)
+    assert needle in str(err.value) and "1 with" in str(err.value)
+
+
+@pytest.mark.parametrize("missing", ["arm", "agent_id_present"])
+def test_the_primary_refuses_a_row_without_the_field_even_before_its_session_is_scanned(missing):
+    elig = {"a": srow("a", T0, ts="2026-12-01T00:00:00Z")}
+    row = {k: v for k, v in frow("a", 5, ts="2026-12-02T00:00:00Z").items() if k != missing}      # newer than the scan: it would wait, but is refused
+    with pytest.raises(ValueError, match=missing):
+        arms.primary([row], ARM.get, elig)
 
 
 def test_a_fire_after_the_sessions_scan_waits_and_a_zero_arm_mean_has_no_ratio():
@@ -165,14 +205,36 @@ def exact_p(values, warn, rate):
 WORLD = {"values": [0, 0, 1, 0, 0, 0, 2, 3, 1, 0, 4, 2], "warn": [True] * 6 + [False] * 6}      # warn mean 1/6, observe mean 2: D = -11/6
 
 
-@pytest.mark.parametrize("rate", [0.5, 0.3])
-def test_the_p_value_matches_the_exact_value_over_every_labelling(rate):
+def exact_quantiles(values, warn, rate):
+    """The weighted 2.5 % and 97.5 % quantiles of D* over every labelling that leaves both arms non-empty."""
+    total, n, pairs = sum(values), len(values), []
+    for flags in product((True, False), repeat=n):
+        k = sum(flags)
+        if k in (0, n):
+            continue
+        s = sum(v for v, f in zip(values, flags) if f)
+        pairs.append((s / k - (total - s) / (n - k), rate ** k * (1 - rate) ** (n - k)))
+    pairs.sort()
+    mass, lo, hi = sum(w for _, w in pairs), None, None
+    acc = 0.0
+    for d, w in pairs:
+        acc += w / mass
+        lo = d if lo is None and acc >= 0.025 else lo
+        hi = d if hi is None and acc >= 0.975 else hi
+    return lo, hi
+
+
+@pytest.mark.parametrize("rate, pinned", [(0.5, 0.0220), (0.3, 0.0473)])
+def test_the_p_value_matches_the_exact_value_over_every_labelling(rate, pinned):
     d, exact = exact_p(WORLD["values"], WORLD["warn"], rate)
-    assert d == pytest.approx(-11 / 6)
+    assert d == pytest.approx(-11 / 6) and round(exact, 4) == pinned                  # the enumeration, pinned to 4 decimals
     got = arms.permutation_test({**WORLD, "D": d}, rate, PERMUT)
-    assert 0.0 < exact < 0.2 and abs(got["p"] - exact) <= 0.02 and got["draws"] == 10_000
+    assert abs(got["p"] - exact) <= 4 * sqrt(exact * (1 - exact) / 10_000) and got["draws"] == 10_000      # 4 Monte Carlo standard errors
     assert got["p"] == (1 + round(got["p"] * 10_001 - 1)) / 10_001            # the p formula: (1 + hits) / 10,001
-    assert got["ci95"][0] <= d <= got["ci95"][1]
+    q_lo, q_hi = exact_quantiles(WORLD["values"], WORLD["warn"], rate)
+    lo, hi = got["ci95"]
+    assert lo < d < hi and hi - lo > 0.5                                       # it brackets the known D and is not degenerate
+    assert abs(lo - (d - q_hi)) <= 0.25 and abs(hi - (d - q_lo)) <= 0.25       # [D - q97.5, D - q2.5] of the exact D* distribution
 
 
 def test_the_test_is_deterministic_under_the_committed_seed_and_changes_with_it():
@@ -208,20 +270,21 @@ def test_holm_boundaries_and_untestable_detectors():
 
 
 # ------------------------------------------------------------------ the whole report, on a synthetic world with known arms
-def world(w, n=20):
+def world(w, n=20, mutate=None):
     """`n` interactive sessions started in the window. A session in the warn arm fires once (0 repeats), one in the observe arm four times
-    (3 repeats): D is exactly -3 whatever the split."""
+    (3 repeats): D is exactly -3 whatever the split. `mutate(row)` returns the row to write (it may damage it)."""
     w.cfg.shadow_seed, w.cfg.permutation_seed, w.cfg.arm_rate = SHADOW, PERMUT, 0.5
     path, k = w.cfg.path("detector_events.jsonl"), 0
     for i in range(n):
-        h = st.session_hash(f"sess-{i}")
-        cs.append_jsonl(path, srow(h, f"2026-11-{1 + i % 20:02d}T10:00:00Z"))
-        for _ in range(1 if arms.assign(h, SHADOW, 0.5, w.pid) == arms.WARN else 4):
+        h, day = st.session_hash(f"sess-{i}"), f"2026-11-{1 + i % 20:02d}"
+        cs.append_jsonl(path, srow(h, f"{day}T10:00:00Z"))
+        arm = arms.assign(h, SHADOW, 0.5, w.pid)
+        for _ in range(1 if arm == arms.WARN else 4):
             k += 1
-            cs.append_jsonl(w.cfg.path("shadow.jsonl"), {"ts": f"2026-11-{1 + i % 20:02d}T11:00:00Z", "proposal_id": w.pid, "lesson_id": cs.RM_LESSON,
-                                                         "mode": "observe", "event": "PreToolUse", "tool_name": "Bash", "session": h,
-                                                         "would_fire": True, "cause": "detector", "tier": "live", "payload_sha256": f"{k:064x}",
-                                                         "agent_id_present": False})
+            row = {"ts": f"{day}T11:00:00Z", "proposal_id": w.pid, "lesson_id": cs.RM_LESSON, "mode": "observe", "event": "PreToolUse",
+                   "tool_name": "Bash", "session": h, "would_fire": True, "cause": "detector", "tier": "live", "payload_sha256": f"{k:064x}",
+                   "agent_id_present": False, "arm": arm}
+            cs.append_jsonl(w.cfg.path("shadow.jsonl"), mutate(row) if mutate else row)
     return w
 
 
@@ -327,5 +390,95 @@ def test_the_mode_shows_again_before_the_phase_and_after_its_window(w, prereg, c
 
 def test_labels_py_stays_within_its_cap_and_the_new_modules_are_small():
     root = ROOT / "ace_playbook" / "compile"
-    sizes = {n: len((root / n).read_text().splitlines()) for n in ("labels.py", "labels_queue.py", "arms.py", "arms_stats.py")}
-    assert sizes["labels.py"] <= 260 and all(sizes[n] <= 200 for n in ("labels_queue.py", "arms.py", "arms_stats.py")), sizes
+    names = ("labels_queue.py", "arms.py", "arms_stats.py", "arms_window.py")
+    sizes = {n: len((root / n).read_text().splitlines()) for n in ("labels.py", *names)}
+    assert sizes["labels.py"] <= 260 and all(sizes[n] <= 200 for n in names), sizes
+
+
+# ------------------------------------------------------------------ round 2: refusals, the arm_start rules, demotion, the Holm family
+def config_file(w, tmp_path):
+    conf = tmp_path / "config.json"
+    conf.write_text(json.dumps({"data_dir": str(w.data), "shadow_seed": SHADOW, "permutation_seed": PERMUT, "arm_rate": 0.5}))
+    return str(conf)
+
+
+@pytest.mark.parametrize("damage, needle", [
+    (lambda r: {k: v for k, v in r.items() if k != "arm"}, "arm"),
+    (lambda r: {k: v for k, v in r.items() if k != "agent_id_present"}, "agent_id_present"),
+    (lambda r: {**r, "arm": arms.OBSERVE if r["arm"] == arms.WARN else arms.WARN}, "arm differs from assign")])
+def test_the_analysis_and_the_cli_refuse_unflagged_or_mis_assigned_rows(w, prereg, tmp_path, capsys, damage, needle):
+    world(w, mutate=damage)
+    with pytest.raises(ValueError, match=needle):
+        arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")
+    assert arms.main(["--config", config_file(w, tmp_path), "report"]) == 1
+    err = capsys.readouterr().err
+    assert needle in err and "hook must randomize and flag every row" in err and SHADOW not in err and PERMUT not in err
+
+
+def test_a_damaged_row_of_an_ineligible_session_does_not_refuse(w, prereg):
+    world(w, n=6)
+    cs.append_jsonl(w.cfg.path("shadow.jsonl"), {"ts": "2026-11-02T11:00:00Z", "proposal_id": w.pid, "session": st.session_hash("outside"),
+                                                 "payload_sha256": "ee" * 32, "would_fire": True, "cause": "detector", "mode": "observe"})
+    assert next(iter(arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")["detectors"].values()))["eligible"] == 6
+
+
+def test_arm_start_lines_count_only_under_the_amendments_heading(tmp_path):
+    above = f"arm_start {DET} 2026-11-05T00:00:00Z\n\n"
+    text = prereg_text(arm_line=False).replace("```text\n", "```text\n" + above, 1)
+    assert arms.arm_starts(text) == {}                                      # above the heading: ignored
+    assert arms.arm_starts(text.replace("(none)", f"arm_start {DET} {T0}")) == {DET: T0}
+    sub = prereg_text(arm_line=False).replace("```\n\n## Amendments", f"```\n\n### Amendments\n\narm_start {DET} {T0}\n\n## Amendments")
+    assert arms.arm_starts(sub) == {}                                       # a ### heading is not the top-level one
+    assert arms.arm_starts("arm_start rm_rf 2026-11-05T00:00:00Z\n") == {}
+
+
+def test_an_arm_start_earlier_than_sealed_at_or_without_a_seal_is_refused(w, prereg, tmp_path, capsys):
+    world(w)
+    early = prereg_text().replace(T0, "2026-10-29T23:59:59Z")
+    prereg.write_text(early)
+    with pytest.raises(ValueError, match="earlier than sealed_at"):
+        arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")
+    assert arms.main(["--config", config_file(w, tmp_path), "report"]) == 1 and "earlier than sealed_at" in capsys.readouterr().err
+    prereg.write_text(prereg_text().replace(f"sealed_at {SEALED_AT}\n", ""))
+    with pytest.raises(ValueError, match="no sealed_at"):
+        arms.analyse(w.cfg)
+    prereg.write_text(prereg_text().replace(T0, SEALED_AT))                  # exactly at sealed_at is allowed
+    assert arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")["detectors"]
+
+
+def test_a_demotion_ends_the_detectors_horizon_in_the_analysis(w, prereg):
+    world(w)
+    row = {"proposal_id": w.pid, "from_mode": "warn", "to_mode": "observe", "cause": "label_fp", "ref": "0123abcd", "review_required": False}
+    demotions.append(w.data, {**row, "ts": "2026-10-15T00:00:00Z"})           # before the arm start: ignored
+    v = next(iter(arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")["detectors"].values()))
+    assert v["eligible"] == 20 and v["demoted_at"] is None
+    demotions.append(w.data, {**row, "from_mode": "block", "ref": "89abcdef", "ts": "2026-11-10T00:00:00Z"})      # a new ref: not a duplicate
+    v = next(iter(arms.analyse(w.cfg, now="2026-11-18T00:00:00Z")["detectors"].values()))
+    assert v["horizon_end"] == "2026-11-10T00:00:00Z" and v["demoted_at"] == "2026-11-10T00:00:00Z" and v["eligible"] == 9
+    assert v["analysis_due"] == "2026-11-17T00:00:00Z" and v["final"] and v["test"]["D"] == -3.0           # final 7 days after the demotion
+    assert next(iter(arms.analyse(w.cfg, now="2026-11-16T00:00:00Z")["detectors"].values()))["final"] is False
+
+
+def test_a_broken_demotions_chain_is_refused(w, prereg):
+    world(w, n=6)
+    (w.data / "demotions.jsonl").write_text("not json\n")
+    with pytest.raises(ValueError, match="demotions chain"):
+        arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")
+
+
+def test_holm_covers_every_detector_with_an_arm_start_and_claims_nothing_until_all_are_final(w, prereg, tmp_path, capsys):
+    world(w)
+    prereg.write_text(prereg_text() + "arm_start rm_rf 2026-11-01T00:00:00Z\n")                 # a second detector that has no proposal yet
+    d = arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")
+    (v,) = d["detectors"].values()
+    assert v["final"] and v["test"]["p"] < 0.01                                                 # the first detector is final and significant ...
+    assert d["pending"] == 1 and d["holm"] == {}                                                # ... yet no adjusted p and no rejection
+    out = arms.render(d)
+    assert "pending: 1 detectors not final" in out and "  holm-adjusted" not in out and "reject True" not in out and "reject False" not in out
+    assert arms.main(["--config", config_file(w, tmp_path), "report", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["holm"] == {}
+    d = arms.analyse(w.cfg, now="2027-01-30T00:00:00Z")                                         # not final in time: also pending
+    assert d["pending"] == 2 and d["holm"] == {}
+    prereg.write_text(prereg_text())
+    d = arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")
+    assert d["pending"] == 0 and next(iter(d["holm"].values()))["reject"] is True and "holm-adjusted p" in arms.render(d)

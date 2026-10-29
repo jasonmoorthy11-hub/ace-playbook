@@ -210,7 +210,7 @@ ABSENT = ("seal", "dashboard", "dashboard_html", "status", "digest", "queue", "r
           "watch", "fetch", "inventory", "match", "store", "summary", "chars", "fsio", "cssstyle", "records", "pin",
           "reconcile", "htmlrules", "mdrules", "stylepass", "cssscan", "treebuild", "treemodes", "treestyle", "treewalk",
           "reader", "readerloop", "validate", "compose", "canary", "model",
-          "arms", "arms_stats", "labels_queue")   # `watch`: network-using (W1); the W2 Reader runs `claude -p` (subprocess)
+          "arms", "arms_stats", "arms_window", "labels_queue")   # `watch`: network-using (W1); the W2 Reader runs `claude -p` (subprocess)
 HEAVY = {"sqlite3", "subprocess", "socket", "ssl", "http", "urllib.request", "asyncio", "multiprocessing", "threading", "ctypes"}
 
 

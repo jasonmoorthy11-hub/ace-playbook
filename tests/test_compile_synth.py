@@ -291,7 +291,7 @@ def test_the_report_header_hash_covers_the_arm_labels_metrics_and_report_files_a
         assert report.source_sha256() == base
     real = report.HASHED
     monkeypatch.undo()
-    assert [p.name for p in report.HASHED] == ["arms.py", "arms_stats.py", "labels.py", "labels_queue.py", "metrics.py", "report.py"]
+    assert [p.name for p in report.HASHED] == ["arms.py", "arms_stats.py", "arms_window.py", "labels.py", "labels_queue.py", "metrics.py", "report.py"]
     assert real != report.HASHED
 
 
