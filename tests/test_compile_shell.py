@@ -559,3 +559,26 @@ WRAPPED_BUILTINS = [   # (case, command, fires)
 @pytest.mark.parametrize("cmd,fires", [(c, f) for _n, c, f in WRAPPED_BUILTINS], ids=[n for n, _c, _f in WRAPPED_BUILTINS])
 def test_v2_a_wrapped_builtin_resets_the_state_but_is_still_scanned(cmd, fires):
     assert bad(cmd) is fires
+
+
+# ------------------------------------------------------------------ v2 fails closed, round 4: a wrapped eval runs on a copy and leaves the outer state unknown
+WRAPPED_EVAL_STATE = [   # (case, command, fires)
+    ("env-eval-cd-does-not-leak", 'env eval "cd /tmp/w" && rm -rf ./*', True),
+    ("sudo-eval-cd-does-not-leak", 'sudo eval "cd /tmp/w" && rm -rf ./*', True),
+    ("time-eval-cd-does-not-leak", 'time eval "cd /tmp/w" && rm -rf ./*', True),
+    ("sudo-eval-assignment-does-not-leak", 'sudo eval "D=/tmp/w" && rm -rf "$D"/x', True),
+    ("env-eval-assignment-does-not-leak", 'env eval "D=/tmp/w" && rm -rf "$D"', True),
+    ("env-eval-worktree-does-not-leak", 'env eval "git worktree add /w/wt b" && rm -rf /w/wt', True),
+    ("wrapped-eval-wipes-an-earlier-binding", 'D=/tmp/w; env eval "true"; rm -rf "$D"', True),
+    ("env-eval-still-collects-its-deletes", 'env eval "rm -rf /w/src"', True),
+    ("env-eval-collects-scratch-as-scratch", 'env eval "rm -rf /tmp/w/x"', False),
+    ("env-eval-own-chain-resolves", 'env eval "cd /tmp/w && rm -rf ./*"', False),
+    ("plain-eval-cd-runs-in-this-shell", 'eval "cd /tmp/w" && rm -rf ./*', False),
+    ("plain-eval-assignment-runs-in-this-shell", 'eval "D=/tmp/w" && rm -rf "$D"/x', False),
+    ("plain-eval-delete-scratch", 'eval "rm -rf /tmp/w/x"', False),
+]
+
+
+@pytest.mark.parametrize("cmd,fires", [(c, f) for _n, c, f in WRAPPED_EVAL_STATE], ids=[n for n, _c, _f in WRAPPED_EVAL_STATE])
+def test_v2_a_wrapped_eval_runs_on_a_copy_and_leaves_the_outer_state_unknown(cmd, fires):
+    assert bad(cmd) is fires

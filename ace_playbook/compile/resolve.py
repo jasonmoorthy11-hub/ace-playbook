@@ -164,13 +164,14 @@ def _run(events: list, quotes: list, st: _State, depth: int, scratch, out: list)
         elif (script := shell.script(front, quotes)) is not None:
             if depth == 0 and script.strip():
                 sub, subq = shell.command_stream(script)
-                inner, was = (st, st.taint) if name == "eval" else (st.copy(), False)
-                inner.taint = False                  # the script is a chain of its own; an `eval` hands its state back
+                shared = name == "eval" and not blind    # a bare `eval` runs in this shell; `bash -c` and a wrapped eval get a copy
+                inner, was = (st, st.taint) if shared else (st.copy(), False)
+                inner.taint = False                  # the script is a chain of its own; a shared state is handed back
                 _run(sub, subq, inner, 1, scratch, out)
-                if name == "eval":
+                if shared:
                     st.taint = was
-                    if was:                              # the eval itself may have been skipped: nothing it set counts
-                        st.cwd, st.env, st.made = None, {}, set()
+                if was or blind:                     # the eval itself may have been skipped, or ran elsewhere: nothing it set counts
+                    st.cwd, st.env, st.made = None, {}, set()
         elif targets := _victims(raw, front, events, i):
             paths = [_path(t, st, quotes) for t in targets]
             out.append([(p, bool(scratch.search(p)) or any(p == w or p.startswith(w + "/") for w in st.made)) for p in paths])
