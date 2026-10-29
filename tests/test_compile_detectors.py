@@ -100,8 +100,9 @@ def test_source_sha256_changes_with_the_leaf_modules(monkeypatch):
     before = {n: r.source_sha256 for n, r in cat.CATALOGUE.items()}
     assert all(re.fullmatch(r"[0-9a-f]{64}", h) for h in before.values()) and len(set(before.values())) == len(before)
     texts = cat._source_texts()
-    assert len(texts) == 5 and all(texts)
-    for i in range(len(texts)):          # events, shell, textrules, resolve, resolve_pre: any edit moves every hash (per-detector rules: test_compile_srchash)
+    assert len(texts) == 6 and all(texts)
+    for i in range(len(texts)):          # events, shell, textrules, resolve, resolve_pre, resolve_chain: any edit moves every hash
+        # (per-detector rules: test_compile_srchash)
         changed = tuple(t + "# edit" if j == i else t for j, t in enumerate(texts))
         monkeypatch.setattr(cat, "_source_texts", lambda changed=changed: changed)
         assert all(r.source_sha256 != before[n] for n, r in cat.CATALOGUE.items()), i

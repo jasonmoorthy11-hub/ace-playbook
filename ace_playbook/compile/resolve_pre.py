@@ -4,20 +4,25 @@ v2 may call a target scratch only when the resolution is PROVEN; anything else f
 fires less than v1 except on proven scratch. A working directory, a variable binding or a worktree mark is trusted only when:
  (a) a plain segment set it: exactly `cd <literal>`, `pushd <literal>`, `NAME=<literal>`, `export NAME=<literal>` or
      `git [-C <literal>] worktree add [opts] <literal>`; no `!`, wrapper, `time`, `builtin`, assignment prefix or redirection (a `<`
-     or `>` anywhere in a word: `cd /x>y`, `D=/x<f`);
+     or `>` anywhere in a word: `cd /x>y`, `D=/x<f`); `local`, `readonly`, `declare` and `typeset` are not binding forms;
  (b) it sits in the current untainted `&&` chain (since the last `;`, newline or `&`; no `||` or `!` before it), not in a
      pipeline, and the command has no compound command or function (this module's `untrusted`);
  (c) the literal has no whitespace, `$`, backtick, glob, brace, backslash, `<>&|;#()`, and the command assigns IFS or CDPATH nowhere;
- (d) the command defines no function, `trap` or `alias`, and holds no `eval` whose text is not plain `cd`/`rm`/assignments.
+ (d) the command defines no function, `trap` or `alias`, runs no `shopt`/`setopt`/`unsetopt`, and holds no `eval` whose text is not
+     plain `cd`/`rm`/assignments;
+ (g) (resolve_chain.py) every segment between the set-point and the delete is a recognised shape or a literal allow-listed word.
 `untrusted(events, quotes)` answers (b)'s compound part, (c)'s IFS part and (d) for a whole command: True means no resolution at
-all (v1's literal reading of every token). The chain-local rules (a)-(c) are applied by resolve.py segment by segment; `leftover`
-judges every expanded target and `child_env` the names a `bash -c` / `sh -c` child inherits (only the exported ones).
+all (v1's literal reading of every token). The chain-local rules (a)-(c) and (g) are applied by resolve.py segment by segment; `leftover`
+judges every expanded target and `child_env` the names a `bash -c` / `sh -c` child inherits (only the exported ones); `victims` lists
+what a delete removes: an xargs-fed one always has its stdin as an unknown target unless the producer is `ls -d` / `find`, and a
+redirection (`2>/dev/null`, `> f`) is never a target.
 """
 
 from __future__ import annotations
 
 import posixpath
 import re
+from functools import lru_cache
 
 from . import shell
 
@@ -29,10 +34,42 @@ _SET = re.compile(r"^(\w+)=(.*)$", re.S)
 _EVALUABLE = frozenset(("cd", "rm", "pushd", "export"))
 _REF = re.compile(r"\$(\w+)|\$\{(\w+)\}")
 _EXEC = frozenset(("-exec", "-execdir", "-ok", "-okdir"))
+_POISON = frozenset(("trap", "alias", "shopt", "setopt", "unsetopt"))       # a command word that makes the whole command unresolvable
+_IFS = ("IFS", "CDPATH")
+_IFS_SET = ("IFS=", "IFS+=", "CDPATH=", "CDPATH+=")
+_GLUED = re.compile(r"^([^<>]*)([<>].*)$", re.S)                            # `2>/dev/null`, `a>b`: the part before the operator, the operator
+_BARE = re.compile(r"<<<|<<-?|<>|>>|>\||&>>|&>|>&|<&|<|>")                  # a redirection operator whose operand is the NEXT word
 
 
+@lru_cache(maxsize=8192)
 def base(word: str) -> str:
     return posixpath.basename(word.replace("\\", ""))
+
+
+@lru_cache(maxsize=8192)
+def lead(tok: str) -> str | None:
+    """The base name of `tok` when it starts a segment with nothing before the command word (no assignment, wrapper, keyword or
+    redirection: shell.front leaves it in place); None otherwise."""
+    probe = [tok, "x"]
+    return base(tok) if shell.front(probe) == probe else None
+
+
+def targets(toks: list[str]) -> list[str]:
+    """`toks` without redirections: a glued operator and operand (`2>/dev/null`) vanish, a bare operator (`>`, `&>`) takes the next word
+    with it, and the part of a word before a glued operator (`a>b`) stays; an fd number or `&` in front of an operator is no target."""
+    out, skip = [], False
+    for t in toks:
+        if skip:
+            skip = False
+            continue
+        m = _GLUED.match(t)
+        if not m:
+            out.append(t)
+            continue
+        if m.group(1) and not m.group(1).isdigit() and m.group(1) != "&":
+            out.append(m.group(1))
+        skip = bool(_BARE.fullmatch(m.group(2)))
+    return out
 
 
 def literal_text(tok: str, quotes: list) -> str | None:
@@ -63,19 +100,28 @@ def _readable(text: str | None, deep: int) -> bool:
 
 
 def untrusted(events: list, quotes: list, deep: int = 0) -> bool:
-    """True when the command holds a compound command, a function, `trap`, `alias`, an IFS or CDPATH assignment or an unreadable `eval`."""
+    """True when the command holds a compound command, a function, `trap`, `alias`, `shopt`/`setopt`, an IFS or CDPATH assignment or an
+    unreadable `eval`."""
+    seen = set()                                 # tokens already checked for IFS / CDPATH
     for i, (sep, raw) in enumerate(events):
         if sep:
             if sep == "(" and i + 1 < len(events) and events[i + 1][0] == ")":      # f() { ...; }
                 return True
             continue
-        front = shell.front(raw)
-        word = posixpath.basename(front[0].replace("\\", "")) if front else ""
-        if raw[0] in COMPOUND or word in ("trap", "alias"):
+        if raw[0] in COMPOUND:
             return True
-        if any(t in ("IFS", "CDPATH") or t.startswith(("IFS=", "IFS+=", "CDPATH=", "CDPATH+=")) for t in raw):
+        for t in raw:
+            if t not in seen:
+                seen.add(t)
+                if t in _IFS or t.startswith(_IFS_SET):
+                    return True
+        word = lead(raw[0])
+        if word is None:
+            front = shell.front(raw)
+            word = base(front[0]) if front else ""
+        if word in _POISON:
             return True
-        if word == "eval" and not _readable(shell.script(front, quotes), deep + 1):
+        if word == "eval" and not _readable(shell.script(shell.front(raw), quotes), deep + 1):
             return True
     return False
 
@@ -134,11 +180,15 @@ def child_env(prefix: list[str], env: dict, exp: set, quotes: list) -> dict:
 
 
 def victims(raw: list[str], front: list[str], events: list, i: int) -> list[str]:
+    """What a recursive force delete removes (redirections are never targets). Behind `xargs` the stdin items are targets too: the paths of
+    a recognised `ls -d` / `find` producer, otherwise ONE unknown target (positional arguments or not); `[]` for anything that deletes nothing."""
     if front and base(front[0]) == "find":
         run = next((front[k + 1:] for k, t in enumerate(front) if t in _EXEC), None)
-        return shell.roots(front[1:]) if "-delete" in front or (run is not None and rm_args(run) is not None) else []
+        return (targets(shell.roots(front[1:])) or ["."]) if "-delete" in front or (run is not None and rm_args(run) is not None) else []
     args = rm_args(front)
     if args is None:
         return []
-    xargs = any(base(t) == "xargs" for t in raw[:len(raw) - len(front)])
-    return shell.fed(events, i) if xargs and not args else args
+    args = targets(args)
+    if any(base(t) == "xargs" for t in raw[:len(raw) - len(front)]):
+        args += targets(shell.fed(events, i)) or ["$UNKNOWN"]
+    return args

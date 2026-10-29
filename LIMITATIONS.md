@@ -118,20 +118,34 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
   see a recursive delete through an interpreter (python, node, perl, a heredoc, a base64 pipe, `zsh -c`, `find -exec sh -c`,
   `bash -c "$(printf ...)"`, a `bash -c` nested in a `bash -c`), through `rsync --delete`, `git clean`, `trash` or Finder, or in a script or
   Makefile that was written and then run, nor through `$IFS` or `$(...)` as the command word, nor an `xargs` fed by anything but `ls -d`
-  or `find` (14 of 144 variants). v2 resolves a target only from PROVEN state; whatever it cannot prove falls back to v1's literal rule
-  for that token, so it fires wherever v1 fired except on proven scratch. Proven means: a plain `cd`, `NAME=`, `export NAME=` or
-  `git worktree add` segment with a literal value (no whitespace, `$`, glob, brace, backslash), in the current `&&` chain (a `;`,
+  or `find` (14 of 189 variants). v2 never fires less than v1 except on scratch it has proven under (a)-(g) of `docs/design/compiler.md` 4.1.2:
+  it resolves a target only from PROVEN state, and whatever it cannot prove falls back to v1's literal rule for that token. Proven
+  means: a plain `cd`, `pushd`, `NAME=`, `export NAME=` or `git worktree add` segment with a literal value (no whitespace, `$`, glob,
+  brace, backslash, redirection; `local`, `readonly`, `declare` and `typeset` are not binding forms), in the current `&&` chain (a `;`,
   newline or `&` ends it, a `||` or `!` taints the rest of it, a pipeline or a wrapper sets nothing), in a command with no compound
-  command (`if`, `while`, `for`, `case`, `{ }`), function, `trap`, `alias`, `IFS`/`CDPATH` assignment or unreadable `eval`, and not
-  followed by a rebinding builtin (`let`, `read`, `printf -v`, `unset`, `source`, `((..))`, `pushd +N`, ...). Closed after security review 5: a
+  command (`if`, `while`, `for`, `case`, `{ }`), function, `trap`, `alias`, `shopt`/`setopt`, `IFS`/`CDPATH` assignment or unreadable
+  `eval`, not followed by a rebinding builtin (`let`, `read`, `printf -v`, `unset`, `((..))`, `pushd +N`, ...), and with EVERY segment
+  between it and the delete a recognised shape or a literal word on a short allow-list (`true`, `:`, `echo`, `ls`, `mkdir`, `touch`,
+  `cp`, `mv`, `cat`, `test`, `[`, `git`, `printf`, `rm`, `find`, `xargs`, `sleep`, `pwd`). Any other command word ends the trust from there
+  on: a non-literal word (`$CD x`, `$(echo cd) x`), an unknown name, which is also how a function or alias of the user's shell snapshot
+  is handled even though v2 never sees it, a zsh precommand (`repeat`, `noglob`, `nocorrect`), `source`, a bare path (zsh AUTO_CD) or
+  `./cd`. Not covered: a snapshot function or alias that shadows a RECOGNISED or allow-listed name (a `cd` or `ls` function), a `mv`,
+  `ln` or `cp` that moves or swaps the directory the shell is in or a symlink under a trusted path (names are read, never the
+  filesystem), `CDPATH` or `cdable_vars` set in the environment (`cd <scratch> && cd sub` joins `sub` onto the trusted directory), and
+  an absolute `rm -rf <scratch>/.[.]/x`, which v1 already called scratch on main by its literal prefix (`.[.]` matches `..` in bash 3.2
+  or without `globskipdots`, never in zsh). Closed after security review 5: a
   redirection glued to a literal (`cd <scratch>>x`, `D=<scratch><f`,
   `cd <scratch>2>/dev/null`) is not a plain segment; the leftover check (`$`, a brace expansion, a glob next to `..`) runs on every
   target (`cd <scratch> && rm -rf ./{a,../../x}` and `cd <scratch> && rm -rf ../*` fire); a `bash -c` / `sh -c` child inherits only
-  exported names and literal prefix assignments (`D=<scratch>; bash -c 'rm -rf "$D"'` fires; so does the double-quoted
-  `bash -c "rm -rf $D"`, whose outer expansion v2 does not model). Closed after security review 6: `export` with any flag
+  exported names and literal prefix assignments (`D=<scratch>; bash -c 'rm -rf "$D"'` fires). Closed after security review 6: `export` with any flag
   (`-n`, `-f`, `-fn`, `-np`) marks no name, for an assignment (`export -n D=<scratch>`) as well as a bare name; a glob component that
   is not the last one, or a last one starting with `.`, `[` or `?`, is left (`cd <scratch> && rm -rf ./.*`, `./.[.]/x`, `./[.][.]`,
-  `./*/x` fire; `./*` and `./sub/*` do not). A worktree made by an EARLIER
+  `./*/x` fire; `./*` and `./sub/*` do not). Closed after the Opus round-2 review (fix wave 5): an unknown command word between the
+  trusted set-point and the delete (clause (g) above); an `xargs`-fed delete whose stdin is not an `ls -d` / `find` producer has an
+  unknown target whatever its positional arguments, and a redirection token (`2>/dev/null`, `> f`, `< list`) is never a target (the
+  old "redirect token as target" over-fire is closed for v2; v1's rule still counts it); a double-quoted or unquoted `bash -c` /
+  `sh -c` script is expanded with the outer trusted names first and rescanned with trust off when a `$` or backtick is left
+  (`D=<out>; bash -c "D=<scratch>; rm -rf $D"` fires; `D=<scratch>; bash -c "rm -rf $D"` does not). A worktree made by an EARLIER
   tool call is not remembered (the detector keeps no state), and a variable that came from the environment (`$HOME`, `$PWD`, one exported
   earlier) is unresolved and not scratch. The price is false positives that v1 also had: a `cd <scratch>` inside a loop or an `if`,
   after a `;`, or a scratch value built with `$`, still fires (week 1 read 36 such fires on the live data; the matrix has 0 false
@@ -187,12 +201,12 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
 - A proposal's `provenance.source_sha256` is a per-detector hash by exclusion: the text of `detectors.py` and `catalogue.py`, minus
   the bodies of the other rows' `fire` functions (`catalogue.py` is hashed whole, the `CATALOGUE` registry literal included, because
   an expression inside it runs at import time in every process), plus the row's name, fire name and catalogue fields (the `meta`
-  label, redundant with the whole-file text and harmless) and the whole text of `events.py`, `shell.py`, `textrules.py`, `resolve.py` and
-  `resolve_pre.py`. Editing
+  label, redundant with the whole-file text and harmless) and the whole text of `events.py`, `shell.py`, `textrules.py`, `resolve.py`,
+  `resolve_pre.py` and `resolve_chain.py`. Editing
   inside one detector's own fire body retires only that detector's proposals (re-propose, re-approve). Any other edit retires every
   approved proposal: any row's registry fields, a shared helper, an import, a constant, a decorator or signature of any fire, a rebinding, `evaluate`, the `Detector`
   class, `advance` or `blank_state` (hashed for every row: `evaluate` runs `advance` before the decision is emitted), any edit to
-  the five leaf modules, and adding a detector. Dynamic lookups are moot (nothing is followed, everything is text). What the hash
+  the six leaf modules, and adding a detector. Dynamic lookups are moot (nothing is followed, everything is text). What the hash
   does not see is any difference between the text on disk, read once when it is first used in a process, and the code actually
   loaded (a tampered `.pyc`, an in-memory monkeypatch, a file edited while a long-lived process runs); the old whole-file hash
   had the same blind spot. A fire in the registry must be the top-level function of `detectors.py` that carries its name

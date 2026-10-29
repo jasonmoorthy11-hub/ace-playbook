@@ -322,7 +322,10 @@ def targets(cmd):
     ("D=/tmp/w; rm -rf $D", [[("/tmp/w", True)]]),
     ('D=/tmp/w; rm -rf "${D}/x"', [[("/tmp/w/x", True)]]),
     ("export D=/w && rm -rf $D", [[("/w", False)]]),
-    ("declare D=/w; rm -rf $D", [[("/w", False)]]),
+    ("declare D=/w; rm -rf $D", [[("$D", False)]]),            # fix wave 5: `declare` is not a binding form (an unknown word ends the trust)
+    ("local D=/tmp/w; rm -rf $D", [[("$D", False)]]),
+    ("readonly D=/tmp/w; rm -rf $D", [[("$D", False)]]),
+    ("typeset D=/tmp/w; rm -rf $D", [[("$D", False)]]),
     ("A=/tmp; B=$A/x; rm -rf $B", [[("$B", False)]]),
     ("rm -rf $HOME/x $PWD/y ${NOPE}", [[("$HOME/x", False), ("$PWD/y", False), ("${NOPE}", False)]]),
     ("rm -rf $TMPDIR/x ${TMPDIR}/y", [[("$TMPDIR/x", True), ("${TMPDIR}/y", True)]]),
@@ -360,9 +363,19 @@ def test_canonical_targets(cmd, want):
     ("ls | xargs rm -rf", [[("$UNKNOWN", False)]]),
     ("cd /tmp/w && ls | xargs rm -rf", [[("$UNKNOWN", False)]]),
     ("find /w/a /tmp/b -type d | xargs rm -rf", [[("/w/a", False), ("/tmp/b", True)]]),
-    ("cat list | xargs rm -rf", []),
-    ("ls /w; xargs rm -rf", []),
-    ("xargs rm -rf /w/src", [[("/w/src", False)]]),
+    ("cat list | xargs rm -rf", [[("$UNKNOWN", False)]]),       # fix wave 5: stdin that is not a recognised producer is an unknown target
+    ("ls /w; xargs rm -rf", [[("$UNKNOWN", False)]]),
+    ("xargs rm -rf /w/src", [[("/w/src", False), ("$UNKNOWN", False)]]),
+    ("xargs rm -rf ./a < list", [[("a", False), ("$UNKNOWN", False)]]),
+    ("cd /tmp/w && xargs rm -rf ./a < list", [[("/tmp/w/a", True), ("$UNKNOWN", False)]]),
+    ("ls -d /tmp/w/* | xargs rm -rf /tmp/w/a", [[("/tmp/w/a", True), ("/tmp/w/*", True)]]),
+    ("cd /tmp/w && rm -rf ./a 2>/dev/null", [[("/tmp/w/a", True)]]),
+    ("rm -rf /w/a 2>/dev/null >/dev/null &>x", [[("/w/a", False)]]),
+    ("rm -rf /w/a > out /w/b >> log 2>&1", [[("/w/a", False), ("/w/b", False)]]),
+    ("rm -rf /w/a>out", [[("/w/a", False)]]),
+    ("find /w/a -delete 2>/dev/null", [[("/w/a", False)]]),
+    ("find 2>/dev/null -delete", [[(".", False)]]),
+    ("ls -d /w/a 2>/dev/null | xargs rm -rf", [[("/w/a", False)]]),
     ("find /w/src -delete", [[("/w/src", False)]]),
     ("find /tmp/w -name '*.o' -delete", [[("/tmp/w", True)]]),
     ("find -L /w/src -delete", [[("/w/src", False)]]),
@@ -520,7 +533,7 @@ TAINT_AND_REBINDS = [   # (case, command, fires)
     ("mapfile-option", 'D=/tmp/w; mapfile -t D < f; rm -rf "$D"', True),
     ("getopts-option", 'D=/tmp/w; getopts -x ab D; rm -rf "$D"', True),
     ("unset-unknown-option", 'D=/tmp/w; unset -q D; rm -rf "$D"', True),
-    ("declare-known-options-keep-the-binding", 'D=/tmp/w; declare -r E=1; rm -rf "$D"', False),
+    ("declare-is-an-unknown-word-that-ends-the-trust", 'D=/tmp/w; declare -r E=1; rm -rf "$D"', True),
     ("export-known-option-keeps-the-binding", 'D=/tmp/w; export -n E; rm -rf "$D"', False),
     ("read-known-options-for-another-name", 'D=/tmp/w; read -r E; rm -rf "$D"', False),
     ("plain-assignment-then-delete", 'D=/tmp/w && rm -rf "$D"', False),
@@ -610,6 +623,8 @@ PROVEN = [   # (case, command, fires)
     ("rm-ddash-then-scratch", "rm -rf -- /tmp/w/x", False),
     ("an-eval-skipped-by-and-binds-nothing", 'true && eval "D=/tmp/w"; rm -rf "$D"', True),
     ("an-eval-first-in-its-chain-binds-and-resolves", 'eval "D=/tmp/w"; rm -rf "$D"', False),
+    ("a-write-after-an-inner-scope-pops-is-lost-at-the-outer-pop", 'D=/tmp/w; ( true; ( D=/x ); D=/w/src ); rm -rf "$D"', False),
+    ("a-write-after-an-inner-scope-pops-does-not-leak-either-way", 'D=/w/src; ( true; ( D=/x ); D=/tmp/w ); rm -rf "$D"', True),
     # fix wave 3: the leftover check on every target, the exported-only child env, glued redirections
     ("brace-through-dotdot-on-a-trusted-cwd", "cd /tmp/w && rm -rf ./{a,../../w/src}", True),
     ("glob-next-to-dotdot-on-a-trusted-cwd", "cd /tmp/w && rm -rf ../*", True),
@@ -664,6 +679,7 @@ def stream(cmd):
     ("trap 'x' EXIT", True), ("alias a=b", True), ("IFS=:; a", True), ("read IFS", True), ("CDPATH=x cd y", True),
     ("eval 'cd /tmp/w'", False), ("eval 'cd /tmp/w; rm -rf x'", False), ("eval \"$X\"", True), ("eval 'echo hi'", True),
     ("eval 'f'", True), ("eval 'a && (b)'", True), ("eval 'if true; then cd x; fi'", True), ("echo if then fi", False),
+    ("shopt -s cdable_vars", True), ("setopt auto_cd", True), ("unsetopt auto_cd", True), ("echo shopt trap alias", False),   # fix wave 5
 ])
 def test_untrusted_gate(cmd, untrusted):
     assert rp.untrusted(*stream(cmd)) is untrusted

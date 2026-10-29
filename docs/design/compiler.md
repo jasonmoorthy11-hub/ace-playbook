@@ -139,7 +139,8 @@ of its `fire` function; the row metadata as canonical JSON (`strength`, `tier`, 
 signatures and default arguments of those fires stay, because they run at import time in every process; a statement
 sharing a line with an excised body stays hashed); `catalogue.py` WHOLE, the `CATALOGUE = {...}` registry literal
 included, because any expression inside that literal runs at import time in every process (the hook too), so it is
-provenance like any other import-time code; and the full text of `events.py`, `shell.py`, `textrules.py`, `resolve.py` and `resolve_pre.py`. The
+provenance like any other import-time code; and the full text of `events.py`, `shell.py`, `textrules.py`, `resolve.py`, `resolve_pre.py` and
+`resolve_chain.py`. The
 row's own fields also enter through the canonical `meta` part; that is redundant now that the literal is hashed, and
 harmless (it keeps a row built at runtime honest). A fire that the remaining text still names (one fire calling another, or named
 in a kept signature) is kept whole. `advance` and `blank_state` are hashed for every row, stateless or not:
@@ -156,7 +157,8 @@ change other rows' results in the nightly pass and in evidence building (an offl
 because it runs only rows whose proposals are hash-valid and an edited row's proposals are stale. So an edit inside one
 detector's own `fire` body (an edit inside another row's fire body leaves this row's hash alone) retires only that row's
 proposals; any other edit to `detectors.py`, `catalogue.py`, `events.py`,
-`shell.py`, `resolve.py`, `resolve_pre.py` or `textrules.py` (a registry field of any row, a shared helper, an import, `evaluate`, `advance`, a
+`shell.py`, `resolve.py`, `resolve_pre.py`, `resolve_chain.py` or `textrules.py` (a registry field of any row, a shared helper, an import, `evaluate`,
+`advance`, a
 decorator or signature of
 any fire) retires every approved proposal. Adding a detector also retires every proposal: it adds an import line
 and a registry row to `catalogue.py` and a placeholder for its fire in `detectors.py`. The check is pure AST and text, read
@@ -235,7 +237,7 @@ stale. CI never needs rebuild-lab, and the port still cannot drift from the numb
 Each row is a class and a variant (for example `flags/split-flags`, `interpreter/python-rmtree`, `xargs_find/find-delete`) built twice
 from one command template: once with an invented path outside scratch (ground truth: it should fire) and once with a scratch
 path (its benign twin: it must not fire). The strings are only data: they go through the hook's own path (hook payload,
-`event_from_hook`, `catalogue.evaluate`) and are never executed. 144 variants, 288 cases (43 and 86 under v1).
+`event_from_hook`, `catalogue.evaluate`) and are never executed. 189 variants, 378 cases (43 and 86 under v1).
 
 The survivors of a mutation run over the detectors, the tokenizer and `textrules` are pinned by `tests/test_mutation_survivors.py`.
 
@@ -248,11 +250,11 @@ change in either direction shows up. As of detector v2 (4.1.2, 2026-10-29):
 |---|---|---|---|
 | `alias_quote` | 3 | 0 | `$IFS` separators, `$(echo rm)` as the command word, `base64 -d \| sh` |
 | `interpreter` | 5 | 0 | python, node, perl, a `bash <<EOF` body, a `bash -c` inside a `bash -c` (`bash -c`, `sh -c` and `eval` themselves are read) |
-| `unproven` | 0 | 0 | 70 unproven constructs around a scratch value must fire; their plain twins must not (section 4.1.2) |
+| `unproven` | 0 | 0 | 114 unproven constructs around a scratch value must fire; their plain twins must not (section 4.1.2) |
 | `path` | 0 | 0 | week 1's two false positives are closed; the fail-closed rows (cd after `;`, `\|\|`, a rebound variable) must fire |
 | `worktree` | 0 | 0 | a worktree added and deleted in one `&&` chain is scratch; a path outside the chain or an earlier call is not |
 | `tool_indirection` | 2 | 0 | a script, or a Makefile whose `clean:` recipe deletes, written by `Write` and then run (`bash script`, `make -C dir clean`) |
-| `xargs_find` | 0 | 0 | `ls -d dir/* \| xargs rm -rf`, `find -delete`, `find -exec rm -rf {} +` are read; `ls dir \| xargs rm -rf` fires |
+| `xargs_find` | 0 | 0 | `ls -d dir/* \| xargs rm -rf`, `find -delete`, `find -exec rm -rf {} +` are read; `ls dir` or any other stdin to xargs fires |
 | `other_tools` | 4 | 0 | `rsync --delete`, `git clean -fdx`, `trash`, an `osascript` Finder delete |
 | `control`, `flags`, `shell_construct` | 0 | 0 | |
 
@@ -277,15 +279,16 @@ written as `cd <scratch> && rm -rf ./*`, through a shell variable, or against a 
 7.8 GB loss) was encoded too broadly: scratch the agent made is not "a directory". Detector v2 (2026-10-29, decision D-204) keeps the
 name, the lesson and the family and resolves what the command deletes before it decides. `rm_rf` (weak) keeps Step 0's literal reading.
 
-**The invariant (fix wave 2, after Opus round 1).** v2 may call a target scratch only when the resolution is PROVEN; everything the
-scanner cannot prove falls back to v1's literal rule for that token, so v2 fires wherever v1 fired except on proven scratch (and fires
-on more: `bash -c`, `find`, `xargs`). A working directory, a variable binding or a worktree mark is trusted only when ALL hold
-(`resolve_pre.py` states them; `resolve.py` applies them segment by segment):
+**The invariant (fix waves 2 and 5, after Opus rounds 1 and 2).** v2 may call a target scratch only when the resolution is PROVEN;
+everything the scanner cannot prove falls back to v1's literal rule for that token, so v2 never fires less than v1 except on scratch
+proven under (a)-(g) (and fires on more: `bash -c`, `find`, `xargs`). A working directory, a variable binding or a worktree mark is
+trusted only when ALL hold (`resolve_pre.py` states them; `resolve.py` applies them segment by segment; `resolve_chain.py` holds (g)):
 
 - (a) a PLAIN segment set it: exactly `cd <literal>`, `pushd <literal>`, `NAME=<literal>`, `export NAME=<literal>` or
   `git [-C <literal>] worktree add [opts] <literal>`, with no `!`, wrapper (`env`, `sudo`, `time`, `command`), `builtin`, assignment prefix or
   redirection (a `<` or `>` ANYWHERE in a word counts:
-  `cd /x>y`, `D=/x<f` and `cd /x2>/dev/null` are one word each and are not plain);
+  `cd /x>y`, `D=/x<f` and `cd /x2>/dev/null` are one word each and are not plain). `local`, `readonly`, `declare` and `typeset` are
+  NOT binding forms (they are unknown command words, (g)); the assignment forms are exactly `NAME=<literal>` and `export NAME=<literal>`;
 - (b) it sits in the CURRENT `&&` chain: `;`, a newline and `&` end a chain (the cd or the add may have failed, so the delete may run
   where the shell started), a `||` or a `!` taints the rest of the chain (nothing in it is trusted and every earlier binding is
   forgotten), a segment in a pipeline or before `&` sets nothing, and a name bound after an `&&` (not first in its chain) dies with the
@@ -293,11 +296,14 @@ on more: `bash -c`, `find`, `xargs`). A working directory, a variable binding or
 - (c) the literal has no whitespace, `$`, backtick, glob, brace, backslash, `<`, `>`, `&`, `|`, `;`, `#` or parenthesis (an unquoted `$D` is word-split and
   globbed, so only a literal value may be substituted), and the command assigns neither `IFS` nor `CDPATH` anywhere;
 - (d) the whole command contains no compound command (`if`/`while`/`until`/`for`/`select`/`case`/`{ }`), no function definition, no
-  `trap` or `alias`, and no `eval` whose text is not plain `cd`/`rm`/`pushd`/`export`/assignment segments without `$` or backticks. When
+  `trap`, `alias`, `shopt`, `setopt` or `unsetopt` (`shopt -s cdable_vars` changes what `cd proj` means), and no `eval` whose text is not
+  plain `cd`/`rm`/`pushd`/`export`/assignment segments without `$` or backticks. When
   any of this appears, nothing in the command is resolved (v1 for every token);
-- (e) `let`, `read`, `printf -v`/`-vNAME`, `declare/typeset/local -n`, `mapfile`/`readarray`, `getopts`, `unset`, `NAME+=`, `NAME[i]=`,
-  `for NAME`, `source`/`.`, `popd`, `cd -`, `pushd +N`, and a binding builtin in an option shape the scanner does not read, make the
-  directory and the bindings unknown from there; a builtin behind a wrapper (`env cd X`, `sudo export D=x`, `time cd X`) does the same
+- (e) `let`, `read`, `printf -v`/`-vNAME`, `mapfile`/`readarray`, `getopts`, `unset`, `NAME+=`, `NAME[i]=`,
+  `for NAME`, `popd`, `cd -`, `pushd +N`, and a binding builtin in an option shape the scanner does not read, make the
+  directory and the bindings unknown from there (the binding builtins named here are read by `shell.rebinds` and drop just the names they
+  rebind; every other builtin, `source`/`.`, `local`, `declare`, `typeset` and `readonly` included, is an unknown word under (g)); a
+  builtin behind a wrapper (`env cd X`, `sudo export D=x`, `time cd X`) does the same
   and is still scanned (`sudo eval "..."` and its targets count). A wrapped `eval` runs on a copy of the state; a bare `eval` runs in
   this shell. A `bash -c` / `sh -c` child starts from a copy that keeps the cwd and the worktree marks but only the EXPORTED
   names: `export NAME=<literal>`, or `export NAME` after a plain binding (`export` with ANY flag word (`-n`, `-f`, `-p`, `-fn`, `-np`,
@@ -305,32 +311,64 @@ on more: `bash -c`, `find`, `xargs`). A working directory, a variable binding or
   rebinding that is not a proven literal, a chain end for a conditional name and the end of a `( )` scope un-export it), plus literal `NAME=<literal>` and
   `env NAME=<literal>` assignments on that segment (a prefix value that is not a literal removes its name). A prefix holding anything
   but assignments and `env` (`sudo`, `nice`, `command`, `time`, `env -i`, `env -u`) passes NO names. So `D=<scratch>; bash -c 'rm -rf "$D"'`
-  fires (the child sees an empty `$D`), and `export D=<scratch>; bash -c ...` or `D=<scratch> bash -c ...` does not;
+  fires (the child sees an empty `$D`), and `export D=<scratch>; bash -c ...` or `D=<scratch> bash -c ...` does not. The script word
+  is read as the outer shell leaves it for the child: a single-quoted or `$'..'` piece is verbatim; in a double-quoted or unquoted piece
+  `\$`, `` \` ``, `\"` and `\\` lose their backslash and `$NAME` / `${NAME}` take the value of a TRUSTED outer binding (exported or not:
+  the outer shell expands it before the child starts), after which the text is rescanned. If any other `$` or backtick is left (an
+  unbound name, `$(..)`, `$1`, a backtick pair) or an unquoted piece holds a backslash, the outer expansion is not provable and the
+  script is rescanned as written with trust OFF (v1's literal rule; a backtick pair reads as `$( )`, an unknown target). So
+  `D=<out>; bash -c "D=<scratch>; rm -rf $D"` fires (the child deletes `<out>`), and so does `bash -c "D=<scratch>; rm -rf $D"`
+  with no outer `$D`; `D=<scratch>; bash -c "rm -rf $D"` does not;
 - (f) EVERY target is checked after expansion, not only those with a `$` or a quoted part: one that still holds `$` (other than a
   leading `$TMPDIR`), a `{a,b}` brace expansion, or a glob character (`*`, `?`, `[`) that may reach `.` or `..` is judged as v1
   judged the token. A glob component may reach them when it is not the LAST path component, when the last one starts with `.`, `[`
   or `?`, or when it follows a `..` component (no fnmatch: it lets `*` match `.`); `./*` and `./sub/*` stay proven
   (`D=<scratch>; rm -rf "$D/$E"`, `cd <scratch> && rm -rf ./{a,../../x}`, `../*`, `./.*`, `./.[.]/x`, `./[.][.]` and `./*/x` fire); a
   literal token keeps exactly v1's `SCRATCH` test (`<scratch>/*` and `/tmp/x/$E` are scratch
-  by the prefix, as before). A worktree is never marked for `~`, `..`, `/`, `.`, the repo, an ancestor of it, or fewer than two components.
+  by the prefix, as before). A worktree is never marked for `~`, `..`, `/`, `.`, the repo, an ancestor of it, or fewer than two components;
+- (g) between the segment that set a trusted cwd, binding or worktree mark and the delete, EVERY intervening segment in the chain is
+  itself a recognised plain shape (`cd`, `pushd`, `NAME=`, `export NAME=`, `git [-C x] worktree add`, as in (a); also `eval` and
+  `bash -c` / `sh -c` with a script, and the binding builtins of (e)) or a command whose command word is a LITERAL on a short
+  allow-list of commands that change neither the directory nor a variable: `true`, `:`, `echo`, `ls`, `mkdir`, `touch`, `cp`, `mv`,
+  `cat`, `test`, `[`, `git` (other than `worktree add`), `printf` (`-v NAME` drops NAME, (e)), `rm`, `find`, `xargs`, `sleep`, `pwd`. ANY
+  other command word makes the cwd, the bindings, the worktree marks and the exports UNKNOWN from that segment on (v1's literal rule
+  applies to what follows): a non-literal word (`$CD x`, `$(echo cd) x`, a backtick, a quote hole), an unknown name (a function, an
+  alias, `workon`), a zsh precommand (`repeat 1 cd x`, `noglob cd x`, `nocorrect cd x`), `source`, `local`/`declare`/`readonly`/`typeset`,
+  `command`/`builtin`/`exec`/`time` in front of an unknown word, and a bare path used as a command (zsh AUTO_CD: `cd <scratch> &&
+  <out> && rm ...`). A word is read exactly: `cd` is the builtin only as `cd` or `\cd`; `/bin/echo` counts as `echo` (a path in
+  `/bin`, `/usr/bin`, `/usr/local/bin`, `/sbin`, `/usr/sbin` or `/opt/homebrew/bin` naming an allow-listed word), and any other path,
+  `./cd` included (an external program never moves the shell), is an unknown word. A `( )` or `$( )` scope keeps what happens inside
+  it inside. Aliases and functions of the user's shell snapshot are not seen: that is WHY an unknown word ends the trust, instead of
+  only a word the command defines itself.
 
 What v2 reads on top of that: `bash -c` and `sh -c` bodies (a copy of the state with only the exported names, (e)),
 a readable `eval` (shared state), `ls -d <paths> |
 xargs rm -rf` and `find <roots> ... | xargs rm -rf`, `find -delete`, `find -exec rm -rf`; any other `ls` producer is unknown (fires).
+Behind `xargs`, the stdin items are ALWAYS a target besides the positional arguments: the paths of a recognised `ls -d` / `find`
+producer, otherwise one unknown target (`cat list | xargs rm -rf`, `xargs rm -rf ./a < list`, `xargs -a list rm -rf`, `xargs rm -rf <
+<(..)` fire). A redirection operator and its operand (`2>/dev/null`, `> f`, `&>x`, `< list`) are never a target of `rm` or `find`.
 After `--` every word is a target, even one that starts with `-`. Quoted targets are read as text (`rm -rf "/tmp/my dir"` is scratch);
 a quoted target with a command substitution or a backslash is `Q` (fires). `cd /tmp/work/..` is `/tmp`, which is scratch as it always was.
 
 **Misses and limits** (the matrix pins the first group): python, node and perl one-liners, a `bash <<EOF` body, base64 pipes, `$IFS` and
 `$(echo rm)` as the command word, a script or Makefile written and then run, `rsync --delete`, `git clean`, `trash`, a Finder delete,
-`zsh -c '...'`, `find -exec sh -c '...'`, `bash -c "$(printf ...)"`, a `bash -c` nested in a `bash -c`, an `xargs` fed by `cat` or `echo`.
-Not seen at all: a function or alias that exists in the user's shell but is not defined in the command, a worktree made by an
-earlier tool call (the detector keeps no state), a directory change by `CDPATH` exported earlier.
+`zsh -c '...'`, `find -exec sh -c '...'`, `bash -c "$(printf ...)"`, a `bash -c` nested in a `bash -c`.
+Not seen at all: a function or alias that exists in the user's shell but is not defined in the command (an unknown word ends the
+trust, (g), but one that shadows a recognised or allow-listed name such as `cd` or `ls` is invisible), a worktree made by an
+earlier tool call (the detector keeps no state), a directory change by `CDPATH` or `cdable_vars` set in the environment (so
+`cd <scratch> && cd sub` is unproven when the user's shell has either; the command itself assigning `CDPATH` or running `shopt` /
+`setopt` makes the whole command unresolved), a `mv`, `ln` or `cp` that moves or swaps the directory the shell is in or a symlink under
+a trusted path (names are read, never the filesystem), and, as in v1, an absolute `rm -rf <scratch>/.[.]/x` (scratch by v1's literal
+prefix; `.[.]` matches `..` in bash 3.2 or without `globskipdots`, never in zsh).
 
-`resolve.py` and `resolve_pre.py` join `events.py`, `shell.py` and `textrules.py` in the hashed text of every row (section 4), so the
-change moved all nine detector hashes. `tests/test_detector_v2_property.py` generates 400 commands per property against an oracle the
+`resolve.py`, `resolve_pre.py` and `resolve_chain.py` join `events.py`, `shell.py` and `textrules.py` in the hashed text of every row
+(section 4): six leaf modules, so the change moved all nine detector hashes (the table keeps one line per detector; only the
+hashes move). `tests/test_detector_v2_property.py` generates 400 commands per property against an oracle the
 generator knows, and holds the V1-FLOOR property: for every mutation of a trusted skeleton (negation, `||`, compound bodies, functions,
 pipes, wrappers, non-literal values, IFS, trap, unreadable eval, arithmetic, rebinding builtins) `v2_fires or not v1_fires`, with a
-frozen copy of v1's rule; removing the compound/function check, the taint or the chain scoping makes it fail.
+frozen copy of v1's rule; removing the compound/function check, the taint, the chain scoping or clause (g) (each of `then-$CD x`,
+`then-unknownfn`, `then-repeat 1 cd x`) makes it fail. A timing test holds the 64 KB budget on the scope-stack shapes (64 bindings
+then `$(a) ` x 13000, `(a)` x 21000, backticks, 64 K parentheses): <= 50 ms locally, asserted at 3x for a slow runner.
 
 ### 4.2 Per-session state (`state.py`)
 

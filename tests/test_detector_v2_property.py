@@ -15,12 +15,13 @@ import os
 import posixpath
 import random
 import re
+import time
 
 import pytest
 
 from ace_playbook.compile import catalogue as cat
 from ace_playbook.compile import detectors as d
-from ace_playbook.compile import resolve, resolve_pre, shell
+from ace_playbook.compile import resolve, resolve_chain, resolve_pre, shell
 from ace_playbook.compile.events import event_from_hook
 from ace_playbook.fixtures import fakes
 
@@ -243,7 +244,9 @@ BINDINGS, DIRS = ("var", "varand", "export"), ("cd", "cd2")
 APPLIES = {"subshell": BINDINGS + DIRS}                  # the other mutants apply to every skeleton; a worktree mark is not scoped by `( )`
 for _c, _kinds in (("let D=1", BINDINGS), ("unset D", BINDINGS), ("read D", BINDINGS), ("printf -vD x", BINDINGS), ("declare -n D=E", BINDINGS),
                    ("mapfile D", BINDINGS), ("getopts ab D", BINDINGS), ("source x", BINDINGS + DIRS), (". x", BINDINGS + DIRS),
-                   ("popd", DIRS), ("cd -", DIRS), ("pushd +1", DIRS)):
+                   ("popd", DIRS), ("cd -", DIRS), ("pushd +1", DIRS),
+                   ("$CD x", BINDINGS + DIRS + ("wt",)), ("unknownfn", BINDINGS + DIRS + ("wt",)),     # fix wave 5, clause (g): an unknown command word
+                   ("repeat 1 cd x", BINDINGS + DIRS + ("wt",))):
     MUTANTS["then-" + _c] = (lambda c: lambda s_, j, dl, k: f"{s_}{j}{c}{j}{dl}")(_c)
     APPLIES["then-" + _c] = _kinds
 VALUES = {"dollar": "{r}/$E", "glob": "{r}/*", "brace": "{r}/{{a,b}}", "space": '"{r} x"', "backtick": '"{r}/`id`"', "subst": '"{r}/$(id)"',
@@ -309,6 +312,42 @@ def test_the_floor_property_fails_when_a_binding_survives_its_chain(monkeypatch)
     assert any(n.endswith("semicolon") or n.endswith("newline") for n, _c in floor_violations())
 
 
+@pytest.mark.parametrize("name", ["then-$CD x", "then-unknownfn", "then-repeat 1 cd x"])
+def test_the_floor_property_fails_when_clause_g_is_removed(monkeypatch, name):
+    monkeypatch.setattr(resolve_chain, "is_known", lambda _word: True)       # every command word counts as inert
+    assert any(n.endswith("/" + name) for n, _c in floor_violations())
+
+
+def test_clause_g_holds_the_floor_for_the_three_new_mutants():
+    names = {n.split("/", 1)[1] for n, _c, _k in floor_worlds()}
+    assert {"then-$CD x", "then-unknownfn", "then-repeat 1 cd x"} <= names and floor_violations() == []
+
+
+# the 64 KB gate (round 2): hostile shapes that bloated the scope stack cost one pass; <= 50 ms locally, asserted at 3x for a slow CI runner
+CI_FACTOR_MS = 150
+_ENV = "".join(f"D{i}=/tmp/a{i}; " for i in range(64))
+TIMING_SHAPES = {
+    "dollar-paren-pairs": _ENV + "$(a) " * 13000, "paren-pairs": _ENV + "(a)" * 21000, "backtick-pairs": _ENV + "`a` " * 16000,
+    "sixty-four-k-parens": _ENV + "(" * 25000 + "rm -rf /x" + ")" * 25000, "open-parens": _ENV + "(" * 32000,
+    "dollar-paren-pairs-then-a-delete": _ENV + "$(a) " * 12000 + "rm -rf ./x", "unknown-words": _ENV + "f g h; " * 9000,
+    "allow-listed-words": _ENV + "echo a; " * 8000 + "rm -rf /tmp/w/x",
+}
+
+
+@pytest.mark.parametrize("name", sorted(TIMING_SHAPES))
+def test_the_64kb_budget_holds_on_the_scope_stack_shapes(name):
+    cmd = TIMING_SHAPES[name][:65000]
+    ev = event_from_hook(cs.pre_payload(cmd), probe=lambda _p: False)
+    best = 1e9
+    for _ in range(3):
+        t0 = time.perf_counter()
+        _out, _state, errors = cat.evaluate(ev, None, names=[NAME, "rm_rf"], strict=True)
+        best = min(best, (time.perf_counter() - t0) * 1000)
+    assert errors == []
+    print(f"timing {name}: best {best:.1f} ms")
+    assert best <= CI_FACTOR_MS, (name, best)
+
+
 FLOOR_FRAGMENTS = ["rm -rf ", "rm -r -f ", "rm -fr -- ", " && ", " || ", "; ", "\n", " | ", " & ", "/srv/", "/w/", "$X", "${X}", '"$X"', "~/", "..",
                    "./*", "*", "'", '"', "\\", "bash -c '", "eval ", "xargs ", "find ", " -delete", "(", ")", "`", "$(", "!", "if ", "then ",
                    "fi", "{ ", "} ", "cat ", "echo ", "ls -d ", "-- ", "a", "b", "x y", "cd ", "D=", "export D=", "time ", "env "]
@@ -323,3 +362,102 @@ def test_the_floor_holds_on_random_command_soup_without_scratch_text():
             fired += 1
             assert fires(text), text
     assert fired >= N // 8, "the soup must reach rm -rf often enough to mean something"
+
+
+# ------------------------------------------------------------------ fix wave 5: clause (g), the redirection filter, the outer expansion, copy-on-write state
+
+
+def bad(cmd):
+    return any(not s for g in canon(cmd) for _p, s in g)
+rc, rp = resolve_chain, resolve_pre
+
+
+@pytest.mark.parametrize("tok,name", [
+    ("cd", "cd"), ("\\cd", "cd"), ("c\\d", "cd"), ("true", "true"), (":", ":"), ("[", "["), ("f", "f"), ("workon", "workon"),
+    ("/bin/echo", "echo"), ("/usr/bin/true", "true"), ("/usr/local/bin/git", "git"), ("/bin/cd", ""), ("/usr/bin/f", ""), ("./cd", ""),
+    ("/tmp/w/echo", ""), ("/srv/x/proj", ""), ("~", ""), ("$CD", ""), ("$", ""), ("\x000\x00", ""), ("`", ""), ("(", ""), ("", ""),
+    ("..", ".."), (".", "."), ("-", "-"), ("a b", ""),
+])
+def test_word_is_the_exact_literal_name_or_empty(tok, name):
+    assert rc.word(tok) == name
+
+
+def test_the_allow_list_is_the_documented_one():
+    assert rc.ALLOW == {":", "true", "echo", "ls", "mkdir", "touch", "cp", "mv", "cat", "test", "[", "git", "printf", "rm", "find", "xargs",
+                        "sleep", "pwd"}
+    for name in ("true", "echo", "git", "rm", "cd", "export", "eval", "unset", "printf"):
+        assert rc.is_known(name), name
+    for name in ("", "f", "source", ".", "local", "declare", "readonly", "typeset", "repeat", "noglob", "nocorrect", "time", "command", "bash", "sh",
+                 "shopt", "workon", "~", ".."):
+        assert not rc.is_known(name), name
+
+
+@pytest.mark.parametrize("tok,kind", [
+    ("true", rc.KNOWN_FAST), ("echo", rc.KNOWN_FAST), ("/bin/ls", rc.KNOWN_FAST), ("[", rc.KNOWN_FAST), ("pwd", rc.KNOWN_FAST),
+    ("f", rc.UNKNOWN), ("$CD", rc.UNKNOWN), ("source", rc.UNKNOWN), ("local", rc.UNKNOWN), ("repeat", rc.UNKNOWN), ("./cd", rc.SLOW),
+    ("~", rc.UNKNOWN), ("/srv/x", rc.UNKNOWN), ("D+=x", rc.UNKNOWN),
+    ("cd", rc.SLOW), ("rm", rc.SLOW), ("/bin/rm", rc.SLOW), ("git", rc.SLOW), ("eval", rc.SLOW), ("bash", rc.SLOW), ("unset", rc.SLOW),
+    ("printf", rc.SLOW), ("export", rc.SLOW), ("D=1", rc.SLOW), ("sudo", rc.SLOW), ("xargs", rc.SLOW), ("time", rc.SLOW), ("!", rc.SLOW),
+    (">f", rc.SLOW), ("then", rc.SLOW), ("{", rc.SLOW),
+])
+def test_lead_kind_routes_a_segment_by_its_first_token(tok, kind):
+    assert rc.lead_kind(tok) == kind
+
+
+@pytest.mark.parametrize("cmd,text,proven", [
+    ("bash -c 'rm -rf \"$D\"'", 'rm -rf "$D"', True),                    # single-quoted: the child expands it itself
+    ('bash -c "rm -rf $D"', "rm -rf /tmp/w", True),                      # double-quoted: the outer shell expands a trusted name
+    ('bash -c "rm -rf ${D}/x"', "rm -rf /tmp/w/x", True),
+    ('bash -c "rm -rf \\$D"', "rm -rf $D", True),                        # an escaped dollar reaches the child as a dollar
+    ('bash -c "echo \\\\ \\" \\`"', 'echo \\ " `', True),
+    ('bash -c "rm -rf $E"', "rm -rf $E", False),                         # an unbound name: not provable
+    ('bash -c "rm -rf $(echo x)"', "rm -rf $(echo x)", False),
+    ('bash -c "rm -rf `echo x`"', "rm -rf $(echo x)", False),            # a backtick pair is read as a substitution
+    ('bash -c "rm -rf $1 $$ $?"', "rm -rf $1 $$ $?", False),
+    ("bash -c rm", "rm", True),
+    ("bash -c 'a'\"$D\"", "a/tmp/w", True),                              # a mixed word is opened piece by piece
+    ("bash -c '$D'\"$E\"", "$D$E", False),
+])
+def test_child_text_expands_the_outer_shells_part_of_a_script(cmd, text, proven):
+    events, quotes = shell.command_stream(cmd)
+    front = shell.front(events[0][1])
+    assert rc.child_text(front, quotes, {"D": "/tmp/w"}) == (text, proven)
+
+
+def test_targets_drops_redirections_and_their_operands():
+    t = rp.targets
+    assert t(["a", "2>/dev/null", "b"]) == ["a", "b"] and t(["a", ">", "f", "b"]) == ["a", "b"] and t(["a", ">>", "f"]) == ["a"]
+    assert t(["a", "&>", "f", "b", "&>/dev/null"]) == ["a", "b"] and t(["a", "<", "f"]) == ["a"] and t(["a", "<<<", "x", "b"]) == ["a", "b"]
+    assert t(["a>f"]) == ["a"] and t(["2>&1", "a"]) == ["a"] and t(["a", ">&", "2", "b"]) == ["a", "b"] and t(["a", "<"]) == ["a"]
+    assert t(["3>f", "a"]) == ["a"] and t(["a", ">|", "f"]) == ["a"] and t(["a", "<>", "f", "b"]) == ["a", "b"] and t([]) == []
+    assert t(["a", "b"]) == ["a", "b"] and t(["-rf", "x"]) == ["-rf", "x"]
+
+
+def test_state_copy_on_write_never_leaks_between_a_scope_and_its_snapshot():
+    st = rc.State(env={"A": "/x"}, exp={"A"}, made={"/m/n"}, cond={"A"})
+    entry = st.push("(")
+    st.bind("B", "/y", False)
+    st.export("B", True)
+    st.add_made("/m/o")
+    st.drop("A")
+    assert st.env == {"B": "/y"} and st.exp == {"B"} and st.made == {"/m/n", "/m/o"}
+    assert entry[2] == {"A": "/x"} and entry[7] == {"A"} and entry[6] == {"/m/n"} and entry[3] == {"A"}
+    assert st.pop(entry) is False
+    assert st.env == {"A": "/x"} and st.exp == {"A"} and st.made == {"/m/n"} and st.cond == {"A"}
+    copy = st.copy()
+    copy.bind("C", "/z", True)
+    copy.drop("A")
+    assert st.env == {"A": "/x"} and st.cond == {"A"} and copy.env == {"C": "/z"} and copy.cond == {"C"}
+    st.end_chain()
+    assert st.env == {} and st.made == set() and st.cond == set() and copy.env == {"C": "/z"} and copy.exp == set()
+    assert st.known() is False and copy.known() is True
+
+
+def test_clause_g_forgets_the_state_at_the_first_unknown_word_and_only_there():
+    cmds = {"f": True, "true": False, "echo hi": False, "mkdir x": False, "$CD x": True, "./cd x": True, "source x": True, "local D=1": True,
+            "[ -n x ]": False, "git status": False, "/bin/echo hi": False, "~": True}
+    for word_, forgets in cmds.items():
+        assert bad(f"cd /tmp/w && {word_} && rm -rf ./*") is forgets, word_
+        assert bad(f"D=/tmp/w; {word_}; rm -rf $D") is forgets, word_       # a binding first in its chain survives `;`
+        assert bad(f"D=/tmp/w && {word_} && rm -rf $D") is forgets, word_
+        assert bad(f"cd /tmp/w && ({word_}) && rm -rf ./*") is False, word_       # a subshell leaves the outer state alone

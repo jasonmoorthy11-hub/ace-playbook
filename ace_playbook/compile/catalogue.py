@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Callable
 
 from .. import textrules
-from . import detectors, events, resolve, resolve_pre, shell, srchash
+from . import detectors, events, resolve, resolve_chain, resolve_pre, shell, srchash
 from .detectors import (Fire, advance, blank_state, commit_without_push, edit_unread_session, edit_unread_turn,
                         exitplan_question_block, preclaim_audit_block, rm_rf, rm_rf_nonscratch, unparseable,
                         user_correction)
@@ -20,8 +20,8 @@ from .events import Event
 
 
 def _source_texts() -> tuple[str, ...]:
-    """Full text of the five leaf modules every detector depends on, hashed whole (patched in tests)."""
-    return tuple(srchash.module_text(Path(m.__file__)) for m in (events, shell, textrules, resolve, resolve_pre))
+    """Full text of the six leaf modules every detector depends on, hashed whole (patched in tests)."""
+    return tuple(srchash.module_text(Path(m.__file__)) for m in (events, shell, textrules, resolve, resolve_pre, resolve_chain))
 
 
 @dataclass(frozen=True)
@@ -38,7 +38,7 @@ class Detector:
     @property
     def source_sha256(self) -> str:
         """Row name, fire name and metadata, plus the text of detectors.py minus the other rows' fire bodies, the whole
-        text of catalogue.py (registry literal included) and the five leaf modules (srchash.py). Raises ValueError
+        text of catalogue.py (registry literal included) and the six leaf modules (srchash.py). Raises ValueError
         unless the fire is the top-level function of detectors.py that carries its name (a lambda, a wrapper, a partial
         or a callable instance fails closed, for this row only: a nameless fire is left out of the other rows' list of
         fires)."""

@@ -112,6 +112,7 @@ CUSTOM = [
     ("path", "cd-in-subshell", [bash(f"(cd {SCR} && true); rm -rf ./*")], [bash(f"(cd {SCR} && rm -rf ./*)")]),
     ("path", "cd-in-pipeline", [bash(f"cd {SCR} | cat; rm -rf ./*")], [bash(f"cd {SCR} && rm -rf ./*")]),
     # v2 fails closed: the cwd carries only across `&&`; a worktree is scratch only in the same `&&` chain; `ls` needs -d
+    ("path", "cd-e-flag", [bash(f"cd -e {OUT} && rm -rf ./*")], [bash(f"cd -e {SCR} && rm -rf ./*")]),
     ("path", "cd-semicolon", [bash(f"cd {SCR}; rm -rf ./*")], [bash(f"cd {SCR} && rm -rf ./*")]),
     ("path", "cd-newline", [bash(f"cd {SCR}\nrm -rf .")], [bash(f"cd {SCR} && rm -rf .")]),
     ("path", "cd-or-true", [bash(f"cd {SCR} || true; rm -rf ./*")], [bash(f"cd {SCR} && rm -rf ./*")]),
@@ -146,6 +147,8 @@ CUSTOM = [
 PLAIN_VAR = f'D={SCR}; rm -rf "$D"'
 PLAIN_CD = f"cd {SCR} && rm -rf ./*"
 PLAIN_WT = f"git worktree add {OUT}/wt b && rm -rf {OUT}/wt"
+TRUE_CD, TRUE_VAR = f"cd {SCR} && true && rm -rf ./*", f'D={SCR}; true; rm -rf "$D"'
+XARGS_TWIN, DQ_TWIN = f"cd {SCR} && ls -d ./* | xargs rm -rf ./a", f'D={SCR}; bash -c "rm -rf $D"'
 UNPROVEN = [
     # bindings that outlive a statement that may not have run, or a pipeline / compound / function / wrapper that scoped them away
     ("conditional-binding", f'[ -n "$CI" ] && D={SCR}; rm -rf "$D"', PLAIN_VAR),
@@ -232,6 +235,57 @@ UNPROVEN = [
     ("bracket-negated-glob-final", f"cd {SCR} && rm -rf ./[!a]*", PLAIN_CD),
     ("non-final-glob-component", f"cd {SCR} && rm -rf ./*/x", f"cd {SCR} && rm -rf ./sub/*"),
     ("dot-glob-on-a-variable", f'D={SCR}; rm -rf "$D"/.*', f'D={SCR}; rm -rf "$D"/*'),
+    # Opus round 2 (fix wave 5), B1: clause (g). Between the trusted set-point and the delete every segment is a recognised plain shape or a
+    # literal command word on the allow-list; any other word (non-literal, unknown, a wrapper, a bare path) ends the trust. Twins use `true`.
+    ("word-from-a-variable", f"cd {SCR} && $CD {OUT} && rm -rf ./*", TRUE_CD),
+    ("word-from-a-substitution", f"cd {SCR} && $(echo cd) {OUT} && rm -rf ./*", TRUE_CD),
+    ("word-from-a-backtick", f"cd {SCR} && `echo cd` {OUT} && rm -rf ./*", TRUE_CD),
+    ("word-with-a-quote-hole", f'cd {SCR} && "${{C}}d" {OUT} && rm -rf ./*', TRUE_CD),
+    ("binding-word-from-a-variable", f'D={SCR}; $SET D={OUT}; rm -rf "$D"', TRUE_VAR),
+    ("unknown-function-between", f"cd {SCR} && f && rm -rf ./*", TRUE_CD),
+    ("unknown-name-between", f"cd {SCR} && workon proj && rm -rf ./*", TRUE_CD),
+    ("zsh-repeat-cd", f"cd {SCR} && repeat 1 cd {OUT} && rm -rf ./*", TRUE_CD),
+    ("zsh-noglob-cd", f"cd {SCR} && noglob cd {OUT} && rm -rf ./*", TRUE_CD),
+    ("zsh-nocorrect-cd", f"cd {SCR} && nocorrect cd {OUT} && rm -rf ./*", TRUE_CD),
+    ("zsh-autocd-bare-path", f"cd {SCR} && {OUT} && rm -rf ./*", TRUE_CD),
+    ("zsh-autocd-tilde", f"cd {SCR} && ~ && rm -rf ./*", TRUE_CD),
+    ("shopt-cdable-vars", f"shopt -s cdable_vars; proj={OUT}; cd {SCR} && cd proj && rm -rf ./*", f"cd {SCR} && cd sub && rm -rf ./*"),
+    ("sourced-file-between", f"cd {SCR} && source env.sh && rm -rf ./*", TRUE_CD),
+    ("path-qualified-cd-is-an-external-program", f"cd {OUT} && ./cd {SCR} && rm -rf ./*", f"cd {OUT} && cd {SCR} && rm -rf ./*"),
+    ("path-qualified-eval-is-an-external-program", f'cd {OUT} && ./eval "cd {SCR}" && rm -rf ./*', f'cd {OUT} && eval "cd {SCR}" && rm -rf ./*'),
+    ("allow-listed-word-then-mkdir", f"cd {OUT} && mkdir x && rm -rf ./x", f"cd {SCR} && mkdir x && rm -rf ./x"),
+    ("echo-between-is-fine", f"cd {OUT} && echo hi && rm -rf ./*", f"cd {SCR} && echo hi && rm -rf ./*"),
+    # B2: an xargs-fed delete always has the stdin items as an unknown target unless the producer is `ls -d` / `find`; a redirection is no target
+    ("xargs-stdin-and-positional", f"cd {SCR} && echo {OUT} | xargs rm -rf ./a", XARGS_TWIN),
+    ("xargs-redirect-and-positional", f"cd {SCR} && xargs rm -rf ./a < list", XARGS_TWIN),
+    ("xargs-redirect-only", f"cd {SCR} && xargs rm -rf < list", XARGS_TWIN),
+    ("xargs-null-redirect", "xargs -0 rm -rf < list", f"ls -d {SCR}/* | xargs -0 rm -rf"),
+    ("xargs-process-substitution", f"xargs rm -rf < <(echo {OUT})", XARGS_TWIN),
+    ("xargs-producer-is-not-ls-or-find", f"cd {SCR} && cat list | xargs rm -rf", XARGS_TWIN),
+    ("xargs-a-file", f"cd {SCR} && xargs -a list rm -rf", XARGS_TWIN),
+    ("xargs-ls-d-and-an-outside-positional", f"ls -d {SCR}/* | xargs rm -rf {OUT}/x", f"ls -d {SCR}/* | xargs rm -rf {SCR}/x"),
+    ("redirect-is-no-target-on-a-cwd", f"cd {OUT} && rm -rf ./a 2>/dev/null", f"cd {SCR} && rm -rf ./a 2>/dev/null"),
+    ("redirect-operand-is-no-target", f"cd {OUT} && rm -rf ./a > /dev/null", f"cd {SCR} && rm -rf ./a > /dev/null"),
+    ("redirect-is-no-target-without-a-cwd", f"rm -rf {OUT}/a 2>/dev/null", f"rm -rf {SCR}/a 2>/dev/null"),
+    ("redirect-both-streams", f"rm -rf {OUT}/a &>/dev/null", f"rm -rf {SCR}/a &>/dev/null"),
+    # B3: a double-quoted or unquoted `bash -c` / `sh -c` script is expanded by the OUTER shell first
+    ("script-rebinds-after-outer-expansion", f'D={OUT}; bash -c "D={SCR}; rm -rf $D"', DQ_TWIN),
+    ("script-rebinds-after-outer-export", f'export D={OUT}; bash -c "D={SCR}; rm -rf $D"', DQ_TWIN),
+    ("script-rebinds-in-sh", f'D={OUT}; sh -c "D={SCR}; rm -rf $D"', DQ_TWIN),
+    ("script-without-an-outer-binding", f'bash -c "D={SCR}; rm -rf $D"', DQ_TWIN),
+    ("script-with-a-backtick", f'D={OUT}; bash -c "D={SCR}; rm -rf `echo $D`"', DQ_TWIN),
+    ("script-expands-the-outer-binding", f'D={OUT}; bash -c "rm -rf $D"', DQ_TWIN),
+    ("script-escaped-dollar-is-the-childs", f'bash -c "D={OUT}; rm -rf \\$D"', f'bash -c "D={SCR}; rm -rf \\$D"'),
+    # B4: local / readonly / declare / typeset are not trusted binding forms (unknown words, clause g)
+    ("local-binding", f'local D={SCR}; rm -rf "$D"', PLAIN_VAR),
+    ("readonly-binding", f'readonly D={SCR}; rm -rf "$D"', PLAIN_VAR),
+    ("declare-binding", f'declare D={SCR}; rm -rf "$D"', PLAIN_VAR),
+    ("typeset-binding", f'typeset D={SCR}; rm -rf "$D"', PLAIN_VAR),
+    # I2: the three surviving mutants of round 2
+    ("worktree-path-with-dotdot", f"git worktree add {OUT}/../wt && rm -rf {OUT}/../wt", PLAIN_WT),
+    ("skipped-eval-leaves-nothing", f'true || eval "cd {SCR}" && rm -rf ./*', f'eval "cd {SCR}" && rm -rf ./*'),
+    ("zsh-short-function-moves-the-cwd", f"f() cd {OUT}; cd {SCR} && f && rm -rf ./*", TRUE_CD),
+    ("zsh-short-function-shadows-cd", f"cd() cd {OUT}; cd {SCR} && rm -rf ./*", PLAIN_CD),
 ]
 
 

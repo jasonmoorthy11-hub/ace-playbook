@@ -109,6 +109,7 @@ EVERYONE = {
     "a helper": ("detectors.py", lambda t: put(t, "_rm_hits")),
     "resolve.py (a leaf module, hashed whole)": ("resolve.py", lambda t: put(t, "canonical_targets")),
     "resolve_pre.py (a leaf module, hashed whole)": ("resolve_pre.py", lambda t: put(t, "untrusted")),
+    "resolve_chain.py (a leaf module, hashed whole)": ("resolve_chain.py", lambda t: put(t, "lead_kind")),
     "shell.py (a leaf module, hashed whole)": ("shell.py", lambda t: put(t, "command_stream", "    _edit = 1\n")),
     "a helper's decorator": ("detectors.py", swap("def _rm_hits(", "@staticmethod\ndef _rm_hits(")),
     "another fire's decorator": ("detectors.py", swap("def user_correction(", "@_b\ndef user_correction(")),
@@ -169,18 +170,18 @@ def test_editing_evaluate_replaces_the_old_whole_catalogue_edit_check(monkeypatc
     assert changed(before, hashes()) == set(before)
 
 
-@pytest.mark.parametrize("index", [0, 1, 2, 3, 4])
-def test_editing_events_shell_textrules_resolve_or_resolve_pre_moves_every_hash(monkeypatch, index):
+@pytest.mark.parametrize("index", [0, 1, 2, 3, 4, 5])
+def test_editing_events_shell_textrules_resolve_resolve_pre_or_resolve_chain_moves_every_hash(monkeypatch, index):
     before = hashes()
     texts = cat._source_texts()
-    assert len(texts) == 5 and all(texts)
+    assert len(texts) == 6 and all(texts)
     edited = tuple(t + "# edit" if i == index else t for i, t in enumerate(texts))
     monkeypatch.setattr(cat, "_source_texts", lambda: edited)
     assert changed(before, hashes()) == set(before)
 
 
-def test_the_leaf_texts_are_the_five_modules_whole():
-    mods = (cat.events, cat.shell, cat.textrules, cat.resolve, cat.resolve_pre)
+def test_the_leaf_texts_are_the_six_modules_whole():
+    mods = (cat.events, cat.shell, cat.textrules, cat.resolve, cat.resolve_pre, cat.resolve_chain)
     assert cat._source_texts() == tuple(Path(m.__file__).read_text() for m in mods)
 
 
