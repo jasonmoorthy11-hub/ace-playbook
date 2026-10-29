@@ -141,6 +141,18 @@ def test_every_connector_tool_in_the_snapshot_is_allowed_or_denied_by_name_or_by
     rules, allowed = set(rule_lines(DENIED)), set(names())
     assert [n for n in rule_lines(SNAPSHOT) if n not in allowed and not denied_by(n, rules)] == []
     assert not [n for n in rule_lines(SNAPSHOT) if n in allowed and denied_by(n, rules)]       # nothing allowed is also denied
+    assert {r for r in rules if r.count("__") == 2} <= set(rule_lines(SNAPSHOT))              # a per-name deny rule is a real snapshot name (no typo)
+
+
+def test_the_audit_finds_no_drift_on_the_snapshot_minus_the_denied_tools_and_names_one_left_in(tmp_path):
+    from ace_playbook.compile.brief_audit import audit
+    rules = set(rule_lines(DENIED))
+    init = ["ToolSearch"] + [n for n in rule_lines(SNAPSHOT) if not denied_by(n, rules)]
+    new = "mcp__claude_ai_Linear__prepare_file_upload"
+    for tools, drift in ((init, []), (init + [new], [new])):
+        stream = tmp_path / "s.jsonl"
+        stream.write_text(json.dumps({"type": "system", "subtype": "init", "tools": tools}) + "\n")
+        assert audit(stream, ALLOW)["drift"] == drift
 
 
 def test_the_three_servers_the_brief_reads_deny_every_unneeded_tool_by_full_name_reads_included():
