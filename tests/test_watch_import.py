@@ -24,7 +24,11 @@ class World:
         self.root, self.wd, self.src = tmp_path, tmp_path / "watch", tmp_path / "copy"
         self.src.mkdir()
         conf = tmp_path / "config.json"
-        conf.write_text(json.dumps({"data_dir": str(tmp_path / "data"), "watch_dir": str(self.wd), "chain_key_path": None}))
+        (tmp_path / "sources.json").write_text(json.dumps([{"id": "feed", "url": "https://example.test/feed.xml", "kind": "rss", "tier": 1}]))
+        targets = {f"k{n}": {"path": str(tmp_path / "none"), "pattern": "x"} for n in range(1, 10)}
+        (tmp_path / "map.json").write_text(json.dumps({"targets": targets, "docs": {"https://docs.example.test/en/hooks": ["k1"]}}))
+        conf.write_text(json.dumps({"data_dir": str(tmp_path / "data"), "watch_dir": str(self.wd), "chain_key_path": None,
+                                    "watch_sources": str(tmp_path / "sources.json"), "watch_inventory_map": str(tmp_path / "map.json")}))
         monkeypatch.setenv("ACE_PLAYBOOK_CONFIG", str(conf))
 
     def put(self, rec, name=None, text=None):
@@ -50,7 +54,7 @@ def test_a_valid_copy_imports_and_shows_in_watch_status(w, capsys):
     rec = make(1)
     w.put(rec)
     code, out, err = w.run(capsys)
-    assert (code, err) == (0, "") and out == ["import: 1 imported, 0 duplicate, 0 rejected", "- title 1"]
+    assert (code, err) == (0, "") and out == ["import: 1 imported, 0 duplicate, 0 rejected", "- title 1 (imported)"]
     path = w.wd / "proposals" / (rec["id"] + ".json")
     assert stat.S_IMODE(path.stat().st_mode) == 0o600 and json.loads(path.read_text())["status"] == "open"
     assert cli_main.main(["watch", "status"]) == 0
@@ -159,6 +163,92 @@ def test_an_unsafe_watch_dir_is_refused(w, capsys, tmp_path):
     assert code == 2 and "symlink" in err and not list(real.iterdir())
 
 
-def test_carry_is_small_and_stdlib_only():
+def test_carry_is_small():
     assert len(Path(carry.__file__).read_text().splitlines()) <= 120
     assert os.path.basename(carry.__file__) == "carry.py"
+
+
+def only(w, rec):
+    return json.loads((w.wd / "proposals" / (rec["id"] + ".json")).read_text())
+
+
+def test_a_diff_is_never_imported_the_record_is_stored_without_it_and_counted(w, capsys):
+    diff = "--- a/f\n+++ b/f\n@@ -1,1 +1,1 @@\n-claude-old\n+evil\n"
+    rec = make(1, cls="model_pin", diff=diff, title="Replace claude-old with claude-new in k1")
+    w.put(rec)
+    plain = make(2)
+    w.put(plain)
+    code, out, _ = w.run(capsys)
+    assert code == 0 and out[0] == "import: 2 imported, 0 duplicate, 0 rejected; 1 imported without diff"
+    got = only(w, rec)
+    assert got["change"]["diff"] is None and got["change"]["diff_sha256"] is None and got["id"] == rec["id"]
+    assert records.check(got) is None and got["title"] == "Replace claude-old with claude-new in k1 (imported)"
+    assert records.title_model(got["title"]) == ("claude-old", "claude-new")
+
+
+def test_the_title_of_an_imported_record_is_marked_in_status_and_the_mark_is_not_doubled(w, capsys):
+    rec = make(1, title="Docs changed")
+    w.put(rec)
+    w.run(capsys)
+    assert only(w, rec)["title"] == "Docs changed (imported)"
+    cli_main.main(["watch", "status"])
+    assert "- Docs changed (imported)" in capsys.readouterr().out
+    marked = make(2, title="Docs again (imported)")
+    w.put(marked)
+    w.run(capsys)
+    assert only(w, marked)["title"] == "Docs again (imported)"
+
+
+def test_a_title_too_long_to_carry_the_mark_is_rejected(w, capsys):
+    rec = make(1, title="t" * 115)
+    w.put(rec)
+    code, out, _ = w.run(capsys)
+    assert out[:2] == ["import: 0 imported, 0 duplicate, 1 rejected", f"rejected {rec['id']}: title"] and w.stored() == []
+
+
+def test_stamps_urls_and_targets_are_checked_against_the_operators_own_config(w, capsys):
+    def bad(n, **changes):
+        rec = make(n)
+        for path, value in changes.items():
+            node = rec
+            *keys, last = path.split(".")
+            for k in keys:
+                node = node[int(k)] if k.isdigit() else node[k]
+            node[int(last) if last.isdigit() else last] = value
+        w.put(rec)
+        return rec["id"]
+    long_window = bad(1, expires="2027-12-31T00:00:00Z")
+    odd_stamp = bad(2, created="2026-10-21 12:00:00")
+    ftp = bad(3, **{"evidence.0.url": "ftp://example.test/x"})
+    nohost = bad(4, **{"evidence.0.url": "https:///x"})
+    notstr = bad(5, **{"evidence.0.url": 5})
+    code, out, _ = w.run(capsys)
+    got = {ln.split()[1].rstrip(":"): ln.split(": ", 1)[1] for ln in reasons(out)}
+    assert got[long_window] == "dates" and got[odd_stamp] == "dates" and got[ftp] == "url" and got[nohost] == "url" and got[notstr] in ("url", "evidence")
+    assert w.stored() == []
+
+
+def test_an_unknown_target_is_rejected_and_a_known_one_of_each_kind_is_taken(w, capsys):
+    foreign = records.record("docs", "t", {"url": "https://example.test/d", "sha256": "1" * 64, "quote": "q", "tier": 0}, [], "k99", None,
+                             "claude --version", NOW)
+    w.put(foreign)
+    ok = [records.record("docs", "page", {"url": "https://example.test/d", "sha256": "2" * 64, "quote": "q", "tier": 0}, [],
+                         "https://docs.example.test/en/hooks", None, "claude --version", NOW),
+          records.record("version", "Claude Code 9.1.0 available (installed 9.0.1)",
+                         {"url": "https://example.test/n", "sha256": "3" * 64, "quote": "q", "tier": 0}, [], "claude_version", None,
+                         "claude --version", NOW),
+          records.record("lead", "A post", {"url": "https://example.test/p", "sha256": "4" * 64, "quote": "q", "tier": 1}, [], "feed", None,
+                         "claude --version", NOW)]
+    for rec in ok:
+        w.put(rec)
+    code, out, _ = w.run(capsys)
+    assert out[:2] == ["import: 3 imported, 0 duplicate, 1 rejected", f"rejected {foreign['id']}: target"]
+
+
+def test_import_needs_the_sources_file_and_the_inventory_map(w, capsys, monkeypatch, tmp_path):
+    w.put(make(1))
+    conf = tmp_path / "bare.json"
+    conf.write_text(json.dumps({"data_dir": str(tmp_path / "data"), "watch_dir": str(w.wd), "chain_key_path": None}))
+    monkeypatch.setenv("ACE_PLAYBOOK_CONFIG", str(conf))
+    code, out, err = w.run(capsys)
+    assert code == 2 and "watch_sources" in err and not w.wd.exists()

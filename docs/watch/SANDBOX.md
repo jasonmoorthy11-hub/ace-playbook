@@ -244,7 +244,9 @@ install and the `inputs.legacy-<date>` name are written from that run, not paste
   a new real directory (for example `cp /var/acewatch/watch/proposals/W-*.json ~/acewatch-copy/` from a shell that may read it), then run
   `python3 -m ace_playbook.compile watch import ~/acewatch-copy` (add `--dry-run` to see the counts first). The import validates each file
   with the same record check, counts duplicates, keeps the cap of five open, never changes the copy, and prints `rejected <stem>: <reason>`
-  for anything else; then `compile watch queue` reviews them.
+  for anything else; then `compile watch queue` reviews them. An imported record is evidence plus title: its stamps, URLs and target are checked
+  against the operator's own `watch_sources` and `watch_inventory_map` (both must be set), any diff in the copy is dropped (diffs come only from the
+  operator's own scan, and `; N imported without diff` says how many), and its title shows ` (imported)`.
 
 ## Kill files
 

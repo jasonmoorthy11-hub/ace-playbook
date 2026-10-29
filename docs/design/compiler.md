@@ -1280,13 +1280,18 @@ files or the live measurement.
 `compile watch import <dir> [--dry-run]` (`watch/carry.py`, loaded only when it runs; `__main__` is untouched) moves a copy of `acewatch`'s
 `proposals/W-*.json` that the operator made into the operator's own store. `<dir>` must be a real directory (not a link; exit 2). Taken are
 only regular files named `W-*.json` whose stem matches `store.ID`, at most 64 KiB, never links, that parse as a JSON object whose `id` is
-the stem and that `records.check(rec)` (no body) accepts; `status` is forced to `open`, and past the cap of five open (leads excepted) the
+the stem and that `records.check(rec)` (no body) accepts, and (`watch/vet.py`) whose stamps are in the store's format and at most 30 days apart
+(`dates`), whose evidence URLs are http(s) (`url`) and whose `change.target` is one the operator's own config knows (`target`: a key or mapped docs
+URL of `watch_inventory_map`, a source id of `watch_sources`, or `claude_version`; both files are required). An imported record is evidence plus
+title: `change.diff` and `diff_sha256` are ALWAYS dropped (null; the id does not depend on them, and `records.check` still passes the stored
+record) because only the operator's own scan computes a diff, and the title carries a visible ` (imported)` (a title too long to carry it is
+rejected, reason `title`); `watch status`, the digest and the queue card show it. `status` is forced to `open`, and past the cap of five open (leads excepted) the
 record is written `queued` in ranking order. A record whose `reconcile.key` is in the store, or whose id exists (`write_proposal` is
 write-once), is a duplicate. The work holds `fsio.lock(watch_dir, blocking=True)` and ends with `store.rebalance`; a `DISABLED` file or an
-unsafe watch directory refuses (exit 2). Output is `import: N imported, N duplicate, N rejected`, one `rejected <stem>: <reason>` per
+unsafe watch directory refuses (exit 2). Output is `import: N imported, N duplicate, N rejected` (plus `; N imported without diff` when a diff was dropped), one `rejected <stem>: <reason>` per
 rejection (a fixed word -- name, symlink, size, json, shape, id, unreadable -- or the `check` reason; never file content) and `- <title>` per
 imported record; `--dry-run` writes nothing and prints the same. The copy is never modified. The import trusts the validation, not the
-copy's origin: a record that passes `check` is as good as one a scan wrote.
+copy's origin, which is why a diff is never taken from it.
 
 The sandbox logs (`acewatch.out.log`, `acewatch.err.log`, `acewatch.weekly.out.log`, `acewatch.weekly.err.log`, written by launchd from the two plists)
 are rotated by `hooks/acewatch/newsyslog.acewatch.conf`, a root-installed newsyslog(8) template (mode 600, keep 5, 1024 KiB, compressed; SANDBOX.md "Log
