@@ -280,3 +280,275 @@ def test_an_accept_of_a_record_without_a_diff_hash_key_does_not_raise(world, cap
     assert store.write_proposal(world.wd, rec)
     assert cli.queue(cfgmod.load(), 5, lambda prompt: "1", lambda what: True) == 0
     assert [d["note"] for d in store.read_decisions(world.wd)] == ["diff_sha256 none"]
+
+# ------------------------------------------------------------------ Track M2: an import twin of the own key never hides the own diff
+OTHER = "W-" + "e" * 8
+
+
+def forge(mine, pin, how):
+    """The own id as a diff-less forged successor (another key), dismissed / accepted / left live; then the live other-id twin of the OWN key."""
+    plant(mine, pin, title=pin["title"].replace(NEW, "claude-evil-9") + " (imported)")
+    if how != "live":
+        store.append_decision(mine.wd, pin["id"], how, "wrong successor", "2026-10-28T00:00:00Z")
+
+
+def decisions(mine):
+    return store.read_decisions(mine.wd)
+
+
+def superseded_ids(mine):
+    return [d["id"] for d in decisions(mine) if d["decision"] == "closed" and d["note"] == "superseded"]
+
+
+def scan(mine, capsys):
+    mine.run(capsys, "scan", "--force")
+    return len(decisions(mine))
+
+
+def one_own_diff(mine, pin):
+    from ace_playbook.compile.watch import reconcile
+    assert [p["id"] for p in live_with_diff(mine)] == [pin["id"]]
+    assert [p["id"] for p, s in statuses(mine) if s in ("open", "queued") and reconcile.key(p) == reconcile.key(pin)] == [pin["id"]]   # no diff-less twin
+    assert dict((p["id"], s) for p, s in statuses(mine))[pin["id"]] == "open" and store.open_count(statuses(mine)) <= 5
+
+
+def test_a_held_dismissed_twin_never_closes_a_live_other_id_twin_of_the_same_key(tmp_path, monkeypatch, capsys):
+    pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
+    forge(mine, pin, "dismissed")
+    plant(mine, pin, id=OTHER)                                                               # another id, the own key, no diff, live
+    fill(mine, 4)                                                                            # the live other-id twin is the fifth open one
+    scan(mine, capsys)
+    assert live_with_diff(mine) == [] and superseded_ids(mine) == []
+    assert dict((p["id"], s) for p, s in statuses(mine))[OTHER] in ("open", "queued") and store.open_count(statuses(mine)) == 5
+    free_slots(mine)
+    scan(mine, capsys)
+    one_own_diff(mine, pin)
+    assert superseded_ids(mine) == [OTHER] and dict((p["id"], s) for p, s in statuses(mine))[OTHER] != "open"
+    seen = scan(mine, capsys)                                                                # a third scan changes nothing
+    one_own_diff(mine, pin)
+    assert seen == len(decisions(mine)) and superseded_ids(mine) == [OTHER] and pin["id"] not in superseded_ids(mine)
+
+
+def test_the_slot_free_world_reopens_the_own_record_and_closes_the_other_id_twin_at_once(tmp_path, monkeypatch, capsys):
+    pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
+    forge(mine, pin, "dismissed")
+    plant(mine, pin, id=OTHER)
+    seen = scan(mine, capsys)                                                                # the cap is free
+    one_own_diff(mine, pin)
+    assert superseded_ids(mine) == [OTHER] and [(d["id"], d["decision"]) for d in decisions(mine)] == [
+        (pin["id"], "dismissed"), (pin["id"], "reopened"), (OTHER, "closed")]
+    for _ in range(2):
+        assert scan(mine, capsys) == seen
+        one_own_diff(mine, pin)
+
+
+def test_a_future_created_other_id_twin_cannot_make_the_own_record_the_superseded_one(tmp_path, monkeypatch, capsys):
+    from ace_playbook.compile.watch import reconcile
+    pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
+    soon = (datetime.now(timezone.utc) + timedelta(hours=12)).strftime(FMT)                  # within vet's now + 1 day
+    forge(mine, pin, "dismissed")
+    plant(mine, pin, id=OTHER, created=soon, expires=(datetime.now(timezone.utc) + timedelta(days=20)).strftime(FMT))
+    fill(mine, 4)
+    scan(mine, capsys)
+    assert live_with_diff(mine) == [] and superseded_ids(mine) == []                         # the held scan closes nothing
+    free_slots(mine)
+    seen = scan(mine, capsys)
+    for _ in range(2):
+        one_own_diff(mine, pin)
+        assert superseded_ids(mine) == [OTHER] and scan(mine, capsys) == seen
+    both = [(pin, "open"), (plant(mine, pin, id="W-" + "d" * 8, created=soon), "open")]      # superseded() keeps the diffed record, whatever the stamps
+    assert reconcile.superseded(both, [pin], set()) == ["W-" + "d" * 8]
+
+
+def test_a_held_accepted_other_key_twin_waits_and_the_other_id_twin_is_closed_after_the_free(tmp_path, monkeypatch, capsys):
+    pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
+    forge(mine, pin, "accepted")
+    plant(mine, pin, id=OTHER)
+    fill(mine, 4)
+    scan(mine, capsys)
+    assert live_with_diff(mine) == [] and superseded_ids(mine) == []
+    free_slots(mine)
+    seen = scan(mine, capsys)
+    one_own_diff(mine, pin)
+    assert superseded_ids(mine) == [OTHER] and scan(mine, capsys) == seen
+    one_own_diff(mine, pin)
+
+
+def test_a_live_forged_own_id_twin_is_replaced_in_place_and_the_other_id_twin_is_closed(tmp_path, monkeypatch, capsys):
+    pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
+    forge(mine, pin, "live")
+    plant(mine, pin, id=OTHER)
+    seen = scan(mine, capsys)
+    one_own_diff(mine, pin)
+    assert superseded_ids(mine) == [pin["id"], OTHER] and list(stored(mine)).count(pin["id"]) == 1         # the forged successor first, then the twin
+    assert [d["decision"] for d in decisions(mine) if d["id"] == pin["id"]][-1] == "reopened"   # the forged successor: closed as another key, then replaced
+    for _ in range(2):
+        assert scan(mine, capsys) == seen
+        one_own_diff(mine, pin)
+
+
+# ------------------------------------------------------------------ Track M2 wave 3: an own diffed record that is not live is reopened, whatever the import
+OLD = {"created": "2026-09-01T00:00:00Z", "expires": "2026-09-30T00:00:00Z"}
+
+
+def stamp(**ago):
+    return (datetime.now(timezone.utc) + timedelta(**ago)).strftime(FMT)
+
+
+def own_diffed(mine, pin, how):
+    """The operator's own record WITH its diff, expired or auto-closed (not an import)."""
+    store.ensure(mine.wd)
+    assert store.write_proposal(mine.wd, {**pin, **OLD} if how == "expired" else pin)
+    if how == "auto-closed":
+        store.append_decision(mine.wd, pin["id"], "closed", "trigger vanished", "2026-10-28T00:00:00Z")
+
+
+def other_twin(mine, pin, how):
+    """A diff-less same-key import under another id: live older / live newer (created up to vet's now + 1 d) / expired / auto-closed."""
+    over = {"live older": {"created": "2026-08-01T00:00:00Z", "expires": stamp(days=20)},
+            "live newer": {"created": stamp(hours=12), "expires": stamp(days=20)},
+            "expired": {"created": "2026-09-15T00:00:00Z", "expires": "2026-10-10T00:00:00Z"},
+            "auto-closed": {"created": stamp(hours=12), "expires": stamp(days=20)}}[how]
+    plant(mine, pin, id=OTHER, **over)
+    if how == "auto-closed":
+        store.append_decision(mine.wd, OTHER, "closed", "trigger vanished", "2026-10-28T00:00:00Z")
+
+
+def rows(mine):
+    return [(d["id"], d["decision"], d["note"] if d["decision"] == "closed" else "") for d in decisions(mine)]
+
+
+def test_an_expired_own_record_without_an_import_is_reopened(tmp_path, monkeypatch, capsys):          # the control
+    pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
+    own_diffed(mine, pin, "expired")
+    scan(mine, capsys)
+    one_own_diff(mine, pin)
+    assert [r[:2] for r in rows(mine)] == [(pin["id"], "reopened")]
+
+
+@pytest.mark.parametrize("how", ["expired", "auto-closed"])
+@pytest.mark.parametrize("twin", ["auto-closed", "expired", "live newer"])
+def test_an_expired_or_auto_closed_own_record_is_reopened_beside_a_later_created_import(tmp_path, monkeypatch, capsys, how, twin):
+    pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
+    own_diffed(mine, pin, how)
+    other_twin(mine, pin, twin)                                                              # F1 (the import is closed already) and F2 (it is live)
+    seen = scan(mine, capsys)
+    one_own_diff(mine, pin)
+    assert (pin["id"], "reopened", "") in rows(mine) and (superseded_ids(mine) == [OTHER]) == (twin == "live newer")
+    for _ in range(2):
+        assert scan(mine, capsys) == seen
+        one_own_diff(mine, pin)
+
+
+@pytest.mark.parametrize("other", ["live older", "live newer", "expired", "auto-closed"])
+@pytest.mark.parametrize("own", ["expired", "auto-closed", "expired forged"])
+def test_a_held_not_live_own_id_twin_is_reopened_after_the_free_whatever_the_other_id_twin(tmp_path, monkeypatch, capsys, own, other):
+    pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
+    if own == "expired forged":
+        plant(mine, pin, title=pin["title"].replace(NEW, "claude-evil-9") + " (imported)", **OLD)
+    else:
+        plant(mine, pin, **(OLD if own == "expired" else {}))
+        if own == "auto-closed":
+            store.append_decision(mine.wd, pin["id"], "closed", "trigger vanished", "2026-10-28T00:00:00Z")
+    other_twin(mine, pin, other)
+    live = other.startswith("live")
+    fill(mine, 4 if live else 5)                                                             # the live twin is the fifth open record
+    before = rows(mine)
+    scan(mine, capsys)
+    assert rows(mine) == before and live_with_diff(mine) == [] and store.open_count(statuses(mine)) == 5
+    free_slots(mine)
+    seen = scan(mine, capsys)
+    one_own_diff(mine, pin)
+    assert superseded_ids(mine) == ([OTHER] if live else [])
+    assert scan(mine, capsys) == seen
+    one_own_diff(mine, pin)
+
+
+def test_a_queued_own_id_import_closed_by_a_newer_import_still_gets_the_own_diff_after_the_free(tmp_path, monkeypatch, capsys):      # F6
+    pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
+    plant(mine, pin, status="queued")                                                        # the own id, an import waiting for a slot
+    plant(mine, pin, id=OTHER, created=stamp(hours=12), expires=stamp(days=20))              # a newer same-key import, live
+    fill(mine, 4)
+    before = len(decisions(mine))
+    scan(mine, capsys)
+    assert superseded_ids(mine) == [pin["id"]] and len(decisions(mine)) == before + 1       # superseded() keeps the newest of two diff-less records
+    assert live_with_diff(mine) == [] and list(stored(mine)).count(pin["id"]) == 1
+    assert stored(mine)[pin["id"]]["change"]["diff"]                                         # the own diff is on file (held replacement), waiting
+    free_slots(mine)
+    seen = scan(mine, capsys)
+    one_own_diff(mine, pin)                                                                  # the file still says queued; the `reopened` row makes it open
+    assert superseded_ids(mine) == [pin["id"], OTHER] and scan(mine, capsys) == seen
+    one_own_diff(mine, pin)
+
+
+def test_a_lead_never_carries_a_diff_so_the_diff_gated_import_branches_cannot_apply_to_it(tmp_path, monkeypatch, capsys):
+    pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
+    scan(mine, capsys)                                              # every branch that closes or reopens for an import is gated on a diff;
+    leads = [r for r in stored(mine).values() if r["class"] == "lead"]                       # no code path gives a lead one
+    assert leads and all(r["change"]["diff"] is None and r["change"]["diff_sha256"] is None for r in leads)
+
+
+# ------------------------------------------------------------------ Track M2 wave 4: the cap guard, the cap-neutral swap and the by_key ranking are pinned
+@pytest.mark.parametrize("other", ["live older", "live newer"])
+@pytest.mark.parametrize("own", ["expired", "auto-closed"])
+def test_an_own_diffed_record_swaps_with_an_open_import_at_once_when_the_cap_is_full(tmp_path, monkeypatch, capsys, own, other):
+    pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
+    own_diffed(mine, pin, own)                                                               # the own record already HAS its diff (the other-id branch)
+    other_twin(mine, pin, other)
+    fill(mine, 4)                                                                            # the open import is the fifth open record
+    seen = scan(mine, capsys)
+    one_own_diff(mine, pin)                                                                  # a swap closes one open record and reopens one: the count stays 5
+    assert store.open_count(statuses(mine)) == 5 and superseded_ids(mine) == [OTHER] and scan(mine, capsys) == seen
+    one_own_diff(mine, pin)
+
+
+@pytest.mark.parametrize("own", ["expired", "auto-closed"])
+def test_the_cap_guard_keeps_a_held_own_diffed_record_and_a_queued_import_untouched(tmp_path, monkeypatch, capsys, own):      # kills the guard mutant
+    pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
+    own_diffed(mine, pin, own)
+    plant(mine, pin, id=OTHER, status="queued", created=stamp(hours=12), expires=stamp(days=20))
+    fill(mine, 5)
+    before = rows(mine)
+    scan(mine, capsys)                                                       # closing the queued import frees no slot: the own record could not reopen
+    assert rows(mine) == before and live_with_diff(mine) == [] and store.open_count(statuses(mine)) == 5
+    assert dict((p["id"], s) for p, s in statuses(mine))[OTHER] == "queued"
+    free_slots(mine)
+    seen = scan(mine, capsys)
+    one_own_diff(mine, pin)
+    assert OTHER in superseded_ids(mine) and scan(mine, capsys) == seen
+
+
+@pytest.mark.parametrize("own", ["expired_diff", "autoclosed_diff", "expired_import", "autoclosed_import", "expired_forged", "queued_import"])
+def test_a_queued_import_taking_the_freed_slot_does_not_keep_the_own_diffed_record_out(tmp_path, monkeypatch, capsys, own):
+    pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
+    if own.endswith("_diff"):
+        own_diffed(mine, pin, own.split("_")[0].replace("autoclosed", "auto-closed"))
+    elif own == "expired_forged":
+        plant(mine, pin, title=pin["title"].replace(NEW, "claude-evil-9") + " (imported)", **OLD)
+    else:
+        plant(mine, pin, **(OLD if own == "expired_import" else {"status": "queued"} if own == "queued_import" else {}))
+        if own == "autoclosed_import":
+            store.append_decision(mine.wd, pin["id"], "closed", "trigger vanished", "2026-10-28T00:00:00Z")
+    plant(mine, pin, id=OTHER, status="queued", created=stamp(hours=12), expires=stamp(days=20))      # a newer same-key import waiting for a slot
+    fill(mine, 5)                                                                            # the cap is full without it
+    scan(mine, capsys)
+    assert live_with_diff(mine) == [] and store.open_count(statuses(mine)) == 5
+    free_slots(mine)                                                                         # ONE free: rebalance promotes the import, the swap is cap-neutral
+    seen = scan(mine, capsys)
+    one_own_diff(mine, pin)
+    assert OTHER in superseded_ids(mine) and scan(mine, capsys) == seen
+    one_own_diff(mine, pin)
+
+
+@pytest.mark.parametrize("with_import", [False, True])
+def test_the_older_own_scan_record_is_reopened_not_duplicated_whatever_the_import(tmp_path, monkeypatch, capsys, with_import):     # world D
+    pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
+    older = "W-" + "b" * 8                                                                   # another own-scan id of the same key, expired, WITH a diff
+    store.ensure(mine.wd)
+    assert store.write_proposal(mine.wd, {**pin, "id": older, **OLD})
+    if with_import:
+        other_twin(mine, pin, "expired")                                                     # a newer expired diff-less import under a third id
+    seen = scan(mine, capsys)
+    assert (older, "reopened", "") in rows(mine) and pin["id"] not in stored(mine) and superseded_ids(mine) == []
+    assert [p["id"] for p in live_with_diff(mine)] == [older] and dict((p["id"], s) for p, s in statuses(mine))[older] == "open"
+    assert scan(mine, capsys) == seen and pin["id"] not in stored(mine)
