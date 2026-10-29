@@ -527,13 +527,16 @@ ledger are one reading per stream, so a single run cannot show its own cost in p
 
 ## Nightly check notes
 
-The two optional config keys `backup_check` and `brain_check` name local scripts that the nightly runs as `<script> --check`. A note is text
+The three optional config keys `backup_check`, `brain_check` and `acewatch_check` name local scripts that the nightly runs as `<script> --check`. A note is text
 from a local script the operator configured, not from the network; first line, 80 chars, failures are reported as `check failed` without
 detail (a script that is missing or not a regular file at run time, a non-zero exit, a timeout of 20 s, a start error, an empty or unprintable first
 line and a line that contains a `/` all give
-`backup check failed` or `brain check failed`: never stderr, the script path or an exception text). The script's own line is shown as it
+`backup check failed`, `brain check failed` or `acewatch check failed`: never stderr, the script path or an exception text). The script's own line is shown as it
 wrote it, so what it prints is only as good as the script (a check line is shown as a plain note; a line whose first word carries a colon is
 rejected so it cannot pose as a digest category such as `silent:`); `compile status` shows at most four notes, each cut to 80 characters.
+
+The `acewatch` note is the same kind of text: whatever the operator's `acewatch_check` script prints (the sample prints the first `open ...`, `none` or
+`disabled` line of `watch status` as `acewatch`), not a count this repository verified. The sudoers line it needs is the operator's, installed by hand.
 
 ## Platform assumptions
 

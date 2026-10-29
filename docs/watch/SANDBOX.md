@@ -296,6 +296,17 @@ ended in an outage or an unavailable claude. A run that is down (an outage or an
 items read`, and with zero compliance it prints no proposals line. A call that ran and failed adds `canary: F failed` on stderr. A model change
 (`watch_reader_model`) is a reason to run it before the next scan.
 
+## The operator-side status line
+
+`/var/acewatch` is `acewatch`'s own (0700), so the operator's `compile status` cannot read the watcher's store and shows nothing about it. The nightly
+can show one line instead: set `acewatch_check` in the OPERATOR's config to a copy of `hooks/acewatch/acewatch_check.sh` (outside the checkout,
+mode 0755; edit the three variables at its top: the acewatch user, the venv python of step 3 and acewatch's config of step 4). The nightly runs
+it as `<script> --check` like `backup_check` and `brain_check`, keeps the first line (80 characters at most, no `/`) as a note, and `compile status`
+shows it: `acewatch open 3  leads 1  oldest 2d  last scan 4h` (or `acewatch none` / `acewatch disabled`); a failed or empty run shows
+`acewatch check failed`. The script runs `sudo -n -u acewatch <venv python> -m ace_playbook.compile --config <acewatch config> watch status`, so it needs
+ONE sudoers line, written by you with `sudo visudo -f /etc/sudoers.d/acewatch-check` (nothing installs it): `<operator> ALL=(acewatch) NOPASSWD: ` followed by that
+exact command (python path, `-m ace_playbook.compile --config` and the config path, `watch status`). It reads state only; it needs no write access.
+
 ## How to rotate the token
 
 Run `claude setup-token` again as `acewatch`, replace the one file (mode 0600; the save and the check of step 6, paste ONCE), run the

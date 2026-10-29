@@ -156,20 +156,26 @@ record untouched. Check it with
 `no health record` before the first run). After 3 failures in a row the SessionStart block adds
 one line telling you to read the reflect log (`reflect.log`) in the data dir.
 
-**Optional notes in `compile status` (`backup`, `brain drift`).** Two config keys name check scripts of your own (`~` is
+**Optional notes in `compile status` (`backup`, `brain drift`, `acewatch`).** Three config keys name check scripts of your own (`~` is
 expanded; the config loader only checks that the value is a non-blank string, so a moved or deleted script never breaks a loader):
 
 ```json
 "backup_check": "~/path/to/ace_backup.sh",
-"brain_check": "~/path/to/sync.sh"
+"brain_check": "~/path/to/sync.sh",
+"acewatch_check": "~/path/to/acewatch_check.sh"
 ```
+
+`acewatch_check` is the operator-side status line of the sandboxed watcher (`docs/watch/SANDBOX.md`, "The operator-side status line"): `/var/acewatch` is
+readable by `acewatch` only, so your own `compile status` cannot show it. `hooks/acewatch/acewatch_check.sh` is a sample (copy it out of the checkout,
+edit its three variables, add the one sudoers line it documents yourself): it prints `acewatch open N  leads N  oldest <age>  last scan <age>`
+(or `acewatch none` / `acewatch disabled`). The code takes any first line under the rules below; a failure shows `acewatch check failed`.
 
 Each night, before the sweep, `nightly_sweep.py` runs each configured script as `<script> --check` (20 s limit, only `PATH` and `HOME` in its
 environment), keeps the first line it prints (80 characters at most) and stores it in `health.json` under `notes`; `compile status` then
-shows it in its `notes:` line, for example `backup 7h`, `backup missing` or `brain drift: 0 files (1 skipped, 16 entropy)`. The line is
+shows it in its `notes:` line, for example `backup 7h`, `backup missing`, `brain drift: 0 files (1 skipped, 16 entropy)` or `acewatch open 3  leads 1  oldest 2d  last scan 4h`. The line is
 whatever your script prints, so print no path (a line with a `/` is dropped). A script that is missing or not a regular file, exits non-zero, times
 out, prints nothing or starts its
-first word with a `:`-bearing token such as `silent:x` shows `backup check failed` or `brain check failed`, with no detail. A failing note never
+first word with a `:`-bearing token such as `silent:x` shows `backup check failed`, `brain check failed` or `acewatch check failed`, with no detail. A failing note never
 fails the night. Leave both keys out and nothing changes.
 
 ## 5. Optional: git pre-commit scrub

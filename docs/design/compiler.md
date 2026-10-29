@@ -1288,6 +1288,13 @@ rejection (a fixed word -- name, symlink, size, json, shape, id, unreadable -- o
 imported record; `--dry-run` writes nothing and prints the same. The copy is never modified. The import trusts the validation, not the
 copy's origin: a record that passes `check` is as good as one a scan wrote.
 
+The operator-side status line is the config key `acewatch_check` (an optional path, `~` expanded, type-checked only like `backup_check`): the nightly
+(`nightly_notes.collect`, whose `CHECKS` is a tuple of (key, label)) runs `<path> --check` and turns the first stdout line (stripped, at most 80 characters,
+no `/`, no colon in the first word) into a health note, in the order backup, brain, acewatch; a missing script, a non-zero exit, a timeout or an
+empty line is `acewatch check failed`. The arm notes stay first (`nightly_sweep.py`). `hooks/acewatch/acewatch_check.sh` is the sample: it runs
+`sudo -n -u acewatch <python> -m ace_playbook.compile --config <config> watch status` and prints `acewatch ` plus the first `open ...`, `none` or
+`disabled` line. `status.py` is untouched; `compile status` shows the note in its `notes:` line.
+
 #### Reader (W2, as built)
 
 W2 adds the quarantined model stage, BUILT AND NOT LIVE (`watch_reader` defaults to false; the `acewatch` user and its login are the operator's steps,
