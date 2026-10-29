@@ -182,9 +182,7 @@ ln -s "$ACE_PLAYBOOK_HOME/hooks/pre-commit-scrub.sh" .git/hooks/pre-commit
 ```
 
 It runs `python -m ace_playbook.scrub check --mode pre-commit --staged` and fails closed. The
-same check runs in this repo's CI, which also runs the three Reader test files under a bare PATH
-(`env -i PATH=/usr/bin:/bin`, a scratch HOME, `LANG=C`, which Python coerces to UTF-8) with the venv's python by absolute path: the PATH and
-locale of the acewatch LaunchDaemon, not its user.
+same check runs in this repo's CI.
 
 ## 6. Uninstall
 
@@ -457,12 +455,12 @@ network, and it is never on a hook path.
    at load, nothing else; the Reader looks at the claude when it runs):
 
    ```json
-   {"watch_reader": true, "watch_reader_model": "claude-haiku-5-5", "watch_claude": "/var/acewatch/bin/claude-reader"}
+   {"watch_reader": true, "watch_reader_model": "claude-haiku-5-5", "watch_claude": "/opt/acewatch/bin/claude-reader"}
    ```
 
    `watch_reader` (default false), `watch_reader_model` (default `claude-haiku-5-5`, must look like `claude-<id>`) and `watch_claude` (default:
-   the `claude` on the PATH; `ACE_WATCH_CLAUDE` in the environment beats it). The example path is the wrapper (the 0700 token wrapper of SANDBOX
-   step 6). A missing claude is not an error: the scan prints
+   the `claude` on the PATH; `ACE_WATCH_CLAUDE` in the environment beats it). The example path is the wrapper (the root-owned token wrapper of SANDBOX
+   steps 5 and 6). A missing claude is not an error: the scan prints
    `reader: 0 read, 0 rejected, 0 leads, U unavailable` and `reader: claude is unavailable; U item(s) not read` (U is every item left unread
    when the first one could not be started) and carries on. A call that started and then failed (an error answer, a non-zero exit, a
    timeout, empty output) is not "unavailable": it adds `, F failed` to the first line, the loop goes on to the next item, and an item that
@@ -487,7 +485,9 @@ network, and it is never on a hook path.
    ended in an outage (a down run prints its outage or unavailable line instead of `N of M items read`, and no proposals line when nothing complied). The
    second-user setup that keeps
    the Reader away from your files (the `acewatch` user in a group of its own, its own claude and login, two LaunchDaemon templates in
-   `hooks/acewatch/`) is `docs/watch/SANDBOX.md`; nothing is installed for you.
+   `hooks/acewatch/`) is `docs/watch/SANDBOX.md`; nothing is installed for you. This repo's CI runs the three Reader test files under a bare PATH
+   (`env -i PATH=/usr/bin:/bin`, a scratch HOME, `LANG=C`, which Python coerces to UTF-8) with the venv's python by absolute path: the PATH and
+   locale of the acewatch LaunchDaemon, not its user.
 
 The count also reaches `status.json` (`watch_open` and friends), the `proposals` block of `compile digest` and the status line (`watch N`).
 
