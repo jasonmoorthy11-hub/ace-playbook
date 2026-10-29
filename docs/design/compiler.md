@@ -67,7 +67,7 @@ RESULTS.md:62), alongside `edit_unread_turn` and `rm_rf` (RESULTS.md:34). The ve
 | `compile/chains.py` | What the two chains share (7.3, "Keyed chains (as built)"): the `Keyring`, the signed heads file, the keyed-install marker `key_of`, `hash_ok` (the verifier rule), `head_state`, `seal`, `has_v2`, `notes`, `read_regular`; stdlib and `canon` only, on the hook path | 150 (cap 150) |
 | `compile/chains_io.py` | The re-seal of both chains under a new key with `.bak` copies and rollback, the file helpers and `need_key` for the writers; not on the hook path | 111 (cap 150) |
 | `compile/chains_cli.py` | `compile keygen` (never-keyed installs only: lists, asks, seals) and `keygen --rehead` (shows what differs from the old heads, asks y/N); not on the hook path | 126 (cap 150) |
-| `compile/seal.py` | `compile seal [--dry-run]` (section 8, "Seal (as built, not executed)"): the Frozen instruments block from live values and the TTY-only rewrite of the PREREGISTRATION.md shadow-mode heading; prints the git commands, never runs git; not on the hook path | 123 (cap 150) |
+| `compile/seal.py` | `compile seal [--dry-run]` (section 8, "Seal (as built, executed 2026-10-29)"): the Frozen instruments block from live values and the TTY-only rewrite of the PREREGISTRATION.md shadow-mode heading; prints the git commands, never runs git; not on the hook path | 123 (cap 150) |
 | `compile/modes.py` | `resolve` and the frozen `Resolution`: the one answer to "what does this proposal run at" for the hook, the ladder, the offline pass and the report (7.3, "Mode resolution"); `in_force`, `anchor`, `lifted` (an operator approvals row stamped strictly later lifts older demotions); stdlib, `approvals`, `demotions` only, on the hook path (integration wave after 5a and 5b) | 117 |
 | `compile/metrics.py` | Stdlib-only rate code behind the report: Wilson 95 % interval, nearest-rank percentile, `_session` summary rows, eligible sessions, friction, hook cost, live-versus-offline agreement (section 8); hashed into `report_sha256` together with `report.py`; never on the hook path (step 5c) | 154 |
 | `compile/synth.py` | `replay-synthetic`: the frozen invented corpus and the examples through `shadow._evaluate` with a temporary state dir into `shadow.synthetic.jsonl` only (`--out` confined by file identity); exits 1 on an `expect` disagreement; never on the hook path (step 5c) | 144 |
@@ -1342,7 +1342,7 @@ second user.
 None of the new modules is
 on the hook path (`tests/test_hook_conformance.py`).
 
-### Seal (as built, not executed)
+### Seal (as built, executed 2026-10-29)
 
 `python3 -m ace_playbook.compile seal [--dry-run]` (`compile/seal.py`) is built; the pre-registration is not sealed, and the
 section in PREREGISTRATION.md still says `(DRAFT until sealed)`. The sealing itself is the go/no-go decision, taken after the observe week.

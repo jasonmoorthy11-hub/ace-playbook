@@ -1,4 +1,4 @@
-"""`compile seal` (docs/design/compiler.md section 8, "Seal (as built, not executed)"): the Frozen instruments block, the
+"""`compile seal` (docs/design/compiler.md section 8, "Seal (as built, executed 2026-10-29)"): the Frozen instruments block, the
 dry run, and the TTY-only rewrite of the pre-registration's shadow-mode heading. Invented ids and hashes only."""
 
 import argparse
@@ -20,6 +20,14 @@ from .test_compile_keyed_heads import keyed
 
 ROOT = Path(__file__).resolve().parent.parent
 DRAFT, SEALED = "## Shadow-mode additions (DRAFT until sealed)", "## Shadow-mode additions (SEALED 2026-11-01 prereg-v1)"
+_LIVE_HEAD = re.compile(r"^## Shadow-mode additions \(SEALED [^)\n]*\)$", re.M)
+_LIVE_BLOCK = re.compile(r"^```text\ndetectors:\n.*?^sealed_at \S+\n```$", re.M | re.S)
+
+
+def unsealed(text: str) -> str:
+    """The live pre-registration as it was before `compile seal` ran (2026-10-29): the DRAFT heading and the filler line."""
+    text = _LIVE_HEAD.sub(DRAFT, text, count=1)
+    return _LIVE_BLOCK.sub("(filled by compile seal)", text, count=1)
 FAKE = {"zeta_detector": "2" * 64, "alpha_detector": "1" * 64}
 STRENGTH = {"zeta_detector": "weak", "alpha_detector": "strong"}
 SHADOW, PERMUT = "c" * 64, "d" * 64                  # private seed values (never printed); the block holds only their sha256
@@ -38,7 +46,7 @@ def world(tmp_path, monkeypatch):
     data = tmp_path / "data"
     data.mkdir()
     prereg = tmp_path / "PREREGISTRATION.md"
-    shutil.copy(ROOT / "PREREGISTRATION.md", prereg)
+    prereg.write_text(unsealed((ROOT / "PREREGISTRATION.md").read_text()))
     monkeypatch.setattr(seal, "PREREG", prereg)
     monkeypatch.setattr(seal, "now_iso", lambda: STAMP)
     monkeypatch.setattr(catalogue, "source_table", lambda: dict(FAKE))
@@ -201,7 +209,7 @@ def test_a_prereg_without_the_section_is_a_usage_error(world):
 
 
 def test_the_section_text_has_its_eight_subsections_and_the_filler_line():
-    text = (ROOT / "PREREGISTRATION.md").read_text()
+    text = unsealed((ROOT / "PREREGISTRATION.md").read_text())
     assert text.count(DRAFT) == 1 and text.index(DRAFT) < text.index("\n## Amendments\n")
     section = text[text.index(DRAFT):text.index("\n## Amendments\n")]
     heads = re.findall(r"^### (.*)$", section, re.M)
