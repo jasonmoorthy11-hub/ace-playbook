@@ -256,7 +256,8 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   a forged but valid record in the copy becomes a proposal. An imported record is evidence plus title: an imported record never carries a diff
   (a diff comes only from the operator's own scan, which supersedes the import) and its title shows ` (imported)`; a forged quote, URL or title can still
   mislead a reader of the queue. An own scan's diff always wins over a diff-less imported twin (same id: the file is replaced in place; another id: the
-  twin is closed as superseded; an expired, auto-closed or forged-key twin is replaced too). A dismissal or an accept of an imported twin is a
+  twin is closed as superseded, also when the own id is replaced; the record with a diff survives whatever the
+  `created` stamps; an expired, auto-closed or forged-key twin is replaced too). A dismissal or an accept of an imported twin is a
   decision about ITS key and is not undone: dismissing an imported twin hides the own scan's diff for that key (same model and successor) for good. A
   dismissed or accepted twin of the same id with ANOTHER key (a forged successor) is replaced by the own candidate and reopened, or waits for a free slot
   (after any queued proposal is promoted) when five are open. The accept row records the `diff_sha256` that

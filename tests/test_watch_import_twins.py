@@ -281,20 +281,108 @@ def test_an_accept_of_a_record_without_a_diff_hash_key_does_not_raise(world, cap
     assert cli.queue(cfgmod.load(), 5, lambda prompt: "1", lambda what: True) == 0
     assert [d["note"] for d in store.read_decisions(world.wd)] == ["diff_sha256 none"]
 
+# ------------------------------------------------------------------ Track M2: an import twin of the own key never hides the own diff
+OTHER = "W-" + "e" * 8
+
+
+def forge(mine, pin, how):
+    """The own id as a diff-less forged successor (another key), dismissed / accepted / left live; then the live other-id twin of the OWN key."""
+    plant(mine, pin, title=pin["title"].replace(NEW, "claude-evil-9") + " (imported)")
+    if how != "live":
+        store.append_decision(mine.wd, pin["id"], how, "wrong successor", "2026-10-28T00:00:00Z")
+
+
+def decisions(mine):
+    return store.read_decisions(mine.wd)
+
+
+def superseded_ids(mine):
+    return [d["id"] for d in decisions(mine) if d["decision"] == "closed" and d["note"] == "superseded"]
+
+
+def scan(mine, capsys):
+    mine.run(capsys, "scan", "--force")
+    return len(decisions(mine))
+
+
+def one_own_diff(mine, pin):
+    [own] = live_with_diff(mine)
+    assert own["id"] == pin["id"] and own["status"] == "open" and store.open_count(statuses(mine)) <= 5
+
 
 def test_a_held_dismissed_twin_never_closes_a_live_other_id_twin_of_the_same_key(tmp_path, monkeypatch, capsys):
     pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
-    other = "W-" + "e" * 8
-    plant(mine, pin, title=pin["title"].replace(NEW, "claude-evil-9") + " (imported)")      # the own id, another key (a forged successor)
-    store.append_decision(mine.wd, pin["id"], "dismissed", "wrong successor", "2026-10-28T00:00:00Z")
-    plant(mine, pin, id=other)                                                               # another id, the own key, no diff, live
+    forge(mine, pin, "dismissed")
+    plant(mine, pin, id=OTHER)                                                               # another id, the own key, no diff, live
     fill(mine, 4)                                                                            # the live other-id twin is the fifth open one
-    mine.run(capsys, "scan", "--force")
-    closed =[d for d in store.read_decisions(mine.wd) if d["id"] == other and d["decision"] == "closed"]
-    assert live_with_diff(mine) == [] and closed == []
-    assert dict((p["id"], s) for p, s in statuses(mine))[other] in ("open", "queued") and store.open_count(statuses(mine)) == 5
+    scan(mine, capsys)
+    assert live_with_diff(mine) == [] and superseded_ids(mine) == []
+    assert dict((p["id"], s) for p, s in statuses(mine))[OTHER] in ("open", "queued") and store.open_count(statuses(mine)) == 5
     free_slots(mine)
-    mine.run(capsys, "scan", "--force")
-    [own] = live_with_diff(mine)
-    assert own["id"] == pin["id"] and own["status"] == "open" and store.open_count(statuses(mine)) <= 5
-    assert dict((p["id"], s) for p, s in statuses(mine))[other] == "open"                    # shipped behaviour: the same-id branch wins, the twin stays
+    scan(mine, capsys)
+    one_own_diff(mine, pin)
+    assert superseded_ids(mine) == [OTHER] and dict((p["id"], s) for p, s in statuses(mine))[OTHER] != "open"
+    seen = scan(mine, capsys)                                                                # a third scan changes nothing
+    one_own_diff(mine, pin)
+    assert seen == len(decisions(mine)) and superseded_ids(mine) == [OTHER] and pin["id"] not in superseded_ids(mine)
+
+
+def test_the_slot_free_world_reopens_the_own_record_and_closes_the_other_id_twin_at_once(tmp_path, monkeypatch, capsys):
+    pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
+    forge(mine, pin, "dismissed")
+    plant(mine, pin, id=OTHER)
+    seen = scan(mine, capsys)                                                                # the cap is free
+    one_own_diff(mine, pin)
+    assert superseded_ids(mine) == [OTHER] and any(d["id"] == pin["id"] and d["decision"] == "reopened" for d in decisions(mine))
+    assert seen > 0
+    for _ in range(2):
+        assert scan(mine, capsys) == seen
+        one_own_diff(mine, pin)
+
+
+def test_a_future_created_other_id_twin_cannot_make_the_own_record_the_superseded_one(tmp_path, monkeypatch, capsys):
+    from ace_playbook.compile.watch import reconcile
+    pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
+    soon = (datetime.now(timezone.utc) + timedelta(hours=12)).strftime(FMT)                  # within vet's now + 1 day
+    forge(mine, pin, "dismissed")
+    plant(mine, pin, id=OTHER, created=soon, expires=(datetime.now(timezone.utc) + timedelta(days=20)).strftime(FMT))
+    fill(mine, 4)
+    scan(mine, capsys)
+    free_slots(mine)
+    seen = scan(mine, capsys)
+    for _ in range(2):
+        one_own_diff(mine, pin)
+        assert superseded_ids(mine) == [OTHER] and scan(mine, capsys) == seen
+    both = [(pin, "open"), (plant(mine, pin, id="W-" + "d" * 8, created=soon), "open")]      # superseded() keeps the diffed record, whatever the stamps
+    assert reconcile.superseded(both, [pin], set()) == ["W-" + "d" * 8]
+
+
+def test_a_held_accepted_other_key_twin_waits_and_the_other_id_twin_is_closed_after_the_free(tmp_path, monkeypatch, capsys):
+    pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
+    forge(mine, pin, "accepted")
+    plant(mine, pin, id=OTHER)
+    fill(mine, 4)
+    scan(mine, capsys)
+    assert live_with_diff(mine) == [] and superseded_ids(mine) == []
+    free_slots(mine)
+    seen = scan(mine, capsys)
+    one_own_diff(mine, pin)
+    assert superseded_ids(mine) == [OTHER] and scan(mine, capsys) == seen
+    one_own_diff(mine, pin)
+
+
+def test_a_live_forged_own_id_twin_is_replaced_in_place_and_the_other_id_twin_is_closed(tmp_path, monkeypatch, capsys):
+    pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
+    forge(mine, pin, "live")
+    plant(mine, pin, id=OTHER)
+    seen = scan(mine, capsys)
+    one_own_diff(mine, pin)
+    assert OTHER in superseded_ids(mine) and [p["id"] for p in model_pins_ids(mine)].count(pin["id"]) == 1
+    assert [d["decision"] for d in decisions(mine) if d["id"] == pin["id"]][-1] == "reopened"   # the forged successor: closed as another key, then replaced
+    for _ in range(2):
+        assert scan(mine, capsys) == seen
+        one_own_diff(mine, pin)
+
+
+def model_pins_ids(mine):
+    return [p for p, _ in model_pins(mine)]

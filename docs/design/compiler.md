@@ -1308,11 +1308,14 @@ An import does not hide the operator's own finding: `reconcile` gives a candidat
 diff is null (every imported record). With the same id the twin's file is replaced in place by the candidate (atomic; the id does not depend on the diff,
 a second file is
 impossible, the twin's decision rows stay; the scan's `new` count does not include it); with another id the twin is closed as `superseded` (a decision row)
-and the candidate is written. The scan reports each replacement as a line `diffed <id>` and ends its summary line with `; diffed N` (only when N > 0;
+and the candidate is written; when the own id is replaced and live, a live null-diff twin of the same key under another id is closed the same way (a
+held replacement closes nothing), and among duplicates of one key the record with a diff survives whatever the `created` stamps (an import may be dated up to a
+day ahead). The scan reports each replacement as a line `diffed <id>` and ends its summary line with `; diffed N` (only when N > 0;
 the text before is unchanged). It holds for an expired or auto-closed twin of the same id (replaced and reopened by a fresh `reopened` row; with five open
 the replacement keeps
 the twin's own dates and stays out until a slot frees after any queued proposal is promoted), for a twin of the candidate's id
-whatever its key (a forged successor in the copy's title; a dismissed or accepted one of another key is replaced and reopened, or waits for a slot),
+whatever its key (a forged successor in the copy's title; a dismissed or accepted one of another key is replaced and reopened, or waits for a slot
+after any queued proposal is promoted),
 not for a twin that was accepted or dismissed under the SAME
 key. An expired or auto-closed twin of ANOTHER id and the same key stays closed; the candidate is written beside it. `queue` writes `diff_sha256
 <hash|none>` as the note of an `accepted` row, so an

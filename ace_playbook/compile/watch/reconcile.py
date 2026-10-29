@@ -13,7 +13,9 @@ deprecations page still lists the id and now says it is not retiring. A page tha
 and never closes anything.
 A candidate WITH a diff for a live twin of the same key whose diff is null (every imported record) always wins: the same id REPLACES the
 twin's file (atomic, `fsio.write_private`; the id does not depend on the diff, so a second file is impossible, and the twin's decision rows stay;
-`diffed` lists those ids); another id closes the twin as `superseded` and is written. This holds for an expired or auto-closed twin too (it is
+`diffed` lists those ids); another id closes the twin as `superseded` and is written, and a live
+diff-less twin of that key under ANOTHER id is closed too when the candidate's own id is replaced and live (not when it is held at the cap); among
+same-key duplicates the one with a diff always survives, whatever the `created` stamps. This holds for an expired or auto-closed twin too (it is
 reopened by a fresh `reopened` row, or, with five open already, replaced with the twin's own dates so it stays out and the reopen path takes it when a slot
 frees after any queued proposal is promoted), and for a twin of the candidate's id whatever its key; a dismissed or accepted twin of the SAME
 key is a decision and is not replaced, one of another key (a forged successor) is replaced and reopened.
@@ -60,14 +62,14 @@ def vanished(p: dict, current: set, results: list[dict], inv: dict | None) -> bo
 
 def superseded(rows: list[tuple[dict, str]], cands: list[dict], skip: set) -> list[str]:
     """Ids of live model_pin proposals that a candidate for the same target and model replaces: one with another successor, and every
-    duplicate of the candidate's own key but the newest."""
+    duplicate of the candidate's own key but the one with a diff (else the newest): an import never outlives the own diff, whatever its stamps."""
     out: list[str] = []
     for c in (c for c in cands if c["class"] == "model_pin"):
         who = (c["change"]["target"], pin.model_of(c))
         group = [p for p, s in rows if s in LIVE and p["class"] == "model_pin" and p["id"] not in skip
                  and (p["change"]["target"], pin.model_of(p)) == who]
-        same = [p["id"] for p in group if key(p) == key(c)]
-        out += [p["id"] for p in group if p["id"] not in (same[-1:] or [None]) and p["id"] not in out]
+        same = sorted((p for p in group if key(p) == key(c)), key=lambda p: (p["change"]["diff"] is not None, p["created"], p["id"]))
+        out += [p["id"] for p in group if p["id"] not in ([q["id"] for q in same[-1:]] or [None]) and p["id"] not in out]
     return out
 
 
@@ -108,8 +110,13 @@ def reconcile(wd: Path, cands: list[dict], results: list[dict], now: str, dry: b
                     if back and not held:                                   # a fresh `reopened` row ends the old rows (stale, closed, dismissed)
                         store.append_decision(wd, c["id"], "reopened", renewed, now)
                         reopened.append(c["id"])
-                continue
-            continue                                                        # held and undone: waits for a free slot, closes no other-id twin
+                for p, s in ([] if held else live):                         # the own record is live: a live diff-less twin of its key under another id goes
+                    if s in LIVE and p["id"] not in (c["id"], *closed) and p["change"]["diff"] is None and key(p) == key(c):
+                        closed.append(p["id"])
+                        n_open -= s == "open" and p["class"] != "lead"
+                        if not dry:
+                            store.append_decision(wd, p["id"], "closed", "superseded", now)
+            continue                                                      # held (any case) or done: the other-id branch below never sees this candidate
         if (c["change"]["diff"] is not None and old is not None and old[0]["change"]["diff"] is None and old[1] not in ("accepted", "dismissed")
                 and old[0]["id"] != c["id"]):
             twin = old[0]                                                   # another id, the same key: closed as superseded if live, candidate written
