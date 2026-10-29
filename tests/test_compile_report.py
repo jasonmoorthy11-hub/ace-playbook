@@ -19,8 +19,8 @@ from . import compile_support as cs
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "ace_playbook" / "compile" / "report.py"
 METRICS = SOURCE.with_name("metrics.py")
-LABELS = SOURCE.with_name("labels.py")
-CODE_HASH = hashlib.sha256(b"\0".join(p.read_bytes() for p in (LABELS, METRICS, SOURCE))).hexdigest()      # labels, metrics, report: NUL-joined
+FILES = ("arms.py", "arms_stats.py", "labels.py", "labels_queue.py", "metrics.py", "report.py")
+CODE_HASH = hashlib.sha256(b"\0".join(SOURCE.with_name(n).read_bytes() for n in FILES)).hexdigest()      # name order, NUL-joined
 RM = "rm -rf /w/src"
 TODAY = "2026-10-20T12:00:00Z"
 PRIV = "Private corpus (aggregate, counts only)"
@@ -73,7 +73,7 @@ def label_rows(w, *specs: tuple[str, str]) -> None:
     cs.write_labels(w.cfg, [{"ref": ref, "label": lab} for ref, lab in specs])
 
 
-def test_with_no_data_both_sections_say_no_rows_and_the_header_hashes_the_labels_metrics_and_report_source(w, capsys):
+def test_with_no_data_both_sections_say_no_rows_and_the_header_hashes_the_arm_labels_metrics_and_report_source(w, capsys):
     code, out, err = run(w, capsys=capsys)
     assert (code, err) == (0, "") and out.count("no rows\n") == 2 and out.startswith("ace-playbook shadow report\n")
     got = re.search(r"^report_sha256: ([0-9a-f]{64})$", out, re.M).group(1)

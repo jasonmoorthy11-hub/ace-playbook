@@ -122,10 +122,11 @@ not specific to any detector.
 ### Eligibility
 
 A session is eligible for a detector if it is an interactive session (the definition of
-`step0/measure.py:79`: a human prompt or a plan start; in the `_session` row, `prompts` above 0) and
+`step0/measure.py:79`: a human prompt or a plan start; in the `_session` row, `prompts` above 0; the plan-start clause is not recorded in the summary row) and
 has at least one event that detector consumes: the detector is listed in the `eligible` field of
 the newest `_session` row of that session in `detector_events.jsonl` (the last row in file order
-wins). Its first transcript event must fall in [arm start, horizon end) for that detector.
+wins). Its first transcript event (the row's `start`; a row without one is reported as missing)
+must fall in [arm start, horizon end) for that detector.
 Automated sessions are not eligible. Revoked, kill-file and demoted gaps are kept in their assigned
 arm and reported. The scan reads `*.jsonl` transcripts and `offline.discover` skips subagent
 transcripts, non-regular files (symlinks included), names that do not match the session-id pattern,
@@ -137,8 +138,12 @@ offline scan; sessions still unscanned are counted and reported as missing, neve
 
 ### Arm assignment
 
-Each (session, proposal) pair is assigned by `coin(shadow_seed, session_id, proposal_id) <
-arm_rate`, with `arm_rate` 0.5. The seeds are private and only their sha256 is sealed, the same
+Each (session, proposal) pair is assigned by `arms.assign`: the first 4 bytes of HMAC-SHA256 under
+`shadow_seed` of `session hash|proposal id`, read as a fraction of 2**32, below `arm_rate` means the
+warn arm; `arm_rate` is 0.5. The arm start of a detector is a line `arm_start <detector> <UTC
+stamp>` added in a dated amendment before its first randomized session (the sealed block cannot
+hold it); the report says "not started" without one, and shows no effect before the analysis day.
+The seeds are private and only their sha256 is sealed, the same
 commitment as `holdout_seed` above. The shadow seed's value lives only in the private config
 file, outside anything the agent reads by default (not in the repository, the transcripts, a
 CLAUDE.md or a rules file). Limit: a Bash tool can read any file the operator can, so this keeps the
@@ -196,10 +201,10 @@ catalogue registry and the hash from `catalogue.source_table()`), `report_sha256
 approved proposal (`P-id mode proposal_sha256`, from the newest non-revoked row of
 `approvals.jsonl`), `shadow_seed_sha256`, `permutation_seed_sha256`, `arm_rate`, `measurement_start` (the greatest, over those
 proposals, of each one's newest `observe` row of `approvals.jsonl`: the restart point of the promotion ladder, so a warn promotion
-does not move it) and `sealed_at`. `report_sha256` covers exactly three files, `ace_playbook/compile/labels.py`,
-`ace_playbook/compile/metrics.py` and `ace_playbook/compile/report.py` (their bytes in name order, joined by a NUL byte); the
+does not move it) and `sealed_at`. `report_sha256` covers exactly six files in `ace_playbook/compile/`, `arms.py`, `arms_stats.py`,
+`labels.py`, `labels_queue.py`, `metrics.py` and `report.py` (their bytes in name order, joined by a NUL byte); the
 detector code is covered by the per-detector hashes, not by `report_sha256`. The arm analysis that computes the primary
-must be built and hashed here before the seal, never written after it.
+(`arms.py`, `arms_stats.py`) is built and hashed here before the seal, never written after it.
 
 (filled by compile seal)
 
@@ -224,8 +229,12 @@ these are edits of the draft, recorded here so that the reasons survive. What ch
   under a committed permutation seed, two-sided p = (1 + #{|D*| >= |D|}) / 10,001, intention to treat, Holm). `labels.py` joins the
   `report_sha256` file set (it shapes the TP/FP numbers). The arm analysis code must be built and hashed before the seal.
   `report_sha256` changed from 5c9cb343d93adbbe9519bacdad03f9fb0e4afe32c332d489f390c4e64404ed24 (metrics.py + report.py) to
-  399061fa96eafd4ec0c7cfe628878ba974dd7249a9782c2886e1850ffe908c89 (labels.py + metrics.py + report.py). The value that counts is the
-  one `compile seal --dry-run` prints on the day of the seal.
+  88a7fc26f87fe2ce3786ef480d13252eed91136d1450421cdb3532a16463525c (the six files named in "Frozen instruments": `labels.py` and the new
+  `labels_queue.py`, `arms.py`, `arms_stats.py` joined `metrics.py` and `report.py`; an intermediate value of
+  399061fa96eafd4ec0c7cfe628878ba974dd7249a9782c2886e1850ffe908c89 covered `labels.py` + `metrics.py` + `report.py` only). The value that
+  counts is the one `compile seal --dry-run` prints on the day of the seal. The arm analysis is built: `python3 -m ace_playbook.compile.arms
+  report` (`assign`, `eligible_sessions`, `primary`, `permutation_test`, `holm`), the `_session` summary row records the session `start`,
+  and the label queue hides mode and arm during a phase.
 - B4: prereg-v1 seals only "Shadow-mode additions"; the injection RER experiment stays a draft and `holdout_enabled` stays false
   during any shadow arm phase (line 7 of this file). The 16-versus-24-week to-do of the injection experiment is dropped: the 24-week
   look is the final one, with the verified boundaries z 3.471, 2.454 and 2.004.

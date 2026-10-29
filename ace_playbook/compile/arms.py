@@ -1,0 +1,191 @@
+"""The arm analysis of the pre-registration (PREREGISTRATION.md, Shadow-mode additions): `python -m ace_playbook.compile.arms report [--json]`.
+
+Stdlib and sibling modules only, never on the hook path. It computes, per detector, the one primary: repeat fires per eligible session
+(fires beyond the first, `agent_id_present` false rows only), D = mean(warn arm) - mean(observe arm), a permutation test with 10,000
+Bernoulli(arm_rate) re-draws under the committed permutation seed (two-sided p = (1 + #{|D*| >= |D|}) / 10,001, intention to treat by
+assigned arm), a percentile-pivot interval for D, and Holm across detectors. Both seeds are read from the config at call time; only
+their sha256 is compared with the sealed block and nothing prints a seed. One approved proposal per detector is assumed; with more,
+each proposal is its own hypothesis in the Holm family (conservative).
+
+Arm start: a line `arm_start <detector> <UTC stamp>` in PREREGISTRATION.md (the sealed block cannot hold it, so it is a dated
+amendment made before the first randomized session). Without one the report says `not started`. Before the analysis day (the horizon
+end plus 7 days) only counts are shown, never an effect: there are no interim looks.
+Interactive means at least one human prompt (`prompts` > 0 in the `_session` row); the plan-start clause of step0/measure.py:79 is not
+recorded there. The session start is the `_session` row's `start`; a row without one (scanned before it existed) is reported as missing.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import hmac
+import json
+import re
+import sys
+from datetime import datetime, timedelta, timezone
+from typing import Callable
+
+from .. import config as cfgmod
+from ..canon import now_iso
+from . import labels, metrics, report, seal
+from .arms_stats import ALPHA, RUNS, holm, permutation_test  # noqa: F401  (the public names of the analysis)
+
+WARN, OBSERVE = "warn", "observe"
+WEEKS, CAP, LAG_DAYS = 12, 400, 7
+FMT = "%Y-%m-%dT%H:%M:%SZ"
+START = re.compile(r"^arm_start (\S+) (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)$", re.M)
+
+
+def _dt(ts: object) -> datetime | None:
+    try:
+        return datetime.strptime(ts, FMT).replace(tzinfo=timezone.utc) if isinstance(ts, str) else None
+    except ValueError:
+        return None
+
+
+def _fmt(t: datetime) -> str:
+    return t.strftime(FMT)
+
+
+def arm_starts(text: str | None = None) -> dict[str, str]:
+    """{detector: arm start stamp} from the `arm_start <detector> <stamp>` lines of the pre-registration (the first line of a detector wins)."""
+    text = seal.PREREG.read_text(encoding="utf-8") if text is None and seal.PREREG.exists() else text or ""
+    out: dict[str, str] = {}
+    for det, ts in START.findall(text):
+        out.setdefault(det, ts)
+    return out
+
+
+def assign(session_hash: str, shadow_seed: str, arm_rate: float, proposal_id: str = "") -> str:
+    """`warn` (the check runs in its approved mode) with probability `arm_rate`, else `observe`: HMAC-SHA256 of the session hash (and the
+    proposal id) under the seed, its first 4 bytes as a fraction of 2**32. Deterministic; the seed is never logged."""
+    mac = hmac.new(shadow_seed.encode(), f"{session_hash}|{proposal_id}".encode(), hashlib.sha256).digest()
+    return WARN if int.from_bytes(mac[:4], "big") / 2**32 < arm_rate else OBSERVE
+
+
+def horizon_end(arm_start: str, starts: list[str]) -> str:
+    """The end of the half-open window: 12 calendar weeks after the arm start, or one second after the start of the 400th eligible session
+    when that comes first. `starts` are the first-event stamps of the interactive sessions the detector consumes."""
+    t0 = _dt(arm_start)
+    end = t0 + timedelta(weeks=WEEKS)
+    inside = sorted(t for t in map(_dt, starts) if t is not None and t0 <= t < end)
+    return _fmt(inside[CAP - 1] + timedelta(seconds=1) if len(inside) >= CAP else end)
+
+
+def _interactive(row: dict, detector: str) -> bool:
+    p = row.get("prompts")
+    return detector in row.get("eligible", []) and isinstance(p, int) and not isinstance(p, bool) and p > 0
+
+
+def eligible_sessions(ev_rows: list[dict], arm_start: str, end: str | None, detector: str) -> tuple[dict[str, dict], str, int]:
+    """(eligible sessions {hash: newest `_session` row}, the horizon end, sessions missing a start). Eligible: an interactive session
+    (`prompts` > 0) that the detector consumes and whose first event falls in [arm start, horizon end); `end` None derives the horizon."""
+    mine = {s: r for s, r in metrics.latest_sessions(ev_rows).items() if _interactive(r, detector)}
+    timed = {s: r for s, r in mine.items() if _dt(r.get("start"))}
+    end = end or horizon_end(arm_start, [r["start"] for r in timed.values()])
+    t0, t1 = _dt(arm_start), _dt(end)
+    return {s: r for s, r in timed.items() if t0 <= _dt(r["start"]) < t1}, end, len(mine) - len(timed)
+
+
+def primary(rows: list[dict], arm_of: Callable[[str], str], eligible: dict[str, dict]) -> dict:
+    """The primary of one proposal over its eligible sessions. `rows` are its shadow rows, `arm_of(session)` the assigned arm. A session's
+    value is max(0, fires - 1) over rows with `agent_id_present` false; subagent rows (true) and rows without the field are counted apart."""
+    fires: dict[str, int] = {s: 0 for s in eligible}
+    sub, unknown = {WARN: 0, OBSERVE: 0}, 0
+    for r in rows:
+        s = r.get("session")
+        if s not in eligible or not metrics._fire(r) or r.get("cause") == "truncated" or not metrics._scanned(r, eligible):
+            continue
+        flag = r.get("agent_id_present")
+        if flag is False:
+            fires[s] += 1
+        elif flag is True:
+            sub[arm_of(s)] += 1
+        else:
+            unknown += 1
+    order = sorted(eligible)
+    arms, values = {s: arm_of(s) for s in order}, {s: max(0, fires[s] - 1) for s in order}
+    n = {a: sum(arms[s] == a for s in order) for a in (WARN, OBSERVE)}
+    mean = {a: (sum(values[s] for s in order if arms[s] == a) / n[a] if n[a] else None) for a in n}
+    d = None if None in mean.values() else mean[WARN] - mean[OBSERVE]
+    with_fire = {a: sum(fires[s] > 0 for s in order if arms[s] == a) for a in n}
+    return {"sessions": order, "values": [values[s] for s in order], "warn": [arms[s] == WARN for s in order], "n": n, "mean": mean, "D": d,
+            "rate_ratio": metrics.ratio(mean[WARN], mean[OBSERVE], digits=4) if d is not None else metrics.DASH,
+            "sessions_with_fire": {a: {"k": with_fire[a], "n": n[a], "wilson95": metrics.wilson(with_fire[a], n[a])} for a in n},
+            "subagent_fires": sub, "fires_without_agent_flag": unknown}
+
+
+def _sealed(cfg, text: str) -> str | None:
+    """Why the config's seeds do not match the sealed block, or None. Only sha256 values are compared."""
+    for key, line in (("shadow_seed", seal.SEED), ("permutation_seed", seal.PERM)):
+        value = getattr(cfg, key)
+        if value is None or f"\n{line} {seal._sha(value)}\n" not in "\n" + text:
+            return f"{key} is unset or does not match {line} in the pre-registration"
+    return None if cfg.arm_rate is not None else "arm_rate is unset"
+
+
+def analyse(cfg, now: str | None = None) -> dict:
+    """{"status": "not started"} or {"detectors": {name: {...}}, "holm": {...}}: the whole report, in plain data."""
+    text = seal.PREREG.read_text(encoding="utf-8") if seal.PREREG.exists() else ""
+    starts = arm_starts(text)
+    if not starts:
+        return {"status": "not started"}
+    if why := _sealed(cfg, text):
+        raise labels.Refusal(why)
+    now = now or now_iso()
+    rows, _ = report.read_corpora(cfg)
+    ev_rows, out = report._read(cfg.path(report.EVENTS)), {}
+    scanned = metrics.latest_sessions(ev_rows)
+    for det, t0 in sorted(starts.items()):
+        pids = sorted({r["proposal_id"] for r in rows if report._meta(cfg, r["proposal_id"])[0] == det})
+        for pid in pids:
+            sess, end, missing = eligible_sessions(ev_rows, t0, None, det)
+            arm_of = lambda s, pid=pid: assign(s, cfg.shadow_seed, cfg.arm_rate, pid)       # noqa: E731
+            stat = primary([r for r in rows if r["proposal_id"] == pid], arm_of, sess)
+            due = _fmt(_dt(end) + timedelta(days=LAG_DAYS))
+            final = now >= due
+            waiting = sum(r["proposal_id"] == pid and metrics._fire(r) and not metrics._scanned(r, scanned) for r in rows)
+            row = {"detector": det, "arm_start": t0, "horizon_end": end, "analysis_due": due, "final": final, "eligible": len(sess),
+                   "missing_start": missing, "fires_awaiting_scan": waiting}
+            if final:
+                row |= {k: stat[k] for k in ("n", "mean", "rate_ratio", "sessions_with_fire", "subagent_fires", "fires_without_agent_flag")}
+                row["test"] = permutation_test(stat, cfg.arm_rate, cfg.permutation_seed)
+            out[pid] = row
+    done = [k for k, v in out.items() if v["final"]]
+    adj = holm([out[k]["test"]["p"] for k in done])
+    return {"detectors": out, "holm": {k: {"adjusted_p": a, "reject": r} for k, (a, r) in zip(done, adj)}}
+
+
+def render(d: dict) -> str:
+    if d.get("status"):
+        return d["status"] + "\n"
+    lines = ["ace-playbook arm analysis (preregistered; intention to treat; Holm across detectors)"]
+    for pid, v in d["detectors"].items():
+        head = f"{pid} {v['detector']}: eligible {v['eligible']}, missing start {v['missing_start']}, awaiting scan {v['fires_awaiting_scan']}"
+        lines.append(f"{head}; arm start {v['arm_start']}, horizon end {v['horizon_end']}, analysis due {v['analysis_due']}")
+        if v["final"]:
+            t, h = v["test"], d["holm"][pid]
+            lines.append(f"  n {v['n']}  mean {v['mean']}  D {t['D']}  p {t['p']}  ci95 {t['ci95']}")
+            lines.append(f"  holm-adjusted p {h['adjusted_p']}  reject {h['reject']}  (family alpha {ALPHA}, two-sided)")
+        else:
+            lines.append("  no effect is shown before the analysis day (no interim looks)")
+    return "\n".join(lines) + "\n"
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(prog="python -m ace_playbook.compile.arms")
+    ap.add_argument("--config")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("report").add_argument("--json", action="store_true")
+    args = ap.parse_args(argv)
+    try:
+        d = analyse(cfgmod.load(args.config))
+    except labels.Refusal as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return exc.code
+    print(json.dumps(d, indent=1, sort_keys=True) if args.json else render(d), end="")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

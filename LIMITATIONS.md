@@ -51,7 +51,7 @@ repository.
 ## Not built yet
 
 The curator and refiner, the replay and task-suite evaluation harness, the judge, and the
-state-versus-lesson classifier. In the stage-2 compiler: the arms (randomization of the check per session), the evaluation of an effect (randomization inference, the spillover flag), the review packet (`packet`) and the review record (`review-record`). The seal command exists (`compile seal`, with `--dry-run`); the pre-registration is not sealed until the go/no-go, and the seal refuses until the `shadow_seed`, `permutation_seed` and `arm_rate` config fields are set and the text states the session-based entry gate and the horizon; the arm analysis itself (`compile.arms`) is still to be built and hashed before the seal. `PREREGISTRATION.md` describes the rest as plans only.
+state-versus-lesson classifier. In the stage-2 compiler: the arms (randomization of the check per session), the evaluation of an effect (randomization inference, the spillover flag), the review packet (`packet`) and the review record (`review-record`). The seal command exists (`compile seal`, with `--dry-run`); the pre-registration is not sealed until the go/no-go, and the seal refuses until the `shadow_seed`, `permutation_seed` and `arm_rate` config fields are set and the text states the session-based entry gate and the horizon; the arm analysis (`python3 -m ace_playbook.compile.arms report`) is built and hashed in `report_sha256`, with the live `agent_id_present` field, the symmetric auto-FP rule and the spillover flag still open (design section 8, Arms). `PREREGISTRATION.md` describes the rest as plans only.
 
 ## Compiler (stage 2)
 

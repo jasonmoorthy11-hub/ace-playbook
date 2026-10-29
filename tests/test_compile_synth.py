@@ -275,7 +275,7 @@ def syn_row_of(w):
             "corpus": "synthetic"}
 
 
-def test_the_report_header_hash_covers_labels_metrics_and_report_and_changes_with_any(tmp_path, monkeypatch):
+def test_the_report_header_hash_covers_the_arm_labels_metrics_and_report_files_and_changes_with_any(tmp_path, monkeypatch):
     c, a, b = tmp_path / "labels.py", tmp_path / "metrics.py", tmp_path / "report.py"
     c.write_text("c = 1\n")
     a.write_text("a = 1\n")
@@ -291,7 +291,8 @@ def test_the_report_header_hash_covers_labels_metrics_and_report_and_changes_wit
         assert report.source_sha256() == base
     real = report.HASHED
     monkeypatch.undo()
-    assert [p.name for p in report.HASHED] == ["labels.py", "metrics.py", "report.py"] and real != report.HASHED
+    assert [p.name for p in report.HASHED] == ["arms.py", "arms_stats.py", "labels.py", "labels_queue.py", "metrics.py", "report.py"]
+    assert real != report.HASHED
 
 
 def test_the_cost_block_states_its_limits_per_corpus(w, capsys, monkeypatch):

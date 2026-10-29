@@ -2,9 +2,10 @@
 
 `pending` lists the fired rows of the private corpus that no label covers, oldest first, one per `labels.row_id`; an item
 carries ids, hashes and the proposal's aggregate tally, never an existing label, a note, a command or any text (payloads are
-hashes only). `run` shows one card per item at a terminal and appends the human `tp` or `fp` row the operator picks; an
-`fp` needs a scrubbed note. Not on the hook path: `shadow.py`, `catalogue.py`, `detectors.py` and `events.py` never import it.
-Imports: stdlib, `..canon`, `..config`, `.labels`, `.report`, `.status`; `proposal` and `shadow` load lazily.
+hashes only); during a randomized arm phase its mode is `hidden` (`labels_queue`, which also draws the card). `run` shows one card per
+item at a terminal and appends the human `tp` or `fp` row the operator picks; an `fp` needs a scrubbed note.
+Not on the hook path: `shadow.py`, `catalogue.py`, `detectors.py` and `events.py` never import it.
+Imports: stdlib, `..canon`, `..config`, `.labels`, `.labels_queue`, `.report`, `.status`; `proposal` and `shadow` load lazily.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from typing import Callable
 
 from ..canon import now_iso
 from ..config import Config
-from . import labels, report, status
+from . import labels, labels_queue, report, status
 
 NEEDED, TRIES = 5, 3                                        # true positives a promotion needs; key attempts per row
 KEYS = {"1": "tp", "2": "fp", "3": "skip", "q": "quit"}
@@ -68,20 +69,10 @@ def pending(cfg: Config, limit: int = 50, now: str | None = None, include_retire
         if not include_retired and status.retired({"mode": mode, "approved_mode": approved, "revoked": status.is_revoked(chains[0], pid)}):
             continue
         items.append({"id": rid, "ts": r["ts"], "age": age(r["ts"], now), "proposal_id": pid, "detector": det, "hash8": h8,
-                      "mode": mode, "event": r["event"] if isinstance(r.get("event"), str) else ev,
+                      "mode": labels_queue.mode_shown(mode, now), "event": r["event"] if isinstance(r.get("event"), str) else ev,
                       "cause": r["cause"] if isinstance(r.get("cause"), str) else "-", "session8": r["session"][:8],
                       "payload_sha256": r["payload_sha256"], "tally": dict(tally[pid]), "chain_ok": broken is None})
     return items[:limit]
-
-
-def _card(item: dict, number: int, total: int) -> None:
-    c, t = labels._clean, item["tally"]
-    print(f"\n[{number}/{total}] id {c(item['id'])}  {c(item['detector'])}@{c(item['hash8'])}  mode {c(item['mode'])}  age {c(item['age'])}\n"
-          f"  why:        detector {c(item['detector'])} fired (cause {c(item['cause'])}); payloads are hashes only, no command text\n"
-          f"  context:    session {c(item['session8'])}  ts {c(item['ts'])}  proposal {c(item['proposal_id'])}  event {c(item['event'])}\n"
-          f"  label:      {CONTROL}\n"
-          f"  tally:      n {t['n']}  tp {t['tp']}  fp {t['fp']}  needed {t['needed']} more to reach {NEEDED} TPs\n"
-          f"  provenance: chain {'ok' if item['chain_ok'] else 'BROKEN'}  rubric = design §7.3")
 
 
 def _key(ask: Callable[[str], str]) -> str:
@@ -121,7 +112,7 @@ def run(cfg: Config, limit: int, ask: Callable[[str], str], need_tty: Callable[[
             return 0
         done = {"tp": 0, "fp": 0, "skip": 0}
         for n, item in enumerate(items, 1):
-            _card(item, n, len(items))
+            labels_queue.card(item, n, len(items), CONTROL, NEEDED)
             try:
                 key = _key(ask)
                 note, ok = _note(cfg, ask, key == "fp") if key in ("tp", "fp") else (None, False)

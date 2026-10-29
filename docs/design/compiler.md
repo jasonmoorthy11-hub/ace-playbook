@@ -1349,7 +1349,7 @@ section in PREREGISTRATION.md still says `(DRAFT until sealed)`. The sealing its
 
 - `--dry-run` needs no terminal, asks nothing and writes nothing. It prints the Frozen instruments block with live values:
   `detectors:` (one `name strength sha256` line per `catalogue.source_table()` entry, sorted; the strength is `Detector.strength` of
-  the registry), `report_sha256` (the bytes of `compile/labels.py`, `compile/metrics.py` and `compile/report.py` in name order, joined by a NUL: exactly those three files, since 2026-10-29;
+  the registry), `report_sha256` (the bytes of `compile/arms.py`, `arms_stats.py`, `labels.py`, `labels_queue.py`, `metrics.py` and `report.py` in name order, joined by a NUL: exactly those six files, since 2026-10-29;
   the detector code is covered by the per-detector hashes), `proposals:` (the newest `approvals.jsonl` row of each proposal id that is
   not revoked, as `id mode proposal_sha256`, sorted; `(none)` when there are none, or a notice line when the chain is unreadable or
   broken, still exit 0), `shadow_seed_sha256`, `permutation_seed_sha256`, `arm_rate`, `measurement_start` (`measure.start_of`, the same value as `status`'s
@@ -1370,6 +1370,21 @@ section in PREREGISTRATION.md still says `(DRAFT until sealed)`. The sealing its
 - Config (since 2026-10-29): `shadow_seed` and `permutation_seed` (each 64 lowercase hex, `repr` hidden, the value never printed, logged or
   written; only `sha256(seed)` appears in the block) and `arm_rate` (a number strictly between 0 and 1); all three default to unset, and the
   real seal refuses (exit 1, naming the unset keys) before it asks anything. A bad value is a config error that names the key and never the value.
+
+### Arms (as built 2026-10-29)
+
+`python3 -m ace_playbook.compile.arms report [--json]` (`compile/arms.py`, `arms_stats.py`; not in `__main__.py`, not on the hook path) is the
+preregistered analysis of the shadow arm phase. It prints `not started` until PREREGISTRATION.md holds a line `arm_start <detector> <UTC stamp>`
+(a dated amendment: the sealed block cannot hold it). Per detector it computes the eligible sessions (interactive: `prompts` > 0 in the newest
+`_session` row; `start`, the first transcript event, in [arm start, horizon end); the horizon is 12 weeks or the 400th eligible session), the
+arm of each session (`assign`: HMAC-SHA256 of `session hash|proposal id` under `shadow_seed`, first 4 bytes below `arm_rate` is the warn arm), the
+primary (`primary`: repeat fires per eligible session over rows with `agent_id_present` false; subagent rows and rows without the field are
+counted apart), D, and `permutation_test` (10,000 Bernoulli(`arm_rate`) re-draws from `random.Random(permutation_seed)`, p = (1 + hits) / 10,001, a
+draw that empties an arm counts as extreme, interval = D minus the 97.5th and 2.5th percentiles of D*), then `holm`. It refuses when a seed in the
+config does not hash to the sealed line, shows counts only before the analysis day (horizon end + 7 days) and never prints a seed. The `_session`
+row gained `start` (rows written before it have none and are reported as missing). `labels_queue.py` (split out of `labels.py` and `queue.py`) hides
+the resolved mode in `label --rows` and the queue card while any detector's phase runs. Still open: the live shadow rows do not yet record
+`agent_id_present` (the row schema above specifies it), the offline auto-FP rule (a) is still asymmetric, and the spillover flag is not computed.
 
 ### 8.x Brief (as built)
 

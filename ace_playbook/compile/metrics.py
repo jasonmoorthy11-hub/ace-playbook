@@ -57,7 +57,8 @@ def event_tags(event) -> set[str]:
 
 
 def session_row(events: list, session: str, ts: str, consumes: dict[str, tuple], stamp: str = "") -> dict:
-    """The offline pass's per-session summary row: tool calls, human prompts, detectors with a consumed event. The id covers the
+    """The offline pass's per-session summary row: tool calls, human prompts, detectors with a consumed event, `start` (the first event's
+    stamp, which the arm analysis windows on; `ts` is the last event's). The id covers the
     values and `stamp` (the transcript's size and mtime), so an unchanged scan is not written again and every changed transcript adds
     a new row, even one that returns to an older state (the newest wins)."""
     calls = sum(len(e.tool_uses) for e in events)
@@ -65,8 +66,9 @@ def session_row(events: list, session: str, ts: str, consumes: dict[str, tuple],
     seen = set().union(set(), *(event_tags(e) for e in events))
     names = sorted(n for n, tags in consumes.items() if seen & set(tags))
     rid = hashlib.sha256(f"{session}|{SESSION}|{calls}|{prompts}|{','.join(names)}|{ts}|{stamp}".encode()).hexdigest()[:16]
+    start = next((e.ts for e in events if getattr(e, "ts", "")), "")                  # the first transcript event: when the session began
     return {"ts": ts, "v": 1, "id": rid, "session": session, "detector": SESSION, "tier": "offline", "count": calls,
-            "prompts": prompts, "eligible": names}
+            "prompts": prompts, "eligible": names, "start": start}
 
 
 def latest_sessions(ev_rows: list[dict]) -> dict[str, dict]:
