@@ -718,3 +718,27 @@ def test_a_revocation_after_the_arm_start_with_the_approved_copy_unlinked_change
     revoke(w, w.pid)
     (w.data / "proposals" / "approved" / (w.pid + ".json")).unlink()      # what `unapprove` does
     assert arms.analyse(w.cfg, now="2027-02-01T00:00:00Z") == before
+
+
+# ------------------------------------------------------------------ round 6: an evasion_pair flag lowers nothing, so it ends nothing
+EVASION = {**DEMOTION, "to_mode": "warn", "cause": "evasion_pair", "ref": "4567cdef", "review_required": True}
+
+
+def test_an_evasion_pair_row_does_not_end_the_horizon(w, prereg):
+    world(w)
+    demotions.append(w.data, {"proposal_id": w.pid, **EVASION, "ts": "2026-11-05T00:00:00Z"})         # from warn to warn: nothing lowered
+    v = next(iter(arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")["detectors"].values()))
+    assert v["demoted_at"] is None and v["eligible"] == 20 and v["horizon_end"] == "2027-01-24T00:00:00Z"
+    demotions.append(w.data, {"proposal_id": w.pid, **DEMOTION, "cause": "error_rate", "ts": "2026-11-10T00:00:00Z"})
+    v = next(iter(arms.analyse(w.cfg, now="2026-11-18T00:00:00Z")["detectors"].values()))
+    assert v["demoted_at"] == "2026-11-10T00:00:00Z" and v["demotion_cause"] == "error_rate" and v["eligible"] == 9
+
+
+def test_an_evasion_pair_row_before_the_arm_start_does_not_refuse_the_family(w, prereg):
+    world(w)
+    demotions.append(w.data, {"proposal_id": w.pid, **EVASION, "ts": "2026-10-31T12:00:00Z"})         # after the approval, before t0
+    v = next(iter(arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")["detectors"].values()))
+    assert v["demoted_at"] is None and v["eligible"] == 20
+    demotions.append(w.data, {"proposal_id": w.pid, **DEMOTION, "ts": "2026-10-31T13:00:00Z"})        # a lowering row: refused as before
+    with pytest.raises(ValueError, match=f"proposal {w.pid} is approved at warn / has 1 demotion\\(s\\) in force"):
+        arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")

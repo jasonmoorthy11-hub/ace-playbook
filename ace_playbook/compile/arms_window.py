@@ -4,13 +4,13 @@ sibling modules only, never on the hook path.
 Arm start: a line `arm_start <detector> <UTC stamp> approvals=<64 hex>` under the top-level `## Amendments` heading of PREREGISTRATION.md,
 read nowhere else (the first line of a detector wins), and refused when the stamp is earlier than the `sealed_at` of the frozen block or the
 line lacks a valid head. The head is the `hash` of the last row of the verified approvals chain at the start. The horizon ends at the
-earliest of 12 weeks after the arm start, the 400th eligible session and the first demotion row of the detector's proposals at or after the
-arm start, whatever its cause (read from demotions.jsonl; the report prints the cause).
+earliest of 12 weeks after the arm start, the 400th eligible session and the first lowering demotion row of the detector's proposals at or
+after the arm start, whatever its cause (read from demotions.jsonl; the report prints the cause; an `evasion_pair` flag lowers nothing).
 
 The Holm family is fixed at the arm start (`family`, intention to treat): a proposal of a started detector belongs when its newest approvals
-row stamped at or before the arm start is not `revoked`, and every member must be approved at `warn` or `block` with no demotion row in
-force at that start. A row stamped later (a revocation, a re-approval, a mode change) changes nothing, and neither does a row appended after the head row (even
-one stamped before the start): the family is read from the chain prefix that ends at the head row.
+row stamped at or before the arm start is not `revoked`, and every member must be approved at `warn` or `block` with no lowering demotion
+row in force at that start. A row stamped later (a revocation, a re-approval, a mode change) changes nothing, and neither does a row
+appended after the head row (even one stamped before the start): the family is read from the chain prefix that ends at the head row.
 """
 
 from __future__ import annotations
@@ -87,10 +87,15 @@ def _rows(cfg, mod, name: str) -> list[dict]:
     return rows
 
 
+def lowering(row: dict) -> bool:
+    """True for a demotion row that lowers the mode. An `evasion_pair` flag keeps the mode (from == to): it is not a demotion here."""
+    return row["to_mode"] != row["from_mode"]
+
+
 def first_demotion(cfg, pids: list[str], arm_start: str) -> tuple[str, str] | tuple[None, None]:
-    """(stamp, cause) of the first demotion row of any of `pids` at or after the arm start, whatever its cause, else (None, None). A broken
-    or unsafe chain is a ValueError."""
-    rows = _rows(cfg, demotions, "demotions")
+    """(stamp, cause) of the first lowering demotion row of any of `pids` at or after the arm start, whatever its cause, else (None, None).
+    A broken or unsafe chain is a ValueError."""
+    rows = [r for r in _rows(cfg, demotions, "demotions") if lowering(r)]
     return min(((r["ts"], r["cause"]) for r in rows if r["proposal_id"] in pids and r["ts"] >= arm_start), default=(None, None))
 
 
@@ -112,7 +117,7 @@ def family(cfg, starts: dict[str, str], heads: dict[str, str]) -> dict[str, list
                 continue
             if det == "-":
                 raise ValueError(f"approved proposal {pid} has no readable proposal file (the family cannot be built)")
-            n = len(modes.in_force([r for r in drows if r["ts"] < t0], pid, prefix, t0))
+            n = len(modes.in_force([r for r in drows if lowering(r) and r["ts"] < t0], pid, prefix, t0))
             if row["mode"] not in ("warn", "block") or n:
                 raise ValueError(f"arm_start {det}: proposal {pid} is approved at {row['mode']} / has {n} demotion(s) in force at the arm "
                                  "start (warn or block with none in force required)")

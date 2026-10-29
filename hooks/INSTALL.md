@@ -397,7 +397,8 @@ it needs `shadow_seed`, `permutation_seed` and `arm_rate` in the config, whose
 seeds must hash to the sealed lines, and never prints a seed. The Holm family is fixed at each `arm_start` (intention to treat): the
 proposals of the detector whose newest `approvals.jsonl` row stamped at or before it is not `revoked`, each approved at `warn` or
 `block` with no demotion in force; later rows change nothing, and only the chain prefix ending at the head row is read (a row
-appended after it, even one stamped earlier, is ignored; a missing, malformed or unknown head is refused).
+appended after it, even one stamped earlier, is ignored; a missing, malformed or unknown head is refused). Run `arms report` right after
+adding the line; the first line of a detector wins, so a corrected second line does not replace a malformed first one.
 The report refuses (exit 1) when a started detector has no such proposal,
 when a member is approved at `observe` or has a demotion in force, or when an approved proposal has no readable proposal file.
 

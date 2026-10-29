@@ -1387,8 +1387,8 @@ verified approvals chain at that moment)
 `arms_window.py` holds the window code). Per detector
 it computes the eligible sessions (interactive: `prompts` > 0 in the newest
 `_session` row; `start`, the first transcript event, in [arm start, horizon end); the horizon is the earliest of 12 weeks,
-the 400th eligible session and the first demotion row of the detector's proposals at or after the arm start, whatever its
-cause, read from `demotions.jsonl`; the report prints the cause), the
+the 400th eligible session and the first lowering demotion row of the detector's proposals at or after the arm start, whatever its
+cause, read from `demotions.jsonl`; the report prints the cause; an `evasion_pair` row keeps the mode and is not a demotion here), the
 arm of each session (`assign`: HMAC-SHA256 of `session hash|proposal id` under `shadow_seed`, first 4 bytes below `arm_rate` is the warn arm), the
 primary (`primary`: repeat fires per eligible session over rows with `agent_id_present` false; subagent rows are counted
 apart), D, and `permutation_test` (10,000 Bernoulli(`arm_rate`) re-draws from `random.Random(permutation_seed)`, p = (1 +
@@ -1397,7 +1397,7 @@ draw that empties an arm counts as extreme, interval = D minus the 97.5th and 2.
 every detector with an `arm_start` (no adjusted p and no rejection is printed until all are final:
 `pending: N detectors not final`). The family is fixed at the arm start (intention to treat): a proposal of a started detector belongs when its newest
 `approvals.jsonl` row stamped at or before the arm start is not `revoked`, and it must then be approved at `warn` or `block` with no
-demotion row in force at that start; rows stamped later (a revocation, a re-approval) change nothing, and the rows read are the chain prefix ending at
+lowering demotion row in force at that start; rows stamped later (a revocation, a re-approval) change nothing, and the rows read are the chain prefix ending at
 the head row, so a row
 appended after it, even one stamped before the arm start, is ignored. Each member is its own
 hypothesis (conservative); a started detector whose proposal has no fires, or no eligible session in an arm, enters at D

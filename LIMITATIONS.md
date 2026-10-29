@@ -59,8 +59,11 @@ states the session-based entry gate and the horizon; the arm analysis (`python3 
 built and hashed in `report_sha256`, with the hook's `arm` and `agent_id_present` fields (without which `arms report`
 refuses), the symmetric auto-FP rule and the spillover comparison still open (design section 8, Arms). The arm analysis refuses as a whole when any approved
 proposal's file is missing, even one of a
-detector that has not started (it fails closed; `unapprove` keeps the file, so it can be restored). `PREREGISTRATION.md`
-describes the rest as plans only.
+detector that has not started (it fails closed; `unapprove` keeps the file, so it can be restored). The arm analysis reads the whole demotions chain,
+not only the part before the `approvals=` head: a demotion stamped before the arm start but appended after the head refuses the family (it fails
+closed; only an API call with an explicit `now` can write one, `compile offline` stamps at append time). A malformed first `arm_start` line of a
+detector is never replaced by a corrected second one (the first line wins), so the analysis refuses for good; run `arms report` right after adding the
+line. `PREREGISTRATION.md` describes the rest as plans only.
 
 ## Compiler (stage 2)
 

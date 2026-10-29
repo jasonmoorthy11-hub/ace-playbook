@@ -156,16 +156,17 @@ file, outside anything the agent reads by default (not in the repository, the tr
 CLAUDE.md or a rules file). Limit: a Bash tool can read any file the operator can, so this keeps the
 arm out of default view and does not make it unreadable; the seal records only the sha256.
 
-Labelling is symmetric in the randomized phase: a user correction within 2 prompts of any fire,
-in either arm, is a neutral flag, not an automatic false positive, and the label queue hides the
-mode and the arm of every row. Any demotions.jsonl row of the detector's proposals at or after the
-arm start ends the horizon, whatever its cause; the report prints the cause. Only a `label_fp` or
-`label_fp_pair` row driven by human labels is the harm event; harm = 1 human-labelled FP block, or 2
-FP warns within 30 days. The analysis is intention to treat by assigned arm, so sessions run in
-a revoked or kill-file gap stay in their assigned arm, and sessions that start after a demotion are
-not eligible. The true-positive and false-positive rules of design section 7.3 and the promotion and demotion ladder
-are frozen by reference to the section numbers of the design document and to the report code hash
-(`report_sha256`) in the block below. holdout_enabled stays false during any shadow arm phase.
+Labelling is symmetric in the randomized phase: a user correction within 2 prompts of any fire, in either
+arm, is a neutral flag, not an automatic false positive, and the label queue hides the mode and the arm
+of every row. Any lowering demotions.jsonl row of the detector's proposals at or after the arm start ends
+the horizon, whatever its cause (an `evasion_pair` flag lowers nothing and does not end the horizon); the
+report prints the cause. Only a `label_fp` or `label_fp_pair` row driven by human labels is the harm
+event; harm = 1 human-labelled FP block, or 2 FP warns within 30 days. The analysis is intention to treat
+by assigned arm, so sessions run in a revoked or kill-file gap stay in their assigned arm, and sessions
+that start after a demotion are not eligible. The true-positive and false-positive rules of design
+section 7.3 and the promotion and demotion ladder are frozen by reference to the section numbers of the
+design document and to the report code hash (`report_sha256`) in the block below. holdout_enabled stays
+false during any shadow arm phase.
 
 Pre-arm-start conditions. Before any `arm_start` line exists: (1) the hook applies
 `arms.assign(session hash, shadow_seed, arm_rate, proposal id)` and writes `arm` and
@@ -179,8 +180,8 @@ nothing, the author sets it); (3) `offline.classify` is made symmetric (the corr
 above); (4) harm and demotion during a phase count human labels only, never auto labels; (5) the
 spillover comparison and the freeze on lesson minting are built after the seal, are exploratory
 and carry no p-values; (6) at the arm start every proposal of the family is approved at `warn` or
-`block` and no demotion row stamped before the arm start is in force (`modes.in_force` over those rows at the arm start is
-empty); `arms report` refuses otherwise.
+`block` and no lowering demotion row stamped before the arm start is in force (`modes.in_force` over those rows at the
+arm start is empty); `arms report` refuses otherwise.
 
 ### Spillover
 
@@ -201,8 +202,8 @@ weeks to reach it.
 
 Horizon (randomized phase): 12 calendar weeks from the detector's arm start or 400 eligible
 sessions, whichever comes first. No interim looks; the analysis after the horizon is the final and
-only look. Stopping early happens only through a demotion row (any cause ends the horizon); only a
-human-label harm row is the harm event.
+only look. Stopping early happens only through a lowering demotion row (any lowering cause ends the
+horizon; an `evasion_pair` flag does not); only a human-label harm row is the harm event.
 
 Power note (assumptions: a repeat-fire mean of 0.47 per eligible session in the observe arm, a
 variance-to-mean ratio of 3.65, 80 % power, two-sided alpha 0.05, a normal approximation to D). The
@@ -237,10 +238,9 @@ does not move it) and `sealed_at`. `report_sha256` covers exactly seven files in
 `arms_window.py`, `labels.py`, `labels_queue.py`, `metrics.py` and `report.py` (their bytes in name order, joined by a NUL byte); the
 detector code is covered by the per-detector hashes, not by `report_sha256`. `shadow.py`, `offline.py` and `events.py` are not in it,
 because they must still change before the first `arm_start` (the hook's arm and flag fields, the symmetric `offline.classify`); the
-`arm_start` amendment records their sha256 instead, and those of `demotions.py` (its causes decide what ends a horizon), `modes.py`
-and `approvals.py` (they decide
-the family and condition (6)). The arm
-analysis that computes the primary (`arms.py`, `arms_stats.py`) is built and hashed here before the seal, never written after it.
+`arm_start` amendment records their sha256 instead, and those of `demotions.py` (its causes decide what ends a horizon), `modes.py` and
+`approvals.py` (they decide the family and condition (6)). The arm analysis that computes the primary (`arms.py`, `arms_stats.py`) is
+built and hashed here before the seal, never written after it.
 
 (filled by compile seal)
 
@@ -311,12 +311,11 @@ Source: the second hostile-statistician pass (verdict SEALABLE WITH THE BLOCKING
 
 Source: the third hostile-statistician pass (verdict SEALABLE WITH TWO SMALL BLOCKING FIXES). What changed:
 
-- A (`arms.py`): the proposals of a detector are taken from the newest non-revoked rows of `approvals.jsonl` (superseded by round 4),
-  not from the shadow rows. A
-  detector with an `arm_start` whose approved proposal never fired (or whose fires the warn arm suppressed) had no rows and stayed
-  pending for good, so no Holm result was ever shown. It now enters the family at D = 0, p = 1 (also when an arm has no eligible session).
-  An `arm_start` for a detector with no approved proposal is refused (exit 1), never left pending. The report prints the cause of a
-  demotion that ended a horizon.
+- A (`arms.py`): the proposals of a detector are taken from the newest non-revoked rows of `approvals.jsonl` (superseded by round 4), not
+  from the shadow rows. A detector with an `arm_start` whose approved proposal never fired (or whose fires the warn arm suppressed) had no
+  rows and stayed pending for good, so no Holm result was ever shown. It now enters the family at D = 0, p = 1 (also when an arm has no
+  eligible session). An `arm_start` for a detector with no approved proposal is refused (exit 1), never left pending. The report prints
+  the cause of a demotion that ended a horizon.
 - B (text): any `demotions.jsonl` row of the detector's proposals at or after the arm start ends the horizon, whatever its cause, and only a
   human-label `label_fp` or `label_fp_pair` row is the harm event. The `arm_start` amendment also records the sha256 of `demotions.py`,
   and is anchored like the seal: a signed tag `arm-<detector>` on its commit plus an OpenTimestamps proof of the amendment line's sha256
@@ -360,3 +359,18 @@ Source: the fifth hostile-statistician pass (verdict SEALABLE WITH THE BLOCKING 
   dropped), and a revocation after the start with the approved copy unlinked.
 - `report_sha256` changed from 37a311cf7ca5e8e9a323da09c7ba6bc74d777e309805f76fb564be2b0f387143 to
   5029fd0b52f410abbbd2ae18d28b8d6746270072b523406da3151e1b770f1058 (seven files: `arms.py` and `arms_window.py` changed).
+
+### 2026-10-29 - round-6 statistician pass (made before the seal, so they edit the draft)
+
+Source: the sixth hostile-statistician pass (verdict SEALABLE WITH THE BLOCKING FIXES). What changed:
+
+- F2 (`arms_window.py`, text): only a lowering demotion row (`to_mode` differs from `from_mode`) ends the horizon or counts under condition (6);
+  an `evasion_pair` flag keeps the mode and neither ends the horizon nor refuses the family. Stopping on it would make the analysed sessions
+  depend on the assignment (candidates exist only after a delivered block). The text of the labelling paragraph, "Timing and stopping" and (6) says so.
+- F2b (same fix): an `evasion_pair` row stamped before the arm start no longer refuses the family.
+- Residual F1 (recorded, not fixed): a demotion stamped before the arm start but appended after the head refuses the family (the demotions chain is
+  not bounded by the head); only an API call with an explicit `now` can write one, and it fails closed.
+- Residual F3 (recorded, not fixed): a malformed first `arm_start` line of a detector is not replaced by a corrected second one (the first line
+  wins), so the analysis refuses for good; run `arms report` right after adding the line.
+- `report_sha256` changed from 5029fd0b52f410abbbd2ae18d28b8d6746270072b523406da3151e1b770f1058 to
+  c064b599fdc370ccf5029eb9813321fe0f6419f50e3e716cfb552602bd99febf (seven files: `arms_window.py` changed).
