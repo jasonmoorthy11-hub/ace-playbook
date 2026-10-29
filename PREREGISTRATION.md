@@ -111,7 +111,9 @@ eligible sessions, drawn from `random.Random(permutation_seed)` under a committe
 (only its sha256 is sealed, as `permutation_seed_sha256`). Two-sided p = (1 + #{|D*| >= |D|}) /
 10,001, where D* is D under a re-draw. The analysis is by assigned arm (intention to treat). The
 interval for D is the permutation interval [D - q97.5(D*), D - q2.5(D*)] from the same re-draws,
-which assumes a constant additive effect. Holm across detectors, family alpha 0.05 two-sided.
+which assumes a constant additive effect. Holm across detectors, family alpha 0.05 two-sided. The
+Holm family holds one hypothesis per approved proposal of every started detector (a detector with
+two approved proposals contributes two), which is conservative.
 
 Secondary, with no p-values: evasion, sessions-with-fire and friction. Sessions-with-fire gets a
 Wilson 95 % interval per arm (`metrics.wilson`); a Wilson interval is never put on fires per
@@ -171,7 +173,9 @@ commit plus an OpenTimestamps proof of the amendment line's sha256 (a commit tim
 nothing, the author sets it); (3) `offline.classify` is made symmetric (the correction rule
 above); (4) harm and demotion during a phase count human labels only, never auto labels; (5) the
 spillover comparison and the freeze on lesson minting are built after the seal, are exploratory
-and carry no p-values.
+and carry no p-values; (6) at the arm start every proposal of the family is approved at `warn` or
+`block` and has no demotion in force (`modes.in_force` at the arm start is empty); `arms report`
+refuses otherwise.
 
 ### Spillover
 
@@ -192,8 +196,8 @@ weeks to reach it.
 
 Horizon (randomized phase): 12 calendar weeks from the detector's arm start or 400 eligible
 sessions, whichever comes first. No interim looks; the analysis after the horizon is the final and
-only look. Stopping early is allowed for harm only (a demotion of any cause ends the horizon,
-see above; only a human-label harm row is the harm event).
+only look. Stopping early happens only through a demotion row (any cause ends the horizon); only a
+human-label harm row is the harm event.
 
 Power note (assumptions: a repeat-fire mean of 0.47 per eligible session in the observe arm, a
 variance-to-mean ratio of 3.65, 80 % power, two-sided alpha 0.05, a normal approximation to D). The
@@ -267,7 +271,7 @@ these are edits of the draft, recorded here so that the reasons survive. What ch
   and keeps revoked and kill-file gaps in the assigned arm. The primary counts only rows with `agent_id_present` false;
   subagent fires are secondary. The analysis runs 7 days after the horizon, after one forced offline scan; unscanned sessions are
   reported as missing.
-- I1-I3: a symmetric correction rule and a label queue that hides mode and arm; a demotion ends the phase and is the harm event;
+- I1-I3: a symmetric correction rule and a label queue that hides mode and arm; a demotion ends the phase and is the harm event (superseded by round 3);
   one primary per detector with Holm across detectors; evasion, sessions-with-fire and friction are secondary with no p-values.
 - I4-I8: friction is descriptive; the power note is in "Timing and stopping"; the spillover estimand is stated and lesson minting is
   frozen from sessions carrying `ACE P-` during the phase; Wilson only for sessions-with-fire, a permutation interval for D.
@@ -285,8 +289,8 @@ Source: the second hostile-statistician pass (verdict SEALABLE WITH THE BLOCKING
   now states the pre-arm-start conditions (hook randomizes and flags every row, `shadow.py`/`offline.py`/`events.py` hashes recorded in the
   `arm_start` amendment, symmetric `offline.classify`, human labels only for harm and demotion, spillover and minting freeze exploratory).
 - `arm_start` lines are read only under the top-level Amendments heading and are refused when earlier than the block's `sealed_at`.
-- I2 is settled one way: a demotion ends the detector's horizon (the harm event); the "demoted gaps kept in arm" sentences are removed and
-  `arms_window.horizon_end` takes the first demotion from demotions.jsonl.
+- I2 is settled one way: a demotion ends the detector's horizon (the harm event) (superseded by round 3); the
+  "demoted gaps kept in arm" sentences are removed and `arms_window.horizon_end` takes the first demotion from demotions.jsonl.
 - The Holm family is every detector with an `arm_start`; no adjusted p and no rejection is printed until all of them are final.
 - The power note and the rate sentence are rewritten for the 12-week interactive-only horizon with a primary that excludes subagent fires
   (about 100 per arm, minimum detectable rate ratio about 0.16; about 200 per arm at the cap, about 0.36); the 7.2 % and 2.4 a day are Step 0
@@ -311,3 +315,19 @@ Source: the third hostile-statistician pass (verdict SEALABLE WITH TWO SMALL BLO
   (a commit time is set by the author and proves nothing).
 - `report_sha256` changed from 70d67f87b0b7960176aee8b9172274aa5f841cb314e44768fc2aaea31cc40d7d to
   acb09a3f4e9f7c95c583e16de5f00813d4460d3702cb4706bbb7f76cdc030692 (seven files: `arms.py` and `arms_window.py` changed).
+
+### 2026-10-29 - round-4 statistician pass (made before the seal, so they edit the draft)
+
+Source: the fourth hostile-statistician pass (verdict SEALABLE WITH THE BLOCKING FIXES). What changed:
+
+- R1 (`arms.py`, `arms_window.py`): the Holm family is fixed at the arm start (intention to treat). A proposal belongs when its newest
+  approvals row stamped at or before the arm start is not `revoked`; a revocation, re-approval or mode change stamped later changes nothing,
+  so no hypothesis leaves the family after the data are seen and no revocation vetoes the other detectors.
+- R2: an approved proposal whose proposal file is missing or unreadable is refused, no longer dropped silently.
+- R3 (text): one sentence states that the Holm family holds one hypothesis per approved proposal, not per detector (conservative).
+- R4 (text): early stopping happens only through a demotion row (any cause ends the horizon); only a human-label harm row is the harm event.
+- R5: new pre-arm-start condition (6), also enforced in `arms.py`: at the arm start every family proposal is approved at `warn` or `block`
+  with no demotion in force, so a null by construction cannot join Holm.
+- Minor (text): the two history entries that still called a demotion "the harm event" are marked superseded by round 3.
+- `report_sha256` changed from acb09a3f4e9f7c95c583e16de5f00813d4460d3702cb4706bbb7f76cdc030692 to
+  37a311cf7ca5e8e9a323da09c7ba6bc74d777e309805f76fb564be2b0f387143 (seven files: `arms.py` and `arms_window.py` changed).

@@ -5,6 +5,10 @@ Arm start: a line `arm_start <detector> <UTC stamp>` under the top-level `## Ame
 (the first line of a detector wins), and refused when the stamp is earlier than the `sealed_at` of the frozen block. The horizon ends at the
 earliest of 12 weeks after the arm start, the 400th eligible session and the first demotion row of the detector's proposals at or after the
 arm start, whatever its cause (read from demotions.jsonl; the report prints the cause).
+
+The Holm family is fixed at the arm start (`family`, intention to treat): a proposal of a started detector belongs when its newest approvals
+row stamped at or before the arm start is not `revoked`, and every member must be approved at `warn` or `block` with no demotion row in
+force at that start. A row stamped later (a revocation, a re-approval, a mode change) changes nothing.
 """
 
 from __future__ import annotations
@@ -12,7 +16,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta, timezone
 
-from . import chains, demotions, metrics, seal
+from . import approvals, chains, demotions, metrics, modes, report, seal
 
 WEEKS, CAP, LAG_DAYS = 12, 400, 7
 FMT = "%Y-%m-%dT%H:%M:%SZ"
@@ -56,16 +60,43 @@ def check_starts(text: str, starts: dict[str, str]) -> None:
             raise ValueError(f"arm_start of {det} is earlier than sealed_at")
 
 
+def _rows(cfg, mod, name: str) -> list[dict]:
+    """The verified rows of a chain file (`approvals` or `demotions`); a symlink, a non-regular file or a broken chain is a ValueError."""
+    try:
+        rows, broken = mod.read_chain(cfg.data_dir, chains.key_of(cfg))
+    except OSError:
+        raise ValueError(f"{name}.jsonl is a symlink or not a regular file") from None
+    if broken is not None:
+        raise ValueError(f"the {name} chain is broken or unreadable; repair it before the analysis")
+    return rows
+
+
 def first_demotion(cfg, pids: list[str], arm_start: str) -> tuple[str, str] | tuple[None, None]:
     """(stamp, cause) of the first demotion row of any of `pids` at or after the arm start, whatever its cause, else (None, None). A broken
     or unsafe chain is a ValueError."""
-    try:
-        rows, broken = demotions.read_chain(cfg.data_dir, chains.key_of(cfg))
-    except OSError:
-        raise ValueError("demotions.jsonl is a symlink or not a regular file") from None
-    if broken is not None:
-        raise ValueError("the demotions chain is broken or unreadable; repair it before the analysis")
+    rows = _rows(cfg, demotions, "demotions")
     return min(((r["ts"], r["cause"]) for r in rows if r["proposal_id"] in pids and r["ts"] >= arm_start), default=(None, None))
+
+
+def family(cfg, starts: dict[str, str]) -> dict[str, list[str]]:
+    """{detector: sorted proposal ids} of every started detector, as fixed at its arm start. ValueError for a member whose proposal file
+    cannot be read, or that is not approved at `warn` or `block` with no demotion row stamped before the start still in force."""
+    arows, drows = _rows(cfg, approvals, "approvals"), _rows(cfg, demotions, "demotions")
+    out: dict[str, list[str]] = {}
+    for pid in sorted({r["proposal_id"] for r in arows}):
+        det = report._meta(cfg, pid)[0]
+        for started, t0 in starts.items():
+            row = modes.anchor(arows, pid, t0)
+            if det not in (started, "-") or row is None or row["mode"] == "revoked":
+                continue
+            if det == "-":
+                raise ValueError(f"approved proposal {pid} has no readable proposal file (the family cannot be built)")
+            n = len(modes.in_force([r for r in drows if r["ts"] < t0], pid, arows, t0))
+            if row["mode"] not in ("warn", "block") or n:
+                raise ValueError(f"arm_start {det}: proposal {pid} is approved at {row['mode']} / has {n} demotion(s) in force at the arm "
+                                 "start (warn or block with none in force required)")
+            out.setdefault(det, []).append(pid)
+    return out
 
 
 def horizon_end(arm_start: str, starts: list[str], demoted: str | None = None) -> str:

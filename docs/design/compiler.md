@@ -1393,9 +1393,12 @@ apart), D, and `permutation_test` (10,000 Bernoulli(`arm_rate`) re-draws from `r
 hits) / 10,001, a
 draw that empties an arm counts as extreme, interval = D minus the 97.5th and 2.5th percentiles of D*), then `holm` over
 every detector with an `arm_start` (no adjusted p and no rejection is printed until all are final:
-`pending: N detectors not final`). The proposals of a detector are the newest non-revoked rows of `approvals.jsonl`, each its
-own hypothesis (conservative); a started detector whose proposal has no fires, or no eligible session in an arm, enters at D
-= 0, p = 1, and an `arm_start` for a detector with no approved proposal is refused, never left pending. It refuses (exit 1)
+`pending: N detectors not final`). The family is fixed at the arm start (intention to treat): a proposal of a started detector belongs when its newest
+`approvals.jsonl` row stamped at or before the arm start is not `revoked`, and it must then be approved at `warn` or `block` with no
+demotion row in force at that start; rows stamped later (a revocation, a re-approval) change nothing. Each member is its own
+hypothesis (conservative); a started detector whose proposal has no fires, or no eligible session in an arm, enters at D
+= 0, p = 1. Three refusals (exit 1): an `arm_start` for a detector with no approved proposal at the arm start, a member approved at
+`observe` or with a demotion in force, and an approved proposal with no readable proposal file. It refuses (exit 1)
 when a fire row of an eligible session lacks `arm` or `agent_id_present` or records an `arm` that `assign` does not give,
 when a seed in the config does not hash to the sealed line, when the approvals or demotions chain is broken, shows counts
 only before the analysis day (horizon end + 7 days) and never prints a seed. The `_session`

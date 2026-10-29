@@ -393,8 +393,10 @@ differs; `compile report` then prints the synthetic table apart from the private
 
 **Arm analysis.** `python3 -m ace_playbook.compile.arms report [--json]` prints `not started` until PREREGISTRATION.md holds
 an `arm_start <detector> <UTC stamp>` line; it needs `shadow_seed`, `permutation_seed` and `arm_rate` in the config, whose
-seeds must hash to the sealed lines, and never prints a seed. Each detector with an `arm_start` needs a non-revoked approved
-proposal in `approvals.jsonl`, or the report refuses (exit 1).
+seeds must hash to the sealed lines, and never prints a seed. The Holm family is fixed at each `arm_start` (intention to treat): the
+proposals of the detector whose newest `approvals.jsonl` row stamped at or before it is not `revoked`, each approved at `warn` or
+`block` with no demotion in force; later rows change nothing. The report refuses (exit 1) when a started detector has no such proposal,
+when a member is approved at `observe` or has a demotion in force, or when an approved proposal has no readable proposal file.
 
 **Seal preview.** `python3 -m ace_playbook.compile seal --dry-run` prints the pre-registration's Frozen instruments block
 (detector hashes, report hash, approved proposals, measurement start) and writes nothing; without `--dry-run` it needs a

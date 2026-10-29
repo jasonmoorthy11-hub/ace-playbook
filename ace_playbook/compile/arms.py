@@ -4,9 +4,10 @@ Stdlib and sibling modules only, never on the hook path. It computes, per detect
 (fires beyond the first, `agent_id_present` false rows only), D = mean(warn arm) - mean(observe arm), a permutation test with 10,000
 Bernoulli(arm_rate) re-draws under the committed permutation seed (two-sided p = (1 + #{|D*| >= |D|}) / 10,001, intention to treat by
 assigned arm), a percentile-pivot interval for D, and Holm over every detector with an `arm_start`. Both seeds are read from the config at
-call time; only their sha256 is compared with the sealed block and nothing prints a seed. The proposals of a detector are the newest
-non-revoked rows of approvals.jsonl; each is its own hypothesis in the Holm family (conservative); a started detector with no fires enters at
-D = 0, p = 1. An `arm_start` for a detector with no approved proposal is refused, never left pending. The window is `arms_window`.
+call time; only their sha256 is compared with the sealed block and nothing prints a seed. The proposals of a detector are fixed at its arm
+start (`arms_window.family`, intention to treat: later approvals rows change nothing); each is its own hypothesis in the Holm family
+(conservative); a started detector with no fires enters at D = 0, p = 1. An `arm_start` for a detector with no approved proposal at that
+start, a member not approved at warn or block with no demotion in force, or an approved proposal with no readable file is refused.
 
 It REFUSES (ValueError; the CLI exits 1) when a fire row of an eligible session lacks `arm` or `agent_id_present`, or records an `arm` that
 `assign` does not give: the hook must have randomized and flagged every row (PREREGISTRATION.md, Pre-arm-start conditions). Before the analysis
@@ -28,9 +29,9 @@ from typing import Callable
 
 from .. import config as cfgmod
 from ..canon import now_iso
-from . import approvals, chains, labels, metrics, report, seal
+from . import labels, metrics, report, seal
 from .arms_window import (CAP, LAG_DAYS, WEEKS, _dt, _fmt, arm_starts, check_starts, eligible_sessions,  # noqa: F401  (re-exported)
-                          first_demotion, horizon_end)
+                          family, first_demotion, horizon_end)
 from .arms_stats import ALPHA, RUNS, holm, permutation_test  # noqa: F401  (the public names of the analysis)
 
 WARN, OBSERVE = "warn", "observe"
@@ -87,22 +88,6 @@ def _sealed(cfg, text: str) -> str | None:
     return None if cfg.arm_rate is not None else "arm_rate is unset"
 
 
-def _approved(cfg) -> dict[str, list[str]]:
-    """{detector: sorted proposal ids}: the newest row of each proposal in approvals.jsonl, kept unless it is `revoked`. ValueError on a broken
-    or unsafe chain."""
-    try:
-        rows, broken = approvals.read_chain(cfg.data_dir, chains.key_of(cfg))
-    except OSError:
-        raise ValueError("approvals.jsonl is a symlink or not a regular file") from None
-    if broken is not None:
-        raise ValueError("the approvals chain is broken or unreadable; repair it before the analysis")
-    out: dict[str, list[str]] = {}
-    for pid in sorted({r["proposal_id"] for r in rows}):
-        if approvals.newest(rows, pid)["mode"] != "revoked":
-            out.setdefault(report._meta(cfg, pid)[0], []).append(pid)
-    return out
-
-
 def analyse(cfg, now: str | None = None) -> dict:
     """{"status": "not started"} or {"detectors": {proposal: {...}}, "holm": {...}, "pending": N}: the whole report, in plain data.
     ValueError for an arm_start before sealed_at or without an approved proposal, a broken approvals or demotions chain or rows that
@@ -116,11 +101,11 @@ def analyse(cfg, now: str | None = None) -> dict:
         raise labels.Refusal(why)
     now = now or now_iso()
     rows, _ = report.read_corpora(cfg)
-    ev_rows, out, ok, approved = report._read(cfg.path(report.EVENTS)), {}, {}, _approved(cfg)
+    ev_rows, out, ok, fam = report._read(cfg.path(report.EVENTS)), {}, {}, family(cfg, starts)
     scanned = metrics.latest_sessions(ev_rows)
     for det, t0 in sorted(starts.items()):
-        if not (pids := approved.get(det)):
-            raise ValueError(f"arm_start {det} names a detector with no approved proposal (approve one or do not start the arm)")
+        if not (pids := fam.get(det)):
+            raise ValueError(f"arm_start {det} names a detector with no approved proposal at the arm start (approve one or do not start the arm)")
         (demoted, cause), ok[det] = first_demotion(cfg, pids, t0), True
         for pid in pids:
             sess, end, missing = eligible_sessions(ev_rows, t0, None, det, demoted)
