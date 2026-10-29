@@ -457,7 +457,7 @@ Haiku run that loaded them all showed 248k cache-creation tokens ($0.25-equivale
 model, dominate stage-1 cost. The brief relies on tool scoping and deny lists, not on a hook, and `-p` alone does not deny an unlisted tool because
 the operator's
 user-level `permissions.allow` and `defaultMode` still apply, so stage 1 passes `--permission-mode default` and the deny file names every
-unneeded connector tool by name; the list is a snapshot (`hooks/brief_connector_tools.txt`, 2026-10-22). A connector tool added later, and
+unneeded connector tool by name; the list is a snapshot (`hooks/brief_connector_tools.txt`, 2026-10-22, re-diffed 2026-10-29). A connector tool added later, and
 any user-scope MCP server that is not in the snapshot, is NOT stopped by `--tools` (built-ins only) or `--allowedTools` (it only adds allows):
 the default mode and `-p` deny it only when no user-level `permissions.allow` covers it, so with a server-wide or wildcard allow such as
 `mcp__claude_ai_Gmail` or `mcp__*` a new Gmail write tool is open to stage 1 (the D-117 caveat). Operators must never keep server-wide or

@@ -102,7 +102,8 @@ def test_the_connector_deny_list_names_every_write_tool_of_the_three_servers_and
     for name in ("Gmail__send_message", "Gmail__reply", "Gmail__forward", "Gmail__trash_thread", "Gmail__create_draft", "Gmail__update_draft",
                  "Google_Calendar__create_event", "Google_Calendar__update_event", "Google_Calendar__delete_event",
                  "Google_Calendar__respond_to_event", "Linear__save_issue", "Linear__save_comment", "Linear__delete_comment",
-                 "Linear__merge_diff", "Linear__share_issue", "Linear__mark_notification", "Linear__prepare_attachment_upload"):
+                 "Linear__merge_diff", "Linear__share_issue", "Linear__mark_notification", "Linear__prepare_attachment_upload",
+                 "Linear__prepare_file_upload"):
         assert f"mcp__claude_ai_{name}" in denied, name
     for server in ("Google_Drive", "Slack", "Canva", "Claude_Docs", "Microsoft_365", "rey_robin"):
         assert f"mcp__claude_ai_{server}" in denied
@@ -130,7 +131,7 @@ def denied_by(name, rules):
 def test_the_connector_snapshot_is_dated_and_holds_the_real_names():
     head = SNAPSHOT.read_text().splitlines()[0]
     snap = rule_lines(SNAPSHOT)
-    assert head.startswith("#") and "2026-10-22" in head and len(snap) == len(set(snap)) == 129
+    assert head.startswith("#") and "2026-10-22" in head and len(snap) == len(set(snap)) == 130
     assert all(n.startswith("mcp__") and n.count("__") == 2 for n in snap)
     assert {"mcp__claude_ai_Linear__extract_images", "mcp__claude_ai_Gmail__get_message", "mcp__claude_ai_Google_Calendar__suggest_time"} <= set(snap)
     assert set(names()) - {"ToolSearch"} <= set(snap)                                    # every allowed connector tool really exists
@@ -140,6 +141,18 @@ def test_every_connector_tool_in_the_snapshot_is_allowed_or_denied_by_name_or_by
     rules, allowed = set(rule_lines(DENIED)), set(names())
     assert [n for n in rule_lines(SNAPSHOT) if n not in allowed and not denied_by(n, rules)] == []
     assert not [n for n in rule_lines(SNAPSHOT) if n in allowed and denied_by(n, rules)]       # nothing allowed is also denied
+    assert {r for r in rules if r.count("__") == 2} <= set(rule_lines(SNAPSHOT))              # a per-name deny rule is a real snapshot name (no typo)
+
+
+def test_the_audit_finds_no_drift_on_the_snapshot_minus_the_denied_tools_and_names_one_left_in(tmp_path):
+    from ace_playbook.compile.brief_audit import audit
+    rules = set(rule_lines(DENIED))
+    init = ["ToolSearch"] + [n for n in rule_lines(SNAPSHOT) if not denied_by(n, rules)]
+    new = "mcp__claude_ai_Linear__prepare_file_upload"
+    for tools, drift in ((init, []), (init + [new], [new])):
+        stream = tmp_path / "s.jsonl"
+        stream.write_text(json.dumps({"type": "system", "subtype": "init", "tools": tools}) + "\n")
+        assert audit(stream, ALLOW)["drift"] == drift
 
 
 def test_the_three_servers_the_brief_reads_deny_every_unneeded_tool_by_full_name_reads_included():
