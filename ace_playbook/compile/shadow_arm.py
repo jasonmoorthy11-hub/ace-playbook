@@ -4,9 +4,10 @@ Pre-arm-start conditions). On the hook path: stdlib only, it must never import `
 `assign` is a copy of `arms.assign`; tests/test_shadow_arm.py pins the two to the same results on generated inputs and to the same body text.
 `fields` gives the two keys every shadow row carries: `arm` (`unassigned` until both `shadow_seed` and `arm_rate` are set, which
 `arms.primary` refuses, so no phase can run on such a row) and `agent_id_present` (whether the hook payload had an `agent_id` key, never its
-value; False when the payload was not parsed). `audible` is the delivery rule: for a proposal whose detector has a started phase (phase.py) a
-hit of an observe-arm session is not delivered (the row is written as ever, with the approved mode); a warn-arm or unassigned hit is, and an
-unassigned one logs `arm:unassigned` (not an `error:` line) through the caller's throttle. `deliver` writes the warn echo (stderr) and the
+value; False when the payload was not parsed). `audible` is the delivery rule: for a proposal whose detector has a started phase (phase.py, a
+marker signed with the chain key) a hit of an observe-arm session is not delivered (the row is written as ever, with the approved mode) and
+`arm:phase:<detector>` is logged; a warn-arm or unassigned hit is delivered, and an unassigned one logs `arm:unassigned` (not an `error:` line)
+through the caller's throttle. `deliver` writes the warn echo (stderr) and the
 decision JSON (stdout), each in its own try and flushed inside it, and logs a failure as `error:delivered:<Type>` through the caller's `log`
 (condition (7)); after a failed write the fd is pointed at /dev/null so the interpreter's exit flush cannot fail unlogged. The seed is never logged.
 """
@@ -46,16 +47,25 @@ def fields(cfg, session_hash: str, proposal_id: str, payload: object) -> dict:
 
 def audible(cfg, hits: list, session_hash: str, once: Callable[[str], object], now: str | None = None) -> list:
     """The hits to deliver: those of a detector with no started phase, of a warn-arm session and of an unassigned one (logged `arm:unassigned`
-    through `once`, an operator error during a phase). Anything that goes wrong delivers everything (the pre-phase behaviour)."""
+    through `once`, an operator error during a phase). Suppressing an observe-arm hit logs `arm:phase:<detector>` and a marker that is present
+    but not verifiable (phase.load) logs `arm:phase:unverified`, each through `once` (not `error:` lines). Anything that goes wrong delivers
+    everything (the pre-phase behaviour)."""
     try:
-        live = phase.active(cfg, now or now_iso()) if hits else frozenset()
+        marked, bad = phase.load(cfg) if hits else ({}, False)
+        stamp = now or now_iso()
+        live = frozenset(d for d, at in marked.items() if at <= stamp)
+        if bad:
+            once("arm:phase:unverified")
         out = []
         for hit in hits:
-            arm = fields(cfg, session_hash, hit[0]["id"], None)["arm"] if hit[0]["check"]["detector"] in live else WARN
+            det = hit[0]["check"]["detector"]
+            arm = fields(cfg, session_hash, hit[0]["id"], None)["arm"] if det in live else WARN
             if arm == UNASSIGNED:
                 once("arm:unassigned")
             if arm != OBSERVE:
                 out.append(hit)
+            else:
+                once(f"arm:phase:{det}")
         return out
     except Exception:
         return hits

@@ -258,7 +258,8 @@ def test_compile_sources_never_spawn_or_eval_or_touch_the_network():
     banned_mods = {"subprocess", "socket", "urllib", "http", "ssl", "sqlite3", "requests", "ctypes", "pty", "multiprocessing"}
     banned_calls = {"eval", "exec", "compile", "__import__", "os.system", "os.popen", "os.spawnl", "os.execv",
                     "os.execvp", "os.execl", "os.fork"}
-    exempt = frozenset({("brief_excl.py", "multiprocessing")})      # D-116: the brief's exclusion match runs in a killable child; nothing else may
+    exempt = frozenset({("brief_excl.py", "multiprocessing"),       # D-116: the brief's exclusion match runs in a killable child; nothing else may
+                        ("arm_start.py", "subprocess")})            # H3: the arm-start verb only reads the repository (status --porcelain, rev-parse HEAD)
     files = sorted(COMPILE_DIR.glob("*.py"))
     assert {p.name for p in files} >= {"__init__.py", "events.py", "shell.py", "detectors.py", "catalogue.py", "state.py"}
     importers = set()

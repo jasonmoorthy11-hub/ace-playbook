@@ -394,10 +394,24 @@ differs; `compile report` then prints the synthetic table apart from the private
 **Arm analysis.** Every shadow row now carries `arm` (from the private `shadow_seed`; `unassigned` until the seed and `arm_rate` are set) and
 `agent_id_present`; a failed write of the warn echo (stderr) or of the stdout decision, including the flush of a block-buffered pipe, is logged as
 `error:delivered:<Type>` in `shadow.log` (a write the harness never reads is not a failure the hook can see). The phase marker
-`data_dir/arm_phase.json` (`{"<detector>": "<arm start stamp>"}`) is written by the arm-start verb only (a later wave), never by hand: while a
-detector's stamp has passed, an observe-arm session gets no warn echo and no block decision for its proposals (the row is still written with
+`data_dir/arm_phase.json` (`{"v", "started": {"<detector>": "<arm start stamp>"}, "ts", "hash"}`, signed with the chain key like an approvals
+row) is written by `python3 -m ace_playbook.compile.arm_start` only, never by hand: a marker that is unsigned, signed with another key or changed
+after signing is no phase (the hook logs `arm:phase:unverified`; the kill file `DISABLED` stays the documented off switch, the marker is not one).
+While a detector's stamp has passed, an observe-arm session gets no warn echo and no block decision for its proposals (the row is still written with
 the approved mode), `compile offline` labels no correction in either arm and demotes on human labels only, and `reflect` mints nothing from a
-transcript carrying `ACE P-`. A phase with no `shadow_seed`/`arm_rate` logs `arm:unassigned` once and delivers as before.
+transcript carrying `ACE P-` (it writes no ledger row, so the nightly sweep mints that transcript after the phase ends); a suppressed observe-arm
+hit logs `arm:phase:<detector>`. A phase with no `shadow_seed`/`arm_rate` logs `arm:unassigned` once and delivers as before.
+
+**Starting an arm phase** (the recipe; `arms report` is the last step, after the tag and the proof). Commit the ten hashed files first
+(`shadow.py`, `offline.py`, `events.py`, `demotions.py`, `modes.py`, `approvals.py`, `shadow_arm.py`, `shadow_guard.py`, `phase.py`,
+`offline_demote.py` in `ace_playbook/compile/`; the verb refuses a working tree with uncommitted changes to them). Then:
+1. `python3 -m ace_playbook.compile.arm_start <detector> --dry-run` prints the entry and refuses for the reasons the analysis would.
+2. `python3 -m ace_playbook.compile.arm_start <detector>`, at a terminal, answer `y`: it appends the dated entry under `## Amendments`
+   and writes the signed marker and `data_dir/arm_start_<detector>.txt`. The marker is written here and nowhere else.
+3. Run the printed lines: the `add` and `commit` of PREREGISTRATION.md (`arm start: <detector> <stamp>`), the signed tag `arm-<detector>`
+   (`tag -s`), the push of `main` and the tag, then `ots stamp <data_dir>/arm_start_<detector>.txt` (the file holds the `arm_start` line;
+   `printf '%s' '<line>' | shasum -a 256` is the sha256 the proof covers).
+4. `python3 -m ace_playbook.compile.arms report`.
 `python3 -m ace_playbook.compile.arms report [--json]` prints `not started` until PREREGISTRATION.md holds
 an `arm_start <detector> <UTC stamp> approvals=<64 hex>` line (the hash of the last `approvals.jsonl` row at that moment);
 it needs `shadow_seed`, `permutation_seed` and `arm_rate` in the config, whose

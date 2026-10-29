@@ -180,8 +180,9 @@ def reflect_transcript(cfg: Config, path: Path, client: client_mod.ReflectorClie
         return {"session_id": sid, "status": "already_reflected"}
     if cleaned.user_turn_count < MIN_USER_TURNS:
         return _ledger(cfg, sid, "skipped_short")
-    if arm_frozen(cfg, path):                  # no outbound call, no delta of any kind; the ledger line closes the session (--force reopens it)
-        return _ledger(cfg, sid, FROZEN)
+    if arm_frozen(cfg, path):                  # no outbound call, no delta of any kind, and NO ledger row: the freeze defers, the session stays open
+        client_mod.log_line(cfg, f"reflect session={sid} status={FROZEN}")
+        return {"session_id": sid, "status": FROZEN}
     log = DeltaLog(cfg.deltas, tuple(cfg.deny_terms))
     try:
         if cfg.deltas.exists():

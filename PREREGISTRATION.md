@@ -437,3 +437,15 @@ Text and docstring edits, plus two behaviour changes: the delivered-path error c
 - `report_sha256` changed from c064b599fdc370ccf5029eb9813321fe0f6419f50e3e716cfb552602bd99febf to
   8b9d55c625f53c4e9474cdaaf2a16f0605779b0c0722fd5d3a8e0e43ac93330d (seven files: `arms.py` and `arms_window.py` changed;
   the delivered-error count and the natural-end rule are new).
+
+### 2026-10-29 - arm_start hash list: the hook files that decide randomization, output and silence
+
+Pre-arm-start condition (2) names six files for the sha256 record of an `arm_start` amendment: `shadow.py`, `offline.py`, `events.py`,
+`demotions.py`, `modes.py` and `approvals.py`.
+Since the seal, the randomization (`shadow_arm.assign`), the delivered path (`shadow_arm.deliver`), the output decision (`shadow_guard.decision`)
+and the phase marker that silences the observe arm (`phase.py`) live outside `shadow.py`, and the human-only demotion rule moved out of `offline.py`
+into `offline_demote.py`.
+Every `arm_start` amendment therefore records the sha256 of TEN files, all in `ace_playbook/compile/`: the six named by condition (2) plus
+`shadow_arm.py`, `shadow_guard.py`, `phase.py` and `offline_demote.py`.
+The sealed block, `report_sha256` (8b9d55c625f53c4e9474cdaaf2a16f0605779b0c0722fd5d3a8e0e43ac93330d) and the analysis are unchanged.
+The `arm-<detector>` signed tag and the OpenTimestamps proof of the amendment line's sha256 cover the line as before.

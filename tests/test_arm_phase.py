@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from ace_playbook import config as cfgmod
+from ace_playbook.canon import record_hash
 from ace_playbook.compile import labels, offline, phase
 from ace_playbook.compile import demotions as dm
 from ace_playbook.compile.events import events_from_records, hash16
@@ -28,8 +29,12 @@ D1, D2 = "2026-10-10T10:00:00Z", "2026-10-18T10:00:00Z"
 ROOT = Path(__file__).resolve().parent.parent
 
 
+TS = "2026-09-30T00:00:00Z"                           # the signing time of the fixture markers
+
+
 def mark(data, **detectors):
-    (Path(data) / phase.FILE).write_text(json.dumps(detectors))
+    """A marker signed the way the arm-start verb signs it (an unkeyed install: the plain record hash)."""
+    phase.write(SimpleNamespace(data_dir=data), detectors, TS)
 
 
 def cfg_of(tmp_path):
@@ -63,16 +68,98 @@ def test_a_directory_a_symlink_a_fifo_and_an_oversize_file_are_no_phase(tmp_path
     (tmp_path / phase.FILE).mkdir()
     assert phase.started(c) == {}
     (tmp_path / phase.FILE).rmdir()
+    mark(tmp_path, a=STARTED)
     real = tmp_path / "real.json"
-    real.write_text(json.dumps({"a": STARTED}))
+    (tmp_path / phase.FILE).rename(real)
     (tmp_path / phase.FILE).symlink_to(real)
     assert phase.started(c) == {}
     (tmp_path / phase.FILE).unlink()
     os.mkfifo(tmp_path / phase.FILE)
     assert phase.started(c) == {}
     (tmp_path / phase.FILE).unlink()
-    (tmp_path / phase.FILE).write_text(json.dumps({"a": STARTED, "pad": " " * phase.MAX_BYTES}))
+    mark(tmp_path, a=STARTED)
+    assert phase.started(c) == {"a": STARTED}
+    with open(tmp_path / phase.FILE, "a") as fh:                      # still the same signed JSON, now over the size cap
+        fh.write(" " * phase.MAX_BYTES)
     assert phase.started(c) == {}
+
+
+K1, K2 = bytes(range(32)), bytes(range(1, 33))
+
+
+def keyed_cfg(tmp_path, key=K1):
+    path = tmp_path / "chain_key"
+    path.write_text(key.hex())
+    path.chmod(0o600)
+    return SimpleNamespace(data_dir=tmp_path, chain_key_path=path)
+
+
+def put(tmp_path, body):
+    (tmp_path / phase.FILE).write_text(body if isinstance(body, str) else json.dumps(body))
+
+
+def test_a_missing_marker_is_not_unverified_and_a_present_bad_one_is(tmp_path):
+    assert phase.load(cfg_of(tmp_path)) == ({}, False)
+    put(tmp_path, "{")
+    assert phase.load(cfg_of(tmp_path)) == ({}, True)
+    (tmp_path / "x").mkdir()
+    mark(tmp_path / "x", a=STARTED)
+    assert phase.load(cfg_of(tmp_path / "x")) == ({"a": STARTED}, False)
+
+
+def test_the_verb_marker_is_a_sealed_object_and_merges_what_was_there(tmp_path):
+    c = cfg_of(tmp_path)
+    phase.write(c, {"a": STARTED}, TS)
+    phase.write(c, {"b": "2026-12-01T00:00:00Z"}, "2026-10-30T00:00:00Z")
+    raw = json.loads((tmp_path / phase.FILE).read_text())
+    assert set(raw) == {"v", "started", "ts", "hash"} and raw["ts"] == "2026-10-30T00:00:00Z" and raw["v"] == 1
+    assert raw["started"] == {"a": STARTED, "b": "2026-12-01T00:00:00Z"} and phase.started(c) == raw["started"]
+    assert (tmp_path / phase.FILE).stat().st_mode & 0o777 == 0o600 and sorted(p.name for p in tmp_path.iterdir()) == [phase.FILE]
+
+
+def test_a_keyed_install_reads_only_a_marker_signed_with_its_own_key(tmp_path):
+    c = keyed_cfg(tmp_path)
+    phase.write(c, {"a": STARTED}, TS)
+    assert json.loads((tmp_path / phase.FILE).read_text())["v"] == 2 and phase.load(c) == ({"a": STARTED}, False)
+    good = json.loads((tmp_path / phase.FILE).read_text())
+    for label, body in (("unsigned", {"a": STARTED}),
+                        ("no hash", {k: v for k, v in good.items() if k != "hash"}),
+                        ("plain record hash (v1)", {**good, "v": 1, "hash": record_hash({**good, "v": 1})}),
+                        ("a forged hash", {**good, "hash": "0" * 64}),
+                        ("a stamp changed after signing", {**good, "started": {"a": "2026-10-02T00:00:00Z"}}),
+                        ("a detector added after signing", {**good, "started": {**good["started"], "b": STARTED}}),
+                        ("an extra key", {**good, "note": "x"}),
+                        ("a wrong version", {**good, "v": True})):
+        put(tmp_path, body)
+        assert phase.load(c) == ({}, True), label
+    put(tmp_path, good)
+    assert phase.started(c) == {"a": STARTED}
+
+
+def test_a_marker_signed_with_another_key_is_no_phase(tmp_path):
+    other = tmp_path / "other"
+    other.mkdir()
+    phase.write(keyed_cfg(other, K2), {"a": STARTED}, TS)
+    (tmp_path / phase.FILE).write_bytes((other / phase.FILE).read_bytes())
+    assert phase.load(keyed_cfg(tmp_path, K1)) == ({}, True) and phase.load(keyed_cfg(other, K2)) == ({"a": STARTED}, False)
+
+
+def test_a_keyed_install_with_an_unusable_key_reads_no_phase_and_cannot_write_one(tmp_path):
+    c = keyed_cfg(tmp_path)
+    phase.write(c, {"a": STARTED}, TS)
+    c.chain_key_path.chmod(0o644)                               # chain_key() refuses a group/other readable key: keyed, no usable key
+    assert phase.load(c) == ({}, True)
+    with pytest.raises(ValueError, match="chain key"):
+        phase.write(c, {"b": STARTED}, TS)
+
+
+def test_an_unkeyed_install_holds_the_marker_to_the_plain_hash_and_refuses_a_v2_one(tmp_path):
+    c = cfg_of(tmp_path)
+    mark(tmp_path, a=STARTED)
+    good = json.loads((tmp_path / phase.FILE).read_text())
+    for body in ({"a": STARTED}, {**good, "started": {"a": "2026-10-02T00:00:00Z"}}, {**good, "v": 2}, {**good, "hash": "1" * 64}):
+        put(tmp_path, body)
+        assert phase.load(c) == ({}, True)
 
 
 # ------------------------------------------------------------------ symmetric corrections (offline.classify)
@@ -229,7 +316,20 @@ def test_an_ace_p_transcript_mints_nothing_while_a_phase_runs(rcfg, tmp_path):
     mark(rcfg.data_dir, **{DET: STARTED})
     res, t = reflect(rcfg, tmp_path, True)
     assert res["status"] == "frozen_arm_phase" and t.calls == [] and minted(rcfg) == [] and not rcfg.deltas.exists()
-    assert [r["status"] for r in read_jsonl(rcfg.reflections)] == ["frozen_arm_phase"]
+    assert not rcfg.reflections.exists() and "status=frozen_arm_phase" in rcfg.log.read_text()      # no ledger row: the freeze defers, it does not close
+
+
+def test_a_frozen_transcript_is_minted_by_the_next_run_once_the_marker_is_gone(rcfg, tmp_path):
+    from ace_playbook import sweep
+    mark(rcfg.data_dir, **{DET: STARTED})
+    res, t = reflect(rcfg, tmp_path, True)
+    assert res["status"] == "frozen_arm_phase" and sweep.reflected_ids(rcfg) == set()              # the nightly sweep still lists it
+    again, _ = reflect(rcfg, tmp_path, True)
+    assert again["status"] == "frozen_arm_phase"                                                    # still in the phase: still frozen, still open
+    (rcfg.data_dir / phase.FILE).unlink()                                                           # the phase ended
+    res, t = reflect(rcfg, tmp_path, True)
+    assert res["status"] == "ok" and len(t.calls) == 1 and minted(rcfg) == ["Run uv sync before pytest in this repo"]
+    assert [r["status"] for r in read_jsonl(rcfg.reflections)] == ["ok"]
 
 
 def test_the_same_transcript_mints_without_a_marker(rcfg, tmp_path):

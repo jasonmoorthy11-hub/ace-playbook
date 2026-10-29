@@ -19,10 +19,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from ace_playbook.compile import arms, arms_window, shadow, shadow_arm
+from ace_playbook.compile import approvals, arms, arms_window, phase, shadow, shadow_arm
 from ace_playbook.compile import state as st
 
 from . import compile_support as cs
+from .test_compile_keyed_heads import keyed
 from .test_compile_shadow import Runner
 from .test_hook_conformance import FAST, ROOT, env_of, hook
 
@@ -272,7 +273,11 @@ def sid_in(arm: str, pid: str) -> str:
 
 
 def phase_marker(w, body=None):
-    (w.data / "arm_phase.json").write_text(json.dumps({DET: STARTED} if body is None else body))
+    """The verb's marker (signed with the world's chain key, or the plain hash when unkeyed); a str body is written raw."""
+    if isinstance(body, str):
+        (w.data / "arm_phase.json").write_text(body)
+    else:
+        phase.write(w.cfg, {DET: STARTED} if body is None else body, "2026-09-30T00:00:00Z")
 
 
 def phased(w, mode="warn"):
@@ -302,11 +307,11 @@ def test_in_a_phase_a_block_mode_proposal_denies_the_warn_arm_and_nothing_the_ob
     assert [(r["mode"], r["arm"]) for r in run.rows] == [("block", "observe"), ("block", "warn")]
 
 
-@pytest.mark.parametrize("marker", [None, {DET: "2099-01-01T00:00:00Z"}, {"user_correction": STARTED}, "[]", "{"])
+@pytest.mark.parametrize("marker", [None, {DET: "2099-01-01T00:00:00Z"}, {"user_correction": STARTED}, "[]", "{", json.dumps({DET: STARTED})])
 def test_without_a_usable_started_marker_for_the_detector_both_arms_deliver(w, run, marker):
     message, pid = phased(w)
     if marker is not None:
-        (w.data / "arm_phase.json").write_text(marker if isinstance(marker, str) else json.dumps(marker))
+        phase_marker(w, marker)
     for arm in ("observe", "warn"):
         code, out, err = run(cs.pre_payload(RM, sid=sid_in(arm, pid)))
         assert code == 0 and err == message + "\n" and out
@@ -350,3 +355,65 @@ def test_audible_delivers_everything_when_anything_goes_wrong(w):
     phase_marker(w)
     assert shadow_arm.audible(cfg, hits, "sh", lambda msg: None, "2026-10-19T00:00:00Z") == hits
     assert shadow_arm.audible(cfg, [], "sh", lambda msg: None) == []
+
+
+# ------------------------------------------------------------------ the marker is signed: a file an agent can write silences nothing
+def keyed_phased(w, mode="warn"):
+    """`phased` on a keyed install: the key file, signed heads and an approvals row signed with the key (the hook verifies the chain)."""
+    armed(w)
+    ring = keyed(w)
+    rec = json.loads(cs.approve_file(w.cfg, w.props[DET], mode).read_text())
+    approvals.append(w.data, {"proposal_id": w.props[DET]["id"], "proposal_sha256": rec["proposal_sha256"], "mode": mode}, ring)
+    return w.props[DET]["message"], w.props[DET]["id"]
+
+
+def both_deliver(run, message, pid):
+    for arm in ("observe", "warn"):
+        code, out, err = run(cs.pre_payload(RM, sid=sid_in(arm, pid)))
+        assert code == 0 and err == message + "\n" and out
+
+
+def test_the_signed_marker_of_the_verb_silences_the_observe_arm_on_a_keyed_install_and_logs_the_phase_line(w, run):
+    message, pid = keyed_phased(w)
+    phase_marker(w)
+    assert run(cs.pre_payload(RM, sid=sid_in("observe", pid))) == (0, "", "")
+    assert run(cs.pre_payload(RM, sid=sid_in("observe", pid))) == (0, "", "")
+    code, _, err = run(cs.pre_payload(RM, sid=sid_in("warn", pid)))
+    assert code == 0 and err == message + "\n"
+    lines = [ln[21:] for ln in log_lines(w)]
+    assert lines.count(f"arm:phase:{DET}") == 1 and not any(ln.startswith("error:") or "unverified" in ln for ln in lines)   # the _Once throttle
+    assert [r["arm"] for r in run.rows] == ["observe", "observe", "warn"]
+
+
+def test_a_hand_written_unsigned_marker_on_a_keyed_install_silences_nothing_and_logs_unverified_once(w, run):
+    message, pid = keyed_phased(w)
+    phase_marker(w, json.dumps({DET: STARTED}))                      # what an agent with Bash in an observe-arm session could write
+    both_deliver(run, message, pid)
+    both_deliver(run, message, pid)
+    lines = [ln[21:] for ln in log_lines(w)]
+    assert lines.count("arm:phase:unverified") == 1 and not any(ln.startswith("error:") for ln in lines)
+    assert f"arm:phase:{DET}" not in lines
+
+
+def test_a_marker_signed_with_another_key_or_tampered_after_signing_silences_nothing(w, run, tmp_path):
+    message, pid = keyed_phased(w)
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "chain_key").write_text(bytes(range(9, 41)).hex())
+    (other / "chain_key").chmod(0o600)
+    phase.write(SimpleNamespace(data_dir=other, chain_key_path=other / "chain_key"), {DET: STARTED}, "2026-09-30T00:00:00Z")
+    (w.data / "arm_phase.json").write_bytes((other / "arm_phase.json").read_bytes())
+    both_deliver(run, message, pid)
+    phase_marker(w)
+    raw = json.loads((w.data / "arm_phase.json").read_text())
+    (w.data / "arm_phase.json").write_text(json.dumps({**raw, "started": {DET: "2026-09-02T00:00:00Z"}}))      # one stamp moved after signing
+    both_deliver(run, message, pid)
+    assert [ln[21:] for ln in log_lines(w)].count("arm:phase:unverified") == 1
+
+
+def test_no_unverified_line_without_a_marker_or_with_a_good_one(w, run):
+    message, pid = phased(w)
+    both_deliver(run, message, pid)
+    phase_marker(w)
+    run(cs.pre_payload(RM, sid=sid_in("observe", pid)))
+    assert not any("unverified" in ln for ln in log_lines(w))

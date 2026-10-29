@@ -69,17 +69,30 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
 ## Compiler (stage 2)
 
 - `agent_id_present` on a shadow row records only whether the hook payload carried an `agent_id` key, never its value (False for an over-cap payload).
-- The arm phase has two views that the arm-start verb (the next wave) must keep equal: the `arm_start` line in PREREGISTRATION.md, which only
+- The arm phase has two views that the arm-start verb (`compile.arm_start`) writes together: the `arm_start` line in PREREGISTRATION.md, which only
   the analysis reads, and `data_dir/arm_phase.json`, which only the hook, the offline pass and the minting freeze read. A marker without a
   matching line silences nothing in the analysis (the hook, the corrections and the freeze behave as in a phase, `arms report` still says
   `not started`); a line without a marker leaves the hook delivering in both arms (`arms report` refuses on the rows it finds, which is the
-  only backstop). A missing, unreadable or malformed marker means no phase, silently.
+  only backstop). The verb appends the line first and writes the marker last: if the marker write fails the line stays and a second run
+  refuses ("already started"), so the marker must then be written by calling `phase.write` by hand (there is no repair verb).
+- The marker is signed with the chain key (`chains.seal`, as approvals rows): an unsigned, malformed, other-key or tampered marker is no phase
+  and the hook logs `arm:phase:unverified`. That protects against a file an agent can write, not against an agent that can read the chain key
+  (a Bash tool reads any file the operator can) and not on an unkeyed install, where the signature is the plain record hash and anyone can
+  recompute it. The kill file `DISABLED` remains the documented unauthenticated off switch; the phase marker is not one. A present but unusable
+  marker (a directory, a symlink, a fifo, oversize, bad JSON) is the same: no phase, `arm:phase:unverified`.
+- The verb's tree check is a working-tree check: it refuses uncommitted changes to the ten hashed files (`git status --porcelain`), so the sha256
+  lines of the entry match `HEAD` only while the tree is clean when the verb runs; a change made after the verb and before the commit is not
+  seen, and the verb does not verify the signed tag or the OpenTimestamps proof (the operator runs them).
+- Both phase log lines go through the hook's `_Once` throttle: `arm:phase:<detector>` and `arm:phase:unverified` are written at most once per run
+  and not again while they are in the last 8 KiB of `shadow.log`, so their count is not a count of silenced hits (the shadow rows are).
 - Only the correction rule of the offline pass is arm-sensitive: in a phase it labels nothing in either arm, so a corrected fire waits for a
   human label (the other three auto rules are unchanged). Demotion in a phase counts only human labels; `error_rate`, `lesson_inactive`,
   `source_sha256` and the `evasion_pair` flag still act. `neutral_corrections` is in the offline summary dict, not in the CLI's printed lines.
 - The minting freeze is enforced at the only session-driven writer of lessons, `reflect_transcript`: during a phase a transcript whose raw bytes
-  carry `ACE P-` (or that is unreadable or over 64 MiB) mints nothing and closes its session in the reflections ledger as `frozen_arm_phase`, so
-  the nightly sweep does not reflect it later (`--force` does). No production code path writes RETIRE, PATCH, MERGE or NARROW from a session
+  carry `ACE P-` (or that is unreadable or over 64 MiB) mints nothing and writes NO reflections ledger row (a `status=frozen_arm_phase` line in
+  `reflect.log` only), so the freeze defers: the nightly sweep offers the transcript again each night during the phase and mints it after the
+  phase ends. Frozen transcripts occupy sweep candidate slots (`max_n`) while the phase runs.
+  No production code path writes RETIRE, PATCH, MERGE or NARROW from a session
   (`store/promote.py` and `store/__main__.py` are operator-driven); tests/test_arm_phase.py fails if one appears elsewhere. The NOOP counters
   of a frozen session are not written either.
 - The command scanner is a best-effort linear tokenizer, not a shell parser. Known shapes it does
