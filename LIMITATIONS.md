@@ -248,7 +248,8 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   tests cannot tell whether a later claude version still honours them); `CLAUDE.md` and auto-memory are kept out by the separate user, which
   is the guarantee. The `acewatch` user, its group, its own claude and login and any egress limit are the operator's steps
   (`docs/watch/SANDBOX.md`): launchd cannot restrict the network, so without a `pf` rule the fetcher's own guards are the only egress control.
-  Moving `acewatch`'s proposals to the operator's store is a manual copy, not built.
+  Moving `acewatch`'s proposals to the operator's store is a manual copy followed by `compile watch import <dir>`, which trusts the validation
+  (`records.check`, the id and name rules, the size cap), not the copy's origin: a forged but valid record in the copy becomes a proposal.
 - Watcher, sanitizer coverage: `strip_hidden` reads inline `style` attributes and simple single-selector `<style>` rules (a tag, `.class` or
   `#id` rule, no combinators; class and id names match without case, as in quirks mode). Media queries, descendant, child and attribute
   selectors, `@import` and external stylesheets are NOT handled, so text hidden that way is read as visible. The inline rules hide opacity

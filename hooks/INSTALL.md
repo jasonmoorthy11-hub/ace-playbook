@@ -466,7 +466,7 @@ followed by `  DISABLED` while the shadow hook's kill file exists (the `kill_fil
 
 ## Watch (the configuration watcher)
 
-`python3 -m ace_playbook.compile watch scan|status|queue|canary` watches the sources you list for changes that touch what your setup pins
+`python3 -m ace_playbook.compile watch scan|status|queue|canary|import` watches the sources you list for changes that touch what your setup pins
 (a model id that is being retired, a newer Claude Code, a docs page you depend on) and stores inert proposals. It calls no model unless you
 turn the Reader on (step 5), applies nothing and writes only inside its own directory. It is the one part of ace-playbook that uses the
 network, and it is never on a hook path.
@@ -490,7 +490,11 @@ network, and it is never on a hook path.
    watcher looks at the default config file. `compile watch status` prints the open count, leads, oldest, last scan and up to three titles.
    `compile watch queue [--limit N]` (terminal only) walks the open proposals oldest first: `1` accept, `2` dismiss (a note is required),
    `3` later, `q` quit. A decision is recorded in `decisions.jsonl`; nothing is changed on your machine. At most five proposals are open at
-   once (leads excepted); the rest wait as `queued`.
+   once (leads excepted); the rest wait as `queued`. `compile watch import <dir> [--dry-run]` moves a copy of `acewatch`'s
+   `proposals/W-*.json` (made by you, into a real directory) into your own store: every file is validated, a duplicate (same id or same
+   proposal key) is counted and not written, the cap of five open still holds, and the summary reads `import: N imported, N duplicate, N rejected`
+   with a `rejected <stem>: <reason>` line per rejection. `--dry-run` writes nothing; the copy is never changed; exit 2 for a symlinked
+   directory, a `DISABLED` file or an unsafe `watch_dir`. Review the imported proposals with `watch queue`.
 4. Kill switch: `touch <watch_dir>/DISABLED`. While it exists `scan` prints `watch: disabled` and fetches and writes nothing; remove it to resume.
 5. The Reader (W2, optional, off by default). Without it nothing above calls a model. With it, tier-1 feed items go one by one to a tool-less,
    single-turn `claude -p` call whose answer code validates; the only result is a `lead` with no diff. **The Reader is for the `acewatch` user

@@ -1277,6 +1277,17 @@ each (the last so that the tile says `none  corrupt 1`, not a bare `none`, while
 lines, `none` or `disabled`); the status line ends with `watch N`. Nothing here touches `metrics.py`, `report.py`, `seal.py`, the detector
 files or the live measurement.
 
+`compile watch import <dir> [--dry-run]` (`watch/carry.py`, loaded only when it runs; `__main__` is untouched) moves a copy of `acewatch`'s
+`proposals/W-*.json` that the operator made into the operator's own store. `<dir>` must be a real directory (not a link; exit 2). Taken are
+only regular files named `W-*.json` whose stem matches `store.ID`, at most 64 KiB, never links, that parse as a JSON object whose `id` is
+the stem and that `records.check(rec)` (no body) accepts; `status` is forced to `open`, and past the cap of five open (leads excepted) the
+record is written `queued` in ranking order. A record whose `reconcile.key` is in the store, or whose id exists (`write_proposal` is
+write-once), is a duplicate. The work holds `fsio.lock(watch_dir, blocking=True)` and ends with `store.rebalance`; a `DISABLED` file or an
+unsafe watch directory refuses (exit 2). Output is `import: N imported, N duplicate, N rejected`, one `rejected <stem>: <reason>` per
+rejection (a fixed word -- name, symlink, size, json, shape, id, unreadable -- or the `check` reason; never file content) and `- <title>` per
+imported record; `--dry-run` writes nothing and prints the same. The copy is never modified. The import trusts the validation, not the
+copy's origin: a record that passes `check` is as good as one a scan wrote.
+
 #### Reader (W2, as built)
 
 W2 adds the quarantined model stage, BUILT AND NOT LIVE (`watch_reader` defaults to false; the `acewatch` user and its login are the operator's steps,

@@ -239,9 +239,12 @@ install and the `inputs.legacy-<date>` name are written from that run, not paste
   another host, and only the hosts in `watch_sources` are ever requested, but a process running as `acewatch` could open any outbound
   connection. A `pf` rule (an anchor that allows `acewatch` to reach only the source hosts) or a local proxy is the operator's optional step;
   without it, treat the egress as open.
-- Not built in W2: moving proposals from `acewatch`'s watch directory to the operator's own (`compile watch queue` appends decisions, so the
-  operator reviews a copy of `proposals/W-*.json` in a watch directory of their own). Copy only those files, as the operator; a copied file
-  is read through the same store readers, which skip anything of the wrong shape.
+- Moving proposals from `acewatch`'s watch directory to the operator's own is a copy, then an import (`compile watch queue` appends
+  decisions, so the operator reviews proposals in a watch directory of their own). Copy only `proposals/W-*.json`, as the operator, into
+  a new real directory (for example `cp /var/acewatch/watch/proposals/W-*.json ~/acewatch-copy/` from a shell that may read it), then run
+  `python3 -m ace_playbook.compile watch import ~/acewatch-copy` (add `--dry-run` to see the counts first). The import validates each file
+  with the same record check, counts duplicates, keeps the cap of five open, never changes the copy, and prints `rejected <stem>: <reason>`
+  for anything else; then `compile watch queue` reviews them.
 
 ## Kill files
 
