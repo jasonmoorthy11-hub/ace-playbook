@@ -235,7 +235,7 @@ stale. CI never needs rebuild-lab, and the port still cannot drift from the numb
 Each row is a class and a variant (for example `flags/split-flags`, `interpreter/python-rmtree`, `xargs_find/find-delete`) built twice
 from one command template: once with an invented path outside scratch (ground truth: it should fire) and once with a scratch
 path (its benign twin: it must not fire). The strings are only data: they go through the hook's own path (hook payload,
-`event_from_hook`, `catalogue.evaluate`) and are never executed. 111 variants, 222 cases (43 and 86 under v1).
+`event_from_hook`, `catalogue.evaluate`) and are never executed. 132 variants, 264 cases (43 and 86 under v1).
 
 The survivors of a mutation run over the detectors, the tokenizer and `textrules` are pinned by `tests/test_mutation_survivors.py`.
 
@@ -248,7 +248,7 @@ change in either direction shows up. As of detector v2 (4.1.2, 2026-10-29):
 |---|---|---|---|
 | `alias_quote` | 3 | 0 | `$IFS` separators, `$(echo rm)` as the command word, `base64 -d \| sh` |
 | `interpreter` | 5 | 0 | python, node, perl, a `bash <<EOF` body, a `bash -c` inside a `bash -c` (`bash -c`, `sh -c` and `eval` themselves are read) |
-| `unproven` | 0 | 0 | 37 unproven constructs around a scratch value must fire; their plain twins must not (section 4.1.2) |
+| `unproven` | 0 | 0 | 58 unproven constructs around a scratch value must fire; their plain twins must not (section 4.1.2) |
 | `path` | 0 | 0 | week 1's two false positives are closed; the fail-closed rows (cd after `;`, `\|\|`, a rebound variable) must fire |
 | `worktree` | 0 | 0 | a worktree added and deleted in one `&&` chain is scratch; a path outside the chain or an earlier call is not |
 | `tool_indirection` | 2 | 0 | a script, or a Makefile whose `clean:` recipe deletes, written by `Write` and then run (`bash script`, `make -C dir clean`) |
@@ -283,14 +283,15 @@ on more: `bash -c`, `find`, `xargs`). A working directory, a variable binding or
 (`resolve_pre.py` states them; `resolve.py` applies them segment by segment):
 
 - (a) a PLAIN segment set it: exactly `cd <literal>`, `pushd <literal>`, `NAME=<literal>`, `export NAME=<literal>` or
-  `git [-C <literal>] worktree add [opts] <literal>`, with no `!`, wrapper (`env`, `sudo`, `time`, `command`), `builtin`, redirection or
-  assignment prefix;
+  `git [-C <literal>] worktree add [opts] <literal>`, with no `!`, wrapper (`env`, `sudo`, `time`, `command`), `builtin`, assignment prefix or
+  redirection (a `<` or `>` ANYWHERE in a word counts:
+  `cd /x>y`, `D=/x<f` and `cd /x2>/dev/null` are one word each and are not plain);
 - (b) it sits in the CURRENT `&&` chain: `;`, a newline and `&` end a chain (the cd or the add may have failed, so the delete may run
   where the shell started), a `||` or a `!` taints the rest of the chain (nothing in it is trusted and every earlier binding is
   forgotten), a segment in a pipeline or before `&` sets nothing, and a name bound after an `&&` (not first in its chain) dies with the
   chain; `( )` and `$( )` scope the cwd, the bindings and the worktree marks; `((..))` and `$((..))` make everything unknown;
-- (c) the literal has no whitespace, `$`, backtick, glob, brace or backslash (an unquoted `$D` is word-split and globbed, so only a
-  literal value may be substituted), and the command assigns neither `IFS` nor `CDPATH` anywhere;
+- (c) the literal has no whitespace, `$`, backtick, glob, brace, backslash, `<`, `>`, `&`, `|`, `;`, `#` or parenthesis (an unquoted `$D` is word-split and
+  globbed, so only a literal value may be substituted), and the command assigns neither `IFS` nor `CDPATH` anywhere;
 - (d) the whole command contains no compound command (`if`/`while`/`until`/`for`/`select`/`case`/`{ }`), no function definition, no
   `trap` or `alias`, and no `eval` whose text is not plain `cd`/`rm`/`pushd`/`export`/assignment segments without `$` or backticks. When
   any of this appears, nothing in the command is resolved (v1 for every token);
@@ -298,12 +299,20 @@ on more: `bash -c`, `find`, `xargs`). A working directory, a variable binding or
   `for NAME`, `source`/`.`, `popd`, `cd -`, `pushd +N`, and a binding builtin in an option shape the scanner does not read, make the
   directory and the bindings unknown from there; a builtin behind a wrapper (`env cd X`, `sudo export D=x`, `time cd X`) does the same
   and is still scanned (`sudo eval "..."` and its targets count). A wrapped `eval` runs on a copy of the state; a bare `eval` runs in
-  this shell;
-- (f) a resolved target that still holds `$` (other than a leading `$TMPDIR`) or a `{a,b}` brace is judged as v1 judged the token
-  (`D=<scratch>; rm -rf "$D/$E"` fires); a literal token keeps exactly v1's `SCRATCH` test (`<scratch>/*` and `/tmp/x/$E` are scratch
+  this shell. A `bash -c` / `sh -c` child starts from a copy that keeps the cwd and the worktree marks but only the EXPORTED
+  names: `export NAME=<literal>`, or `export NAME` after a plain binding (`export -n`, `unset`, a rebinding that is not a proven
+  literal, a chain end for a conditional name and the end of a `( )` scope un-export it), plus literal `NAME=<literal>` and
+  `env NAME=<literal>` assignments on that segment (a prefix value that is not a literal removes its name). A prefix holding anything
+  but assignments and `env` (`sudo`, `nice`, `command`, `time`, `env -i`, `env -u`) passes NO names. So `D=<scratch>; bash -c 'rm -rf "$D"'`
+  fires (the child sees an empty `$D`), and `export D=<scratch>; bash -c ...` or `D=<scratch> bash -c ...` does not;
+- (f) EVERY target is checked after expansion, not only those with a `$` or a quoted part: one that still holds `$` (other than a
+  leading `$TMPDIR`), a `{a,b}` brace expansion, or a glob character (`*`, `?`, `[`) in a path component next to a `..` component is
+  judged as v1 judged the token (`D=<scratch>; rm -rf "$D/$E"`, `cd <scratch> && rm -rf ./{a,../../x}` and `cd <scratch> && rm -rf ../*` fire); a
+  literal token keeps exactly v1's `SCRATCH` test (`<scratch>/*` and `/tmp/x/$E` are scratch
   by the prefix, as before). A worktree is never marked for `~`, `..`, `/`, `.`, the repo, an ancestor of it, or fewer than two components.
 
-What v2 reads on top of that: `bash -c` and `sh -c` bodies (own copy of the state), a readable `eval` (shared state), `ls -d <paths> |
+What v2 reads on top of that: `bash -c` and `sh -c` bodies (a copy of the state with only the exported names, (e)),
+a readable `eval` (shared state), `ls -d <paths> |
 xargs rm -rf` and `find <roots> ... | xargs rm -rf`, `find -delete`, `find -exec rm -rf`; any other `ls` producer is unknown (fires).
 After `--` every word is a target, even one that starts with `-`. Quoted targets are read as text (`rm -rf "/tmp/my dir"` is scratch);
 a quoted target with a command substitution or a backslash is `Q` (fires). `cd /tmp/work/..` is `/tmp`, which is scratch as it always was.

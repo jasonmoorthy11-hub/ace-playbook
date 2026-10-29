@@ -3,13 +3,15 @@
 v2 may call a target scratch only when the resolution is PROVEN; anything else falls back to v1's literal rule, so v2 never
 fires less than v1 except on proven scratch. A working directory, a variable binding or a worktree mark is trusted only when:
  (a) a plain segment set it: exactly `cd <literal>`, `pushd <literal>`, `NAME=<literal>`, `export NAME=<literal>` or
-     `git [-C <literal>] worktree add [opts] <literal>`; no `!`, wrapper, `time`, `builtin`, redirection or assignment prefix;
+     `git [-C <literal>] worktree add [opts] <literal>`; no `!`, wrapper, `time`, `builtin`, assignment prefix or redirection (a `<`
+     or `>` anywhere in a word: `cd /x>y`, `D=/x<f`);
  (b) it sits in the current untainted `&&` chain (since the last `;`, newline or `&`; no `||` or `!` before it), not in a
      pipeline, and the command has no compound command or function (this module's `untrusted`);
- (c) the literal has no whitespace, `$`, backtick, glob, brace or backslash, and the command assigns IFS or CDPATH nowhere;
+ (c) the literal has no whitespace, `$`, backtick, glob, brace, backslash, `<>&|;#()`, and the command assigns IFS or CDPATH nowhere;
  (d) the command defines no function, `trap` or `alias`, and holds no `eval` whose text is not plain `cd`/`rm`/assignments.
 `untrusted(events, quotes)` answers (b)'s compound part, (c)'s IFS part and (d) for a whole command: True means no resolution at
-all (v1's literal reading of every token). The chain-local rules (a)-(c) are applied by resolve.py segment by segment.
+all (v1's literal reading of every token). The chain-local rules (a)-(c) are applied by resolve.py segment by segment; `leftover`
+judges every expanded target and `child_env` the names a `bash -c` / `sh -c` child inherits (only the exported ones).
 """
 
 from __future__ import annotations
@@ -20,8 +22,9 @@ import re
 from . import shell
 
 COMPOUND = frozenset("if then elif else fi while until do done for select case esac function { }".split())
-_BAD = re.compile(r"[\s$`*?\[{\\]")           # whitespace, $, backtick, glob, brace, backslash: not a literal
-_REDIR = re.compile(r"[0-9]*&?[<>]")
+_BAD = re.compile(r"[\s$`*?\[{\\<>&|;#()]")   # whitespace, $, backtick, glob, brace, backslash, redirection, separator, comment, paren
+_GLOB = re.compile(r"[*?\[]")
+_BRACE = re.compile(r"\{[^{}]*,[^{}]*\}")
 _SET = re.compile(r"^(\w+)=(.*)$", re.S)
 _EVALUABLE = frozenset(("cd", "rm", "pushd", "export"))
 _REF = re.compile(r"\$(\w+)|\$\{(\w+)\}")
@@ -39,9 +42,10 @@ def literal_text(tok: str, quotes: list) -> str | None:
 
 
 def plain(raw: list[str], front: list[str]) -> bool:
-    """Rule (a): no prefix was stripped from the segment (assignment, wrapper, keyword, `!`, `builtin`) and nothing is redirected."""
+    """Rule (a): no prefix was stripped from the segment (assignment, wrapper, keyword, `!`, `builtin`) and nothing is redirected
+    (a `<` or `>` anywhere in a token counts: `cd /x>y`, `D=/x<f` and `cd /x2>/dev/null` are one word each)."""
     pure = not front and all(_SET.match(t) for t in raw)
-    return (pure or (bool(front) and len(raw) == len(front))) and not any(_REDIR.match(t) for t in raw)
+    return (pure or (bool(front) and len(raw) == len(front))) and not any("<" in t or ">" in t for t in raw)
 
 
 def _readable(text: str | None, deep: int) -> bool:
@@ -100,6 +104,29 @@ def text(tok: str, env: dict, quotes: list) -> str | None:
             return None
         out.append(inner if kind == "'" else expand(inner))
     return "".join(out)
+
+
+def leftover(s: str) -> bool:
+    """True when a resolved target still holds `$`, a brace expansion or a glob in a component next to `..`: it proves nothing."""
+    if "$" in s or _BRACE.search(s):
+        return True
+    parts = s.split("/")
+    return any(_GLOB.search(p) and ".." in (parts[k - 1] if k else "", parts[k + 1] if k + 1 < len(parts) else "") for k, p in enumerate(parts))
+
+
+def child_env(prefix: list[str], env: dict, exp: set, quotes: list) -> dict:
+    """What a `bash -c` / `sh -c` child starts with: the exported names plus literal `NAME=v` / `env NAME=v` in front of it.
+
+    Any other prefix (sudo, nice, command, time, `env -i`, ...) passes NO names; a prefix value that is not a literal drops its name."""
+    if any(not (_SET.match(t) or base(t) == "env") for t in prefix):
+        return {}
+    out = {n: env[n] for n in exp if n in env}
+    for m in filter(None, map(_SET.match, prefix)):
+        if (val := literal_text(m.group(2), quotes)) is None:
+            out.pop(m.group(1), None)
+        else:
+            out[m.group(1)] = val
+    return out
 
 
 def victims(raw: list[str], front: list[str], events: list, i: int) -> list[str]:

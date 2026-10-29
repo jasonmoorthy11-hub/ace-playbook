@@ -194,6 +194,30 @@ UNPROVEN = [
     ("cd-behind-a-redirect", f"cd {SCR} >/dev/null && rm -rf ./*", PLAIN_CD),
     # a target after `--` is a target even when it starts with `-`
     ("dash-target-after-ddash", f"rm -f -r -- -{OUT}", f"rm -f -r -- {SCR}"),
+    # Security review 5 (fix wave 3), finding 1: a redirection glued to the literal is not a plain segment
+    ("glued-redirect-cd", f"cd {SCR}>x && rm -rf ./*", PLAIN_CD),
+    ("glued-redirect-var", f'D={SCR}<f; rm -rf "$D"', PLAIN_VAR),
+    ("glued-redirect-fd", f"cd {SCR}2>/dev/null && rm -rf ./*", PLAIN_CD),
+    ("glued-redirect-dup", f"cd {SCR}>&2 && rm -rf ./*", PLAIN_CD),
+    ("glued-redirect-export", f"export D={SCR}>x && rm -rf $D", f"export D={SCR} && rm -rf $D"),
+    # finding 2: the leftover check runs on EVERY target (a brace expansion, a glob next to `..`), not only on `$` and quote holes
+    ("brace-through-dotdot", f"cd {SCR} && rm -rf ./{{a,../../{OUT.lstrip('/')}}}", PLAIN_CD),
+    ("glob-after-dotdot", f"cd {SCR} && rm -rf ../*", PLAIN_CD),
+    ("glob-before-dotdot", f"cd {SCR} && rm -rf ./*/../..", PLAIN_CD),
+    ("glob-after-sub-dotdot", f"cd {SCR} && rm -rf ./sub/../../*", f"cd {SCR} && rm -rf ./sub/*"),
+    ("glob-after-dotdot-var", f'D={SCR}; rm -rf "$D"/../*', f'D={SCR}; rm -rf "$D"/*'),
+    # finding 3: a `bash -c` / `sh -c` child inherits only exported names and literal prefix assignments
+    ("child-unexported-bash", f"D={SCR}; bash -c 'rm -rf \"$D\"'", f"export D={SCR}; bash -c 'rm -rf \"$D\"'"),
+    ("child-unexported-sh", f"D={SCR}; sh -c 'rm -rf \"$D\"'", f"D={SCR} sh -c 'rm -rf \"$D\"'"),
+    ("child-env-bash-unexported", f"D={SCR}; env bash -c 'rm -rf \"$D\"'", f"env D={SCR} bash -c 'rm -rf \"$D\"'"),
+    ("child-unexported-after-and", f"D={SCR} && bash -c 'rm -rf \"$D\"'", f"D={SCR} && export D && bash -c 'rm -rf \"$D\"'"),
+    ("child-unexport-n", f"export D={SCR}; export -n D; bash -c 'rm -rf \"$D\"'", f"export D={SCR}; bash -c 'rm -rf \"$D\"'"),
+    ("child-export-then-unset", f"export D={SCR}; unset D; bash -c 'rm -rf \"$D\"'", f"export D={SCR}; bash -c 'rm -rf \"$D\"'"),
+    ("child-sudo-resets-the-env", f"export D={SCR}; sudo bash -c 'rm -rf \"$D\"'", f"export D={SCR}; bash -c 'rm -rf \"$D\"'"),
+    ("child-nice-prefix", f"export D={SCR}; nice bash -c 'rm -rf \"$D\"'", f"export D={SCR}; bash -c 'rm -rf \"$D\"'"),
+    ("child-prefix-not-literal", f"export D={SCR}; D=$X bash -c 'rm -rf \"$D\"'", f"D={SCR} bash -c 'rm -rf \"$D\"'"),
+    ("child-env-i", f"export D={SCR}; env -i bash -c 'rm -rf \"$D\"'", f"export D={SCR}; env bash -c 'rm -rf \"$D\"'"),
+    ("child-rebound-after-export", f"export D={SCR}; D={OUT}; bash -c 'rm -rf \"$D\"'", f"D={OUT}; export D={SCR}; bash -c 'rm -rf \"$D\"'"),
 ]
 
 

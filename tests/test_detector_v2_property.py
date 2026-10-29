@@ -246,7 +246,8 @@ for _c, _kinds in (("let D=1", BINDINGS), ("unset D", BINDINGS), ("read D", BIND
                    ("popd", DIRS), ("cd -", DIRS), ("pushd +1", DIRS)):
     MUTANTS["then-" + _c] = (lambda c: lambda s_, j, dl, k: f"{s_}{j}{c}{j}{dl}")(_c)
     APPLIES["then-" + _c] = _kinds
-VALUES = {"dollar": "{r}/$E", "glob": "{r}/*", "brace": "{r}/{{a,b}}", "space": '"{r} x"', "backtick": '"{r}/`id`"', "subst": '"{r}/$(id)"'}
+VALUES = {"dollar": "{r}/$E", "glob": "{r}/*", "brace": "{r}/{{a,b}}", "space": '"{r} x"', "backtick": '"{r}/`id`"', "subst": '"{r}/$(id)"',
+          "glued-out": "{r}>x", "glued-in": "{r}<f", "glued-fd": "{r}2>/dev/null"}   # fix wave 3: a redirection glued to the literal
 
 
 def _outside(k: str) -> str:

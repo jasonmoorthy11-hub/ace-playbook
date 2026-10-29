@@ -348,7 +348,8 @@ def test_canonical_targets(cmd, want):
     ("bash --norc -o pipefail -c 'rm -rf /w/src'", [[("/w/src", False)]]),
     ("sudo bash -c 'rm -rf /w/src'", [[("/w/src", False)]]),
     ("cd /tmp/w && bash -c 'rm -rf .'", [[("/tmp/w", True)]]),
-    ("D=/tmp/w; bash -c 'rm -rf $D'", [[("/tmp/w", True)]]),
+    ("export D=/tmp/w; bash -c 'rm -rf $D'", [[("/tmp/w", True)]]),
+    ("D=/tmp/w; bash -c 'rm -rf $D'", [[("$D", False)]]),          # fix wave 3: a child shell inherits only exported names
     ("cd /tmp/w && bash -c 'cd /w' && rm -rf .", [[("/tmp/w", True)]]),
     ("bash -c \"bash -c 'rm -rf /w/src'\"", []),
     ("bash script.sh -c 'rm -rf /w/src'", []),
@@ -609,6 +610,31 @@ PROVEN = [   # (case, command, fires)
     ("rm-ddash-then-scratch", "rm -rf -- /tmp/w/x", False),
     ("an-eval-skipped-by-and-binds-nothing", 'true && eval "D=/tmp/w"; rm -rf "$D"', True),
     ("an-eval-first-in-its-chain-binds-and-resolves", 'eval "D=/tmp/w"; rm -rf "$D"', False),
+    # fix wave 3: the leftover check on every target, the exported-only child env, glued redirections
+    ("brace-through-dotdot-on-a-trusted-cwd", "cd /tmp/w && rm -rf ./{a,../../w/src}", True),
+    ("glob-next-to-dotdot-on-a-trusted-cwd", "cd /tmp/w && rm -rf ../*", True),
+    ("plain-glob-on-a-trusted-cwd", "cd /tmp/w && rm -rf ./*", False),
+    ("subdir-glob-on-a-trusted-cwd", "cd /tmp/w && rm -rf ./sub/*", False),
+    ("dotdot-without-a-glob-still-resolves", "cd /tmp/w && rm -rf ../x", False),
+    ("a-literal-token-with-a-brace-keeps-v1s-prefix-rule-on-a-cwd", "cd /tmp/w && rm -rf ./{a,b}", True),
+    ("bash-c-child-without-export", 'D=/tmp/w; bash -c \'rm -rf "$D"\'', True),
+    ("bash-c-child-with-export", 'export D=/tmp/w; bash -c \'rm -rf "$D"\'', False),
+    ("bash-c-child-with-export-after-binding", 'D=/tmp/w; export D; bash -c \'rm -rf "$D"\'', False),
+    ("bash-c-child-with-prefix-assignment", 'D=/tmp/w bash -c \'rm -rf "$D"\'', False),
+    ("bash-c-child-with-env-prefix", 'env D=/tmp/w bash -c \'rm -rf "$D"\'', False),
+    ("sh-c-child-without-export", 'D=/tmp/w; sh -c \'rm -rf "$D"\'', True),
+    ("bash-c-child-keeps-the-cwd", "cd /tmp/w && bash -c 'rm -rf ./*'", False),
+    ("bash-c-child-keeps-the-worktree-mark", "git worktree add /w/src/wt b && bash -c 'rm -rf /w/src/wt'", False),
+    ("bash-c-child-after-sudo-inherits-nothing", 'export D=/tmp/w; sudo bash -c \'rm -rf "$D"\'', True),
+    ("bash-c-child-after-unexport", 'export D=/tmp/w; export -n D; bash -c \'rm -rf "$D"\'', True),
+    ("bash-c-child-prefix-overrides-with-a-dollar", 'export D=/tmp/w; D=$X bash -c \'rm -rf "$D"\'', True),
+    ("export-inside-a-subshell-is-restored", 'D=/tmp/w; (export D); bash -c \'rm -rf "$D"\'', True),
+    ("export-before-a-subshell-survives-it", 'export D=/tmp/w; (D=/tmp/v); bash -c \'rm -rf "$D"\'', False),
+    ("export-dies-with-its-chain-binding", 'true && export D=/tmp/w; bash -c \'rm -rf "$D"\'', True),
+    ("bare-eval-still-shares-the-cwd", "eval 'cd /tmp/w' && rm -rf ./*", False),
+    ("glued-redirect-on-cd", "cd /tmp/w>x && rm -rf ./*", True),
+    ("glued-redirect-on-an-assignment", 'D=/tmp/w<f; rm -rf "$D"', True),
+    ("glued-fd-redirect-on-cd", "cd /tmp/w2>/dev/null && rm -rf ./*", True),
 ]
 
 
@@ -642,6 +668,35 @@ def test_literal_text_and_plain_segments():
     assert not rp.plain(["!", "cd", "/x"], ["cd", "/x"]) and not rp.plain(["env", "cd", "/x"], ["cd", "/x"])
     assert not rp.plain(["cd", "/x", ">/dev/null"], ["cd", "/x", ">/dev/null"]) and not rp.plain(["D=1", "env"], [])
     assert not rp.plain(["D=1", "cd", "/x"], ["cd", "/x"]) and not rp.plain(["D=1", ">f"], [])
+
+
+def test_wave3_a_glued_redirection_is_neither_a_literal_nor_a_plain_segment():
+    for glued in ("/tmp/w>x", "/tmp/w<f", "/tmp/w2>/dev/null", "/tmp/w>&2", "/tmp/w;x", "/tmp/w|x", "/tmp/w&x", "/tmp/w#x", "/tmp/w(x", "/tmp/w)"):
+        assert rp.literal_text(glued, []) is None, glued
+    for cmd in (["cd", "/tmp/w>x"], ["cd", "/tmp/w2>/dev/null"], ["cd", "/tmp/w>&2"], ["pushd", "/tmp/w<f"], ["export", "D=/tmp/w>x"]):
+        assert not rp.plain(cmd, cmd), cmd
+    assert not rp.plain(["D=/tmp/w<f"], []) and not rp.plain(["D=/tmp/w>x", "E=1"], []) and rp.plain(["D=/tmp/w"], [])
+    assert rp.plain(["cd", "/tmp/w"], ["cd", "/tmp/w"]) and rp.literal_text("/tmp/w-x_1.2", []) == "/tmp/w-x_1.2"
+
+
+def test_wave3_leftover_is_true_for_expansions_and_globs_next_to_dotdot_only():
+    for left in ("a/$X", "a/${X}", "./{a,b}", "a/{b,../../c}", "../*", "*/..", "a/../?", "a/[ab]/..", "./sub/../../*"):
+        assert rp.leftover(left), left
+    for fine in ("/tmp/w", "./*", "./sub/*", "a/../b", "*", "a/b*c/d", "/tmp/w/{a", "{a}"):
+        assert not rp.leftover(fine), fine
+
+
+def test_wave3_child_env_keeps_exported_names_and_literal_prefix_assignments_only():
+    q = [("'", "a b")]
+    env, exp = {"D": "/tmp/w", "E": "/srv/e", "F": "/tmp/f"}, {"D", "F", "GONE"}
+    assert rp.child_env([], env, exp, q) == {"D": "/tmp/w", "F": "/tmp/f"}
+    assert rp.child_env(["env"], env, exp, q) == {"D": "/tmp/w", "F": "/tmp/f"}
+    assert rp.child_env(["E=/tmp/e", "env", "G=/tmp/g"], env, exp, q) == {"D": "/tmp/w", "F": "/tmp/f", "E": "/tmp/e", "G": "/tmp/g"}
+    assert rp.child_env(["D=/tmp/x"], env, exp, q) == {"D": "/tmp/x", "F": "/tmp/f"}
+    assert rp.child_env(["D=$X"], env, exp, q) == {"F": "/tmp/f"} and rp.child_env(["D=\x000\x00"], env, exp, q) == {"F": "/tmp/f"}
+    for wrapper in (["sudo"], ["nice"], ["command"], ["time"], ["env", "-i"], ["env", "-u", "D"], ["D=/tmp/x", "sudo"], ["builtin"], ["timeout", "5"]):
+        assert rp.child_env(wrapper, env, exp, q) == {}, wrapper
+    assert env == {"D": "/tmp/w", "E": "/srv/e", "F": "/tmp/f"} and exp == {"D", "F", "GONE"}      # inputs are never mutated
 
 
 def test_rm_args_after_a_double_dash_everything_is_a_target():

@@ -118,12 +118,17 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
   see a recursive delete through an interpreter (python, node, perl, a heredoc, a base64 pipe, `zsh -c`, `find -exec sh -c`,
   `bash -c "$(printf ...)"`, a `bash -c` nested in a `bash -c`), through `rsync --delete`, `git clean`, `trash` or Finder, or in a script or
   Makefile that was written and then run, nor through `$IFS` or `$(...)` as the command word, nor an `xargs` fed by anything but `ls -d`
-  or `find` (14 of 111 variants). v2 resolves a target only from PROVEN state; whatever it cannot prove falls back to v1's literal rule
+  or `find` (14 of 132 variants). v2 resolves a target only from PROVEN state; whatever it cannot prove falls back to v1's literal rule
   for that token, so it fires wherever v1 fired except on proven scratch. Proven means: a plain `cd`, `NAME=`, `export NAME=` or
   `git worktree add` segment with a literal value (no whitespace, `$`, glob, brace, backslash), in the current `&&` chain (a `;`,
   newline or `&` ends it, a `||` or `!` taints the rest of it, a pipeline or a wrapper sets nothing), in a command with no compound
   command (`if`, `while`, `for`, `case`, `{ }`), function, `trap`, `alias`, `IFS`/`CDPATH` assignment or unreadable `eval`, and not
-  followed by a rebinding builtin (`let`, `read`, `printf -v`, `unset`, `source`, `((..))`, `pushd +N`, ...). A worktree made by an EARLIER
+  followed by a rebinding builtin (`let`, `read`, `printf -v`, `unset`, `source`, `((..))`, `pushd +N`, ...). Closed after security review 5: a
+  redirection glued to a literal (`cd <scratch>>x`, `D=<scratch><f`,
+  `cd <scratch>2>/dev/null`) is not a plain segment; the leftover check (`$`, a brace expansion, a glob next to `..`) runs on every
+  target (`cd <scratch> && rm -rf ./{a,../../x}` and `cd <scratch> && rm -rf ../*` fire); a `bash -c` / `sh -c` child inherits only
+  exported names and literal prefix assignments (`D=<scratch>; bash -c 'rm -rf "$D"'` fires; so does the double-quoted
+  `bash -c "rm -rf $D"`, whose outer expansion v2 does not model). A worktree made by an EARLIER
   tool call is not remembered (the detector keeps no state), and a variable that came from the environment (`$HOME`, `$PWD`, one exported
   earlier) is unresolved and not scratch. The price is false positives that v1 also had: a `cd <scratch>` inside a loop or an `if`,
   after a `;`, or a scratch value built with `$`, still fires (week 1 read 36 such fires on the live data; the matrix has 0 false
