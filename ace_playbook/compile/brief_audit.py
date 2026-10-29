@@ -19,6 +19,7 @@ import math
 import os
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*")
@@ -147,3 +148,34 @@ def append_row(path, row: dict) -> None:
         fcntl.flock(fd, fcntl.LOCK_EX)
         os.fchmod(fd, 0o600)
         fh.write(json.dumps(row, sort_keys=True).encode() + b"\n")
+
+
+# The reasons a run can refuse (the `fail` literals of hooks/brief.sh and hooks/brief_lib.sh; a timeout already has its own row): the ONLY
+# text `brief refusal` writes, anything else is "other". `stage N failed (exit R)` is read without its exit code.
+REASONS = ("config", "lock", "no /usr/bin/perl", "cannot create the brief directory", "cannot open the lock file", "cannot create the run directory",
+           "empty or malformed tool allowlist or deny list", "due check failed", "stage 1 failed", "stage 2 failed", "tool audit failed",
+           "stage 1 gave no result", "digest refused", "stage 2 gave no result", "brief refused", "state file")
+
+
+def as_dict(x) -> dict:
+    return x if isinstance(x, dict) else {}
+
+
+def refusal_reason(text) -> str:
+    base = str(text).split(" (exit", 1)[0]
+    return base if base in REASONS else "other"
+
+
+def last_refusal(rows: list, now: datetime | None = None) -> str:
+    """`<reason> <age>` of the LAST ledger row that carries `drift` (tool drift), `timeout` (stage<N> timeout) or `refused`, else `none`."""
+    now = now or datetime.now(timezone.utc)
+    for r in reversed(rows):
+        stage = r.get("stage") if isinstance(r.get("stage"), str) and re.fullmatch(r"[a-z0-9_]{1,20}", r["stage"]) else "stage"
+        why = "tool drift" if "drift" in r else f"{stage} timeout" if "timeout" in r else refusal_reason(r["refused"]) if "refused" in r else None
+        if why:
+            try:
+                secs = (now - datetime.strptime(r["ts"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)).total_seconds()
+            except (KeyError, TypeError, ValueError):
+                return f"{why} ?"
+            return f"{why} " + (f"{int(secs // 86400)}d" if secs >= 86400 else f"{int(secs // 3600)}h" if secs >= 3600 else f"{max(int(secs // 60), 0)}m")
+    return "none"

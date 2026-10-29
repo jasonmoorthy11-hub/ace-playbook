@@ -251,7 +251,7 @@ def test_the_queue_records_one_decision_per_key_and_a_dismissal_needs_a_note(tmp
     assert run_queue(cfg, ask) == 0
     rows = store.read_decisions(wd)
     assert [(r["id"], r["decision"], r["note"]) for r in rows[:3]] == [
-        ("W-00000000", "accepted", ""), ("W-00000001", "dismissed", "not relevant to me"), ("W-00000002", "later", "")]
+        ("W-00000000", "accepted", "diff_sha256 none"), ("W-00000001", "dismissed", "not relevant to me"), ("W-00000002", "later", "")]
     assert ask.prompts.count("dismiss note (required): ") == 3 and "accepted 1, dismissed 1, later 1" in capsys.readouterr().out
     assert {p["id"]: s for p, s in store.statuses(wd, "2026-10-21T00:00:00Z")} == {
         "W-00000000": "accepted", "W-00000001": "dismissed", "W-00000002": "open"}

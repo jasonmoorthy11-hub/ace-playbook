@@ -234,7 +234,9 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   `claude --version`. There is no separate `acewatch` user and no egress allowlist until W2, so a fetch that is fooled (a redirect the guard
   misjudges, a rebinding answer) runs with the operator's network and file reach. The SSRF guard checks the address before the connection,
   not on the connected socket, so a DNS-rebinding race remains: a name that resolves to a public address at the check and to a private one at
-  the connect is not caught.
+  the connect is not caught. After a sleep and wake the first lookups can fail before DNS is up: a scan waits ONCE (20 s, bounded) for the first
+  source whose name did not resolve and tries that source again; the others in the same scan are not retried, so a second scan of the day still
+  catches up (a dropped source keeps no stamp and stays due).
 - Watcher, Reader (W2, built, not live, off by default): a tool-less single-turn model call reads one sanitized tier-1 feed item and may
   only answer a fixed JSON schema that code validates; the result is a `lead` with no diff, whatever the item says. The residual is the
   title: it is the one model-touched free text (at most 120 characters, control, invisible and line-separator characters removed, never in
@@ -249,7 +251,17 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   tests cannot tell whether a later claude version still honours them); `CLAUDE.md` and auto-memory are kept out by the separate user, which
   is the guarantee. The `acewatch` user, its group, its own claude and login and any egress limit are the operator's steps
   (`docs/watch/SANDBOX.md`): launchd cannot restrict the network, so without a `pf` rule the fetcher's own guards are the only egress control.
-  Moving `acewatch`'s proposals to the operator's store is a manual copy, not built.
+  Moving `acewatch`'s proposals to the operator's store is a manual copy followed by `compile watch import <dir>`, which trusts the validation
+  (`records.check`, the id and name rules, the size cap, stamps, http(s) URLs, targets known to the operator's own config), not the copy's origin:
+  a forged but valid record in the copy becomes a proposal. An imported record is evidence plus title: an imported record never carries a diff
+  (a diff comes only from the operator's own scan, which supersedes the import) and its title shows ` (imported)`; a forged quote, URL or title can still
+  mislead a reader of the queue. An own scan's diff always wins over a diff-less imported twin (same id: the file is replaced in place; another id: the
+  twin is closed as superseded; an expired, auto-closed or forged-key twin is replaced too). A dismissal or an accept of an imported twin is a
+  decision about ITS key and is not undone: dismissing an imported twin hides the own scan's diff for that key (same model and successor) for good. A
+  dismissed or accepted twin of the same id with ANOTHER key (a forged successor) is replaced by the own candidate and reopened, or waits for a free slot
+  when five are open. The accept row records the `diff_sha256` that
+  the operator saw (`diff_sha256 none` for a record without a diff), so a queue session left open across a scan that replaced the file leaves an accept of
+  a hash that no longer matches the file; nothing is applied by either.
 - Watcher, sanitizer coverage: `strip_hidden` reads inline `style` attributes and simple single-selector `<style>` rules (a tag, `.class` or
   `#id` rule, no combinators; class and id names match without case, as in quirks mode). Media queries, descendant, child and attribute
   selectors, `@import` and external stylesheets are NOT handled, so text hidden that way is read as visible. The inline rules hide opacity
@@ -524,16 +536,29 @@ used because it drops the claude.ai
 connectors (probed 2026-10-22), so `disableAllHooks` keeps the operator's hooks out, which also disables the PreToolUse guard. Isolating
 with a private `CLAUDE_CONFIG_DIR` does not work: credentials are bound to the config dir, so a fresh one is "Not logged in". The window figures in its
 ledger are one reading per stream, so a single run cannot show its own cost in plan share; only the trend over consecutive rows does.
+The `last refusal:` line of `brief status` names only a reason from a fixed list (a stage timeout and a tool drift are the other two kinds, each from its
+own row); a run
+whose config or brief directory cannot be read has no ledger to write to, so its refusal stays on stderr only, and a quiet exit (another run holding the
+lock, not due) is not a refusal.
 
 ## Nightly check notes
 
-The two optional config keys `backup_check` and `brain_check` name local scripts that the nightly runs as `<script> --check`. A note is text
+The three optional config keys `backup_check`, `brain_check` and `acewatch_check` name local scripts that the nightly runs as
+`<script> --check`. A note is text
 from a local script the operator configured, not from the network; first line, 80 chars, failures are reported as `check failed` without
 detail (a script that is missing or not a regular file at run time, a non-zero exit, a timeout of 20 s, a start error, an empty or unprintable first
 line and a line that contains a `/` all give
-`backup check failed` or `brain check failed`: never stderr, the script path or an exception text). The script's own line is shown as it
+`backup check failed`, `brain check failed` or `acewatch check failed`: never stderr, the script path or an exception text). The script's own line is shown
+as it
 wrote it, so what it prints is only as good as the script (a check line is shown as a plain note; a line whose first word carries a colon is
-rejected so it cannot pose as a digest category such as `silent:`); `compile status` shows at most four notes, each cut to 80 characters.
+rejected so it cannot pose as a digest category such as `silent:`); `compile status` shows at most four notes, each cut to 80 characters;
+the arm notes come first, so with two of them plus the backup and brain notes the `acewatch` note is not shown there (it stays in `health.json`).
+
+The sandbox logs in `/var/acewatch/logs` are rotated only if the operator installs the newsyslog template (`hooks/acewatch/newsyslog.acewatch.conf`) as
+root; nothing in this repository installs it, and the other launchd jobs' logs (nightly, brief) are not covered by it.
+
+The `acewatch` note is the same kind of text: whatever the operator's `acewatch_check` script prints (the sample prints the first `open ...`, `none` or
+`disabled` line of `watch status` as `acewatch`), not a count this repository verified. The sudoers line it needs is the operator's, installed by hand.
 
 ## Platform assumptions
 

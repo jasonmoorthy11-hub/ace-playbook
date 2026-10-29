@@ -148,6 +148,10 @@ def cmd_timeout_mark(cfg, a) -> int:
     ba.append_row(_dir(cfg) / LEDGER, {"ts": _now(), "stage": a.stage, "timeout": a.stage})
 
 
+def cmd_refusal(cfg, a) -> int:
+    ba.append_row(_dir(cfg) / LEDGER, {"ts": _now(), "stage": "run", "refused": ba.refusal_reason(a.reason)})
+
+
 def cmd_extract(cfg, a) -> int:
     out = extract(a.stream, a.what, a.last)
     print(out if a.what == "text" else json.dumps(out))
@@ -155,13 +159,12 @@ def cmd_extract(cfg, a) -> int:
 
 def cmd_status(cfg, a) -> int:
     d = cfg.brief_path          # status only reads: it never creates the directory
-    state = read_json(d / STATE)
-    state = state if isinstance(state, dict) else {}
+    state = ba.as_dict(read_json(d / STATE))
     rows = [r for r in map(_jl, (d / LEDGER).read_text(errors="replace").split("\n") if (d / LEDGER).is_file() else []) if isinstance(r, dict)]
     by_stage = {str(r.get("stage"))[:20]: r.get("cost_usd") for r in rows if "cost_usd" in r}      # str(): a list or object stage must not be a dict key
     costs = ", ".join(f"{s} ${c}" for s, c in sorted(by_stage.items(), key=str))
     print(f"last brief: {state.get('last_brief', 'never')}\nneeds you: {state.get('needs_you_count', 0)}\nledger rows: {len(rows)}")
-    print(f"last stage costs: {costs or 'none'}")
+    print(f"last refusal: {ba.last_refusal(rows)}\nlast stage costs: {costs or 'none'}")
 
 
 def cmd_conf(cfg, a) -> int:
@@ -172,7 +175,7 @@ def cmd_conf(cfg, a) -> int:
 
 VERBS = {"due": ["--force"], "digest-apply": ["src", "--out"], "render": ["src"], "state-mark": [], "status": [],
          "ledger": ["before", "after", "stage", "result"], "extract": ["stream", "--what", "--last"], "conf": ["key"],
-         "tools-audit": ["stream", "--allow"], "timeout-mark": ["stage"]}
+         "tools-audit": ["stream", "--allow"], "timeout-mark": ["stage"], "refusal": ["reason"]}
 
 
 def main(argv=None) -> int:

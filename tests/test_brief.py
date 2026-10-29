@@ -276,7 +276,8 @@ def test_state_mark_counts_needs_you_and_status_reports(env, capsys):
     assert datetime.strptime(state["last_brief"], brief.FMT)
     assert run(capsys, "due")[0] == 3
     lines = run(capsys, "status")[1].splitlines()
-    assert lines[0] == f"last brief: {state['last_brief']}" and lines[1:3] == ["needs you: 1", "ledger rows: 0"] and lines[3] == "last stage costs: none"
+    assert lines[0] == f"last brief: {state['last_brief']}" and lines[1:3] == ["needs you: 1", "ledger rows: 0"]
+    assert lines[3:] == ["last refusal: none", "last stage costs: none"]
 
 
 def test_conf_prints_the_value_and_creates_the_brief_dir_0700(env, capsys):
@@ -325,7 +326,7 @@ def test_ledger_appends_one_0600_row_with_the_window_fields(env, capsys):
     assert r["five_hour_after"] == pytest.approx(0.09) and r["tools_called"] == ["mcp__claude_ai_Gmail__search_threads"]
     assert datetime.strptime(r["ts"], brief.FMT)
     assert rows[1]["five_hour_before"] is None and rows[1]["seven_day_after"] is None and rows[1]["cost_usd"] == 0.2424
-    assert run(capsys, "status")[1].splitlines()[2:] == ["ledger rows: 2", "last stage costs: stage1 $0.2424, stage2 $0.2424"]
+    assert run(capsys, "status")[1].splitlines()[2:] == ["ledger rows: 2", "last refusal: none", "last stage costs: stage1 $0.2424, stage2 $0.2424"]
 
 
 def test_ledger_survives_garbage_inputs_and_refuses_a_bad_stage(env, capsys):
@@ -486,7 +487,8 @@ def test_timeout_mark_appends_one_row_and_status_ignores_it_for_costs(env, capsy
     assert run(capsys, "timeout-mark", "Stage 1; rm")[0] == 2
     rows = [json.loads(ln) for ln in (env / "brief" / "brief_ledger.jsonl").read_text().splitlines()]
     assert len(rows) == 1 and rows[0]["timeout"] == "stage1" and rows[0]["ts"].endswith("Z")
-    assert run(capsys, "status")[1].splitlines()[2:] == ["ledger rows: 1", "last stage costs: none"]
+    assert run(capsys, "status")[1].splitlines()[2:4] == ["ledger rows: 1", "last refusal: stage1 timeout 0m"]
+    assert run(capsys, "status")[1].splitlines()[4:] == ["last stage costs: none"]
 
 
 # ------------------------------------------------------------------ wave 7: every tool call block, the raw scan, status, the ledger model
@@ -551,7 +553,8 @@ def test_status_treats_a_state_file_that_is_not_an_object_as_empty(env, capsys, 
 def test_status_never_creates_the_brief_directory(env, capsys):
     assert not (env / "brief").exists()
     code, out, err = run(capsys, "status")
-    assert (code, err) == (0, "") and out.splitlines() == ["last brief: never", "needs you: 0", "ledger rows: 0", "last stage costs: none"]
+    assert (code, err) == (0, "")
+    assert out.splitlines() == ["last brief: never", "needs you: 0", "ledger rows: 0", "last refusal: none", "last stage costs: none"]
     assert not (env / "brief").exists()
 
 

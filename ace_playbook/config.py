@@ -19,7 +19,7 @@ SUGGESTED_KEY = "chain_key"   # keygen's suggestion beside the config file; neve
 MAX_INJECT_CHARS = 7000
 
 
-CHECK_FIELDS = ("backup_check", "brain_check", "watch_claude")   # optional scripts and binaries, type-checked only: nightly notes, the watcher Reader's claude
+CHECK_FIELDS = ("backup_check", "brain_check", "acewatch_check", "watch_claude")   # optional scripts and binaries, type-checked only
 READER_MODEL = re.compile(r"claude-[A-Za-z0-9][A-Za-z0-9._-]*")
 SEED_HEX = re.compile(r"[0-9a-f]{64}")
 
@@ -78,9 +78,10 @@ class Config:
     brief_model_stage2: str = "claude-sonnet-5-5"  # stage 2 (no tools: writes the brief JSON from the cleaned digest)
     brief_dedupe_hours: int = 4
     brief_max_budget_usd: float = 1.0
-    # the nightly's optional health notes (ace_playbook/nightly_notes.py): two operator scripts run as `<script> --check`; None means none
+    # the nightly's optional health notes (ace_playbook/nightly_notes.py): three operator scripts run as `<script> --check`; None means none
     backup_check: Path | None = None
     brain_check: Path | None = None
+    acewatch_check: Path | None = None  # a third script, the same way: the operator-side acewatch status line (hooks/acewatch/acewatch_check.sh)
     # the shadow arm phase (PREREGISTRATION.md, Shadow-mode additions): two private seeds (64 hex; only their sha256 is ever printed or sealed)
     # and the arm rate; None means not set yet, and `compile seal` refuses until all three are
     shadow_seed: str | None = field(default=None, repr=False)
@@ -165,7 +166,7 @@ class Config:
 
 
 _PATH_FIELDS = {"data_dir", "transcripts_root", "api_key_path", "engagements_path", "chain_key_path", "brief_dir", "brief_exclusions",
-                "watch_dir", "watch_sources", "watch_inventory_map", "backup_check", "brain_check", "watch_claude"}
+                "watch_dir", "watch_sources", "watch_inventory_map", "backup_check", "brain_check", "acewatch_check", "watch_claude"}
 
 
 def from_dict(raw: dict[str, Any]) -> Config:

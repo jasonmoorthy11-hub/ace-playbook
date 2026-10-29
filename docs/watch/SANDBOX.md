@@ -239,9 +239,27 @@ install and the `inputs.legacy-<date>` name are written from that run, not paste
   another host, and only the hosts in `watch_sources` are ever requested, but a process running as `acewatch` could open any outbound
   connection. A `pf` rule (an anchor that allows `acewatch` to reach only the source hosts) or a local proxy is the operator's optional step;
   without it, treat the egress as open.
-- Not built in W2: moving proposals from `acewatch`'s watch directory to the operator's own (`compile watch queue` appends decisions, so the
-  operator reviews a copy of `proposals/W-*.json` in a watch directory of their own). Copy only those files, as the operator; a copied file
-  is read through the same store readers, which skip anything of the wrong shape.
+- Moving proposals from `acewatch`'s watch directory to the operator's own is a copy, then an import (`compile watch queue` appends
+  decisions, so the operator reviews proposals in a watch directory of their own). Copy only `proposals/W-*.json` into a new
+  real directory of the operator's own, through `acewatch` (the operator cannot list `/var/acewatch`, and `sudo cp` would leave root-owned 0600 files that
+  every import rejects as `unreadable`); the archive is written by `acewatch` and unpacked by the operator, so the files end up operator-owned (0600):
+
+  ```
+  mkdir -m 700 ~/acewatch-copy
+  sudo -u acewatch sh -c 'cd /var/acewatch/watch/proposals && tar -cf - W-*.json' | tar -xf - --no-same-owner --no-same-permissions -C ~/acewatch-copy
+  ```
+
+  The archive comes from the sandboxed user, so the unpacking relies on tar's default safe extraction: never `-P` (absolute paths) and never as root; the
+  two extra flags keep the operator's own owner and umask on the files. bsdtar (macOS) accepts both (checked in its manual); on GNU tar use the same
+  long options (both are in its documented option list; verify with `tar --help`).
+
+  (`/var/acewatch/watch` is the `watch_dir` of step 4; change it if yours differs.) Then run
+  `python3 -m ace_playbook.compile watch import ~/acewatch-copy` (add `--dry-run` to see the counts first). The import validates each file
+  with the same record check, counts duplicates, keeps the cap of five open, never changes the copy, and prints `rejected <stem>: <reason>`
+  for anything else; then `compile watch queue` reviews them. An imported record is evidence plus title: its stamps, URLs and target are checked
+  against the operator's own `watch_sources` and `watch_inventory_map` (both must be set), an imported record is evidence and a title: a diff in the copy
+  is never taken (`; N imported without diff` says how many) and none is computed from its fields; a diff comes only from the operator's own
+  `watch scan`, which supersedes the import. Its title shows ` (imported)`.
 
 ## Kill files
 
@@ -292,6 +310,35 @@ Exit 1 outranks 2 (D-168): a seen compliance is reported (its `model_pin` and pr
 ended in an outage or an unavailable claude. A run that is down (an outage or an unavailable claude) prints that line INSTEAD of `canary: N of M
 items read`, and with zero compliance it prints no proposals line. A call that ran and failed adds `canary: F failed` on stderr. A model change
 (`watch_reader_model`) is a reason to run it before the next scan.
+
+## Log rotation
+
+launchd appends `acewatch.out.log`, `acewatch.err.log` and `acewatch.weekly.out.log` / `.err.log` in `/var/acewatch/logs/` forever; the scan itself writes
+no log file. `hooks/acewatch/newsyslog.acewatch.conf` is a newsyslog(8) template, one line per file (owner `acewatch:acewatch`, mode 600, keep 5, rotate
+at 1024 KiB, compressed, flags `JN`: no signal to syslogd).
+Install it as root, by hand, once: replace the placeholder with acewatch's home and put the result where newsyslog reads it:
+
+```
+f=$(mktemp) && sed "s#__ACEWATCH_HOME__#/var/acewatch#g" hooks/acewatch/newsyslog.acewatch.conf > "$f"
+sudo install -m 644 "$f" /etc/newsyslog.d/acewatch.conf && rm "$f"
+sudo newsyslog -nvf /etc/newsyslog.d/acewatch.conf
+```
+
+(the last line is a dry run: it prints what it would rotate). launchd opens the log files again for every run, so the rotation needs no signal. The files are
+rotated as root and stay owned by `acewatch`; nothing in this repository installs the file. Linux: the same four files, the same numbers in a
+logrotate stanza (`rotate 5`, `size 1024k`, `compress`, `create 0600 acewatch acewatch`) under `/etc/logrotate.d/acewatch`.
+
+## The operator-side status line
+
+`/var/acewatch` is `acewatch`'s own (0700), so the operator's `compile status` cannot read the watcher's store and shows nothing about it. The nightly
+can show one line instead: set `acewatch_check` in the OPERATOR's config to a copy of `hooks/acewatch/acewatch_check.sh` (outside the checkout,
+mode 0755; edit the three variables at its top: the acewatch user, the venv python of step 3 and acewatch's config of step 4). The nightly runs
+it as `<script> --check` like `backup_check` and `brain_check`, keeps the first line (80 characters at most, no `/`) as a note, and `compile status`
+shows it: `acewatch open 3  leads 1  oldest 2d  last scan 4h` (or `acewatch none` / `acewatch disabled`); a failed or empty run shows
+`acewatch check failed`. The script runs `sudo -n -u acewatch <venv python> -m ace_playbook.compile --config <acewatch config> watch status`, so it needs
+ONE sudoers line, written by you with `sudo visudo -f /etc/sudoers.d/acewatch-check` (nothing installs it): `<operator> ALL=(acewatch) NOPASSWD: ` followed
+by that
+exact command (python path, `-m ace_playbook.compile --config` and the config path, `watch status`). It reads state only; it needs no write access.
 
 ## How to rotate the token
 

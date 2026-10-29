@@ -156,20 +156,30 @@ record untouched. Check it with
 `no health record` before the first run). After 3 failures in a row the SessionStart block adds
 one line telling you to read the reflect log (`reflect.log`) in the data dir.
 
-**Optional notes in `compile status` (`backup`, `brain drift`).** Two config keys name check scripts of your own (`~` is
+**Optional notes in `compile status` (`backup`, `brain drift`, `acewatch`).** Three config keys name check scripts of your own (`~` is
 expanded; the config loader only checks that the value is a non-blank string, so a moved or deleted script never breaks a loader):
 
 ```json
 "backup_check": "~/path/to/ace_backup.sh",
-"brain_check": "~/path/to/sync.sh"
+"brain_check": "~/path/to/sync.sh",
+"acewatch_check": "~/path/to/acewatch_check.sh"
 ```
+
+`acewatch_check` is the operator-side status line of the sandboxed watcher (`docs/watch/SANDBOX.md`, "The operator-side status line"): `/var/acewatch` is
+readable by `acewatch` only, so your own `compile status` cannot show it. `hooks/acewatch/acewatch_check.sh` is a sample (copy it out of the checkout,
+edit its three variables, add the one sudoers line it documents yourself): it prints `acewatch open N  leads N  oldest <age>  last scan <age>`
+(or `acewatch none` / `acewatch disabled`). The code takes any first line under the rules below; a failure shows `acewatch check failed`.
 
 Each night, before the sweep, `nightly_sweep.py` runs each configured script as `<script> --check` (20 s limit, only `PATH` and `HOME` in its
 environment), keeps the first line it prints (80 characters at most) and stores it in `health.json` under `notes`; `compile status` then
-shows it in its `notes:` line, for example `backup 7h`, `backup missing` or `brain drift: 0 files (1 skipped, 16 entropy)`. The line is
+shows it in its `notes:` line, for example `backup 7h`, `backup missing`, `brain drift: 0 files (1 skipped, 16 entropy)` or `acewatch open 3  leads 1 
+oldest 2d  last scan 4h`. `compile status` shows only the first four nightly
+notes (the arm notes come first), so two arm notes plus a backup and a brain note push the acewatch note out of that line; it is still in
+`health.json`. The line is
 whatever your script prints, so print no path (a line with a `/` is dropped). A script that is missing or not a regular file, exits non-zero, times
 out, prints nothing or starts its
-first word with a `:`-bearing token such as `silent:x` shows `backup check failed` or `brain check failed`, with no detail. A failing note never
+first word with a `:`-bearing token such as `silent:x` shows `backup check failed`, `brain check failed` or `acewatch check failed`, with no detail. A
+failing note never
 fails the night. Leave both keys out and nothing changes.
 
 ## 5. Optional: git pre-commit scrub
@@ -466,7 +476,7 @@ followed by `  DISABLED` while the shadow hook's kill file exists (the `kill_fil
 
 ## Watch (the configuration watcher)
 
-`python3 -m ace_playbook.compile watch scan|status|queue|canary` watches the sources you list for changes that touch what your setup pins
+`python3 -m ace_playbook.compile watch scan|status|queue|canary|import` watches the sources you list for changes that touch what your setup pins
 (a model id that is being retired, a newer Claude Code, a docs page you depend on) and stores inert proposals. It calls no model unless you
 turn the Reader on (step 5), applies nothing and writes only inside its own directory. It is the one part of ace-playbook that uses the
 network, and it is never on a hook path.
@@ -483,14 +493,26 @@ network, and it is never on a hook path.
    ```
 3. `compile watch scan` fetches the sources that are due (tier 0 daily, tier 1 weekly, by the stamps in `seen.json`; `--force` ignores the
    cadence, `--tier 0|1|all` picks, `--dry-run` fetches and matches but writes nothing), rebuilds `inventory.json` and prints one line per
-   new proposal and a summary line. It exits 0 except for a configuration error or a store write failure (an `OSError` on `watch_dir`,
+   new proposal and a summary line. When the first source it drops fails only because the name did not resolve (DNS is often not up yet after a
+   wake), it waits 20 seconds once, tries that source again and notes `dns wait 20s: <id> recovered|still dropped`; it never waits twice in a scan. It
+   exits 0 except for a configuration error or a store write failure (an `OSError` on `watch_dir`,
    printed as its type only): both exit 2. A scan holds an exclusive lock on `<watch_dir>/scan.lock`; a second scan that starts meanwhile
    prints `watch: scan running` and exits 0 without doing anything. Run it by hand or from a scheduler of your own; nothing is installed for
    you. For the terminal run, set `ACE_PLAYBOOK_CONFIG` in your shell profile (the same file the hooks and the status line read), or the
    watcher looks at the default config file. `compile watch status` prints the open count, leads, oldest, last scan and up to three titles.
    `compile watch queue [--limit N]` (terminal only) walks the open proposals oldest first: `1` accept, `2` dismiss (a note is required),
    `3` later, `q` quit. A decision is recorded in `decisions.jsonl`; nothing is changed on your machine. At most five proposals are open at
-   once (leads excepted); the rest wait as `queued`.
+   once (leads excepted); the rest wait as `queued`. `compile watch import <dir> [--dry-run]` moves a copy of `acewatch`'s
+   `proposals/W-*.json` (made by you, into a real directory) into your own store: every file is validated, a duplicate (same id or same
+   proposal key) is counted and not written, the cap of five open still holds, and the summary reads `import: N imported, N duplicate, N rejected`
+   with a `rejected <stem>: <reason>` line per rejection. An imported record is evidence plus title: its stamps, URLs and target are checked
+   against your own `watch_sources` and `watch_inventory_map` (both required), an imported record is evidence and a title: it never carries a diff
+   (`; N imported without diff` counts the copy's), a diff comes only from your own `watch scan`, which supersedes the import, and its title shows
+   ` (imported)`. `--dry-run` writes nothing; the copy is never changed; exit 2 for a symlinked directory
+   (also `<link>/sub/..`), a `DISABLED` file or an unsafe `watch_dir`;
+   a FIFO or any other non-file in the copy is rejected, never waited for. Review the imported proposals with `watch queue`.
+   When a later `watch scan` replaces an imported (diff-less) record with its own candidate with a diff, it prints `diffed <id>` per record and ends
+   the summary line with `; diffed N`; an `accept` in the queue records `diff_sha256 <hash>` of the diff that was shown in its decision note.
 4. Kill switch: `touch <watch_dir>/DISABLED`. While it exists `scan` prints `watch: disabled` and fetches and writes nothing; remove it to resume.
 5. The Reader (W2, optional, off by default). Without it nothing above calls a model. With it, tier-1 feed items go one by one to a tool-less,
    single-turn `claude -p` call whose answer code validates; the only result is a `lead` with no diff. **The Reader is for the `acewatch` user
@@ -533,7 +555,8 @@ network, and it is never on a hook path.
    the Reader away from your files (the `acewatch` user in a group of its own, its own claude and login, two LaunchDaemon templates in
    `hooks/acewatch/`) is `docs/watch/SANDBOX.md`; nothing is installed for you. This repo's CI runs the three Reader test files under a bare PATH
    (`env -i PATH=/usr/bin:/bin`, a scratch HOME, `LANG=C`, which Python coerces to UTF-8) with the venv's python by absolute path: the PATH and
-   locale of the acewatch LaunchDaemon, not its user.
+   locale of the acewatch LaunchDaemon, not its user. The four launchd logs of the sandbox are rotated by a root-installed newsyslog template
+   (`hooks/acewatch/newsyslog.acewatch.conf`; SANDBOX.md "Log rotation").
 
 The count also reaches `status.json` (`watch_open` and friends), the `proposals` block of `compile digest` and the status line (`watch N`).
 
@@ -681,7 +704,10 @@ the four token counts, `duration_ms`, `num_turns`,
 Tool scope), `unknown_tools` (how many other names the model called), and the plan windows read from
 the stream's `rate_limit_event`: `five_hour_before/after` and `seven_day_before/after` (utilization, 0 to 1; both readings come from the
 same stream, so compare consecutive rows for the share of a week). `uv run python -m ace_playbook.compile.brief status` prints the last
-brief, the needs-you count, the ledger row count and the last cost of each stage.
+brief, the needs-you count, the ledger row count, the last refusal and the last cost of each stage. Every `fail` path of `brief.sh` leaves
+a ledger row `{ts, stage: "run", refused: <reason>}` (the reason is one of a fixed list, else `other`; a stage timeout and a tool drift keep their own
+rows; the quiet
+exits leave none), and `status` shows the newest of these three kinds: `last refusal: tool drift 2h`, `stage1 timeout 1d`, `digest refused 5m` or `none`.
 
 The raw streams of a run hold mail the exclusion list has not seen, so `brief.sh` deletes them when it exits, also on SIGTERM, SIGINT or
 SIGHUP (exit 143, 130 and 129), which also stop the running `claude` or python step at once (every step runs in the background and is

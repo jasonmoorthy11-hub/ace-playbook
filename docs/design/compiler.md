@@ -1219,7 +1219,11 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
 - `netguard.py`: the SSRF guard. A host that is, or resolves to, a loopback, link-local, private, multicast or reserved address is dropped
   (`address`) before any request; a redirect is followed only to the same scheme, host and port, at most three hops, with no userinfo in the
   URL, and is dropped (`redirect`) otherwise. The DNS answer can change between the check and the connect (rebinding); the address is checked
-  before the connection, not on the connected socket, so that race stays.
+  before the connection, not on the connected socket, so that race stays. `resolve_failed(host)` is True only for a name whose lookup raised or gave
+  no answer (`blocked_address` keeps its contract: an unsafe answer and a failed lookup are both True). `scan.collect` uses it for the wake-up scan: on
+  the FIRST `address` drop of a scan whose lookup failed it waits `scan.DNS_WAIT` seconds (20, ONE wait per scan, `scan.SLEEP` is injectable),
+  fetches that one source again and adds the note `dns wait <N>s: <id> recovered|still dropped`; later address drops of the same scan never wait. A
+  source that is still dropped keeps no stamp and stays due for the second scan of the day.
 - `inventory.py`: the snapshot (`inventory.json`, 0600). Per target of the private map only the matching LINES with numbers plus the
   file sha256; `{"missing": true}` for a missing file; at most 50 files per target, a target with more is marked `truncated` and its
   `model_pin` becomes a lead with no diff; `claude --version` only when `claude` is on PATH.
@@ -1258,7 +1262,9 @@ class (`grep -n "<model_id>" <path>`, `claude --version`, `curl -sI <url> | head
 `[A-Za-z0-9][A-Za-z0-9._:-]{2,79}` before it reaches a diff or a command; `elevated` is false for every W1 class; `expires` is 30 days
 after `created`. Free text from the web appears in a record only as the title and the quote.
 
-Store files, all under `watch_dir` and nowhere else: `proposals/W-*.json` (0600, written once, never replaced), `decisions.jsonl`
+Store files, all under `watch_dir` and nowhere else: `proposals/W-*.json` (0600, written once, never replaced EXCEPT that a null-diff
+record, an import, is replaced
+by the own scan's candidate of the same id with a diff, see the import verb), `decisions.jsonl`
 (append-only, 0600, O_APPEND, flock: `{ts, id, decision: accepted|dismissed|later|closed|promoted|reopened, note}`), `seen.json` (per-URL sha256,
 ETag and `fetched_at`; the parsed result of every source; per-source stamps for the daily or weekly cadence; sitemap `lastmod` baselines;
 `last_scan`), `inventory.json` and the kill file `DISABLED`. The status of a proposal is its newest decision row, else the file's own
@@ -1276,6 +1282,51 @@ each (the last so that the tile says `none  corrupt 1`, not a bare `none`, while
 `watch_last_scan` and `watch_corrupt`; the digest gains the `proposals` block (`open N  leads N  oldest <age>  last scan <age>` and up to three `- <title>`
 lines, `none` or `disabled`); the status line ends with `watch N`. Nothing here touches `metrics.py`, `report.py`, `seal.py`, the detector
 files or the live measurement.
+
+`compile watch import <dir> [--dry-run]` (`watch/carry.py`, loaded only when it runs; `__main__` is untouched) moves a copy of `acewatch`'s
+`proposals/W-*.json` that the operator made into the operator's own store. `<dir>` is normalised, then opened with `O_NOFOLLOW | O_DIRECTORY` (a link, also
+`<link>/sub/..`, is refused: exit 2) and its entries are read through that descriptor. Taken are only regular files named `W-*.json` whose stem matches
+`store.ID` (`vet.read`: an `lstat` for a regular file before the open, `O_NOFOLLOW | O_NONBLOCK`, an `fstat` of the same inode, so a FIFO is refused and
+never waited for), at most 64 KiB, that parse as a JSON object whose `id` is the stem and that `records.check(rec)` (no body) accepts, and (`watch/vet.py`)
+that are shaped as the store's own readers need (`shape`: `store._shaped`, `inventory_hits` a list of at most 50 clean strings of at most 200 characters,
+an int `tier` that is not a bool), whose stamps are in the store's format, at most 30 days apart and `created` at most a day ahead of now (`dates`), whose
+evidence URLs are http(s) (`url`) and whose `change.target` is one the operator's own config knows (`target`: a key or mapped docs URL of
+`watch_inventory_map`, a source id of `watch_sources`, or `claude_version`; both files are required). An imported record is evidence and a title: a diff is
+never taken from the copy and none is computed from its fields (the title would choose the model and the successor), so `change.diff` and `diff_sha256` are
+always null (the id does not depend on them, and `records.check` passes the stored record). A diff comes only from the operator's own `watch scan`, which
+supersedes the import (below). The summary counts `N imported without diff` for a copy's diff that was dropped. The title carries a visible ` (imported)`
+(a title too long to carry it is rejected, reason `title`); `watch status`, the
+digest and the queue card show it. `status` is forced to `open`, and past the cap of five open (leads excepted) the record is written `queued` in ranking
+order. A record whose `reconcile.key` is in the store, or whose id exists (`write_proposal` is write-once), is a duplicate. The work holds
+`fsio.lock(watch_dir, blocking=True)` and ends with `store.rebalance`; a `DISABLED` file or an unsafe watch directory refuses (exit 2). Output is
+`import: N imported, N duplicate, N rejected` (plus `; N imported without diff`), one `rejected <stem>: <reason>` per rejection (the reason is one of
+`name`, `symlink`, `not a file`, `size`, `unreadable`, `json`, `shape`, `id`, `dates`, `url`, `target`, `title` or a `records.check` reason such as `evidence`,
+`quote`, `diff hash`, `verify`; never file content) and `- <title>` per imported record; `--dry-run` writes nothing and prints the same. The copy is never
+modified. The import trusts the validation, not the copy's origin, which is why a diff is never taken from it.
+
+An import does not hide the operator's own finding: `reconcile` gives a candidate of an own scan that HAS a diff priority over a live twin (same key) whose
+diff is null (every imported record). With the same id the twin's file is replaced in place by the candidate (atomic; the id does not depend on the diff,
+a second file is
+impossible, the twin's decision rows stay; the scan's `new` count does not include it); with another id the twin is closed as `superseded` (a decision row)
+and the candidate is written. The scan reports each replacement as a line `diffed <id>` and ends its summary line with `; diffed N` (only when N > 0;
+the text before is unchanged). It holds for an expired or auto-closed twin of the same id (replaced and reopened by a fresh `reopened` row; with five open
+the replacement keeps
+the twin's own dates and stays out until a slot frees), for a twin of the candidate's id whatever its key (a forged successor in the copy's title; a
+dismissed or accepted one of another key is replaced and reopened, or waits for a slot), not for a twin that was accepted or dismissed under the SAME
+key. An expired or auto-closed twin of ANOTHER id and the same key stays closed; the candidate is written beside it. `queue` writes `diff_sha256
+<hash|none>` as the note of an `accepted` row, so an
+accept of a record that was replaced afterwards is visibly stale.
+
+The sandbox logs (`acewatch.out.log`, `acewatch.err.log`, `acewatch.weekly.out.log`, `acewatch.weekly.err.log`, written by launchd from the two plists)
+are rotated by `hooks/acewatch/newsyslog.acewatch.conf`, a root-installed newsyslog(8) template (mode 600, keep 5, 1024 KiB, compressed; SANDBOX.md "Log
+rotation"). No code on the scan path rotates or writes a log; `tests/test_acewatch_rotation.py` pins that the template names exactly the plists' four paths.
+
+The operator-side status line is the config key `acewatch_check` (an optional path, `~` expanded, type-checked only like `backup_check`): the nightly
+(`nightly_notes.collect`, whose `CHECKS` is a tuple of (key, label)) runs `<path> --check` and turns the first stdout line (stripped, at most 80 characters,
+no `/`, no colon in the first word) into a health note, in the order backup, brain, acewatch; a missing script, a non-zero exit, a timeout or an
+empty line is `acewatch check failed`. The arm notes stay first (`nightly_sweep.py`). `hooks/acewatch/acewatch_check.sh` is the sample: it runs
+`sudo -n -u acewatch <python> -m ace_playbook.compile --config <config> watch status` and prints `acewatch ` plus the first `open ...`, `none` or
+`disabled` line. `status.py` is untouched; `compile status` shows the note in its `notes:` line.
 
 #### Reader (W2, as built)
 
@@ -1550,7 +1601,14 @@ Order W3 of the watcher and cockpit design (section 7, "The brief"). Not on the 
   `extract <stream> --what rate_limit|result|text [--last]` (the result object gains `_tools_called`, the names that may be written, and
   `_unknown_tools`, the count of the others), `ledger <before> <after> <stage> <result>`,
   `state-mark` (writes `brief_state.json`: `last_brief`, `needs_you_count`), `tools-audit <stream> --allow <file>` (exit 2 on drift), `timeout-mark
-  <stage>` (a ledger row `{ts, stage, timeout}`) and `status`. They print counts and field paths, never mail content. A usage error (an unknown verb
+  <stage>` (a ledger row `{ts, stage, timeout}`), `refusal <reason>` (a ledger row `{ts, stage: "run", refused: <reason>}`; the reason is checked against the
+  FIXED set `brief_audit.REASONS`, the `fail` literals of `brief.sh` and `brief_lib.sh` without the `(exit N)` tail, and anything else is written as
+  `other`, never
+  free text; `fail` calls it best effort before it exits, except for a stage timeout, which has its own row, and the quiet exits -- lock held, not due --
+  leave no row)
+  and `status` (prints `last refusal: <reason> <age>` between `ledger rows:` and `last stage costs:`: the LAST row that carries `drift`, shown as `tool drift`,
+  `timeout`, as `stage<N> timeout`, or `refused`; `none` when there is no such row). They print counts and field paths, never mail content. A usage error
+  (an unknown verb
   or argument, a missing one) is ONE stderr line,
   `brief: usage: ...`, exit 2; `brief.sh` takes only `--force` and answers anything else with `brief: usage: brief.sh [--force]`, exit 2, before it
   reads the config or takes the lock. A number that is not finite (`Infinity`, `NaN` in a result file) is missing in a ledger row. Stream lines are split

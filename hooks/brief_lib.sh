@@ -1,6 +1,8 @@
 # Helpers of hooks/brief.sh, sourced by it (functions only; docs/design/compiler.md 8.x "Brief (as built)"). The caller sets PYB (the python
 # command), RUN (brief_dir/run) and CHILD (the pid of the tracked background step, "" when none) before it calls these.
-fail() { echo "brief: $1" >&2; exit 1; }
+fail() {   # $1 the reason (stderr, and a `refusal` ledger row, best effort and only a reason of the fixed set), $2 any: a stage timeout, which has its row
+  echo "brief: $1" >&2; [ -n "${2:-}" ] || py refusal "$1" > /dev/null 2>&1 || true; exit 1      # py = run_bg: a TERM stops it at once
+}
 b() { "${PYB[@]}" -m ace_playbook.compile.brief "$@"; }      # only for `conf`, before the lock and the traps exist
 run_bg() {   # every long step runs in the background and is waited for: a foreground child would defer a signal's trap until it ended
   "$@" &

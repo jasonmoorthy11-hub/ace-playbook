@@ -7,23 +7,29 @@ with the candidates (dedupe, auto-close, reopen, the cap) is `reconcile.py`. A s
 a second one prints `watch: scan running` and exits 0. Writes go to `watch_dir` only; `dry_run` writes nothing (the network is still read).
 With `watch_reader` on (default off), no `READER_DISABLED` and no `--dry-run`, tier-1 feed items also go through the quarantined Reader
 (`model.py`): leads only. A title is printed quoted (`!r`).
+A name that fails to resolve (DNS is often not up right after a wake) costs ONE bounded wait per scan: on the first `address` drop whose lookup
+failed (`netguard.resolve_failed`: one extra lookup, also for an unsafe answer, which is then not waited for) the scan sleeps `DNS_WAIT` seconds,
+fetches that one source again and adds the note `dns wait <N>s: <id> recovered|still dropped`; later address drops never wait.
 """
 
 from __future__ import annotations
 
 import copy
 import os
+import time
+import urllib.parse
 from datetime import datetime
 from pathlib import Path
 
 from ...canon import now_iso
 from ...config import Config
 from . import fetch as fetchmod
-from . import fsio, inventory, match, model, store
+from . import fsio, inventory, match, model, netguard, store
 from .reconcile import reconcile  # noqa: F401 - tests call scan.reconcile
 from .records import quote_line
 
 PERIOD = {"daily": 86400, "weekly": 7 * 86400}
+DNS_WAIT, SLEEP = 20.0, time.sleep      # seconds, ONE wait per scan after a name fails to resolve (the wake-up scan); tests patch both
 FMT = "%Y-%m-%dT%H:%M:%SZ"
 
 
@@ -63,7 +69,7 @@ def _quote(src: dict, item: dict) -> str:
 def collect(sources: list[dict], seen: dict, now: str, force: bool, opener=None) -> tuple[list[dict], list[str], dict]:
     """Fetch what is due; returns (results, notes, counts). Unchanged, not-due and dropped sources fall back to their cached result."""
     parsed, stamps = seen.setdefault("parsed", {}), seen.setdefault("sources", {})
-    results, notes, counts = [], [], {"fetched": 0, "unchanged": 0, "dropped": 0}
+    results, notes, counts, waited = [], [], {"fetched": 0, "unchanged": 0, "dropped": 0}, False
     for src in sources:
         cached = parsed.get(src["id"])
         cached = cached if isinstance(cached, dict) and cached.get("url") == src["url"] else None
@@ -71,7 +77,14 @@ def collect(sources: list[dict], seen: dict, now: str, force: bool, opener=None)
             seen.setdefault("fetched", {}).pop(src["url"], None)              # no cache to fall back on: do not accept "unchanged"
         fresh = None
         if _due(src, seen, now, force) or cached is None:
-            item = fetchmod.fetch(src["url"], expect=fetchmod.EXPECT[src["kind"]], store=seen, kind=src["kind"], opener=opener, now=now)
+            get = lambda: fetchmod.fetch(src["url"], expect=fetchmod.EXPECT[src["kind"]], store=seen, kind=src["kind"], opener=opener, now=now)  # noqa: E731
+            item = get()
+            if (not waited and item is not None and item.get("dropped") == "address"
+                    and netguard.resolve_failed(urllib.parse.urlsplit(src["url"]).hostname)):
+                waited = True                                                   # DNS may not be up after a wake: wait once, try this source again
+                SLEEP(DNS_WAIT)
+                item = get()
+                notes.append(f"dns wait {DNS_WAIT:g}s: {src['id']} {'still dropped' if item is not None and 'dropped' in item else 'recovered'}")
             if item is not None and "dropped" in item:
                 counts["dropped"] += 1
                 notes.append(f"dropped {src['id']}: {item['dropped']}")
@@ -127,9 +140,10 @@ def run(cfg: Config, tier: str = "all", dry_run: bool = False, force: bool = Fal
     finally:
         if lock is not None:
             os.close(lock)
-    lines = [*notes, *(f"new {c['id']} {c['class']} {c['status']}: {c['title']!r}" for c in out["new"]), *rlines]       # a title is shown quoted
+    lines = [*notes, *(f"new {c['id']} {c['class']} {c['status']}: {c['title']!r}" for c in out["new"]),
+             *(f"diffed {pid}" for pid in out["diffed"]), *rlines]       # a title is shown quoted; diffed: a diff-less (imported) file replaced by this scan's
     lines.append(f"watch{' (dry run, nothing written)' if dry_run else ''}: fetched {counts['fetched']}, unchanged {counts['unchanged']}, "
                  f"dropped {counts['dropped']}; new {len(out['new'])}, closed {len(out['closed'])}, promoted {len(out['promoted'])}; "
                  f"open {store.open_count(live)}, leads {sum(1 for p, s in live if s == 'open' and p['class'] == 'lead')}"
-                 + (f"; reopened {len(out['reopened'])}" if out["reopened"] else ""))
+                 + (f"; reopened {len(out['reopened'])}" if out["reopened"] else "") + (f"; diffed {len(out['diffed'])}" if out["diffed"] else ""))
     return lines

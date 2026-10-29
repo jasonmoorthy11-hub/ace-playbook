@@ -262,3 +262,87 @@ def test_run_sweep_writes_the_notes_into_its_own_health_record(tmp_path):
     cfg = cfgmod.Config(data_dir=tmp_path / "data", transcripts_root=tmp_path / "projects")
     assert run_sweep(cfg, notes=["backup 7h"]) == [] and health.read(cfg)["notes"] == ["backup 7h"]
     assert run_sweep(cfg) == [] and "notes" not in health.read(cfg)
+
+
+# ------------------------------------------------------------------ the third key: acewatch_check (an operator-side acewatch status line)
+SAMPLE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hooks", "acewatch", "acewatch_check.sh")
+AW_LINE = "acewatch open 3  leads 1  oldest 2d  last scan 4h"
+
+
+def test_the_config_takes_acewatch_check_expands_the_home_and_only_type_checks_it(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    good = script(tmp_path, "aw.sh", "echo ok\n")
+    assert cfgmod.from_dict({"acewatch_check": "~/aw.sh"}).acewatch_check == good
+    assert cfgmod.from_dict({}).acewatch_check is None
+    assert cfgmod.from_dict({"acewatch_check": str(tmp_path / "gone")}).acewatch_check == tmp_path / "gone"
+    for bad in ("", "  ", 3, ["x"]):
+        with pytest.raises(ValueError, match="acewatch_check"):
+            cfgmod.from_dict({"acewatch_check": bad})
+
+
+def test_an_acewatch_line_follows_backup_and_brain_and_a_failure_is_acewatch_check_failed(tmp_path):
+    aw = script(tmp_path, "aw.sh", f'[ "$1" = "--check" ] && echo "{AW_LINE}"\n')
+    backup = script(tmp_path, "b.sh", 'echo "backup 7h"\n')
+    assert nightly_notes.collect(cfgmod.Config(data_dir=tmp_path / "data", backup_check=backup, acewatch_check=aw)) == ["backup 7h", AW_LINE]
+    assert nightly_notes.collect(cfgmod.Config(data_dir=tmp_path / "data", acewatch_check=aw)) == [AW_LINE]
+    bad = script(tmp_path, "bad.sh", 'echo "acewatch open 3"\nexit 1\n')
+    empty = script(tmp_path, "empty.sh", "exit 0\n")
+    slashed = script(tmp_path, "sl.sh", 'echo "acewatch /var/acewatch"\n')
+    for path in (bad, empty, slashed, tmp_path / "missing.sh"):
+        assert nightly_notes.collect(cfgmod.Config(data_dir=tmp_path / "data", acewatch_check=path)) == ["acewatch check failed"], path
+
+
+def test_status_renders_the_acewatch_line_the_nightly_recorded(tmp_path, monkeypatch, capsys, w):
+    aw = script(tmp_path, "aw.sh", f'echo "{AW_LINE}"\n')
+    rc, cfg, mod = run_nightly(tmp_path, monkeypatch, capsys, {"acewatch_check": str(aw)}, "--dry-run")
+    assert rc == 0 and health.read(cfg)["notes"] == [AW_LINE]
+    w.cfg.path("health.json").write_text(json.dumps(health.read(cfg)))
+    assert AW_LINE in status.render(build(w))
+
+
+def test_the_arm_notes_stay_first_when_the_acewatch_note_is_configured(tmp_path, monkeypatch, capsys):
+    from ace_playbook.compile import arm_check
+    arm = ["arm phase missing: x", "holdout on during an arm phase"]
+    monkeypatch.setattr(arm_check, "check", lambda cfg, *a, **k: arm)
+    aw = script(tmp_path, "aw.sh", f'echo "{AW_LINE}"\n')
+    backup = script(tmp_path, "b.sh", 'echo "backup 7h"\n')
+    rc, cfg, mod = run_nightly(tmp_path, monkeypatch, capsys, {"acewatch_check": str(aw), "backup_check": str(backup)}, "--dry-run")
+    assert health.read(cfg)["notes"] == [*arm, "backup 7h", AW_LINE]
+
+
+def sample(tmp_path, sudo_body, *args):
+    """Run the sample script with a fake `sudo` first on PATH."""
+    import subprocess
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    fake = bin_dir / "sudo"
+    fake.write_text("#!/bin/bash\n" + sudo_body)
+    fake.chmod(0o755)
+    return subprocess.run(["/bin/bash", SAMPLE, *(args or ("--check",))], capture_output=True, text=True, timeout=30,
+                          env={"PATH": f"{bin_dir}:/usr/bin:/bin"})
+
+
+def test_the_sample_script_passes_bash_n_and_is_short():
+    import subprocess
+    assert subprocess.run(["/bin/bash", "-n", SAMPLE], capture_output=True).returncode == 0
+    assert len(open(SAMPLE).read().splitlines()) <= 40
+
+
+def test_the_sample_script_prints_acewatch_and_the_first_status_line(tmp_path):
+    argv = tmp_path / "argv"
+    where = tmp_path / "cwd"
+    done = sample(tmp_path, f'pwd > {where}\nprintf "%s " "$@" > {argv}\nprintf "proposals\\nopen 3  leads 1  oldest 2d  last scan 4h\\n- a title\\n"\n')
+    assert (done.returncode, done.stdout) == (0, AW_LINE + "\n")
+    assert where.read_text().strip() == "/"                                  # not the caller's working directory
+    words = argv.read_text().split()
+    assert words[:3] == ["-n", "-u", "acewatch"] and words[-2:] == ["watch", "status"]
+    for first in ("none", "disabled"):
+        done = sample(tmp_path, f'printf "proposals\\n{first}\\n"\n')
+        assert (done.returncode, done.stdout) == (0, f"acewatch {first}\n")
+
+
+def test_the_sample_script_exits_1_on_any_failure_and_prints_nothing(tmp_path):
+    for body in ("exit 1\n", 'printf "proposals\\n"\n', "exit 0\n", 'printf "garbage\\n"\n'):
+        done = sample(tmp_path, body)
+        assert done.returncode == 1 and done.stdout == "", body
+    assert sample(tmp_path, "exit 0\n", "--other").returncode == 1
