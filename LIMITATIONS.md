@@ -263,7 +263,7 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   (after any queued proposal is promoted) when five are open. An expired or auto-closed own record that already has its diff is reopened even
   when a diff-less same-key import of another id exists, whatever the import's `created`; with five open an open import is swapped at once (the
   open count is unchanged), a queued one is swapped by the scan after a free slot, and a dismissed or accepted forged twin still waits. Some scans
-  close a record while five are open; each such close keeps the open count. The accept row records the `diff_sha256` that
+  close a record while five are open; each such close is a swap or frees a slot, and the count never exceeds five. The accept row records the `diff_sha256` that
   the operator saw (`diff_sha256 none` for a record without a diff), so a queue session left open across a scan that replaced the file leaves an accept of
   a hash that no longer matches the file; nothing is applied by either.
 - Watcher, sanitizer coverage: `strip_hidden` reads inline `style` attributes and simple single-selector `<style>` rules (a tag, `.class` or

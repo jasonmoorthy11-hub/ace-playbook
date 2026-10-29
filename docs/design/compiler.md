@@ -1317,7 +1317,8 @@ the twin's own dates and stays out until a slot frees after any queued proposal 
 whatever its key (a forged successor in the copy's title; a dismissed or accepted one of another key is replaced and reopened, or waits for a slot
 after any queued proposal is promoted),
 not for a twin that was accepted or dismissed under the SAME
-key. An expired or auto-closed twin of ANOTHER id and the same key stays closed; the candidate is written beside it. An expired or auto-closed
+key. An expired or auto-closed twin of ANOTHER id and the same key stays closed; the candidate is written beside it (unless an own-scan
+record of the key with a diff exists: that one is reopened instead, and nothing is written). An expired or auto-closed
 OWN record that already has its diff is reopened even when a diff-less same-key import of another id exists, whatever the import's `created` (a live
 import is closed `superseded` first; with five open, an open import is swapped at once, the open count being unchanged, while a queued import and
 the own record wait and the scan after a free slot, which promotes the import first, swaps them; a dismissed or accepted forged own-id twin still
