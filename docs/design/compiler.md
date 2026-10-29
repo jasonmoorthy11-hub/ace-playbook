@@ -1262,7 +1262,9 @@ class (`grep -n "<model_id>" <path>`, `claude --version`, `curl -sI <url> | head
 `[A-Za-z0-9][A-Za-z0-9._:-]{2,79}` before it reaches a diff or a command; `elevated` is false for every W1 class; `expires` is 30 days
 after `created`. Free text from the web appears in a record only as the title and the quote.
 
-Store files, all under `watch_dir` and nowhere else: `proposals/W-*.json` (0600, written once, never replaced), `decisions.jsonl`
+Store files, all under `watch_dir` and nowhere else: `proposals/W-*.json` (0600, written once, never replaced EXCEPT that a null-diff
+record, an import, is replaced
+by the own scan's candidate of the same id with a diff, see the import verb), `decisions.jsonl`
 (append-only, 0600, O_APPEND, flock: `{ts, id, decision: accepted|dismissed|later|closed|promoted|reopened, note}`), `seen.json` (per-URL sha256,
 ETag and `fetched_at`; the parsed result of every source; per-source stamps for the daily or weekly cadence; sitemap `lastmod` baselines;
 `last_scan`), `inventory.json` and the kill file `DISABLED`. The status of a proposal is its newest decision row, else the file's own
@@ -1306,7 +1308,10 @@ An import does not hide the operator's own finding: `reconcile` gives a candidat
 diff is null (every imported record). With the same id the twin's file is replaced in place by the candidate (atomic; the id does not depend on the diff,
 a second file is
 impossible, the twin's decision rows stay; the scan's `new` count does not include it); with another id the twin is closed as `superseded` (a decision row)
-and the candidate is written.
+and the candidate is written. The scan reports each replacement as a line `diffed <id>` and ends its summary line with `; diffed N` (only when N > 0;
+the text before is unchanged). It holds for an expired or auto-closed twin (reopened) and for a twin of the candidate's id whatever its key (a forged
+successor in the copy's title), not for a twin that was accepted or dismissed. `queue` writes `diff_sha256 <hash|none>` as the note of an `accepted` row, so an
+accept of a record that was replaced afterwards is visibly stale.
 
 The sandbox logs (`acewatch.out.log`, `acewatch.err.log`, `acewatch.weekly.out.log`, `acewatch.weekly.err.log`, written by launchd from the two plists)
 are rotated by `hooks/acewatch/newsyslog.acewatch.conf`, a root-installed newsyslog(8) template (mode 600, keep 5, 1024 KiB, compressed; SANDBOX.md "Log

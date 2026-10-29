@@ -11,9 +11,10 @@ auto-closed only when its trigger is really gone: a version proposal when `claud
 garbage output closes nothing) and npm no longer has a newer one; a model proposal when the inventory no longer pins the id, or when the
 deprecations page still lists the id and now says it is not retiring. A page that stopped parsing (no rows) is a dropped fetch upstream
 and never closes anything.
-A candidate WITH a diff for a live twin of the same key whose diff is null (an imported record whose diff could not be computed from the operator's
-own inventory at import time) always wins: the same id REPLACES the twin's file (atomic, `fsio.write_private`; the id does not depend on the diff, so a
-second file is impossible, and the twin's decision rows stay; `diffed` lists those ids); another id closes the twin as `superseded` and is written.
+A candidate WITH a diff for a live twin of the same key whose diff is null (every imported record) always wins: the same id REPLACES the
+twin's file (atomic, `fsio.write_private`; the id does not depend on the diff, so a second file is impossible, and the twin's decision rows stay;
+`diffed` lists those ids); another id closes the twin as `superseded` and is written. This holds for an expired or auto-closed twin too (it is
+reopened), and for a twin of the candidate's id whatever its key; a dismissed or accepted twin is a decision and is not replaced.
 """
 
 from __future__ import annotations
@@ -85,20 +86,30 @@ def reconcile(wd: Path, cands: list[dict], results: list[dict], now: str, dry: b
     by_key = {key(p): (p, s) for p, s in sorted(live, key=lambda r: r[1] in LIVE)}           # a live proposal wins over a closed twin
     new, reopened, diffed = [], [], []
     renewed = (datetime.strptime(now, STAMP) + timedelta(days=DAYS)).strftime(STAMP)
+    by_id = {p["id"]: (p, s) for p, s in live}
     for c in cands:
-        old = by_key.get(key(c))
-        if old is not None and old[1] in LIVE and old[0]["change"]["diff"] is None and c["change"]["diff"] is not None:      # an own diff wins
-            twin = old[0]
-            if twin["id"] == c["id"]:                                       # the same file name: replaced in place (the id does not hold the diff)
-                diffed.append(twin["id"])
-                if not dry:
-                    text = json.dumps({**c, "status": twin.get("status", "open")}, indent=1, sort_keys=True) + "\n"
-                    fsio.write_private(wd / store.PROPOSALS / (twin["id"] + ".json"), text)
-                continue
-            closed.append(twin["id"])                                       # another id: the twin is closed as superseded, the candidate is written
-            n_open -= old[1] == "open" and twin["class"] != "lead"
+        mine, old = by_id.get(c["id"]), by_key.get(key(c))
+        if c["change"]["diff"] is not None and mine is not None and mine[0]["change"]["diff"] is None and mine[1] not in ("accepted", "dismissed"):
+            twin, tstat = mine                                              # the file of this id has no diff (an import): the own candidate replaces it,
+            diffed.append(c["id"])                                          # whatever its key and status (a forged key or a closed twin hides nothing)
+            back = tstat in ("expired", "auto-closed") and c["class"] != "lead"
+            queued = back and n_open >= store.CAP
+            n_open += back and not queued
             if not dry:
-                store.append_decision(wd, twin["id"], "closed", "superseded", now)
+                keep = twin.get("status", "open") if tstat in LIVE else "open"
+                text = json.dumps({**c, "status": "queued" if queued else keep}, indent=1, sort_keys=True) + "\n"
+                fsio.write_private(wd / store.PROPOSALS / (c["id"] + ".json"), text)
+                if tstat == "auto-closed" and not queued:                   # closed by a decision row: reopened by one (the file is the candidate now)
+                    store.append_decision(wd, c["id"], "reopened", renewed, now)
+                    reopened.append(c["id"])
+            continue
+        if c["change"]["diff"] is not None and old is not None and old[0]["change"]["diff"] is None and old[1] not in ("accepted", "dismissed"):
+            twin = old[0]                                                   # another id, the same key: closed as superseded if live, candidate written
+            if old[1] in LIVE:
+                closed.append(twin["id"])
+                n_open -= old[1] == "open" and twin["class"] != "lead"
+                if not dry:
+                    store.append_decision(wd, twin["id"], "closed", "superseded", now)
             old = None
         if old is not None:
             p, status = old

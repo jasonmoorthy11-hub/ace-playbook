@@ -1,6 +1,7 @@
 """The watcher's private store (docs/design/compiler.md 8.x "Watch (as built)"): everything lives under `watch_dir`, nothing outside it.
 
-`proposals/W-<16 hex>.json` (a record stored before S-1 F8 keeps its `W-<8 hex>` name and is read; 0600, written once, never replaced),
+`proposals/W-<16 hex>.json` (a record stored before S-1 F8 keeps its `W-<8 hex>` name and is read; 0600, written once and never replaced EXCEPT that
+the own scan swaps a diff-less (imported) record of its id for its candidate with a diff, `reconcile`),
 `decisions.jsonl` (append-only, 0600, O_APPEND, flock like `digest.append_log`), `seen.json` and `inventory.json` (0600, atomic) and the kill file
 `DISABLED`. The current status of a proposal is its
 newest decision row, else the file's own `status`; `expired` once past `expires` while still open or queued. At most CAP proposals are

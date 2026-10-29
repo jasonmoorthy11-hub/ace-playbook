@@ -3,7 +3,8 @@
 `read` opens one file of the copy (an `lstat` for a regular file BEFORE the open, `O_NOFOLLOW | O_NONBLOCK`, an `fstat` that it is the same regular
 inode: a FIFO named `W-<hex>.json` is refused, never waited for). The record must be shaped as the store's own readers need it (`shape`: `store._shaped`,
 `inventory_hits` a list of at most 50 clean strings of at most 200 characters, a `tier` that is an int and not a bool), its stamps in the store's format,
-at most `records.DAYS` apart and not later than a day from now (`dates`), every evidence URL http(s) (`url`), its target one that the OPERATOR's own config
+at most `records.DAYS` apart, `created` not later than a day from now and `expires` not already past (`dates`), every evidence URL http(s) (`url`), its
+target one that the OPERATOR's own config
 knows (`target`: an inventory key or a mapped docs URL of `watch_inventory_map`, a source id of `watch_sources`, or `claude_version`). A diff is never taken
 from the copy, and none is computed from its fields: `change.diff` and `diff_sha256` are null (the id does not depend on them), so an imported record is
 evidence and a title, and a diff comes only from the operator's own `watch scan`, which supersedes the import (`reconcile`). The title gets a visible
@@ -48,7 +49,7 @@ def _reason(rec: dict, ctx: dict) -> str:
         if not all(store.STAMP.fullmatch(rec[k]) for k in ("created", "expires")):
             return "dates"
         made, gone = (datetime.strptime(rec[k], FMT) for k in ("created", "expires"))
-        if gone - made > timedelta(days=records.DAYS) or made > ctx["now"] + timedelta(days=1):
+        if gone - made > timedelta(days=records.DAYS) or made > ctx["now"] + timedelta(days=1) or gone <= ctx["now"]:      # window, future, already expired
             return "dates"
     except (ValueError, TypeError):
         return "dates"

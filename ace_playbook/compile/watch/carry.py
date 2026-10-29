@@ -1,7 +1,8 @@
 """`compile watch import <dir>`: move a reviewed copy of acewatch's `proposals/W-*.json` into the operator's own store.
 
-`<dir>` is opened with `O_NOFOLLOW | O_DIRECTORY` after its path is normalised (so `<link>/sub/..` is the link and is refused) and its entries are read
-through that descriptor. Only regular files named `W-<hex>.json` (never links, FIFOs or devices; at most 64 KiB) whose record passes `records.check`
+`<dir>` is normalised (so `<link>/sub/..` is the link, which is refused), then the RESOLVED path (`realpath`: a symlinked ancestor is fine, and is
+what gets opened, so no middle component is followed at the open) is opened with `O_NOFOLLOW | O_DIRECTORY` and its entries are read through that
+descriptor. Only regular files named `W-<hex>.json` (never links, FIFOs or devices; at most 64 KiB) whose record passes `records.check`
 (no body), the id of which is the file stem, are taken, and `vet.py` holds the rest of the rules: shape, stamps, http(s) URLs, targets the OPERATOR's own
 config knows, no diff (never taken from the copy: a diff comes only from the operator's own scan), the visible ` (imported)`. `status` is
 forced to open and the CAP of five open still holds (the rest are queued, leads excepted). A record whose `reconcile.key` is in the store, or whose id
@@ -23,7 +24,10 @@ def run(cfg: Config, src: str, dry: bool) -> int:
     """Exit 0 (with the summary line) or 2 for a source that is not a real directory, an unusable config, an unsafe or disabled watch directory."""
     wd = store.watch_dir(cfg)
     try:
-        dirfd = os.open(os.path.abspath(src), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        path = os.path.abspath(src)
+        if os.path.islink(path):
+            raise OSError("a link")
+        dirfd = os.open(os.path.realpath(path), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     except OSError:
         print("error: import needs a real directory (not a symlink)", file=sys.stderr)
         return 2

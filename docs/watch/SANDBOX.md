@@ -246,8 +246,11 @@ install and the `inputs.legacy-<date>` name are written from that run, not paste
 
   ```
   mkdir -m 700 ~/acewatch-copy
-  sudo -u acewatch sh -c 'cd /var/acewatch/watch/proposals && tar -cf - W-*.json' | tar -xf - -C ~/acewatch-copy
+  sudo -u acewatch sh -c 'cd /var/acewatch/watch/proposals && tar -cf - W-*.json' | tar -xf - --no-same-owner --no-same-permissions -C ~/acewatch-copy
   ```
+
+  The archive comes from the sandboxed user, so the unpacking relies on tar's default safe extraction: never `-P` (absolute paths) and never as root; the
+  two extra flags are accepted by both bsdtar (macOS) and GNU tar (Linux) and keep the operator's own owner and umask on the files.
 
   (`/var/acewatch/watch` is the `watch_dir` of step 4; change it if yours differs.) Then run
   `python3 -m ace_playbook.compile watch import ~/acewatch-copy` (add `--dry-run` to see the counts first). The import validates each file

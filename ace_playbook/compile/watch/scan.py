@@ -140,9 +140,10 @@ def run(cfg: Config, tier: str = "all", dry_run: bool = False, force: bool = Fal
     finally:
         if lock is not None:
             os.close(lock)
-    lines = [*notes, *(f"new {c['id']} {c['class']} {c['status']}: {c['title']!r}" for c in out["new"]), *rlines]       # a title is shown quoted
+    lines = [*notes, *(f"new {c['id']} {c['class']} {c['status']}: {c['title']!r}" for c in out["new"]),
+             *(f"diffed {pid}" for pid in out["diffed"]), *rlines]       # a title is shown quoted; diffed: a diff-less (imported) file replaced by this scan's
     lines.append(f"watch{' (dry run, nothing written)' if dry_run else ''}: fetched {counts['fetched']}, unchanged {counts['unchanged']}, "
                  f"dropped {counts['dropped']}; new {len(out['new'])}, closed {len(out['closed'])}, promoted {len(out['promoted'])}; "
                  f"open {store.open_count(live)}, leads {sum(1 for p, s in live if s == 'open' and p['class'] == 'lead')}"
-                 + (f"; reopened {len(out['reopened'])}" if out["reopened"] else ""))
+                 + (f"; reopened {len(out['reopened'])}" if out["reopened"] else "") + (f"; diffed {len(out['diffed'])}" if out["diffed"] else ""))
     return lines

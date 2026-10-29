@@ -255,7 +255,10 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   a forged but valid record in the copy becomes a proposal. An imported record is evidence plus title: an imported record never carries a diff
   (a diff comes only from the operator's own scan, which supersedes the import) and its title shows ` (imported)`; a forged quote, URL or title can still
   mislead a reader of the queue. An own scan's diff always wins over a diff-less imported twin (same id: the file is replaced in place; another id: the
-  twin is closed as superseded).
+  twin is closed as superseded; an expired, auto-closed or forged-key twin is replaced too). A dismissal or an accept of an imported twin is a
+  decision and is not undone: dismissing an imported twin hides the own scan's diff for that key for good. The accept row records the `diff_sha256` that
+  the operator saw (`diff_sha256 none` for a record without a diff), so a queue session left open across a scan that replaced the file leaves an accept of
+  a hash that no longer matches the file; nothing is applied by either.
 - Watcher, sanitizer coverage: `strip_hidden` reads inline `style` attributes and simple single-selector `<style>` rules (a tag, `.class` or
   `#id` rule, no combinators; class and id names match without case, as in quirks mode). Media queries, descendant, child and attribute
   selectors, `@import` and external stylesheets are NOT handled, so text hidden that way is read as visible. The inline rules hide opacity

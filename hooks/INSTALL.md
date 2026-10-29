@@ -511,6 +511,8 @@ network, and it is never on a hook path.
    ` (imported)`. `--dry-run` writes nothing; the copy is never changed; exit 2 for a symlinked directory
    (also `<link>/sub/..`), a `DISABLED` file or an unsafe `watch_dir`;
    a FIFO or any other non-file in the copy is rejected, never waited for. Review the imported proposals with `watch queue`.
+   When a later `watch scan` replaces an imported (diff-less) record with its own candidate with a diff, it prints `diffed <id>` per record and ends
+   the summary line with `; diffed N`; an `accept` in the queue records `diff_sha256 <hash>` of the diff that was shown in its decision note.
 4. Kill switch: `touch <watch_dir>/DISABLED`. While it exists `scan` prints `watch: disabled` and fetches and writes nothing; remove it to resume.
 5. The Reader (W2, optional, off by default). Without it nothing above calls a model. With it, tier-1 feed items go one by one to a tool-less,
    single-turn `claude -p` call whose answer code validates; the only result is a `lead` with no diff. **The Reader is for the `acewatch` user

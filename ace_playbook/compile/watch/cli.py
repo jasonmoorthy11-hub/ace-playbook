@@ -109,6 +109,8 @@ def queue(cfg: Config, limit: int, ask: Callable[[str], str], need_tty: Callable
             note = _note(ask) if key == "dismissed" else ""
         except EOFError:                                                 # the terminal went away: stop like q
             break
+        if key == "accepted":                                            # pins the diff that was shown: a record replaced since reads as stale
+            note = f"diff_sha256 {p['change']['diff_sha256'] or 'none'}"
         store.append_decision(wd, p["id"], key, note, now_iso())
         done[key] += 1
     lock = fsio.lock(wd, blocking=True)                                  # not while a scan is promoting or writing
