@@ -7,18 +7,20 @@ check is the detector for that. For every detector with an `arm_start` line in t
 returns one line: `arm phase missing: <detector>` when `phase.load` has no verified entry for it (`arm phase unverified: <detector>` when a
 marker file is present but fails verification), or `arm phase stamp differs: <detector>` when the verified entry's stamp is not the line's.
 It adds `holdout on during an arm phase` when `holdout_enabled` is true (the sealed text keeps it false; the verb refuses it at the start,
-this catches a later flip). An unreadable PREREGISTRATION.md raises (the nightly turns that into `arm check failed`). Not on the hook path:
+this catches a later flip). An unreadable or missing PREREGISTRATION.md raises (the nightly turns that into `arm check failed`). Not on the hook path:
 stdlib and sibling modules only; nothing imports it but the nightly.
 """
 
 from __future__ import annotations
 
 from ..canon import now_iso
-from . import arms_window, phase
+from . import arms_window, phase, seal
 
 
 def check(cfg, now: str | None = None) -> list[str]:
     """The note lines for an arm phase that has started and is not in force; [] outside a phase or when the marker is verified."""
+    if not seal.PREREG.exists():                                  # `arms_window` reads a missing file as "" (no lines): that must not read as no phase
+        raise FileNotFoundError("PREREGISTRATION.md is missing")
     stamp = now or now_iso()
     started = {d: at for d, at in sorted(arms_window.arm_starts().items()) if at <= stamp}
     if not started:
