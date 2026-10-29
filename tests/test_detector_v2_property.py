@@ -1,14 +1,12 @@
-"""Property tests for `rm_rf_nonscratch` v2 (compile/resolve.py): generated commands against an oracle the generator knows.
+"""Property tests for `rm_rf_nonscratch` v2 (compile/grammar.py, D-209): generated commands against an oracle the generator knows.
 
-Every world has ONE effective deletion root: the generator picks the root (a scratch root or one outside scratch), then
-spells the delete one of many ways (plain, `./*` after `cd`, `$VAR`, `${VAR}/sub`, quoted, wrapped in sudo/env/nice, `--`,
-split flags, `bash -c`/`sh -c`/`eval`, `ls | xargs`, `find -delete`, one or two `cd`s, `&&`/`;`/newline joins). The oracle is
-"fires iff the root is outside scratch, or the world relies on something v2 does not trust" (a `cd` not joined by `&&`, a value with
-`$`, an assignment before `||` or after `true &&`, an `eval` text with `$`); build() reports these as `forced`. The second half of the
-file is the V1-FLOOR property: v2 may stop firing only on a PROVEN construct, so for every mutation of a trusted skeleton (negation,
-`||`, compound bodies, functions, pipes, wrappers, non-literal values, IFS, trap, unreadable eval, arithmetic, rebinding builtins ...)
-`v2_fires or not v1_fires`, where `v1_fires` is a frozen copy of v1's literal rule kept below. Seeded
-(`random.Random(1234)`, override with PYTEST_SEED); stdlib only; the commands are DATA fed to the detector, nothing runs.
+v2 is v1's literal rule plus ONE exception: a command that is, in full, one of three exact scratch shapes (S1 `cd <scr> && rm -rf <rel>...`,
+S2 `NAME=<scr>; rm -rf "$NAME"...`, S3 `git worktree add <p> && rm -rf <p>`) is proven scratch and does not fire. The generator builds those
+shapes with a scratch or an outside root; the oracle is "proven iff every joined target is scratch", and the detector must fire exactly when
+v1 fires and the shape is not proven. The V1 FLOOR: `v2_fires or not v1_fires or proven`, where `v1_fires` is a frozen copy of v1's rule kept
+below and `proven` = the generator built a grammar shape with scratch targets. Every mutation of a shape (a forbidden character, a trailing
+newline, a tab, a `..` or leading-dot component, another NAME, a `;` in S1) is NOT proven. Five mutants of grammar.py must each fail a test.
+Seeded (`random.Random(1234)`, override with PYTEST_SEED); stdlib only; the commands are DATA fed to the detector, nothing runs.
 """
 
 import os
@@ -16,12 +14,14 @@ import posixpath
 import random
 import re
 import time
+import types
+from pathlib import Path
 
 import pytest
 
 from ace_playbook.compile import catalogue as cat
 from ace_playbook.compile import detectors as d
-from ace_playbook.compile import resolve, resolve_chain, resolve_pre, shell
+from ace_playbook.compile import grammar, shell
 from ace_playbook.compile.events import event_from_hook
 from ace_playbook.fixtures import fakes
 
@@ -30,175 +30,21 @@ from . import compile_support as cs
 SEED = int(os.environ.get("PYTEST_SEED", "1234"))
 N = 400
 NAME = "rm_rf_nonscratch"
-SCRATCH_ROOTS = ["/tmp/w", "/private/tmp/claude-501/proj/sess/scratchpad", "/var/folders/ab/cd/T/x", "$TMPDIR/w", "/tmp/a/b"]
-OUTSIDE_ROOTS = [fakes.HOME_PREFIX + "FAKEuser/proj", "/srv/data", "/opt/app/x", "$HOME/proj", "~/proj", "$UNSET/x", "/w/src"]
-FLAGS = ["-rf", "-fr", "-Rf", "-r -f", "-f -r", "--recursive --force", "-rf --", "-r -f --"]
-WRAP = ["", "", "sudo ", "env ", "nice -n 5 ", "command ", "sudo -u root "]
-JOIN = [" && ", "; ", "\n", " || "]
-LEAD = ["", "", "echo start; ", "echo start\n", "true && "]
-SUB = ["", "", "/x1", "/pkg/y"]
+SCR_ROOTS = ["/tmp/w", "/tmp", "/private/tmp/claude-501/proj/sess/scratchpad", "/var/folders/ab/cd/T/x", "/tmp/a/b-c_d.e", "/srv/app/node_modules",
+             "/w/x/build", "/private/tmp/z"]
+OUT_ROOTS = [fakes.HOME_PREFIX + "FAKEuser/proj", "/srv/data", "/opt/app/x", "/w/src", "/tmpfoo/x", "/var/foldersx/a", "/srv/app/dist2", "/home/u"]
+FLAGS = ["-rf", "-fr", "-Rf", "-fR", "-r -f", "-f -r"]
+RELS = [".", "./", "*", "./*", "x", "sub/y", "./sub/*", "a*b", "d?e", "a.b/c-d_e", "sub/*", "x/y/z*", "./-x"]
+NAMES = ["D", "DIR", "_x", "Tmp1", "target", "a"]
 
 
 def fires(cmd) -> bool:
-    cmd = cmd[0] if isinstance(cmd, tuple) else cmd
     ev = event_from_hook(cs.pre_payload(cmd), probe=lambda _p: False)
     out, _state, errors = cat.evaluate(ev, None, names=[NAME], strict=False)
     assert errors == []
     return any(f.detector == NAME and f.count > 0 for f in out)
 
 
-def build(seed: int, root: str) -> tuple[str, bool]:
-    """(command, forced): a generated command whose effective deletion root is `root` (same seed -> same shape, only the root
-    differs). `forced` = the world is unprovable by design (a `cd` joined by something other than `&&`) and must fire."""
-    r = random.Random(seed)
-    rm = lambda target: f"{r.choice(WRAP)}rm {r.choice(FLAGS)} {target}"   # noqa: E731
-    join, sub = r.choice(JOIN), r.choice(SUB)
-    rel = r.choice(["./*", "*", ".", "./"]) if not sub else "."
-    kind = r.choice(["plain", "quoted", "cd", "cd2", "cd_sub", "var", "brace", "export", "pipe", "find", "findexec", "cdls"])
-    other = r.choice(SCRATCH_ROOTS + OUTSIDE_ROOTS)
-    var_kind = kind in ("var", "brace", "export")
-    forced = (kind in ("cd", "cd2", "cd_sub", "cdls") and (join.strip() != "&&" or "$" in root)) or (var_kind and join.strip() == "||")
-    if kind in ("var", "brace", "export") and "$" in root:      # a binding with an unresolved value is dropped: same class, plain spelling
-        root = "/tmp/vars" if d.SCRATCH.search(root) else "/srv/vars"
-    if kind == "plain":
-        cmd = rm(root + sub)
-    elif kind == "quoted":
-        q = r.choice(['"', "'"])
-        cmd = rm(f"{q}{root}{sub}{q}")
-    elif kind == "cd":
-        cmd = f"cd {root}{sub}{join}{rm(rel)}"
-    elif kind == "cd2":                       # an absolute cd overrides whatever came first
-        cmd = f"cd {other}{join}cd {root}{sub}{join}{rm(rel)}"
-    elif kind == "cd_sub":                    # a relative cd goes below the root
-        cmd = f"cd {root}{join}cd sub{join}{rm(rel)}"
-    elif kind == "var":
-        cmd = f"D={root}{join}" + rm(r.choice(['$D', '"$D"', "$D/x", '"$D/x"']))
-    elif kind == "brace":
-        cmd = f"D={root}{join}" + rm(r.choice(['${D}', '"${D}"', '"${D}/x"', '${D}/x']))
-    elif kind == "export":
-        cmd = f"export D={root}{join}" + rm("$D")
-    elif kind == "pipe":
-        cmd = f"ls -d {root}/* | xargs rm -rf"
-    elif kind == "find":
-        cmd = f"find {root} -type d -delete"
-    elif kind == "findexec":
-        cmd = f"find {root} -exec rm -rf {{}} +"
-    else:
-        cmd = f"cd {root}{join}ls -d * | xargs rm -rf"
-    wrap = None
-    if kind in ("plain", "quoted", "cd", "cd2", "cd_sub", "var", "brace", "export") and r.random() < 0.3:
-        # `bash -c '...'`, `sh -c '...'` and `eval '...'` hold the command in single quotes (the quoting the generator avoids inside)
-        inner = cmd.replace("'", "")
-        wrap = r.choice(["bash -c '%s'", "sh -c '%s'", "eval '%s'", "bash -lc '%s'"])
-        cmd, forced = wrap % inner, forced or (wrap.startswith("eval") and var_kind)     # an eval text holding `$` is not read
-    lead = r.choice(LEAD)
-    # a binding made after `true &&` may not have run: it dies with its chain, so a delete after `;` or a newline sees none
-    return lead + cmd, forced or (var_kind and lead == "true && " and join.strip() != "&&" and wrap is None)
-
-
-def worlds(n: int, salt: int):
-    rng = random.Random(SEED * 7 + salt)
-    for _ in range(n):
-        yield rng.randrange(1 << 30), rng.choice(SCRATCH_ROOTS), rng.choice(OUTSIDE_ROOTS)
-
-
-def test_generated_commands_fire_exactly_when_the_root_is_outside_scratch():
-    seen = {True: 0, False: 0}
-    for seed, scratch, outside in worlds(N, 1):
-        for root, scratchy in ((outside, False), (scratch, True)):
-            cmd, forced = build(seed, root)
-            oracle = forced or not scratchy
-            assert fires(cmd) is oracle, (seed, root, cmd)
-            seen[oracle] += 1
-    assert seen[True] >= N and seen[False] >= N // 2
-
-
-def test_swapping_the_root_of_a_fire_world_to_scratch_gives_a_twin_that_does_not_fire():
-    for seed, scratch, outside in worlds(N, 2):
-        (fire, forced), (twin, forced_twin) = build(seed, outside), build(seed, scratch)
-        assert fires(fire) and (forced or forced_twin or not fires(twin)), (seed, fire, twin)
-
-
-def test_the_world_grammar_covers_every_shape_and_wrapper():
-    shapes = set()
-    for seed, scratch, _outside in worlds(N, 3):
-        cmd = build(seed, scratch)[0]
-        shapes |= {s for s in ("bash -c", "sh -c", "eval", "xargs", "find", "export", "cd ", "${D}", " -- ", "sudo", "nice", "\n")
-                   if s in cmd}
-    assert shapes == {"bash -c", "sh -c", "eval", "xargs", "find", "export", "cd ", "${D}", " -- ", "sudo", "nice", "\n"}
-
-
-def test_the_weak_rm_rf_detector_is_unchanged_by_v2_for_plain_deletes():
-    """v2 only changes WHICH deletes are non-scratch; `rm_rf` still counts every recursive force delete as Step 0 did."""
-    for root in SCRATCH_ROOTS + OUTSIDE_ROOTS:
-        ev = event_from_hook(cs.pre_payload(f"rm -rf {root}/a"), probe=lambda _p: False)
-        out, _s, errors = cat.evaluate(ev, None, names=["rm_rf"], strict=False)
-        assert errors == [] and [f.count for f in out] == [1], root
-
-
-def canon(cmd: str):
-    return resolve.canonical_targets(shell.command_stream(cmd), d.SCRATCH)
-
-
-def test_the_canonicalizer_is_idempotent_on_generated_commands():
-    """A resolved target, written back as a plain `rm -rf <target>`, resolves to itself with the same verdict."""
-    checked = 0
-    for seed, scratch, outside in worlds(N, 4):
-        for root in (scratch, outside):
-            for group in canon(build(seed, root)[0]):
-                for path, verdict in group:
-                    again = canon(f"rm -rf {path}")
-                    assert again == [[(path, verdict)]], (seed, root, path, again)
-                    checked += 1
-    assert checked >= N
-
-
-def test_the_canonicalizer_is_pure_it_gives_the_same_answer_twice():
-    for seed, scratch, outside in worlds(N, 5):
-        cmd = build(seed, outside)[0]
-        assert canon(cmd) == canon(cmd) != []
-
-
-ALPHABET = "abcdefgxyz /.*~-_=:,{}()[]<>|&;$\\\"'`!#%\n\t0123456789"
-FRAGMENTS = ["rm -rf ", "rm -r -f ", "cd ", "pushd ", "popd", "D=", "export D=", "$D", "${D}", "\"$D\"", "bash -c '", "sh -c \"", "eval ",
-             "xargs ", "find ", " -delete", " -exec rm -rf {} +", "git worktree add ", "git -C ", " && ", " || ", "; ", " | ", "\n", "(", ")",
-             "`", "$(", "<<EOF\n", "\nEOF\n", "/tmp/", "/private/tmp/claude-501/", "$TMPDIR/", "~", "..", "./*", "'", "\"", "\\", "\x00"]
-
-
-def garbage(rng: random.Random) -> str:
-    parts = []
-    while sum(map(len, parts)) < rng.randrange(0, 200):
-        parts.append(rng.choice(FRAGMENTS) if rng.random() < 0.5 else "".join(rng.choice(ALPHABET) for _ in range(rng.randrange(1, 8))))
-    return "".join(parts)[:200]
-
-
-def test_the_canonicalizer_never_raises_on_printable_garbage():
-    rng = random.Random(SEED + 99)
-    nonempty = 0
-    for _ in range(1000):
-        text = garbage(rng)
-        events, quotes = shell.command_stream(text)
-        assert all(isinstance(sep, str) and isinstance(toks, list) for sep, toks in events) and isinstance(quotes, list)
-        groups = canon(text)
-        nonempty += bool(groups)
-        assert all(isinstance(p, str) and isinstance(v, bool) for g in groups for p, v in g)
-        assert canon(text) == groups
-        ev = event_from_hook(cs.pre_payload(text), probe=lambda _p: False)
-        _out, _state, errors = cat.evaluate(ev, None, names=[NAME, "rm_rf"], strict=True)
-        assert errors == []
-    assert nonempty >= 10, "the garbage grammar must reach the delete path now and then"
-
-
-@pytest.mark.parametrize("seed", [1, 2, 3])
-def test_other_seeds_agree_with_the_oracle(seed):
-    rng = random.Random(seed)
-    for _ in range(100):
-        s, scratch, outside = rng.randrange(1 << 30), rng.choice(SCRATCH_ROOTS), rng.choice(OUTSIDE_ROOTS)
-        (fire, forced), (twin, forced_twin) = build(s, outside), build(s, scratch)
-        assert fires(fire) and (forced or forced_twin or not fires(twin)), (seed, s)
-
-
-# ------------------------------------------------------------------ the v1 floor
 def v1_fires(cmd: str) -> bool:
     """A frozen copy of v1's rule (detectors.py before D-204): tokens from `shell.command_segments`, literal SCRATCH test of each target."""
     for toks in shell.command_segments(cmd):
@@ -213,139 +59,321 @@ def v1_fires(cmd: str) -> bool:
     return False
 
 
-SCR, OUT = "/tmp/w", "/srv/data"
+def scratch(path: str) -> bool:
+    return bool(d.SCRATCH.search(posixpath.normpath(path)))
 
 
-def skeletons(r: str) -> dict:
-    """name -> (setter, join, delete): the constructs v2 trusts, with `r` as the root they set."""
-    return {"cd": (f"cd {r}", " && ", "rm -rf ./*"), "cd2": (f"cd {r} && cd sub", " && ", "rm -rf ./*"),
-            "var": (f"D={r}", "; ", 'rm -rf "$D"'), "varand": (f"D={r}", " && ", 'rm -rf "${D}/x"'),
-            "export": (f"export D={r}", " && ", "rm -rf $D"), "wt": (f"git worktree add {r}/wt b", " && ", f"rm -rf {r}/wt")}
+def proven(cmd: str) -> bool:
+    return grammar.proven_scratch(cmd, d.SCRATCH)
 
 
-MUTANTS = {   # name -> (setter, join, delete, skeleton name) -> command; every one breaks a rule of resolve_pre.py
-    "negated": lambda s_, j, dl, k: f"! {s_}{j}{dl}", "or": lambda s_, j, dl, k: f"{s_} || {dl}",
-    "or-first": lambda s_, j, dl, k: f"false || {s_}{j}{dl}", "neg-first": lambda s_, j, dl, k: f"! false && {s_}{j}{dl}",
-    "semicolon": lambda s_, j, dl, k: f"{s_}; {dl}" if k in ("cd", "cd2", "wt") else f"false && {s_}; {dl}",
-    "newline": lambda s_, j, dl, k: f"{s_}\n{dl}" if k in ("cd", "cd2", "wt") else f"false && {s_}\n{dl}",
-    "if": lambda s_, j, dl, k: f"if true; then {s_}{j}{dl}; fi", "while": lambda s_, j, dl, k: f"while true; do {s_}{j}{dl}; done",
-    "for": lambda s_, j, dl, k: f"for x in a; do {s_}{j}{dl}; done", "case": lambda s_, j, dl, k: f"case x in x) {s_}{j}{dl};; esac",
-    "group": lambda s_, j, dl, k: f"{{ {s_}{j}{dl}; }}", "function": lambda s_, j, dl, k: f"f() {{ {s_}{j}{dl}; }}; f",
-    "pipe": lambda s_, j, dl, k: f"{s_} | cat{j}{dl}", "background": lambda s_, j, dl, k: f"{s_} &\n{dl}",
-    "subshell": lambda s_, j, dl, k: f"({s_}){j}{dl}", "redirect": lambda s_, j, dl, k: f"{s_} >/dev/null{j}{dl}",
-    "env": lambda s_, j, dl, k: f"env {s_}{j}{dl}", "sudo": lambda s_, j, dl, k: f"sudo {s_}{j}{dl}",
-    "time": lambda s_, j, dl, k: f"time {s_}{j}{dl}", "command": lambda s_, j, dl, k: f"command {s_}{j}{dl}",
-    "builtin": lambda s_, j, dl, k: f"builtin {s_}{j}{dl}", "ifs": lambda s_, j, dl, k: f"IFS=:; {s_}{j}{dl}",
-    "trap": lambda s_, j, dl, k: f"trap 'x' DEBUG; {s_}{j}{dl}", "alias": lambda s_, j, dl, k: f"alias a=b; {s_}{j}{dl}",
-    "unreadable-eval": lambda s_, j, dl, k: f'{s_} && eval "$CMD"{j}{dl}', "eval-name": lambda s_, j, dl, k: f'{s_} && eval "f"{j}{dl}',
-    "arithmetic": lambda s_, j, dl, k: f"{s_}{j}(( D=1 )){j}{dl}", "arith-subst": lambda s_, j, dl, k: f"{s_}{j}: $(( D=1 )){j}{dl}",
-}
-BINDINGS, DIRS = ("var", "varand", "export"), ("cd", "cd2")
-APPLIES = {"subshell": BINDINGS + DIRS}                  # the other mutants apply to every skeleton; a worktree mark is not scoped by `( )`
-for _c, _kinds in (("let D=1", BINDINGS), ("unset D", BINDINGS), ("read D", BINDINGS), ("printf -vD x", BINDINGS), ("declare -n D=E", BINDINGS),
-                   ("mapfile D", BINDINGS), ("getopts ab D", BINDINGS), ("source x", BINDINGS + DIRS), (". x", BINDINGS + DIRS),
-                   ("popd", DIRS), ("cd -", DIRS), ("pushd +1", DIRS),
-                   ("$CD x", BINDINGS + DIRS + ("wt",)), ("unknownfn", BINDINGS + DIRS + ("wt",)),     # fix wave 5, clause (g): an unknown command word
-                   ("repeat 1 cd x", BINDINGS + DIRS + ("wt",))):
-    MUTANTS["then-" + _c] = (lambda c: lambda s_, j, dl, k: f"{s_}{j}{c}{j}{dl}")(_c)
-    APPLIES["then-" + _c] = _kinds
-VALUES = {"dollar": "{r}/$E", "glob": "{r}/*", "brace": "{r}/{{a,b}}", "space": '"{r} x"', "backtick": '"{r}/`id`"', "subst": '"{r}/$(id)"',
-          "glued-out": "{r}>x", "glued-in": "{r}<f", "glued-fd": "{r}2>/dev/null"}   # fix wave 3: a redirection glued to the literal
+# ------------------------------------------------------------------ the generator: (command, oracle) with the oracle from the roots
+def flags(r: random.Random) -> str:
+    return r.choice(FLAGS) + r.choice(["", "", " --"])
 
 
-def _outside(k: str) -> str:
-    return OUT if k == "wt" else SCR            # the worktree skeleton deletes outside scratch (v1 fires), the others inside it
+def s1(r: random.Random, root: str, rels=None, sep=" && ") -> tuple[str, bool]:
+    rels = rels or [r.choice(RELS) for _ in range(r.randint(1, 3))]
+    return f"cd {root}{sep}rm {flags(r)} {' '.join(rels)}", scratch(root) and all(scratch(posixpath.join(root, x)) for x in rels)
 
 
-def floor_worlds():
-    for k in skeletons(SCR):
-        for name, mutate in MUTANTS.items():
-            if k not in APPLIES.get(name, tuple(skeletons(SCR))):
+def vref(r: random.Random, name: str, rel) -> str:
+    var = r.choice([f"${name}", f"${{{name}}}"])
+    if rel is None:
+        return r.choice([var, f'"{var}"'])
+    return r.choice([f"{var}/{rel}", f'"{var}/{rel}"', f'"{var}"/{rel}'])
+
+
+def s2(r: random.Random, root: str) -> tuple[str, bool]:
+    name = r.choice(NAMES)
+    rels = [r.choice([None] + RELS) for _ in range(r.randint(1, 3))]
+    refs = " ".join(vref(r, name, x) for x in rels)
+    ok = scratch(root) and all(scratch(root if x is None else posixpath.join(root, x)) for x in rels)
+    return f"{name}={root}{r.choice([';', ' &&'])} rm {flags(r)} {refs}", ok
+
+
+def s3(r: random.Random, wt: str, rm=None) -> tuple[str, bool]:
+    c = f"-C {r.choice(['/w/repo', '/srv/r'])} " if r.random() < 0.3 else ""
+    opts = r.choice(["", "-b nb "]) + wt + r.choice(["", " HEAD", " main"])
+    return f"git {c}worktree add {opts} && rm {flags(r)} {rm or wt}", rm is None or posixpath.normpath(rm) == posixpath.normpath(wt)
+
+
+def shapes(r: random.Random, root: str) -> list[tuple[str, bool]]:
+    return [s1(r, root), s2(r, root), s3(r, root + "/wt")]
+
+
+def worlds(n: int, salt: int):
+    rng = random.Random(SEED * 7 + salt)
+    for _ in range(n):
+        yield rng.randrange(1 << 30), rng.choice(SCR_ROOTS), rng.choice(OUT_ROOTS)
+
+
+def test_generated_shapes_are_proven_exactly_when_every_joined_target_is_scratch():
+    seen = {True: 0, False: 0}
+    for seed, scr, out in worlds(N, 1):
+        for root in (scr, out):
+            r = random.Random(seed)
+            for cmd, oracle in shapes(r, root)[:2]:
+                assert proven(cmd) is oracle, (seed, cmd)
+                seen[oracle] += 1
+            cmd, oracle = shapes(r, root)[2]
+            assert proven(cmd) is True is oracle, cmd        # S3: the rm path is the path the add created, wherever it is
+    assert seen[True] >= N and seen[False] >= N // 2
+
+
+def test_the_detector_fires_exactly_when_v1_fires_and_the_shape_is_not_proven():
+    """The v1 floor on the shapes themselves: `v2_fires or not v1_fires or proven`, and no new fire either."""
+    for seed, scr, out in worlds(N, 2):
+        for root in (scr, out):
+            for cmd, oracle in shapes(random.Random(seed), root):
+                v1, v2 = v1_fires(cmd), fires(cmd)
+                assert v2 or not v1 or oracle, (seed, cmd)
+                assert v2 is (v1 and not oracle), (seed, cmd)
+
+
+def test_the_generator_covers_every_variant_of_every_shape():
+    text = "\n".join(c for seed, scr, _o in worlds(N, 3) for c, _ in shapes(random.Random(seed), scr))
+    for token in ("-rf", "-fr", "-Rf", "-fR", "-r -f", "-f -r", " --", "${", '"$', "/*", "./", "&&", ";", "-b nb", "-C ", "HEAD", "worktree add"):
+        assert token in text, token
+
+
+# ------------------------------------------------------------------ mutations of a proven shape are never proven
+FORBIDDEN = list("\\`;|&()[]{}<>#!'\"\n\t~=%,:@+^") + ["$(", "$((", "&&", "||", ">&2", "2>"]
+
+
+def mutate_chars(r: random.Random, cmd: str):
+    for ch in FORBIDDEN:
+        for _ in range(3):
+            k = r.randrange(len(cmd) + 1)
+            yield f"insert {ch!r} at {k}", cmd[:k] + ch + cmd[k:]
+    yield "trailing newline", cmd + "\n"
+    yield "trailing space", cmd + " "
+    yield "leading space", " " + cmd
+    yield "trailing tab", cmd + "\t"
+    for k in [i for i, c in enumerate(cmd) if c == " "][:6]:
+        yield f"tab for the space at {k}", cmd[:k] + "\t" + cmd[k + 1:]
+        yield f"double space at {k}", cmd[:k] + "  " + cmd[k + 1:]
+        yield f"newline for the space at {k}", cmd[:k] + "\n" + cmd[k + 1:]
+
+
+def test_every_character_level_mutation_of_a_proven_shape_is_not_proven():
+    rng, count = random.Random(SEED + 5), 0
+    for seed, scr, _out in worlds(60, 4):
+        for cmd, oracle in shapes(random.Random(seed), scr):
+            if not oracle:
                 continue
-            setter, join, delete = skeletons(_outside(k))[k]
-            for lead in ("", "echo start; ", "echo start\n", "true && "):
-                yield f"{k}/{name}", lead + mutate(setter, join, delete, k), k
-        for name, value in VALUES.items():
-            setter, join, delete = skeletons(value.format(r=_outside(k)))[k]
-            for lead in ("", "echo start; ", "echo start\n", "true && "):
-                yield f"{k}/value-{name}", lead + setter + join + delete, k
+            assert proven(cmd), cmd
+            for what, mutant in mutate_chars(rng, cmd):
+                assert not proven(mutant), (what, mutant)
+                count += 1
+    assert count >= 3000
 
 
-def floor_violations() -> list:
-    """Worlds where v1 fires, v2 does not, and nothing was proven: must be empty."""
-    return [(name, cmd) for name, cmd, _k in floor_worlds() if v1_fires(cmd) and not fires(cmd)]
+BAD_RELS = ["..", "../x", "sub/../x", "x/..", ".hidden", "./.hidden", ".*", "./.*", "./.[.]", "?x", "[a]x", "*/../x", "a/./b", "a//b", "/abs",
+            "~/x", "$X", "{a,b}", "a\tb", "x/", "./x/", "-rf", "--", "-"]
 
 
-def test_the_proven_skeletons_are_the_only_place_v2_fires_less_than_v1():
+def structured_mutants(r: random.Random, root: str):
+    """(why, command): the shape built right, then broken in exactly one way the grammar names."""
+    for rel in BAD_RELS:
+        yield f"s1 rel {rel!r}", f"cd {root} && rm -rf {rel}"
+        yield f"s1 later rel {rel!r}", f"cd {root} && rm -rf x {rel}"
+        if rel not in ("-rf", "--", "-"):
+            yield f"s2 rel {rel!r}", f'D={root}; rm -rf "$D/{rel}"'
+    yield "s1 dotdot in the root", f"cd {root}/.. && rm -rf x"
+    yield "s1 dotdot inside the root", f"cd {root}/x/../y && rm -rf x"
+    yield "s1 leading-dot component in the root", f"cd {root}/.d && rm -rf x"
+    yield "s1 dot component in the root", f"cd {root}/./d && rm -rf x"
+    yield "s1 semicolon", f"cd {root}; rm -rf ./x"
+    yield "s1 or", f"cd {root} || rm -rf ./x"
+    yield "s1 relative root", "cd tmp/w && rm -rf x"
+    yield "s1 root with a trailing slash", f"cd {root}/ && rm -rf x"
+    yield "s1 second command", f"cd {root} && rm -rf x && ls"
+    yield "s1 second rm", f"cd {root} && rm -rf x; rm -rf y"
+    yield "s1 flags -v", f"cd {root} && rm -rf -v x"
+    yield "s1 flags -rfv", f"cd {root} && rm -rfv x"
+    yield "s1 flags -r only", f"cd {root} && rm -r x"
+    yield "s1 flags -f only", f"cd {root} && rm -f x"
+    yield "s1 long flags", f"cd {root} && rm --recursive --force x"
+    yield "s1 flags after the target", f"cd {root} && rm x -rf"
+    yield "s1 no target", f"cd {root} && rm -rf"
+    yield "s1 extra cd", f"cd {root} && cd sub && rm -rf x"
+    yield "s1 env wrapper", f"cd {root} && env rm -rf x"
+    yield "s1 sudo", f"cd {root} && sudo rm -rf x"
+    yield "s1 absolute rm", f"cd {root} && /bin/rm -rf x"
+    yield "s1 quoted root", f'cd "{root}" && rm -rf x'
+    yield "s1 variable root", "cd $D && rm -rf x"
+    yield "s1 tilde root", "cd ~ && rm -rf x"
+    for name in ("D", "E"):
+        yield f"s2 other name {name}", f'D={root}; rm -rf "${name}x"'
+    yield "s2 different NAME in the rm", f'D={root}; rm -rf "$E"'
+    yield "s2 different NAME braced", f'D={root}; rm -rf "${{E}}/x"'
+    yield "s2 different NAME second ref", f'D={root}; rm -rf "$D" "$E"'
+    yield "s2 prefix NAME", f'D={root}; rm -rf "$D1"'
+    yield "s2 name suffix glued", f'D={root}; rm -rf "$D"x'
+    yield "s2 single-quoted ref", f"D={root}; rm -rf '$D'"
+    yield "s2 alias chain", f'D={root}; E=$D; rm -rf "$E"'
+    yield "s2 dotdot after the ref", f'D={root}; rm -rf "$D"/../x'
+    yield "s2 or", f'D={root} || rm -rf "$D"'
+    yield "s2 pipe", f'D={root} | rm -rf "$D"'
+    yield "s2 export", f'export D={root}; rm -rf "$D"'
+    yield "s2 quoted value", f'D="{root}"; rm -rf "$D"'
+    yield "s2 two spaces after the semicolon", f'D={root};  rm -rf "$D"'
+    yield "s2 no space after the semicolon", f'D={root};rm -rf "$D"'
+    for bad in ("IFS", "PATH", "path", "Path", "HOME", "CDPATH", "TMPDIR", "PWD", "OLDPWD", "ENV", "BASH_ENV", "BASHPID", "LD_PRELOAD", "LC_ALL", "_",
+                "SHELLOPTS", "GLOBIGNORE", "RANDOM", "ZDOTDIR"):
+        yield f"s2 special name {bad}", f'{bad}={root}; rm -rf "${bad}"'
+    wt = "/w/repo/wt"
+    yield "s3 other rm path", f"git worktree add {wt} && rm -rf {wt}2"
+    yield "s3 parent", f"git worktree add {wt} && rm -rf /w/repo"
+    yield "s3 child", f"git worktree add {wt} && rm -rf {wt}/src"
+    yield "s3 relative rm for an absolute add", f"git worktree add {wt} && rm -rf wt"
+    yield "s3 relative add for an absolute rm", f"git worktree add wt && rm -rf {wt}"
+    yield "s3 semicolon", f"git worktree add {wt}; rm -rf {wt}"
+    yield "s3 or", f"git worktree add {wt} || rm -rf {wt}"
+    yield "s3 dotdot add and rm", f"git worktree add /w/x/../wt && rm -rf /w/x/../wt"
+    yield "s3 dotdot in -C", f"git -C /w/x/.. worktree add {wt} && rm -rf {wt}"
+    yield "s3 relative under -C", "git -C /w/repo worktree add wt && rm -rf wt"
+    yield "s3 the repository itself", "git -C /w/repo worktree add /w/repo && rm -rf /w/repo"
+    yield "s3 a parent of the repository", "git -C /w/repo/a/b worktree add /w/repo && rm -rf /w/repo"
+    yield "s3 root", "git worktree add / && rm -rf /"
+    yield "s3 one component", "git worktree add /wt && rm -rf /wt"
+    yield "s3 dot", "git worktree add . && rm -rf ."
+    yield "s3 option as the path", "git worktree add -f && rm -rf -f"
+    yield "s3 force option", f"git worktree add -f {wt} && rm -rf {wt}"
+    yield "s3 option after the path", f"git worktree add {wt} -b nb && rm -rf {wt}"
+    yield "s3 remove", f"git worktree remove {wt} && rm -rf {wt}"
+    yield "s3 rm first", f"rm -rf {wt} && git worktree add {wt}"
+    yield "s3 git alias", f"git wt add {wt} && rm -rf {wt}"
+    yield "s3 tilde", "git worktree add ~/wt/x && rm -rf ~/wt/x"
+    yield "s3 variable", "git worktree add $W/x && rm -rf $W/x"
+
+
+def test_every_structured_mutation_is_not_proven_and_the_floor_holds():
     count = 0
-    for k, (setter, join, delete) in ((k, skeletons(_outside(k))[k]) for k in skeletons(SCR)):
-        for lead in ("", "echo start; ", "echo start\n", "true && "):
-            if lead == "true && " and k == "var":
-                continue                                     # a binding after `true &&` dies with its chain: not proven
-            cmd = lead + setter + join + delete
-            assert v1_fires(cmd) and not fires(cmd), (k, cmd)    # proven scratch: v1 fired, v2 does not
+    for seed, scr, _out in worlds(30, 6):
+        for why, cmd in structured_mutants(random.Random(seed), scr):
+            assert not proven(cmd), (why, cmd)
+            assert fires(cmd) or not v1_fires(cmd), (why, cmd)       # the floor: v2 fires wherever v1 fires
             count += 1
-    assert count >= 20
+    assert count >= 3000
 
 
-def test_v2_never_fires_less_than_v1_on_a_mutation_of_a_trusted_construct():
-    worlds_ = list(floor_worlds())
-    assert len(worlds_) >= 400
-    assert floor_violations() == []
+def test_the_denied_names_and_the_allowed_names_of_s2():
+    for name in NAMES:
+        assert proven(f'{name}=/tmp/w; rm -rf "${name}"'), name
+    for name in ("IFS", "PATH", "path", "cdpath", "HOME", "BASH_ENV", "BASH_XYZ", "LD_LIBRARY_PATH", "DYLD_X", "LC_ALL", "ZSH_X", "_", "RANDOM"):
+        assert not proven(f'{name}=/tmp/w; rm -rf "${name}"'), name
 
 
-def test_the_floor_property_fails_when_the_compound_and_function_check_is_removed(monkeypatch):
-    monkeypatch.setattr(resolve_pre, "untrusted", lambda *a, **k: False)
-    names = {n.split("/", 1)[1] for n, _c in floor_violations()}
-    assert names and {"if", "function", "group", "trap", "ifs", "unreadable-eval"} & names
+# ------------------------------------------------------------------ the oracle as one function: used by the real grammar and by the mutants
+def check(fn) -> list:
+    """Every killer world for the named mutants, run through `fn(command, SCRATCH)`; the real grammar returns []."""
+    bad = []
+
+    def want(cmd, expected, why):
+        if fn(cmd, d.SCRATCH) is not expected:
+            bad.append(why)
+
+    for seed, scr, out in worlds(60, 7):
+        for root in (scr, out):
+            r = random.Random(seed)
+            for cmd, oracle in shapes(r, root)[:2]:
+                want(cmd, oracle, "oracle")
+    for cmd in ("cd /tmp/w && rm -rf ./x\n", "D=/tmp/w; rm -rf \"$D\"\n", "git worktree add /w/a/wt && rm -rf /w/a/wt\n"):
+        want(cmd, False, "trailing newline")                                              # the `\Z` mutant
+    want("git worktree add /w/x/../wt && rm -rf /w/x/../wt", False, "s3 dotdot")           # the `..` check
+    want("git -C /w/x/.. worktree add /w/y/wt && rm -rf /w/y/wt", False, "s3 dotdot -C")
+    want("cd /tmp/w/.. && rm -rf x", False, "s1 dotdot")                                  # the component class of the absolute root
+    want("cd /srv/app/node_modules && rm -rf x", False, "s1 joined target")               # the SCRATCH check on the JOINED target
+    want('D=/w/x/build; rm -rf "$D/x"', False, "s2 joined target")
+    want('D=/w/x/build; rm -rf "$D" "$D/x"', False, "s2 second target")
+    want("git worktree add /w/wt && rm -rf /w/other", False, "s3 equal paths")             # the rm target equals the add path
+    want("git worktree add /w/wt && rm -rf /w", False, "s3 parent")
+    want("git -C /w/repo/a worktree add /w/repo && rm -rf /w/repo", False, "s3 repository parent")     # never the repo or a parent of it
+    want("git -C /w/repo worktree add /w/repo/wt && rm -rf /w/repo/wt", True, "s3 repository child")
+    want('D=/tmp/w; rm -rf "$E"', False, "s2 NAME")                                       # the NAME equality
+    want('D=/tmp/w; rm -rf "${E}/x"', False, "s2 NAME braced")
+    want("cd /tmp/w && rm -rf ./x", True, "s1 plain")
+    want('D=/tmp/w; rm -rf "$D"', True, "s2 plain")
+    want("git worktree add /w/wt && rm -rf /w/wt", True, "s3 plain")
+    return bad
 
 
-def test_the_floor_property_fails_when_the_taint_is_removed(monkeypatch):
-    real = resolve._State.forget
-    monkeypatch.setattr(resolve._State, "forget", lambda self, taint=False: real(self, False))
-    names = {n.split("/", 1)[1] for n, _c in floor_violations()}
-    assert names and {"or-first", "neg-first"} & names
+def mutant(old: str, new: str):
+    src = Path(grammar.__file__).read_text()
+    assert src.count(old) >= 1, old
+    mod = types.ModuleType("ace_playbook.compile.grammar_mutant")
+    mod.__package__ = "ace_playbook.compile"
+    exec(compile(src.replace(old, new), "grammar_mutant.py", "exec"), mod.__dict__)
+    return mod.proven_scratch
 
 
-def test_the_floor_property_fails_when_a_binding_survives_its_chain(monkeypatch):
-    monkeypatch.setattr(resolve._State, "end_chain", lambda self: setattr(self, "first", True) or setattr(self, "taint", False))
-    assert any(n.endswith("semicolon") or n.endswith("newline") for n, _c in floor_violations())
-
-
-@pytest.mark.parametrize("name", ["then-$CD x", "then-unknownfn", "then-repeat 1 cd x"])
-def test_the_floor_property_fails_when_clause_g_is_removed(monkeypatch, name):
-    monkeypatch.setattr(resolve_chain, "is_known", lambda _word: True)       # every command word counts as inert
-    assert any(n.endswith("/" + name) for n, _c in floor_violations())
-
-
-def test_clause_g_holds_the_floor_for_the_three_new_mutants():
-    names = {n.split("/", 1)[1] for n, _c, _k in floor_worlds()}
-    assert {"then-$CD x", "then-unknownfn", "then-repeat 1 cd x"} <= names and floor_violations() == []
-
-
-# the 64 KB gate (round 2): hostile shapes that bloated the scope stack cost one pass; <= 50 ms locally, asserted at 3x for a slow CI runner
-CI_FACTOR_MS = 150
-_ENV = "".join(f"D{i}=/tmp/a{i}; " for i in range(64))
-TIMING_SHAPES = {
-    "dollar-paren-pairs": _ENV + "$(a) " * 13000, "paren-pairs": _ENV + "(a)" * 21000, "backtick-pairs": _ENV + "`a` " * 16000,
-    "sixty-four-k-parens": _ENV + "(" * 25000 + "rm -rf /x" + ")" * 25000, "open-parens": _ENV + "(" * 32000,
-    "dollar-paren-pairs-then-a-delete": _ENV + "$(a) " * 12000 + "rm -rf ./x", "unknown-words": _ENV + "f g h; " * 9000,
-    "allow-listed-words": _ENV + "echo a; " * 8000 + "rm -rf /tmp/w/x",
+MUTANTS = {
+    "anchor-Z-becomes-dollar": ('\\Z")', '$")'),
+    "the-S3-dotdot-check-removed": ('any(".." in p.split("/") for p in (wt, rm, c or "")) or ', ""),
+    "the-joined-target-SCRATCH-check-removed-in-S1": ('and _dir(posixpath.join(m["scr"], t), scratch) for t', "and True for t"),
+    "the-joined-target-SCRATCH-check-removed-in-S2": ('if rest and not _dir(posixpath.join(m["scr"], rest[1:]), scratch):', "if False:"),
+    "the-S3-rm-equals-add-check-removed": (" or wn != posixpath.normpath(rm)", ""),
+    "the-S3-repository-parent-check-removed": ('if c and (posixpath.normpath(c) + "/").startswith(wn.rstrip("/") + "/"):', "if False:"),
+    "the-NAME-equality-removed": ("(?P=n)", "[A-Za-z_][A-Za-z0-9_]*"),
+    "the-dot-free-component-class-removed": ('_COMP = r"[A-Za-z0-9_-][A-Za-z0-9._-]*"', '_COMP = r"[A-Za-z0-9._-]+"'),
 }
 
 
-@pytest.mark.parametrize("name", sorted(TIMING_SHAPES))
-def test_the_64kb_budget_holds_on_the_scope_stack_shapes(name):
-    cmd = TIMING_SHAPES[name][:65000]
-    ev = event_from_hook(cs.pre_payload(cmd), probe=lambda _p: False)
-    best = 1e9
-    for _ in range(3):
-        t0 = time.perf_counter()
-        _out, _state, errors = cat.evaluate(ev, None, names=[NAME, "rm_rf"], strict=True)
-        best = min(best, (time.perf_counter() - t0) * 1000)
-    assert errors == []
-    print(f"timing {name}: best {best:.1f} ms")
-    assert best <= CI_FACTOR_MS, (name, best)
+def test_the_real_grammar_passes_every_killer_world():
+    assert check(grammar.proven_scratch) == []
+
+
+@pytest.mark.parametrize("name", sorted(MUTANTS))
+def test_each_mutant_of_the_grammar_fails_a_test(name):
+    assert check(mutant(*MUTANTS[name])), name
+
+
+def test_the_mutant_loader_changes_nothing_when_the_edit_is_the_identity():
+    assert check(mutant("(?P=n)", "(?P=n)")) == []
+
+
+# ------------------------------------------------------------------ the V1 floor on constructs the old resolver trusted
+WRAPS = {   # name -> wrapper(setter, join, delete): constructs that used to be trusted; none is a grammar shape, so v2 must fire wherever v1 does
+    "negated": lambda s_, j, dl: f"! {s_}{j}{dl}", "or": lambda s_, j, dl: f"{s_} || {dl}", "or-first": lambda s_, j, dl: f"false || {s_}{j}{dl}",
+    "semicolon": lambda s_, j, dl: f"{s_}; {dl}", "newline": lambda s_, j, dl: f"{s_}\n{dl}", "if": lambda s_, j, dl: f"if true; then {s_}{j}{dl}; fi",
+    "while": lambda s_, j, dl: f"while true; do {s_}{j}{dl}; done", "group": lambda s_, j, dl: f"{{ {s_}{j}{dl}; }}",
+    "function": lambda s_, j, dl: f"f() {{ {s_}{j}{dl}; }}; f", "pipe": lambda s_, j, dl: f"{s_} | cat{j}{dl}",
+    "background": lambda s_, j, dl: f"{s_} &\n{dl}", "subshell": lambda s_, j, dl: f"({s_}){j}{dl}", "redirect": lambda s_, j, dl: f"{s_} >/dev/null{j}{dl}",
+    "env": lambda s_, j, dl: f"env {s_}{j}{dl}", "sudo": lambda s_, j, dl: f"sudo {s_}{j}{dl}", "time": lambda s_, j, dl: f"time {s_}{j}{dl}",
+    "ifs": lambda s_, j, dl: f"IFS=:; {s_}{j}{dl}", "trap": lambda s_, j, dl: f"trap 'x' DEBUG; {s_}{j}{dl}",
+    "alias": lambda s_, j, dl: f"alias a=b; {s_}{j}{dl}",
+    "eval-unreadable": lambda s_, j, dl: f'{s_} && eval "$CMD"{j}{dl}', "arith": lambda s_, j, dl: f"{s_}{j}(( D=1 )){j}{dl}",
+    "unknown-word": lambda s_, j, dl: f"{s_}{j}$CD x{j}{dl}", "unknown-fn": lambda s_, j, dl: f"{s_}{j}f{j}{dl}",
+    "true-between": lambda s_, j, dl: f"{s_}{j}true{j}{dl}", "source": lambda s_, j, dl: f"{s_}{j}source x{j}{dl}",
+    "unset": lambda s_, j, dl: f"{s_}{j}unset D{j}{dl}", "env-C": lambda s_, j, dl: f"{s_}{j}env -C /srv/x {dl}",
+    "newline-in-quotes": lambda s_, j, dl: f': "\n" {s_}{j}{dl}', "glob-qualifier": lambda s_, j, dl: f"{s_}{j}{dl}(P:x:)",
+}
+SKELETONS = {"cd": ("cd {r}", " && ", "rm -rf ./*"), "var": ("D={r}", "; ", 'rm -rf "$D"'), "varand": ("D={r}", " && ", 'rm -rf "${{D}}/x"'),
+             "export": ("export D={r}", " && ", "rm -rf $D"), "wt": ("git worktree add {r}/wt b", " && ", "rm -rf {r}/wt")}
+
+
+def test_the_floor_holds_for_every_wrapped_skeleton():
+    count = 0
+    for k, (setter, join, delete) in SKELETONS.items():
+        for root in ("/tmp/w", "/srv/data"):
+            s_, dl = setter.format(r=root), delete.format(r=root)
+            for name, wrap in WRAPS.items():
+                for lead in ("", "echo start; ", "echo start\n", "true && "):
+                    cmd = lead + wrap(s_, join, dl)
+                    shape = (k, name, lead) in (("var", "semicolon", ""), ("varand", "semicolon", "")) and root == "/tmp/w"   # S2 rebuilt by itself
+                    assert proven(cmd) is shape, (k, name, cmd)
+                    assert fires(cmd) or not v1_fires(cmd) or shape, (k, name, cmd)       # the floor: proven = the generator built a shape
+                    count += 1
+    assert count >= 400
+
+
+def test_the_plain_skeletons_are_where_v2_fires_less_than_v1():
+    """The three shapes (and nothing else the old resolver trusted besides them) are the only commands v1 fires on and v2 does not."""
+    for cmd, expect_proven in (("cd /tmp/w && rm -rf ./*", True), ('D=/tmp/w; rm -rf "$D"', True), ("D=/tmp/w && rm -rf $D/x", True),
+                               ("git worktree add /w/wt && rm -rf /w/wt", True), ("export D=/tmp/w && rm -rf $D", False)):
+        assert v1_fires(cmd) and fires(cmd) is not expect_proven and proven(cmd) is expect_proven, cmd
 
 
 FLOOR_FRAGMENTS = ["rm -rf ", "rm -r -f ", "rm -fr -- ", " && ", " || ", "; ", "\n", " | ", " & ", "/srv/", "/w/", "$X", "${X}", '"$X"', "~/", "..",
@@ -358,106 +386,83 @@ def test_the_floor_holds_on_random_command_soup_without_scratch_text():
     fired = 0
     for _ in range(N * 2):
         text = "".join(rng.choice(FLOOR_FRAGMENTS) for _ in range(rng.randrange(1, 14)))
+        assert not proven(text), text
         if v1_fires(text):
             fired += 1
             assert fires(text), text
     assert fired >= N // 8, "the soup must reach rm -rf often enough to mean something"
 
 
-# ------------------------------------------------------------------ fix wave 5: clause (g), the redirection filter, the outer expansion, copy-on-write state
+def test_the_weak_rm_rf_detector_is_unchanged_by_v2_for_plain_deletes():
+    """v2 only changes WHICH deletes are non-scratch; `rm_rf` still counts every recursive force delete as Step 0 did."""
+    for root in SCR_ROOTS + OUT_ROOTS:
+        for cmd in (f"rm -rf {root}/a", f"cd {root} && rm -rf ./*"):
+            ev = event_from_hook(cs.pre_payload(cmd), probe=lambda _p: False)
+            out, _s, errors = cat.evaluate(ev, None, names=["rm_rf"], strict=False)
+            assert errors == [] and [f.count for f in out] == [1], cmd
 
 
-def bad(cmd):
-    return any(not s for g in canon(cmd) for _p, s in g)
-rc, rp = resolve_chain, resolve_pre
+# ------------------------------------------------------------------ fuzz: never raises
+ALPHABET = "abcdefgxyz /.*~-_=:,{}()[]<>|&;$\\\"'`!#%\n\t0123456789"
+FRAGMENTS = ["rm -rf ", "rm -r -f ", "cd ", "D=", "$D", "${D}", "\"$D\"", "bash -c '", "xargs ", "git worktree add ", "git -C ", " && ", " || ", "; ",
+             " | ", "\n", "(", ")", "`", "$(", "<<EOF\n", "/tmp/", "/private/tmp/claude-501/", "$TMPDIR/", "~", "..", "./*", "'", "\"", "\\", "\x00"]
 
 
-@pytest.mark.parametrize("tok,name", [
-    ("cd", "cd"), ("\\cd", "cd"), ("c\\d", "cd"), ("true", "true"), (":", ":"), ("[", "["), ("f", "f"), ("workon", "workon"),
-    ("/bin/echo", "echo"), ("/usr/bin/true", "true"), ("/usr/local/bin/git", "git"), ("/bin/cd", ""), ("/usr/bin/f", ""), ("./cd", ""),
-    ("/tmp/w/echo", ""), ("/srv/x/proj", ""), ("~", ""), ("$CD", ""), ("$", ""), ("\x000\x00", ""), ("`", ""), ("(", ""), ("", ""),
-    ("..", ".."), (".", "."), ("-", "-"), ("a b", ""),
-])
-def test_word_is_the_exact_literal_name_or_empty(tok, name):
-    assert rc.word(tok) == name
+def garbage(rng: random.Random) -> str:
+    parts = []
+    while sum(map(len, parts)) < rng.randrange(0, 200):
+        parts.append(rng.choice(FRAGMENTS) if rng.random() < 0.5 else "".join(rng.choice(ALPHABET) for _ in range(rng.randrange(1, 8))))
+    return "".join(parts)[:200]
 
 
-def test_the_allow_list_is_the_documented_one():
-    assert rc.ALLOW == {":", "true", "echo", "ls", "mkdir", "touch", "cp", "mv", "cat", "test", "[", "git", "printf", "rm", "find", "xargs",
-                        "sleep", "pwd"}
-    for name in ("true", "echo", "git", "rm", "cd", "export", "eval", "unset", "printf"):
-        assert rc.is_known(name), name
-    for name in ("", "f", "source", ".", "local", "declare", "readonly", "typeset", "repeat", "noglob", "nocorrect", "time", "command", "bash", "sh",
-                 "shopt", "workon", "~", ".."):
-        assert not rc.is_known(name), name
+def test_the_grammar_never_raises_on_1000_garbage_strings_and_the_detector_stays_total():
+    rng = random.Random(SEED + 99)
+    for _ in range(1000):
+        text = garbage(rng)
+        assert proven(text) in (True, False) and proven(text) is proven(text)
+        ev = event_from_hook(cs.pre_payload(text), probe=lambda _p: False)
+        _out, _state, errors = cat.evaluate(ev, None, names=[NAME, "rm_rf"], strict=True)
+        assert errors == []
+    for odd in (None, 5, b"cd /tmp/w && rm -rf x", [], {}, "", "\x00", "\u202e", "cd /tmp/w && rm -rf x\u0301"):
+        assert grammar.proven_scratch(odd, d.SCRATCH) is False
 
 
-@pytest.mark.parametrize("tok,kind", [
-    ("true", rc.KNOWN_FAST), ("echo", rc.KNOWN_FAST), ("/bin/ls", rc.KNOWN_FAST), ("[", rc.KNOWN_FAST), ("pwd", rc.KNOWN_FAST),
-    ("f", rc.UNKNOWN), ("$CD", rc.UNKNOWN), ("source", rc.UNKNOWN), ("local", rc.UNKNOWN), ("repeat", rc.UNKNOWN), ("./cd", rc.SLOW),
-    ("~", rc.UNKNOWN), ("/srv/x", rc.UNKNOWN), ("D+=x", rc.UNKNOWN),
-    ("cd", rc.SLOW), ("rm", rc.SLOW), ("/bin/rm", rc.SLOW), ("git", rc.SLOW), ("eval", rc.SLOW), ("bash", rc.SLOW), ("unset", rc.SLOW),
-    ("printf", rc.SLOW), ("export", rc.SLOW), ("D=1", rc.SLOW), ("sudo", rc.SLOW), ("xargs", rc.SLOW), ("time", rc.SLOW), ("!", rc.SLOW),
-    (">f", rc.SLOW), ("then", rc.SLOW), ("{", rc.SLOW),
-])
-def test_lead_kind_routes_a_segment_by_its_first_token(tok, kind):
-    assert rc.lead_kind(tok) == kind
+def test_the_grammar_default_scratch_is_the_detectors_own_rule():
+    assert grammar.proven_scratch("cd /tmp/w && rm -rf ./x") is True and grammar.proven_scratch("cd /srv/w && rm -rf ./x") is False
+    assert not hasattr(grammar, "SCRATCH") and "SCRATCH =" not in Path(grammar.__file__).read_text()
 
 
-@pytest.mark.parametrize("cmd,text,proven", [
-    ("bash -c 'rm -rf \"$D\"'", 'rm -rf "$D"', True),                    # single-quoted: the child expands it itself
-    ('bash -c "rm -rf $D"', "rm -rf /tmp/w", True),                      # double-quoted: the outer shell expands a trusted name
-    ('bash -c "rm -rf ${D}/x"', "rm -rf /tmp/w/x", True),
-    ('bash -c "rm -rf \\$D"', "rm -rf $D", True),                        # an escaped dollar reaches the child as a dollar
-    ('bash -c "echo \\\\ \\" \\`"', 'echo \\ " `', True),
-    ('bash -c "rm -rf $E"', "rm -rf $E", False),                         # an unbound name: not provable
-    ('bash -c "rm -rf $(echo x)"', "rm -rf $(echo x)", False),
-    ('bash -c "rm -rf `echo x`"', "rm -rf $(echo x)", False),            # a backtick pair is read as a substitution
-    ('bash -c "rm -rf $1 $$ $?"', "rm -rf $1 $$ $?", False),
-    ("bash -c rm", "rm", True),
-    ("bash -c 'a'\"$D\"", "a/tmp/w", True),                              # a mixed word is opened piece by piece
-    ("bash -c '$D'\"$E\"", "$D$E", False),
-])
-def test_child_text_expands_the_outer_shells_part_of_a_script(cmd, text, proven):
-    events, quotes = shell.command_stream(cmd)
-    front = shell.front(events[0][1])
-    assert rc.child_text(front, quotes, {"D": "/tmp/w"}) == (text, proven)
+# ------------------------------------------------------------------ the 64 KB gate: <= 50 ms locally, asserted at 3x for a slow CI runner
+CI_FACTOR_MS = 150
+_ENV = "".join(f"D{i}=/tmp/a{i}; " for i in range(64))
+TIMING_SHAPES = {
+    "dollar-paren-pairs": _ENV + "$(a) " * 13000, "paren-pairs": _ENV + "(a)" * 21000, "backtick-pairs": _ENV + "`a` " * 16000,
+    "sixty-four-k-parens": _ENV + "(" * 25000 + "rm -rf /x" + ")" * 25000, "open-parens": _ENV + "(" * 32000,
+    "dollar-paren-pairs-then-a-delete": _ENV + "$(a) " * 12000 + "rm -rf ./x", "unknown-words": _ENV + "f g h; " * 9000,
+    "allow-listed-words": _ENV + "echo a; " * 8000 + "rm -rf /tmp/w/x",
+    "worktree-adds-then-many-targets": "git worktree add /a/b/c1 && " * 1000 + "rm -rf " + " ".join(f"/a/b/c{i}/x" for i in range(5000)),
+    "negations": "! x; " * 13000,
+    "s1-many-rels": "cd /tmp/w && rm -rf " + "a " * 32000, "s1-one-huge-rel": "cd /tmp/w && rm -rf " + "a" * 64000,
+    "s1-huge-rel-bad-tail": "cd /tmp/w && rm -rf " + "a/" * 30000 + "!", "s1-star-runs": "cd /tmp/w && rm -rf " + "a*" * 30000 + "\n",
+    "s1-many-components": "cd " + "/a" * 30000 + " && rm -rf x", "s2-many-refs": 'D=/tmp/w; rm -rf ' + '"$D/x" ' * 10000,
+    "s2-many-refs-bad-name": 'D=/tmp/w; rm -rf ' + '"$D/x" ' * 10000 + '"$E"', "s3-long-lit": "git worktree add " + "a" * 30000 + " && rm -rf " + "a" * 30000,
+    "dots-and-dashes": "cd /tmp/w && rm -rf " + "-." * 30000, "spaces": "cd /tmp/w && rm -rf " + " " * 60000 + "x",
+    "quotes": 'D=/tmp/w; rm -rf "$D' + '"' * 60000,
+}
 
 
-def test_targets_drops_redirections_and_their_operands():
-    t = rp.targets
-    assert t(["a", "2>/dev/null", "b"]) == ["a", "b"] and t(["a", ">", "f", "b"]) == ["a", "b"] and t(["a", ">>", "f"]) == ["a"]
-    assert t(["a", "&>", "f", "b", "&>/dev/null"]) == ["a", "b"] and t(["a", "<", "f"]) == ["a"] and t(["a", "<<<", "x", "b"]) == ["a", "b"]
-    assert t(["a>f"]) == ["a"] and t(["2>&1", "a"]) == ["a"] and t(["a", ">&", "2", "b"]) == ["a", "b"] and t(["a", "<"]) == ["a"]
-    assert t(["3>f", "a"]) == ["a"] and t(["a", ">|", "f"]) == ["a"] and t(["a", "<>", "f", "b"]) == ["a", "b"] and t([]) == []
-    assert t(["a", "b"]) == ["a", "b"] and t(["-rf", "x"]) == ["-rf", "x"]
-
-
-def test_state_copy_on_write_never_leaks_between_a_scope_and_its_snapshot():
-    st = rc.State(env={"A": "/x"}, exp={"A"}, made={"/m/n"}, cond={"A"})
-    entry = st.push("(")
-    st.bind("B", "/y", False)
-    st.export("B", True)
-    st.add_made("/m/o")
-    st.drop("A")
-    assert st.env == {"B": "/y"} and st.exp == {"B"} and st.made == {"/m/n", "/m/o"}
-    assert entry[2] == {"A": "/x"} and entry[7] == {"A"} and entry[6] == {"/m/n"} and entry[3] == {"A"}
-    assert st.pop(entry) is False
-    assert st.env == {"A": "/x"} and st.exp == {"A"} and st.made == {"/m/n"} and st.cond == {"A"}
-    copy = st.copy()
-    copy.bind("C", "/z", True)
-    copy.drop("A")
-    assert st.env == {"A": "/x"} and st.cond == {"A"} and copy.env == {"C": "/z"} and copy.cond == {"C"}
-    st.end_chain()
-    assert st.env == {} and st.made == set() and st.cond == set() and copy.env == {"C": "/z"} and copy.exp == set()
-    assert st.known() is False and copy.known() is True
-
-
-def test_clause_g_forgets_the_state_at_the_first_unknown_word_and_only_there():
-    cmds = {"f": True, "true": False, "echo hi": False, "mkdir x": False, "$CD x": True, "./cd x": True, "source x": True, "local D=1": True,
-            "[ -n x ]": False, "git status": False, "/bin/echo hi": False, "~": True}
-    for word_, forgets in cmds.items():
-        assert bad(f"cd /tmp/w && {word_} && rm -rf ./*") is forgets, word_
-        assert bad(f"D=/tmp/w; {word_}; rm -rf $D") is forgets, word_       # a binding first in its chain survives `;`
-        assert bad(f"D=/tmp/w && {word_} && rm -rf $D") is forgets, word_
-        assert bad(f"cd /tmp/w && ({word_}) && rm -rf ./*") is False, word_       # a subshell leaves the outer state alone
+@pytest.mark.parametrize("name", sorted(TIMING_SHAPES))
+def test_the_64kb_budget_holds(name):
+    cmd = TIMING_SHAPES[name][:65000]
+    ev = event_from_hook(cs.pre_payload(cmd), probe=lambda _p: False)
+    best, best_g = 1e9, 1e9
+    for _ in range(3):
+        t0 = time.perf_counter()
+        _out, _state, errors = cat.evaluate(ev, None, names=[NAME, "rm_rf"], strict=True)
+        best = min(best, (time.perf_counter() - t0) * 1000)
+        t0 = time.perf_counter()
+        proven(cmd)
+        best_g = min(best_g, (time.perf_counter() - t0) * 1000)
+    assert errors == []
+    print(f"timing {name}: evaluate best {best:.1f} ms, grammar alone {best_g:.2f} ms")
+    assert best <= CI_FACTOR_MS and best_g <= 15, (name, best, best_g)
