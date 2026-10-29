@@ -360,7 +360,9 @@ def test_the_offline_functions_still_load_their_heavy_parts_on_demand():
 def test_step2_and_4_sources_do_not_import_inject_keys_reflect_or_spawn_anything():
     banned = {"inject", "keys", "reflect", "subprocess", "socket", "urllib", "http", "ssl", "requests", "migrate"}
     for name in ("evidence.py", "proposal.py", "__main__.py", "shadow.py", "labels.py", "report.py", "approvals.py",
-                 "ladder.py", "offline.py", "demotions.py", "modes.py", "synth.py", "metrics.py", "srchash.py", "chains.py", "chains_io.py", "chains_cli.py", "seal.py"):
+                 "ladder.py", "offline.py", "demotions.py", "modes.py", "synth.py", "metrics.py", "srchash.py", "chains.py",
+                 "chains_io.py", "chains_cli.py", "seal.py",
+                 "shadow_arm.py", "phase.py", "offline_demote.py"):
         for node in ast.walk(ast.parse((COMPILE / name).read_text())):
             if isinstance(node, ast.Import):
                 mods = {a.name.split(".")[0] for a in node.names}
@@ -376,6 +378,8 @@ def test_step2_and_4_modules_stay_within_their_line_budgets():
     for name, cap in (("evidence.py", 300), ("proposal.py", 300), ("__main__.py", 300), ("shadow.py", 300),
                       ("labels.py", 260), ("report.py", 300), ("approvals.py", 150), ("ladder.py", 300),
                       ("offline.py", 300), ("demotions.py", 150), ("state.py", 300), ("modes.py", 150), ("events.py", 300),
-                      ("synth.py", 300), ("metrics.py", 300), ("catalogue.py", 150), ("srchash.py", 120), ("chains.py", 150), ("chains_io.py", 150), ("chains_cli.py", 150), ("seal.py", 150)):
+                      ("synth.py", 300), ("metrics.py", 300), ("catalogue.py", 150), ("srchash.py", 120), ("chains.py", 150),
+                      ("chains_io.py", 150), ("chains_cli.py", 150), ("seal.py", 150),
+                      ("shadow_arm.py", 200), ("phase.py", 80), ("offline_demote.py", 200), ("arm_start.py", 200), ("arm_check.py", 100)):
         assert len((COMPILE / name).read_text().splitlines()) <= cap, name
     assert os.access(COMPILE / "__main__.py", os.R_OK) and proposal.PROPOSALS == "proposals"

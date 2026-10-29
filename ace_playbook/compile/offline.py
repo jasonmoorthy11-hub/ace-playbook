@@ -2,7 +2,11 @@
 runs every catalogue detector into `detector_events.jsonl`, pre-fills labels for live shadow rows (a human row always wins),
 records evasion candidates, appends lowering-only demotions (demotions.py) and removes stale shadow_state files. Rows hold
 enums, ids, hashes and counts, never transcript text; agent self-tags and `[L-id]` citations are never inputs. The store and
-the transcript reader load inside the functions that need them (hook path stays light).
+the transcript reader load inside the functions that need them (hook path stays light). `write_labels` and `demote` live in
+offline_demote.py (re-exported here). During an arm phase of a detector (phase.py) NO auto label is written for it, in either arm: the
+correction rule is symmetric by design, `auto_fp_shell_rerun` and `auto_tp_hook_block` follow a delivered block (warn arm only) and
+`auto_fp_prompt_target` would cover the row and hide it from the blind human queue (`neutral_corrections` still counts the fires that carry
+a user correction); demotion counts human labels only.
 """
 
 from __future__ import annotations
@@ -16,25 +20,20 @@ import posixpath
 import re
 import stat
 import time
-from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
 from ..atomic import write_private
-from . import catalogue, chains, chains_io, demotions, detectors, evidence, labels, metrics, modes, report, shadow
+from . import catalogue, demotions, detectors, evidence, labels, metrics, phase, report, shadow
 from . import state as state_mod
 from .events import end_event, events_from_records, hash16
+from .offline_demote import DAY, MIN_SAMPLE, WITHDRAWN, current_mode, demote, iso, write_labels   # noqa: F401  (re-exported)
 from .report import _read as read_jsonl
 from .shell import command_segments
 
 P95 = "not implemented"                                            # design 7.3 names the 200 ms rule but no demotion cause for it
-DAY, STAMP, SHELL, MIN_SAMPLE = 86400, "%Y-%m-%dT%H:%M:%SZ", re.compile(r"\s*<bash-input>(.*)</bash-input>\s*", re.S), 100
-WITHDRAWN = {"dormant", "superseded", "retired", "quarantined"}      # store statuses that mean withdrawn (not compiled)
+SHELL = re.compile(r"\s*<bash-input>(.*)</bash-input>\s*", re.S)
 EVENTS, EVASION, SEEN = "detector_events.jsonl", "evasion_candidates.jsonl", "offline_state.json"
-
-
-def iso(t: float) -> str:
-    return time.strftime(STAMP, time.gmtime(t))
 
 
 def tsec(ts: object) -> float | None:
@@ -85,10 +84,19 @@ def guard_blocked(events: list, tool_id: str) -> bool:
     return bool(m) and detectors._hook_name(m.group(1)).endswith("guard-destructive.sh")
 
 
-def classify(mode: str, events: list, i: int, tu, key: str) -> str | None:
-    """The auto label rule (a reason_code of `labels.AUTO`) for the fire of `tu` in events[i]; first match wins."""
+def corrected(events: list, i: int) -> bool:
+    """A user correction within 2 prompts after the fire in events[i]."""
+    return any(detectors.user_correction(e, {}) for e in span(events, i))
+
+
+def classify(mode: str, events: list, i: int, tu, key: str, phase: bool = False) -> str | None:
+    """The auto label rule (a reason_code of `labels.AUTO`) for the fire of `tu` in events[i]; first match wins. `phase`: the fire's detector
+    is in an arm phase: no auto rule labels it (every fire goes to the blind human queue; a correction is a neutral flag in both arms, and the
+    shell-rerun and hook-block rules follow a delivered block, so they would differ by arm)."""
+    if phase:
+        return None
     after = span(events, i)
-    said = any(detectors.user_correction(e, {}) for e in after)
+    said = corrected(events, i)
     prompt = next((e for e in reversed(events[:i]) if e.human and not e.meta), None)
     if mode in ("warn", "block") and said:
         return "auto_fp_correction"
@@ -154,13 +162,15 @@ def join(uses: list, t: float):
     return pick[1:] if pick else None
 
 
-def session_pass(rows: list[dict], events: list, detector_of) -> tuple[list[tuple[dict, str]], list[dict]]:
-    """([(shadow row, auto rule)], evasion candidates) of one transcript; a row joins the tool use `join` picks by time."""
+def session_pass(rows: list[dict], events: list, detector_of, live: frozenset = frozenset()) -> tuple[list[tuple[dict, str]], list[dict], int]:
+    """([(shadow row, auto rule)], evasion candidates, neutral corrections) of one transcript; a row joins the tool use `join` picks by time.
+    `live` is the detectors in an arm phase: a fire of one is classified with `phase` and counts as neutral when the withheld correction
+    rule was the only thing that would have labelled it."""
     occ: dict[str, list] = {}
     for i, e in enumerate(events):
         for tu in e.tool_uses:
             occ.setdefault(phash(tu), []).append((tsec(e.ts), i, tu))
-    picks, cands = [], []
+    picks, cands, neutral = [], [], 0
     for r in sorted(rows, key=lambda r: r["ts"]):
         t = tsec(r["ts"])
         hit = join(occ.get(r["payload_sha256"], []), t) if t is not None else None
@@ -171,72 +181,13 @@ def session_pass(rows: list[dict], events: list, detector_of) -> tuple[list[tupl
             fires = catalogue.evaluate(dataclasses.replace(events[i], tool_uses=[tu], tool_results=[]), None,
                                        names=[det], strict=True)[0]
             key = fires[0].key if fires else ""
-        rule = classify(r.get("mode", ""), events, i, tu, key)
+        rule = classify(r.get("mode", ""), events, i, tu, key, det in live)
         picks += [(r, rule)] if rule else []
+        neutral += det in live and rule is None and r.get("mode") in ("observe", "warn", "block") and corrected(events, i)
         if r.get("mode") == "block" and evaded(events, i, tu, key):
             cid = hashlib.sha256(f"{r['session']}|{r['proposal_id']}|{r['ts']}".encode()).hexdigest()[:16]
             cands.append({"ts": r["ts"], "v": 1, "id": cid, "session": r["session"], "proposal_id": r["proposal_id"], "key": key})
-    return picks, cands
-
-
-# ---------------------------------------------------------------- labels, demotions
-def write_labels(cfg, picks: list[tuple[dict, str]], now: float, dry: bool) -> tuple[Counter, dict[str, str]]:
-    """(auto rows written per rule, effective labels). Never over a human row, never twice (newest row is an auto row)."""
-    rows, broken = labels.read_chain(cfg)
-    if broken is not None:
-        raise labels.Refusal("labels.jsonl chain broken")
-    human, done, added = {r.get("ref") for r in rows if r.get("reason_code") not in labels.AUTO}, Counter(), []
-    newest = {r.get("ref"): r.get("reason_code") for r in rows}
-    for row, rule in picks:
-        ref = labels.row_id(row)
-        if ref not in human and newest.get(ref) not in labels.AUTO:
-            newest[ref] = rule
-            done[rule] += 1
-            added.append({"ref": ref, "label": labels.AUTO[rule], "reason_code": rule})
-            if not dry:
-                labels.append_row(cfg, labels.AUTO[rule], ref, None, reason_code=rule, at=iso(now))
-    return done, labels.effective(rows + added)
-
-
-def current_mode(copy: tuple[dict, str, dict], arows: list[dict], abroken, drows: list[dict], until: str = "~") -> modes.Resolution:
-    """`modes.resolve` for an approved copy (proposal, mode, record) as of `until` (a stamp after it cannot blind FP counting)."""
-    return modes.resolve(copy[0]["id"], copy[2], arows, abroken, drows, None, until)
-
-
-def demote(cfg, rows: list[dict], labs: dict[str, str], cands: list[dict], now: float, dry: bool, out: dict, fixed=True) -> None:
-    """Append design 7.3's demotion rows (counts to `out`); `fixed` stamps `iso(now)`, else `append` stamps at append time."""
-    drows, broken = demotions.read_chain(cfg.data_dir, ring := chains.key_of(cfg) if dry else chains_io.need_key(cfg, demotions))   # KeyMissing: one error
-    if broken is not None:
-        raise ValueError("demotions.jsonl chain broken")
-    lessons, out["lesson_check"] = report.lesson_statuses(cfg)
-    out["errors"] += out["lesson_check"] == "chain invalid"
-    errors, fires, full = report.hook_errors(cfg, rows, iso(now - 7 * DAY))
-    n = errors + fires
-    sure = n >= MIN_SAMPLE and not full
-    out["error_rate"] = ("not computable (log full)" if full else f"computed (n={n})" if sure
-                         else f"not computable (n={n}, need {MIN_SAMPLE})")
-    arows, abroken = modes.read_approvals(cfg.data_dir, ring)         # unreadable counts as broken: the resolver caps at observe
-    for copy in shadow.approved_records(cfg):
-        try:
-            pid, det = (p := copy[0])["id"], p["check"]["detector"]
-            res = current_mode(copy, arows, abroken, drows, iso(now))
-            after = (a := modes.anchor(arows, pid, iso(now), abroken)) and a["ts"]     # rows before it are lifted: they hide no cause
-            if (cur := res.mode) == "disabled":                # revoked or disabled: nothing left to lower
-                continue
-            fps = [(r["ts"], labels.row_id(r)) for r in rows if r["proposal_id"] == pid and r["ts"] >= res.window_start
-                   and labs.get(labels.row_id(r)) == "fp"]
-            ref = demotions.pair_ref([c for c in cands if c.get("proposal_id") == pid], 14)
-            flagged = any(r["proposal_id"] == pid and r["cause"] == "evasion_pair" and r["ref"] == ref for r in drows)
-            stale = catalogue.stale(det, p["provenance"]["source_sha256"])
-            disable = ("lesson_inactive" if (lessons or {}).get(p["lesson_id"]) in WITHDRAWN else
-                       "source_sha256" if stale else "error_rate" if sure and errors > 0.01 * n else None)
-            for f in demotions.decide(pid, cur, disable=disable, fps=sorted(set(fps)), evasion=None if flagged else ref):
-                f = {**f, "ts": iso(now)} if fixed else f
-                if demotions.duplicate(drows, f, after) is None:
-                    drows.append({"ts": iso(time.time()), **f} if dry else demotions.append(cfg.data_dir, f, current=cur, after=after, ring=ring))
-                    out["demotions"] += 1
-        except (KeyError, TypeError, ValueError, OSError):
-            out["errors"] += 1
+    return picks, cands, neutral
 
 
 @contextlib.contextmanager
@@ -251,9 +202,9 @@ def run(cfg, *, dry_run: bool = False, since_days: int = 7, idle_minutes: float 
     """The offline pass; counts only. A session is marked done when its rows were written (and, with shadow rows, its labels)."""
     explicit, now = now is not None, time.time() if now is None else now
     out = {"transcripts": 0, "skipped": 0, "detector_events": 0, "sessions": 0, "labels": dict.fromkeys(labels.AUTO, 0), "demotions": 0,
-           "evasion_candidates": 0, "state_removed": 0, "errors": 0, "lesson_check": "not run", "error_rate": "not run",
+           "evasion_candidates": 0, "neutral_corrections": 0, "state_removed": 0, "errors": 0, "lesson_check": "not run", "error_rate": "not run",
            "p95_rule": P95}
-    rows, old_ev, old_ca, done, todo, corpus = [], [], [], {}, [], False
+    rows, old_ev, old_ca, done, todo, corpus, live = [], [], [], {}, [], False, phase.active(cfg, iso(now))
     with stage(out):
         rows = [r for r in report.read_corpora(cfg)[0] if r.get("tier") == "live"]
         corpus = True
@@ -270,19 +221,20 @@ def run(cfg, *, dry_run: bool = False, since_days: int = 7, idle_minutes: float 
         try:
             from ..clean.transcript import read_records
             events = list(events_from_records(read_records(path)))
-            ev_rows, (got, cands) = detector_rows(events, sh, f"{size}:{mtime}"), session_pass(by_session.get(sh, []), events, detector_of)
+            ev_rows, (got, cands, neutral) = detector_rows(events, sh, f"{size}:{mtime}"), session_pass(by_session.get(sh, []), events, detector_of, live)
         except Exception:                                      # one bad transcript never stops the pass
             out["errors"] += 1
             continue
         out["transcripts"] += 1
         marks[sh] = {"size": size, "mtime": mtime}
         picks += got
+        out["neutral_corrections"] += neutral
         for bucket, fresh in ((new_ev, ev_rows), (new_ca, cands)):
             bucket += [r for r in fresh if r["id"] not in known and not known.add(r["id"])]     # de-duplicate by id
     out["sessions"] = sum(r["detector"] == metrics.SESSION for r in new_ev)          # summary rows; detector_events counts fires only
-    out["detector_events"], out["evasion_candidates"], labs, before = len(new_ev) - out["sessions"], len(new_ca), {}, out["errors"]
+    out["detector_events"], out["evasion_candidates"], labs, human, before = len(new_ev) - out["sessions"], len(new_ca), {}, {}, out["errors"]
     with stage(out):
-        counts, labs = write_labels(cfg, picks, now, dry_run)
+        counts, labs, human = write_labels(cfg, picks, now, dry_run)
         out["labels"].update(counts)
     keep = {sh: v for sh, v in marks.items() if out["errors"] == before or sh not in by_session}
     with stage(out):
@@ -294,7 +246,7 @@ def run(cfg, *, dry_run: bool = False, since_days: int = 7, idle_minutes: float 
                 write_private(cfg.path(SEEN), json.dumps({**done, **keep}, sort_keys=True) + "\n")
     if corpus:                                                 # an unreadable corpus is not "no fires": never demote on it
         with stage(out):
-            demote(cfg, rows, labs, old_ca + new_ca, now, dry_run, out, explicit)
+            demote(cfg, rows, labs, old_ca + new_ca, now, dry_run, out, explicit, human)
     with stage(out):
         out["state_removed"] = state_mod.prune(cfg.data_dir, now - 7 * DAY, dry_run)
     return out

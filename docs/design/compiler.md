@@ -68,6 +68,8 @@ RESULTS.md:62), alongside `edit_unread_turn` and `rm_rf` (RESULTS.md:34). The ve
 | `compile/chains_io.py` | The re-seal of both chains under a new key with `.bak` copies and rollback, the file helpers and `need_key` for the writers; not on the hook path | 111 (cap 150) |
 | `compile/chains_cli.py` | `compile keygen` (never-keyed installs only: lists, asks, seals) and `keygen --rehead` (shows what differs from the old heads, asks y/N); not on the hook path | 126 (cap 150) |
 | `compile/seal.py` | `compile seal [--dry-run]` (section 8, "Seal (as built, executed 2026-10-29)"): the Frozen instruments block from live values and the TTY-only rewrite of the PREREGISTRATION.md shadow-mode heading; prints the git commands, never runs git; not on the hook path | 123 (cap 150) |
+| `compile/arm_start.py` | The arm-start verb (section 8, "Arms (as built)"): refusals, thirteen-file entry, signed marker; off the hook path | 194 (cap 200) |
+| `compile/arm_check.py` | The nightly's arm-phase check: notes for a missing or unverified marker, and holdout on; off the hook path | 26 (cap 100) |
 | `compile/modes.py` | `resolve` and the frozen `Resolution`: the one answer to "what does this proposal run at" for the hook, the ladder, the offline pass and the report (7.3, "Mode resolution"); `in_force`, `anchor`, `lifted` (an operator approvals row stamped strictly later lifts older demotions); stdlib, `approvals`, `demotions` only, on the hook path (integration wave after 5a and 5b) | 117 |
 | `compile/metrics.py` | Stdlib-only rate code behind the report: Wilson 95 % interval, nearest-rank percentile, `_session` summary rows, eligible sessions, friction, hook cost, live-versus-offline agreement (section 8); hashed into `report_sha256` together with `report.py`; never on the hook path (step 5c) | 154 |
 | `compile/synth.py` | `replay-synthetic`: the frozen invented corpus and the examples through `shadow._evaluate` with a temporary state dir into `shadow.synthetic.jsonl` only (`--out` confined by file identity); exits 1 on an `expect` disagreement; never on the hook path (step 5c) | 144 |
@@ -487,9 +489,10 @@ registration only resets per-turn state and logs observe rows.
 3. Load approved proposals: at most 50 files, each at most 16 KiB, regular files only (no
    symlinks), hash must match `approvals.jsonl`, message re-checked with `inert_reason`
    (`textrules`). Any failure skips that proposal and logs the reason by type only (as inject/__main__.py:18-25).
-4. Effective mode = min(approved mode, any cap in `demotions.jsonl`, arm). The arm comes from
-   `arms.assign(session hash, shadow_seed, arm_rate, proposal_id)` (HMAC-SHA256, `compile/arms.py`) during a randomized
-   phase; outside one the arm is always "active".
+4. Effective mode = min(approved mode, any cap in `demotions.jsonl`) (`modes.resolve`); the row's `mode` is that mode. The arm is not part of it:
+   `shadow_arm.assign` (a copy of `arms.assign(session hash, shadow_seed, arm_rate, proposal_id)`, HMAC-SHA256) gives every row its `arm`, and
+   `shadow_arm.audible` then silences the DELIVERY (the stderr echo and the stdout decision) of an observe-arm session for a proposal whose
+   detector has a started phase (`phase.py`, section 8, Arms (as built)); outside a phase every arm delivers the effective mode.
 5. Build the Event, run each matching detector with the session state, update state.
 6. Append one row per evaluated proposal to `shadow.jsonl` (below), then act on the strongest
    decision.
@@ -503,15 +506,16 @@ registration only resets per-turn state and logs observe rows.
 | any error | type-only log line | none | fail open; a broken store never blocks a session |
 
 ```json
-{"ts": "2026-10-21T10:12:04Z", "v": 1, "row_id": "r:8d41c07e", "corpus": "private", "session": "sid:5f0c9e21aa03b7d4",
- "proposal_id": "P-3f9a0c12", "detector": "rm_rf_nonscratch", "tier": "live", "event": "PreToolUse",
- "mode": "observe", "arm": "active", "decision": "would_fire", "hits": 1,
- "payload_sha256": "c4a1...e9", "target_hashes": ["0d93aa61c2b4f5e0"], "agent_id_present": false,
- "dur_ms": 41}
+{"v": 1, "ts": "2026-10-21T10:12:04Z", "proposal_id": "P-3f9a0c12", "lesson_id": "L-0001", "mode": "observe",
+ "event": "PreToolUse", "tool_name": "Bash", "session": "5f0c9e21aa03b7d4...", "payload_sha256": "c4a1...e9",
+ "would_fire": true, "cause": "detector", "tier": "live", "dur_ms": 41, "arm": "warn", "agent_id_present": false}
 ```
 
-`row_id` is sha256(ts, session, proposal_id, payload_sha256)[:8]; `approve` and the report list
-fires by it. Rows hold only enums, ids, hashes, integers and timestamps. There is no free-text
+`arm` is `warn` or `observe` from `shadow_arm.assign` (the same algorithm as `arms.assign`), or `unassigned` until the private
+`shadow_seed` and `arm_rate` are both set; `agent_id_present` records only whether the payload carried an `agent_id` key (False for an
+over-cap payload, which is never parsed). `row_id` is not stored: it is sha256(ts, session, proposal_id, payload_sha256)[:8], computed by
+`labels.row_id` and ignoring the two arm keys; `approve` and the report list fires by it.
+Rows hold only enums, ids, hashes, integers and timestamps. There is no free-text
 field, so there is nothing for the scrubber to miss on the hot path; a test asserts the row schema.
 
 ### 7.2 Cost budget
@@ -1408,13 +1412,65 @@ when a fire row of an eligible session lacks `arm` or `agent_id_present` or reco
 when a seed in the config does not hash to the sealed line, when the approvals or demotions chain is broken, shows counts
 only before the analysis day (horizon end + 7 days) and never prints a seed. The `_session`
 row gained `start` (rows written before it have none and are reported as missing). `labels_queue.py` (split out of `labels.py` and `queue.py`) hides
-the resolved mode in `label --rows` and the queue card while any detector's phase runs. Still open, and conditions before any
-`arm_start` (PREREGISTRATION.md, Pre-arm-start conditions): the live hook does not yet
-write `arm` or `agent_id_present` (`shadow.py` holds no arm code, so today `arms report` refuses every row), the offline auto-FP rule (a) is still
-asymmetric, demotion and harm do not yet ignore auto labels during a phase, the spillover comparison is not built, and condition (7) is half built: the
-analysis counts `error:delivered:` lines of `shadow.log` in the horizon of an `error_rate` demotion (`arms_window.delivered_errors`, `unknown` for a
-missing, unreadable or full log), but the hook does not yet log them and no family-lesson status change from a session carrying `ACE P-`
-and no lesson minting is frozen.
+the resolved mode in `label --rows` and the queue card while any detector's phase runs.
+Built 2026-10-29 (`shadow_arm.py`, hook side of conditions (1) and (7)): the hook writes `arm`
+(`shadow_arm.assign`, a copy of `arms.assign` because the hook may not import `arms`; a test pins the identity on generated inputs and by body text;
+`unassigned` until the seed and rate are set, which `arms report` refuses) and `agent_id_present` on every shadow row, and logs each failed
+delivered write (stderr echo, stdout decision) as `<UTC stamp> error:delivered:<Type>`, which `arms_window.delivered_errors` counts in the horizon of an
+`error_rate` demotion (`unknown` for a missing, unreadable or full log). Each write is flushed inside its own try (stdout is block-buffered on a
+pipe, so a closed reader fails at the flush), and after a failure the fd is pointed at /dev/null so the exit flush cannot fail unlogged; a
+harness that closes its end after the hook has exited is not a failure the hook can see.
+
+*The phase marker and what it switches (built, wave H2).* `compile/phase.py` reads `data_dir/arm_phase.json`, `{"v", "started": {"<detector>":
+"<arm start stamp>"}, "ts", "hash"}`, written by the arm-start verb only; `active(cfg, now)` is the detectors whose stamp is at or before `now`.
+The marker is SIGNED like an approvals row (`chains.seal` / `chains.hash_ok` under `chains.key_of(cfg)`: a `v: 2` keyed hash on a keyed install, the
+plain record hash on an unkeyed one), because an agent with Bash could otherwise write it and silence a block. `phase.load` returns
+`(started, unverified)`: an unsigned, malformed, other-key, tampered, oversize or non-regular marker is no phase (`unverified` true, and
+the hook logs `arm:phase:unverified`); a missing one is no phase and logs nothing. The kill file `DISABLED` stays the documented unauthenticated
+off switch; the marker is not one. The sealed `arm_start` line stays
+the analysis's authority (hashed `arms.py` reads only that); the marker is the runtime's view of it, and the verb writes both in one step. A
+marker without a line silences nothing in the analysis; a line without a marker leaves the hook delivering in both arms, and `arms report`
+does NOT see that (deleting or corrupting the marker removes the silence and the rows are accepted): `compile/arm_check.py`, run by the nightly,
+is the detector, as the health notes, listed first, `arm phase missing: <detector>` / `arm phase unverified: <detector>` / `arm phase stamp differs: <detector>`
+(and `holdout on during an arm phase`; `arm check failed` if the check crashes), never failing the night; a changed `shadow_seed` or `arm_rate` IS
+caught, by `primary`. Four things read it: (1) delivery: for a proposal whose detector is
+active, a row of an `observe`-arm session is
+written as ever (`mode` the effective mode, `would_fire` true) but nothing is delivered, no echo and no decision, so the session proceeds as if in
+observe, and the hook logs `arm:phase:<detector>` (through `_Once`: once per run, and not again while it is in the log's last 8 KiB);
+`warn`-arm sessions deliver as before, an `unassigned` row delivers and logs `arm:unassigned` once (not an `error:` line: it must not feed
+`error_rate`), and a failure of the filter delivers; (2) no auto labels: `offline.classify(..., phase)` yields no label at all for a fire of an
+active detector, in either arm, so every fire stays unlabelled for the blind human queue (`queue.pending` lists it); `run` counts the fires
+that carry a user correction in `neutral_corrections` (name kept). `auto_fp_shell_rerun` and `auto_tp_hook_block` follow a delivered block and
+are therefore arm-sensitive, which is why all five rules are off, and `auto_fp_prompt_target` would cover the row and hide it from the queue;
+(3) demotion: for an active detector the
+FP count of its proposals reads only the newest HUMAN row per ref (`offline_demote.write_labels` returns them; `labels.effective` is
+unchanged), so auto FPs lower nothing, while `error_rate`, `lesson_inactive`, `source_sha256` and the `evasion_pair` flag are not labels and
+act as before; (4) the minting freeze: `reflect_transcript` mints nothing, and writes no delta, from a transcript whose raw bytes carry `ACE P-`
+(unreadable or over 64 MiB counts as carrying it) while any detector is active; it writes NO reflections ledger row (a log line `status=frozen_arm_phase`
+only), so the freeze defers: `already_reflected` and `sweep.reflected_ids` never saw the session, and the next run after the phase ends
+mints it. No production code path writes RETIRE, PATCH, MERGE or NARROW from a session (`store/promote.py` and `store/__main__.py` are
+operator-driven; `tests/test_arm_phase.py` fails if another appears), which is why the freeze sits at minting, the only session-driven writer.
+`offline.py` keeps the pure rules and `run`; `offline_demote.py` holds `write_labels`, `current_mode` and `demote` (re-exported).
+
+*The arm-start verb (built, wave H3).* `python -m ace_playbook.compile.arm_start <detector> [--dry-run] [--at <UTC stamp>]`
+(`compile/arm_start.py`, not in `__main__.py`, not on the hook path). It refuses, by the hashed analysis's own functions (`arms_window.family`,
+`arm_starts`, `check_starts`, `approvals.read_chain`), a detector unknown to the catalogue, an unsealed pre-registration, a stamp earlier than
+`sealed_at` or than the moment the marker is written, an existing `arm_start` line, unset seeds, `holdout_enabled` true, an unreadable, broken or
+empty approvals chain, a family with no member at `warn`/`block`
+or with a member at `observe` or with a lowering demotion in force, and a working tree with uncommitted changes to the thirteen files. It prints the
+dated entry (`### <date> - arm start: <detector>`, the `arm_start <detector> <stamp> approvals=<head>` line at column 0, thirteen `sha256 <path> <hex>`
+lines (paths from the repository root), the family ids, `tree <HEAD>`, the marker line), asks y/N, stamps the next whole second after the `y`, appends it
+under the top-level `## Amendments` heading, writes the signed marker
+and `data_dir/arm_start_<detector>.txt` (the line without a newline: `printf '%s' <line> | shasum -a 256` is its sha256; `sha256sum` is the coreutils
+alternative to `shasum -a 256`) and prints the operator
+lines: `git add` and `commit`, `tag -s arm-<detector>`, the push of the current branch and the tag, the line's sha256, `ots stamp <that file>` and the
+`arms report` command (never run by the verb). The hash list is THIRTEEN files, by the dated Amendments entry "arm_start hash list" of 2026-10-29
+(`shadow.py`, `offline.py`, `events.py`, `demotions.py`, `modes.py`, `approvals.py` of condition (2), plus `shadow_arm.py`, `shadow_guard.py`,
+`phase.py`, `offline_demote.py`, and on the operator's ruling `chains.py`, `reflect/runner.py` and `sweep.py`); the sealed block and
+`report_sha256` are unchanged. If the marker write fails, or finishes after the stamp, the verb restores the file, the one-line file and the previous
+marker, exits 1, and a rerun is clean.
+
+*Still open.* The spillover comparison, and the operator's tag and OpenTimestamps proof at the arm start.
 
 ### 8.x Brief (as built)
 

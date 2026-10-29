@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 from ..clean import clean_file
+from ..compile import phase
 from ..config import Config
 from ..inject.ledger import append_jsonl, read_jsonl, shown_ids_for_session
 from ..inject.sanitize import inert_reason
@@ -20,6 +21,10 @@ from .provenance import check_provenance
 TAG_COUNTERS = {"helpful": "helpful", "harmful": "harmful", "violated": "violated"}
 MIN_USER_TURNS = 2
 MAX_ATTEMPTS = 3
+FROZEN = "frozen_arm_phase"
+# the sealed marker (PREREGISTRATION.md condition (7)): the `ACE P-<id>: ` prefix of a family proposal's message
+TAG = b"ACE P-"
+MAX_SCAN_BYTES = 64 << 20
 
 
 def retry_count(cfg: Config, session_id: str) -> int:
@@ -45,6 +50,18 @@ def _fail(cfg: Config, sid: str, error: str, final: bool = False, **extra) -> di
 def already_reflected(cfg: Config, session_id: str) -> bool:
     return any(r.get("session_id") == session_id and r.get("status") != "retryable"
                for r in read_jsonl(cfg.reflections))
+
+
+def arm_frozen(cfg: Config, path: Path) -> bool:
+    """During an arm phase (compile/phase.py) a transcript whose raw bytes carry `ACE P-` mints nothing (PREREGISTRATION.md, Pre-arm-start
+    conditions (7)). Unreadable or over 64 MiB counts as carrying it. Minting is the only session-driven writer of lesson status: nothing
+    here writes RETIRE/supersede/deactivate (store/promote.py is operator-driven; tests/test_arm_phase.py guards that)."""
+    if not phase.active(cfg, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())):
+        return False
+    try:
+        return path.stat().st_size > MAX_SCAN_BYTES or TAG in path.read_bytes()
+    except OSError:
+        return True
 
 
 def _ledger(cfg: Config, session_id: str, status: str, **extra) -> dict:
@@ -163,6 +180,9 @@ def reflect_transcript(cfg: Config, path: Path, client: client_mod.ReflectorClie
         return {"session_id": sid, "status": "already_reflected"}
     if cleaned.user_turn_count < MIN_USER_TURNS:
         return _ledger(cfg, sid, "skipped_short")
+    if arm_frozen(cfg, path):                  # no outbound call, no delta of any kind, and NO ledger row: the freeze defers, the session stays open
+        client_mod.log_line(cfg, f"reflect session={sid} status={FROZEN}")
+        return {"session_id": sid, "status": FROZEN}
     log = DeltaLog(cfg.deltas, tuple(cfg.deny_terms))
     try:
         if cfg.deltas.exists():

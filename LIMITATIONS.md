@@ -57,7 +57,9 @@ an effect (randomization inference, the spillover flag), the review packet (`pac
 go/no-go, and the seal refuses until the `shadow_seed`, `permutation_seed` and `arm_rate` config fields are set and the text
 states the session-based entry gate and the horizon; the arm analysis (`python3 -m ace_playbook.compile.arms report`) is
 built and hashed in `report_sha256`, with the hook's `arm` and `agent_id_present` fields (without which `arms report`
-refuses), the symmetric auto-FP rule and the spillover comparison still open (design section 8, Arms). The arm analysis refuses as a whole when any approved
+refuses), the phase marker, the observe-arm silence, the symmetric correction rule, human-only demotion and the minting freeze built, and the
+arm-start verb built (`compile.arm_start`), and the spillover comparison still open (design section 8, Arms). The arm analysis refuses as a whole
+when any approved
 proposal's file is missing, even one of a
 detector that has not started (it fails closed; `unapprove` keeps the file, so it can be restored). The arm analysis reads the whole demotions chain,
 not only the part before the `approvals=` head: a demotion stamped before the arm start but appended after the head refuses the family (it fails
@@ -67,6 +69,46 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
 
 ## Compiler (stage 2)
 
+- `agent_id_present` on a shadow row records only whether the hook payload carried an `agent_id` key, never its value (False for an over-cap payload).
+- The arm phase has two views that the arm-start verb (`compile.arm_start`) writes together: the `arm_start` line in PREREGISTRATION.md, which only
+  the analysis reads, and `data_dir/arm_phase.json`, which only the hook, the offline pass and the minting freeze read. A marker without a
+  matching line silences nothing in the analysis (the hook, the corrections and the freeze behave as in a phase, `arms report` still says
+  `not started`); a line without a marker leaves the hook delivering in both arms, and `arms report` does NOT see that: deleting or corrupting
+  the marker removes the silence, the rows are accepted as they are, and only the nightly check (`compile/arm_check.py`, run by
+  `hooks/nightly_sweep.py`) flags it, as the notes `arm phase missing: <detector>`, `arm phase unverified: <detector>` or `arm phase stamp differs: <detector>`
+  (first in the list, so `compile status`'s four shown never lose them to the backup and brain notes), until the next nightly; a check that
+  itself crashes is the note `arm check failed`, and it never fails the night. The same check notes `holdout on during an arm phase`; the verb
+refuses to start with
+  `holdout_enabled` true. A change of `shadow_seed` or `arm_rate` in the config, by contrast, IS caught by the analysis (`primary` refuses rows
+  that differ from `assign` and a seed that does not hash to the sealed line). The verb appends the line first and writes the marker last: if
+  the marker write fails, or the writes finish after the stamp, the verb itself restores PREREGISTRATION.md, deletes the one-line file and puts
+  the previous marker back, exits 1 and says to fix the cause and rerun. `--at` may only be now or later, and the default stamp is the NEXT whole
+  second after the `y`. Sessions starting in that stamp's second before the write lands are eligible yet ran with output in both arms: the
+  window is bounded by the write latency (a fraction of a second; the verb refuses when it is longer), not zero.
+- The marker is signed with the chain key (`chains.seal`, as approvals rows): an unsigned, malformed, other-key or tampered marker is no phase
+  and the hook logs `arm:phase:unverified`. That protects against a file an agent can write, not against an agent that can read the chain key
+  (a Bash tool reads any file the operator can) and not on an unkeyed install, where the signature is the plain record hash and anyone can
+  recompute it. The kill file `DISABLED` remains the documented unauthenticated off switch; the phase marker is not one. A present but unusable
+  marker (a directory, a symlink, a fifo, oversize, bad JSON) is the same: no phase, `arm:phase:unverified`.
+- The verb's tree check is a working-tree check: it refuses uncommitted changes to the thirteen hashed files (`git status --porcelain`), so the sha256
+  lines of the entry match `HEAD` only while the tree is clean when the verb runs; a change made after the verb and before the commit is not
+  seen, and the verb does not verify the signed tag or the OpenTimestamps proof (the operator runs them).
+- Both phase log lines go through the hook's `_Once` throttle: `arm:phase:<detector>` and `arm:phase:unverified` are written at most once per run
+  and not again while they are in the last 8 KiB of `shadow.log`, so their count is not a count of silenced hits (the shadow rows are).
+- In a phase no auto label is written for a started detector, in either arm: every fire waits for a human label in the blind queue. The
+  correction rule is symmetric by design; `auto_fp_shell_rerun` and `auto_tp_hook_block` follow a delivered block and are therefore
+  arm-sensitive, which is why they are off too, and `auto_fp_prompt_target` would cover the row and hide it from the queue (condition (4) counts
+  human labels only). Demotion in a phase counts only human labels; `error_rate`, `lesson_inactive`,
+  `source_sha256` and the `evasion_pair` flag still act. `neutral_corrections` is in the offline summary dict, not in the CLI's printed lines.
+- The minting freeze is enforced at the only session-driven writer of lessons, `reflect_transcript`: during a phase a transcript whose raw bytes
+  carry `ACE P-` (or that is unreadable or over 64 MiB) mints nothing and writes NO reflections ledger row (a `status=frozen_arm_phase` line in
+  `reflect.log` only), so the freeze defers: the nightly sweep (`sweep._sweep`) decides "frozen" with the same `runner.arm_frozen` before it fills
+  its `max_n` slots, so frozen transcripts take no slot, and reports the ones it set aside as a final `{"status": "frozen_arm_phase", "count": n}`
+  entry (counted among the candidates it examined before the cap filled); it reads each examined transcript once (bounded, 64 MiB fail-closed) and
+  re-examines them every night during the phase. After the phase (marker gone) they are ordinary candidates and are minted.
+  No production code path writes RETIRE, PATCH, MERGE or NARROW from a session
+  (`store/promote.py` and `store/__main__.py` are operator-driven); tests/test_arm_phase.py fails if one appears elsewhere. The NOOP counters
+  of a frozen session are not written either.
 - The command scanner is a best-effort linear tokenizer, not a shell parser. Known shapes it does
   not see: `find ... -delete` and `-exec rm -rf`, `xargs` fed from a pipe, `bash -c`, `eval` and
   `bash <<EOF` bodies, shell functions and aliases, and anything past the 64 KB cap (reported as

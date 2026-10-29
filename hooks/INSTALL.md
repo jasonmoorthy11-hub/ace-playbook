@@ -391,7 +391,35 @@ status line and the menu-bar plugin print `DISABLED`. Remove the file to arm the
 (a throwaway state directory), writes `data_dir/shadow.synthetic.jsonl` (never `shadow.jsonl`; `--out` inside `data_dir` is refused unless it is that file) and exits 1 if any expected outcome
 differs; `compile report` then prints the synthetic table apart from the private one.
 
-**Arm analysis.** `python3 -m ace_playbook.compile.arms report [--json]` prints `not started` until PREREGISTRATION.md holds
+**Arm analysis.** Every shadow row now carries `arm` (from the private `shadow_seed`; `unassigned` until the seed and `arm_rate` are set) and
+`agent_id_present`; a failed write of the warn echo (stderr) or of the stdout decision, including the flush of a block-buffered pipe, is logged as
+`error:delivered:<Type>` in `shadow.log` (a write the harness never reads is not a failure the hook can see). The phase marker
+`data_dir/arm_phase.json` (`{"v", "started": {"<detector>": "<arm start stamp>"}, "ts", "hash"}`, signed with the chain key like an approvals
+row) is written by `python3 -m ace_playbook.compile.arm_start` only, never by hand: a marker that is unsigned, signed with another key or changed
+after signing is no phase (the hook logs `arm:phase:unverified`; the kill file `DISABLED` stays the documented off switch, the marker is not one).
+While a detector's stamp has passed, an observe-arm session gets no warn echo and no block decision for its proposals (the row is still written with
+the approved mode), `compile offline` writes no auto label for it in either arm and demotes on human labels only, and `reflect` mints nothing from a
+transcript carrying `ACE P-` (it writes no ledger row, so the nightly sweep mints that transcript after the phase ends); a suppressed observe-arm
+hit logs `arm:phase:<detector>`. A phase with no `shadow_seed`/`arm_rate` logs `arm:unassigned` once and delivers as before. The nightly
+(`hooks/nightly_sweep.py`) adds the notes `arm phase missing: <detector>` / `arm phase unverified: <detector>` / `arm phase stamp differs:
+<detector>` (a started phase whose signed marker is gone
+or fails verification: nothing else notices, `arms report` does not) and `holdout on during an arm phase` to the health record that
+`compile status` shows.
+
+**Starting an arm phase** (the recipe; `arms report` is the last step, after the tag and the proof). Commit the thirteen hashed files first
+(`shadow.py`, `offline.py`, `events.py`, `demotions.py`, `modes.py`, `approvals.py`, `shadow_arm.py`, `shadow_guard.py`, `phase.py`,
+`offline_demote.py`, `chains.py` in `ace_playbook/compile/`, `ace_playbook/reflect/runner.py` and `ace_playbook/sweep.py`; the verb refuses a
+working tree with uncommitted changes to them, and prints each as `sha256 <path from the repository root> <hex>`). `holdout_enabled` must be
+false, and `--at` may only be now or later (the default stamp is the next whole second after your `y`). Then:
+1. `python3 -m ace_playbook.compile.arm_start <detector> --dry-run` prints the entry and refuses for the reasons the analysis would.
+2. `python3 -m ace_playbook.compile.arm_start <detector>`, at a terminal, answer `y`: it appends the dated entry under `## Amendments`
+   and writes the signed marker and `data_dir/arm_start_<detector>.txt`. The marker is written here and nowhere else.
+3. Run the printed lines: the `add` and `commit` of PREREGISTRATION.md (`arm start: <detector> <stamp>`), the signed tag `arm-<detector>`
+   (`tag -s`), the push of the current branch and the tag, then `ots stamp <data_dir>/arm_start_<detector>.txt` (the file holds the
+   `arm_start` line; `printf '%s' '<line>' | shasum -a 256` is the sha256 the proof covers; on a host without `shasum` use
+   `sha256sum`, from coreutils, the same digest).
+4. `python3 -m ace_playbook.compile.arms report`.
+`python3 -m ace_playbook.compile.arms report [--json]` prints `not started` until PREREGISTRATION.md holds
 an `arm_start <detector> <UTC stamp> approvals=<64 hex>` line (the hash of the last `approvals.jsonl` row at that moment);
 it needs `shadow_seed`, `permutation_seed` and `arm_rate` in the config, whose
 seeds must hash to the sealed lines, and never prints a seed. The Holm family is fixed at each `arm_start` (intention to treat): the

@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent
 FROZEN = ROOT / "ace_playbook" / "fixtures" / "frozen"
 SYN_FILE = "shadow.synthetic.jsonl"
 HOOK_KEYS = {"v", "ts", "proposal_id", "lesson_id", "mode", "event", "tool_name", "session", "payload_sha256", "would_fire", "cause",
-             "tier", "dur_ms"}
+             "tier", "dur_ms", "arm", "agent_id_present"}
 
 
 @pytest.fixture
@@ -180,7 +180,7 @@ def test_the_hook_row_has_the_exact_key_set_and_types_and_a_row_id_that_ignores_
     fire_live(w, monkeypatch)
     (row,) = cs.shadow_rows(w.data)
     assert set(row) == HOOK_KEYS and row["v"] == 1 and type(row["dur_ms"]) is int and row["dur_ms"] >= 0
-    assert all(type(row[k]) is str for k in HOOK_KEYS - {"v", "would_fire", "dur_ms"}) and row["would_fire"] is True
+    assert all(type(row[k]) is str for k in HOOK_KEYS - {"v", "would_fire", "dur_ms", "agent_id_present"}) and row["would_fire"] is True
     assert labels.row_id(row) == hashlib.sha256("|".join([row["ts"], row["session"], row["proposal_id"], row["payload_sha256"]]).encode()
                                                ).hexdigest()[:8]
 

@@ -73,7 +73,7 @@ def replay(cfg, sessions: list | None = None) -> tuple[list[dict], dict]:
     """(rows, counts): evaluate every event with a throwaway state directory; counts hold events, fired, disagreements, errors."""
     rows, counts, errors = [], dict.fromkeys(("sessions", "events", "fired", "disagreements", "errors"), 0), []
     with tempfile.TemporaryDirectory() as tmp:
-        scratch = dataclasses.replace(cfg, data_dir=Path(tmp))
+        scratch = dataclasses.replace(cfg, data_dir=Path(tmp), shadow_seed=None)   # synthetic rows say `unassigned`; the seed stays out
         scratch.source = getattr(cfg, "source", None)           # `replace` copies fields only: `key_of` looks for the heads file beside it
         for sid, events in sessions or plan():
             counts["sessions"] += 1
@@ -81,7 +81,7 @@ def replay(cfg, sessions: list | None = None) -> tuple[list[dict], dict]:
                 ev = event_from_hook({**payload, "session_id": sid, "hook_event_name": "PreToolUse", "tool_use_id": "synthetic"})
                 t0 = time.monotonic()
                 fired = det in shadow._evaluate(scratch, ev, sid, [det], errors.append)
-                row = shadow._row(proposal_of(det), "observe", "detector" if fired else "none", "PreToolUse", ev, sid, b"", t0)
+                row = shadow._row(scratch, proposal_of(det), "observe", "detector" if fired else "none", "PreToolUse", ev, sid, b"", t0)
                 rows.append({**row, "would_fire": fired, "corpus": "synthetic", "tier": "synthetic", "detector": det})
                 counts["events"] += 1
                 counts["fired"] += fired
