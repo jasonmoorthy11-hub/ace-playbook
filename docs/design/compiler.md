@@ -139,7 +139,7 @@ of its `fire` function; the row metadata as canonical JSON (`strength`, `tier`, 
 signatures and default arguments of those fires stay, because they run at import time in every process; a statement
 sharing a line with an excised body stays hashed); `catalogue.py` WHOLE, the `CATALOGUE = {...}` registry literal
 included, because any expression inside that literal runs at import time in every process (the hook too), so it is
-provenance like any other import-time code; and the full text of `events.py`, `shell.py` and `textrules.py`. The
+provenance like any other import-time code; and the full text of `events.py`, `shell.py`, `textrules.py` and `resolve.py`. The
 row's own fields also enter through the canonical `meta` part; that is redundant now that the literal is hashed, and
 harmless (it keeps a row built at runtime honest). A fire that the remaining text still names (one fire calling another, or named
 in a kept signature) is kept whole. `advance` and `blank_state` are hashed for every row, stateless or not:
@@ -156,7 +156,7 @@ change other rows' results in the nightly pass and in evidence building (an offl
 because it runs only rows whose proposals are hash-valid and an edited row's proposals are stale. So an edit inside one
 detector's own `fire` body (an edit inside another row's fire body leaves this row's hash alone) retires only that row's
 proposals; any other edit to `detectors.py`, `catalogue.py`, `events.py`,
-`shell.py` or `textrules.py` (a registry field of any row, a shared helper, an import, `evaluate`, `advance`, a decorator or signature of
+`shell.py`, `resolve.py` or `textrules.py` (a registry field of any row, a shared helper, an import, `evaluate`, `advance`, a decorator or signature of
 any fire) retires every approved proposal. Adding a detector also retires every proposal: it adds an import line
 and a registry row to `catalogue.py` and a placeholder for its fire in `detectors.py`. The check is pure AST and text, read
 from disk once per process (`srchash.module_text`): it describes the on-disk text, not the loaded code, so a
@@ -234,30 +234,31 @@ stale. CI never needs rebuild-lab, and the port still cannot drift from the numb
 Each row is a class and a variant (for example `flags/split-flags`, `interpreter/python-rmtree`, `xargs_find/find-delete`) built twice
 from one command template: once with an invented path outside scratch (ground truth: it should fire) and once with a scratch
 path (its benign twin: it must not fire). The strings are only data: they go through the hook's own path (hook payload,
-`event_from_hook`, `catalogue.evaluate`) and are never executed. 43 variants, 86 cases.
+`event_from_hook`, `catalogue.evaluate`) and are never executed. 74 variants, 148 cases (43 and 86 under v1).
 
 The survivors of a mutation run over the detectors, the tokenizer and `textrules` are pinned by `tests/test_mutation_survivors.py`.
 
-Where the frozen detector disagrees with the ground truth the case is a strict `xfail` (`documented miss: <class>`), so the suite is
-green today and turns red the day a detector edit fixes a case, which forces the expectation to be updated in the same change. A
+Where the detector disagrees with the ground truth the case is a strict `xfail` (`documented miss: <class>`), so the suite turns red
+the day a detector edit fixes a case or a fix regresses, which forces the expectation to be updated in the same change. A
 second test pins the miss count per class (FN = a delete outside scratch that does not fire, FP = a scratch delete that does), so a
-change in either direction shows up. As of this commit:
+change in either direction shows up. As of detector v2 (4.1.2, 2026-10-29):
 
 | Class | FN | FP | Cases |
 |---|---|---|---|
 | `alias_quote` | 3 | 0 | `$IFS` separators, `$(echo rm)` as the command word, `base64 -d \| sh` |
-| `interpreter` | 7 | 0 | python, node, perl, `bash -c`, `sh -c`, `eval`, a `bash <<EOF` body |
-| `path` | 0 | 2 | `cd <scratch> && rm -rf ./*` and `D=<scratch>; rm -rf "$D"` fire (the target cannot be resolved) |
+| `interpreter` | 5 | 0 | python, node, perl, a `bash <<EOF` body, a `bash -c` inside a `bash -c` (`bash -c`, `sh -c` and `eval` themselves are read) |
+| `path` | 0 | 0 | week 1's two false positives are closed; the fail-closed rows (cd after `;`, `\|\|`, a rebound variable) must fire |
+| `worktree` | 0 | 0 | a worktree added and deleted in one `&&` chain is scratch; a path outside the chain or an earlier call is not |
 | `tool_indirection` | 2 | 0 | a script, or a Makefile whose `clean:` recipe deletes, written by `Write` and then run (`bash script`, `make -C dir clean`) |
-| `xargs_find` | 3 | 0 | `ls -d dir/* \| xargs rm -rf`, `find -delete`, `find -exec rm -rf {} +` |
+| `xargs_find` | 0 | 0 | `ls -d dir/* \| xargs rm -rf`, `find -delete`, `find -exec rm -rf {} +` are read; `ls dir \| xargs rm -rf` fires |
 | `other_tools` | 4 | 0 | `rsync --delete`, `git clean -fdx`, `trash`, an `osascript` Finder delete |
 | `control`, `flags`, `shell_construct` | 0 | 0 | |
 
-That is 19 false negatives and 2 false positives. `trash` and the Finder delete are recoverable, but they still count as should-fire:
+That is 14 false negatives and 0 false positives (19 and 2 under v1). `trash` and the Finder delete are recoverable, but they still count as should-fire:
 the lesson's letter is "confirm the target first", and a recoverable delete outside scratch has not been confirmed.
-The matrix is the input to the next detector edit after the measurement week
-ends: fix a class, flip its cases from xfail to plain, update the pinned counts, and re-propose and re-approve (the edit moves
-`source_sha256`). Nothing in the detector changes while the week runs. `tests/test_hook_conformance.py` is the other half: the real
+Detector v2 (4.1.2) was the edit the matrix was kept for: the cases it closed flipped from xfail to plain, the counts above are the ones
+pinned now, and the edit moved `source_sha256` of every row (it retired P-f9407d6c; the operator re-proposes and re-approves in observe).
+`tests/test_hook_conformance.py` is the other half: the real
 `hooks/shadow.sh` in a child process against malformed, empty, non-UTF-8 and over-cap stdin (exactly `MAX_STDIN` is evaluated, one
 byte more is skipped), a command of exactly 64 KiB (the row carries `dur_ms`), a state lock held by another process, a missing or
 read-only data directory, `ACE_PLAYBOOK_KEYED=1` without a key (`chain_key:missing` once across processes), and an allow-list of
@@ -265,6 +266,51 @@ every module the hook path loads, checked twice in a child process: at import, a
 `catalogue.evaluate` and the row write have all run); `seal`, `dashboard`, `report`, `synth`, `metrics` and `scrub` must not be among
 them. Every hostile-input case (malformed, empty, non-UTF-8, over the cap) must exit 0 and write nothing but at most one type-only
 line in `shadow.log`; the other cases must exit 0 with an empty stdout and stderr, and pin what they do write (a row, a log note).
+
+### 4.1.2 Target resolution (v2)
+
+Week 1 of the measurement read 0 true positives and 36 false positives on `rm_rf_nonscratch`: every fire was a subagent cleaning its
+own scratch (the session scratchpad under `/private/tmp/claude-501/<project>/<session>/scratchpad`, or a worktree the agent had made),
+written as `cd <scratch> && rm -rf ./*`, through a shell variable, or against a worktree path. The lesson (L-b3d1fba9, a real
+7.8 GB loss) was encoded too broadly: scratch the agent made is not "a directory". Detector v2 (2026-10-29, decision D-204) keeps the name,
+the lesson and the family and resolves what the command deletes before it decides. `ace_playbook/compile/resolve.py` does it over one
+command (`shell.command_stream`: events, separators and quoted strings kept aside as holes); `detectors._rm_hits` hands it the
+`SCRATCH` pattern. `rm_rf` (weak) keeps Step 0's literal reading. The rules, and what each one leaves a miss:
+
+- **Working directory.** `cd X` and `pushd X` set the directory for the later segments of the SAME `&&` chain only: after `;`, a newline,
+  `&` or `||` it is unknown (the cd may have failed, so the delete may run where the shell started) and a relative target fires. A bare
+  `cd` is `$HOME` (never scratch); `cd -`, `popd`, a `cd` in a pipeline or in the background, and a `cd` behind `env`/`sudo` leave it
+  unknown; `( )` and backticks scope it. `cd <scratch> && rm -rf ./*` resolves to `<scratch>/*`; `cd <scratch>; rm -rf ./*` fires.
+- **Tainted chains.** A `||` anywhere earlier in a chain may have skipped anything before it (`true || cd <scratch> && rm -rf ./*` parses as
+  `(true || cd <scratch>) && rm`), so after it the directory, the worktree marks and every variable binding are unknown until the next `;`,
+  newline or `&`; assignments, `cd` and `git worktree add` inside the chain bind nothing.
+- **Variables.** `NAME=value` and `export NAME=value` earlier in the command fill `$NAME`, `${NAME}`, `"$NAME"` and `"${NAME}/x"` (not inside
+  single quotes). An unassigned name, `$HOME` and `$PWD` stay unresolved and are not scratch (a leading unknown variable fires);
+  `$TMPDIR` keeps the literal-prefix rule. A binding is dropped when its value stays unresolved (`$`, backticks, `$(`), when the name is
+  rebound (`unset`, `NAME+=`, `NAME[i]=`, `for`, `read`, `printf -v` also glued as `-vNAME`, `declare -n`, `mapfile`, `getopts`, `let`), or when
+  `source`/`.` runs; a binding builtin used with an option shape the scanner does not read, or run behind `env`/`sudo`, drops every
+  binding and the directory. A `builtin` prefix is looked through. Shell functions are not followed (a function that rebinds a variable
+  or changes directory is invisible).
+- **Scratch.** The `SCRATCH` pattern (the agent tree is already under `/private/tmp`) plus a path made by `git [-C repo] worktree add <path>` in
+  the same `&&` chain, never `~`, `..`, a `$`-prefixed path, `/`, `.`, the repo or one of its ancestors, or a path of fewer than two
+  components. A worktree made by an earlier tool call is not remembered (the detector stays `state: "none"`): the delete fires.
+- **Wrappers.** `bash -c '...'`, `sh -c '...'` (own copy of the state) and `eval '...'` (shared state) are re-scanned one level deep with
+  the quotes opened; a wrapper nested in a wrapper is a miss.
+- **xargs and find.** `ls -d <paths> | xargs rm -rf` deletes those paths and `find <roots> ... | xargs rm -rf`, `find <roots> -delete` and
+  `find <roots> -exec rm -rf ...` delete the roots (default `.`). `ls` without `-d` lists names inside a directory, not paths: unknown, fires.
+  Any other producer (`cat list | xargs rm -rf`) is not read.
+- **Quoted targets** are read as text (`rm -rf "/tmp/my dir"` is scratch); a quoted target with a command substitution is `Q` (fires).
+- **Still misses** (the matrix pins them): python, node and perl one-liners, a `bash <<EOF` body, base64 pipes, `$IFS` and `$(echo rm)` as
+  the command word, a script or Makefile written and then run, `rsync --delete`, `git clean`, `trash`, a Finder delete.
+
+A builtin behind a wrapper (`env cd X`, `sudo export D=x`, `time cd X`) is not read: the directory and the variables become unknown,
+but the segment is still scanned (`sudo eval "rm -rf ..."` and `time eval "..."` fire like the bare `eval`; `time cd <scratch> && rm -rf ./*`
+fires, conservatively). A wrapped `eval` runs its script on a copy of the state (its deletes are collected) and leaves the
+outer directory, variables and worktree marks unknown, so `env eval "cd <scratch>" && rm -rf ./*` fires; a bare `eval` runs in this shell, so
+`eval "cd <scratch>" && rm -rf ./*` resolves to scratch, as bash does.
+
+`resolve.py` joins `events.py`, `shell.py` and `textrules.py` in the hashed text of every row (section 4), so the change moved all nine
+detector hashes; `tests/test_detector_v2_property.py` generates 400 commands per property against an oracle the generator knows.
 
 ### 4.2 Per-session state (`state.py`)
 
@@ -372,6 +418,17 @@ This follows the report's rule of a fixed evaluator the proposer cannot edit (re
 As built, `provenance` is `{cards, lesson_evidence, source_sha256}`; `source_sha256` is the per-detector
 hash of section 4 and the proposal id includes it, so a detector edit gives the same proposal a new id.
 
+**Contract worlds (optional key `contract`).** A proposal may record `{"must_fire": [payload, ...], "must_not_fire": [payload, ...]}`, each
+payload shaped like a `regression_examples` item (`tool_name`, `tool_input`, `expect`, `source: "synthetic"`), at least 1 must-fire and 3
+must-not-fire, the whole record under `MAX_BYTES`. `validate` runs each payload through the proposal's own check, in the regressions step, at
+propose, validate and approve (and when the hook loads the file), and refuses with `contract must_fire example(s) [i] do not fire` or
+`contract must_not_fire example(s) [i] fire`; the schema step rejects a malformed contract, and any key other than `contract` stays
+unknown. `proposal_id` covers the contract, and a record without the key keeps its old id and today's behaviour. `compile propose` copies
+`contracts.CONTRACT_WORLDS[detector]` (data only; 22 must-fire and 14 must-not-fire worlds for `rm_rf_nonscratch`: the closed evasion
+classes with their scratch twins and the fail-closed shapes); the table is not hashed with the catalogue and `contracts.py` is on the hook
+path only because `proposal.py` imports it (no imports beyond __future__, data and four small functions). The point: a later detector edit that breaks a
+world refuses the proposal at `approve`, whoever else still passes.
+
 Validation, all fail-closed, before the file is written:
 
 1. **Parse and schema**: exact key set; `id` matches `^P-[0-9a-f]{8}$`; `event` in {PreToolUse,
@@ -383,7 +440,7 @@ Validation, all fail-closed, before the file is written:
    `ACE <id>:` so a user can always trace a warning to its file. A message never interpolates
    payload fields.
 3. **Unit regressions**: at least three `no_fire` examples (catalogue fixtures plus private
-   near-misses from the same session) produce no hit.
+   near-misses from the same session) produce no hit. An OPTIONAL `contract` (below) runs in this step as well.
 4. **Replay**: the originating incident's payload, through the same detector with a fresh state,
    must fire. No replay, no proposal (TRACE acceptance, report:25; EviSkill's 20.7-42.5% rejection
    rate is the expected baseline, report:27).

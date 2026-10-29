@@ -451,3 +451,40 @@ Three more were added on the operator's ruling: `ace_playbook/compile/chains.py`
 `ace_playbook/reflect/runner.py` and `ace_playbook/sweep.py` (the minting freeze of condition (7)).
 The sealed block, `report_sha256` (8b9d55c625f53c4e9474cdaaf2a16f0605779b0c0722fd5d3a8e0e43ac93330d) and the analysis are unchanged.
 The `arm-<detector>` signed tag and the OpenTimestamps proof of the amendment line's sha256 cover the line as before.
+
+### 2026-10-29 - detector v2: rm_rf_nonscratch resolves cwd, variables and same-command worktrees
+
+Week 1 of the measurement read 0 true positives and 36 false positives on `rm_rf_nonscratch`. Every fire was a subagent cleaning its own
+scratch (the session scratchpad under `/private/tmp/claude-501/`, or a worktree it had created), written as `cd <scratch> && rm -rf ./*`,
+through a shell variable, or against a worktree path. The lesson (L-b3d1fba9, a 7.8 GB loss) was encoded too broadly: scratch the agent made
+is not "a directory". Detector v2 (decision D-204) keeps the name, the lesson and the family and resolves what the command deletes before it
+decides: the working directory (only across `&&`), shell variables, worktrees added in the same command, `bash -c`/`sh -c`/`eval` one
+level deep, `ls -d | xargs`, `find -delete` and `find -exec rm -rf`, failing closed on whatever it cannot prove scratch
+(`docs/design/compiler.md` 4.1.2). The change adds `ace_playbook/compile/resolve.py` to the text every detector hash covers and edits
+`detectors.py` and `shell.py` (shared text), so every hash moved. The nine lines `name strength sha256`, as printed by
+`compile seal --dry-run` on the commit that carries this entry:
+
+```text
+detectors:
+  commit_without_push weak c0c6e9942b27ceda82248ef44ea6cd4746527ea0261c0f5a51b2940db2e44d61
+  edit_unread_session strong c4a8da9dbe8ac191514d50bb105fe852c71b63b29c95137f75e26c3432c13b69
+  edit_unread_turn weak 0eec88e15cbd4d1768e64b4466b24cc99febd55c6f445b23326e7348b7f66e24
+  exitplan_question_block strong 8002e807a2f5aa7f5e9e3ae0dd67424ef98a46a00ea0f73af0df0400f3de2a02
+  preclaim_audit_block strong 1579c74f22e72c18b46422e98d2d0c2e36330d7682b04ee4f7c88b7cccd69ea3
+  rm_rf weak 63d11803de6c2bf6aec5492399de2d0528ac5904c583db7e103a05a9f48d9046
+  rm_rf_nonscratch strong c21b083ad5b22a79b18fe3fffb92f5fce80c4e709fc972ba204ae99637848ec7
+  unparseable weak b00bc3a6e476d653c6899c5bc955d16d393fafc06650d9d911ba78cce063ffcc
+  user_correction weak 759ca437463f1f7d704ee3a7b92e43a6011a20258db831f9d0113cbbb20349b4
+```
+
+These supersede the per-detector lines of the sealed block for provenance only. The sealed block is not edited. The proposal P-f9407d6c
+is retired by the source change (`source_sha256` is stale); a new proposal id follows the operator's re-propose and approve in observe,
+and the entry gate (at least 30 human-labelled sessions-with-fire, 0 false positives, 0 unlabelled) and the ladder restart for the new id.
+
+`report_sha256` (8b9d55c625f53c4e9474cdaaf2a16f0605779b0c0722fd5d3a8e0e43ac93330d) is unchanged: `compile seal --dry-run` prints the same
+value and the seven files it covers hash to it. Of the thirteen files that every `arm_start` amendment records (the entry of 2026-10-29
+above), twelve are byte-identical to the commit before this change (14f7ecd). One is not: `ace_playbook/compile/shadow.py` changed by one
+line, because an approved proposal may now carry the optional `contract` key (`pending_body` accepts it; no randomization, output or silence
+decision moved). Its sha256 was 6f2355d8a788b99e424cf821939d11efd282bb93a743f8f0d3b34f033ed95c54 and is
+97a4014fc383d73722f656880f75563ef37059d6b47fd5fb7145302d2dc67370; the `arm_start` amendment records the hashes in force when it is written,
+as before.
