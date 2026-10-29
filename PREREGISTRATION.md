@@ -442,10 +442,12 @@ Text and docstring edits, plus two behaviour changes: the delivered-path error c
 
 Pre-arm-start condition (2) names six files for the sha256 record of an `arm_start` amendment: `shadow.py`, `offline.py`, `events.py`,
 `demotions.py`, `modes.py` and `approvals.py`.
-Since the seal, the randomization (`shadow_arm.assign`), the delivered path (`shadow_arm.deliver`), the output decision (`shadow_guard.decision`)
-and the phase marker that silences the observe arm (`phase.py`) live outside `shadow.py`, and the human-only demotion rule moved out of `offline.py`
-into `offline_demote.py`.
-Every `arm_start` amendment therefore records the sha256 of TEN files, all in `ace_playbook/compile/`: the six named by condition (2) plus
-`shadow_arm.py`, `shadow_guard.py`, `phase.py` and `offline_demote.py`.
+The output decision (`shadow_guard.decision`) was already outside `shadow.py` at the seal (298b06d).
+After the seal, the randomization (`shadow_arm.assign`), the delivered path (`shadow_arm.deliver`) and the phase marker that silences the observe
+arm (`phase.py`) moved outside `shadow.py`, and the human-only demotion rule moved out of `offline.py` into `offline_demote.py`.
+Every `arm_start` amendment therefore records the sha256 of THIRTEEN files, each named by its path from the repository root: the six named by
+condition (2), plus `shadow_arm.py`, `shadow_guard.py`, `phase.py` and `offline_demote.py` (all in `ace_playbook/compile/`).
+Three more were added on the operator's ruling: `ace_playbook/compile/chains.py` (it verifies the signed phase marker, so it decides silence),
+`ace_playbook/reflect/runner.py` and `ace_playbook/sweep.py` (the minting freeze of condition (7)).
 The sealed block, `report_sha256` (8b9d55c625f53c4e9474cdaaf2a16f0605779b0c0722fd5d3a8e0e43ac93330d) and the analysis are unchanged.
 The `arm-<detector>` signed tag and the OpenTimestamps proof of the amendment line's sha256 cover the line as before.

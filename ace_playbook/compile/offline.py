@@ -3,8 +3,10 @@ runs every catalogue detector into `detector_events.jsonl`, pre-fills labels for
 records evasion candidates, appends lowering-only demotions (demotions.py) and removes stale shadow_state files. Rows hold
 enums, ids, hashes and counts, never transcript text; agent self-tags and `[L-id]` citations are never inputs. The store and
 the transcript reader load inside the functions that need them (hook path stays light). `write_labels` and `demote` live in
-offline_demote.py (re-exported here). During an arm phase of a detector (phase.py) the correction rule, the only arm-sensitive one, labels
-nothing in either arm (`neutral_corrections` counts those fires) and demotion counts human labels only.
+offline_demote.py (re-exported here). During an arm phase of a detector (phase.py) NO auto label is written for it, in either arm: the
+correction rule is symmetric by design, `auto_fp_shell_rerun` and `auto_tp_hook_block` follow a delivered block (warn arm only) and
+`auto_fp_prompt_target` would cover the row and hide it from the blind human queue (`neutral_corrections` still counts the fires that carry
+a user correction); demotion counts human labels only.
 """
 
 from __future__ import annotations
@@ -89,9 +91,12 @@ def corrected(events: list, i: int) -> bool:
 
 def classify(mode: str, events: list, i: int, tu, key: str, phase: bool = False) -> str | None:
     """The auto label rule (a reason_code of `labels.AUTO`) for the fire of `tu` in events[i]; first match wins. `phase`: the fire's detector
-    is in an arm phase, where a correction is a neutral flag in both arms: the correction rule labels nothing (the other three are unchanged)."""
+    is in an arm phase: no auto rule labels it (every fire goes to the blind human queue; a correction is a neutral flag in both arms, and the
+    shell-rerun and hook-block rules follow a delivered block, so they would differ by arm)."""
+    if phase:
+        return None
     after = span(events, i)
-    said = corrected(events, i) and not phase
+    said = corrected(events, i)
     prompt = next((e for e in reversed(events[:i]) if e.human and not e.meta), None)
     if mode in ("warn", "block") and said:
         return "auto_fp_correction"

@@ -380,6 +380,6 @@ def test_step2_and_4_modules_stay_within_their_line_budgets():
                       ("offline.py", 300), ("demotions.py", 150), ("state.py", 300), ("modes.py", 150), ("events.py", 300),
                       ("synth.py", 300), ("metrics.py", 300), ("catalogue.py", 150), ("srchash.py", 120), ("chains.py", 150),
                       ("chains_io.py", 150), ("chains_cli.py", 150), ("seal.py", 150),
-                      ("shadow_arm.py", 200), ("phase.py", 80), ("offline_demote.py", 200), ("arm_start.py", 200)):
+                      ("shadow_arm.py", 200), ("phase.py", 80), ("offline_demote.py", 200), ("arm_start.py", 200), ("arm_check.py", 100)):
         assert len((COMPILE / name).read_text().splitlines()) <= cap, name
     assert os.access(COMPILE / "__main__.py", os.R_OK) and proposal.PROPOSALS == "proposals"

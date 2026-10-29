@@ -182,12 +182,17 @@ def test_classify_labels_a_correction_outside_a_phase_and_nothing_inside_one(mod
     assert offline.classify(mode, *(lambda e: (e, 1, e[1].tool_uses[0], hash16("/w/src")))(evs(CORRECTED))) == expected      # phase defaults off
 
 
-def test_the_other_three_rules_are_unchanged_inside_a_phase():
-    assert rule("observe", [{"human": "please remove /w/src"}, RM], True) == "auto_fp_prompt_target"
+def test_all_five_auto_rules_label_nothing_inside_a_phase_and_all_still_apply_outside_one():
+    """`auto_fp_shell_rerun` and `auto_tp_hook_block` follow a delivered block, so they are arm-sensitive too; `auto_fp_prompt_target` would
+    cover the row and hide it from the blind human queue. In a phase every fire of a started detector goes to a human."""
+    prompt = [{"human": "please remove /w/src"}, RM]
     tidy = [{"human": "tidy"}, RM, {"human": "<bash-input>rm -rf /w/src</bash-input>"}, {"human": "thanks"}]
-    assert rule("block", tidy, True) == "auto_fp_shell_rerun"
     guard = "PreToolUse:Bash hook error: [$HOME/.claude/hooks/guard-destructive.sh]: refusing a recursive delete"
-    assert rule("observe", [{"human": "tidy"}, {**RM, "result": guard, "error": True}], True) == "auto_tp_hook_block"
+    blocked = [{"human": "tidy"}, {**RM, "result": guard, "error": True}]
+    cases = [("observe", prompt, "auto_fp_prompt_target"), ("block", tidy, "auto_fp_shell_rerun"), ("observe", blocked, "auto_tp_hook_block"),
+             ("warn", CORRECTED, "auto_fp_correction"), ("observe", CORRECTED, "auto_tp_correction")]
+    for mode, steps, expected in cases:
+        assert rule(mode, steps, False) == expected and rule(mode, steps, True) is None, expected
 
 
 def label_rows(w):
@@ -208,13 +213,31 @@ def test_run_labels_the_correction_without_a_marker_and_counts_a_neutral_flag_wi
     assert out_phased["errors"] == 0
 
 
-def test_run_still_labels_a_prompt_target_in_a_phase_and_counts_no_neutral_flag_for_it(tmp_path):
-    w = cs.offline_world(tmp_path, "warn")
+def test_run_labels_a_prompt_target_outside_a_phase_and_writes_no_label_for_it_inside_one(tmp_path):
+    plain, phased = cs.offline_world(tmp_path / "a", "warn"), cs.offline_world(tmp_path / "b", "warn")
+    mark(phased.data, **{DET: STARTED})
+    for w in (plain, phased):
+        cs.put_session(w, "s1", [{"human": "please remove /w/src"}, RM])
+        cs.put_shadow(w, "s1", CMD, "warn")
+    offline.run(plain.cfg, now=cs.NOW)
+    out = offline.run(phased.cfg, now=cs.NOW)
+    assert [r["reason_code"] for r in label_rows(plain)] == ["auto_fp_prompt_target"]
+    assert label_rows(phased) == [] and out["neutral_corrections"] == 0 and out["demotions"] == 0
+
+
+def test_in_a_phase_a_block_proposals_two_auto_fp_fires_reach_the_blind_queue_and_demote_nothing(tmp_path):
+    """Opus round 2 probe: a block proposal, a phase, a prompt-target fire and a shell-rerun fire. Before the fix both rows carried an auto fp
+    label, covered the queue and counted for nothing under condition (4)."""
+    from ace_playbook.compile import queue
+    w = cs.offline_world(tmp_path, "block")
     mark(w.data, **{DET: STARTED})
-    cs.put_session(w, "s1", [{"human": "please remove /w/src"}, RM, {"human": "I told you not to delete that again"}])
-    cs.put_shadow(w, "s1", CMD, "warn")
+    cs.put_session(w, "s1", [{"human": "please remove /w/src"}, RM])
+    cs.put_session(w, "s2", [{"human": "tidy"}, RM, {"human": "<bash-input>rm -rf /w/src</bash-input>"}, {"human": "thanks"}])
+    rows = [cs.put_shadow(w, "s1", CMD, "block", D1), cs.put_shadow(w, "s2", CMD, "block", D2)]
     out = offline.run(w.cfg, now=cs.NOW)
-    assert [r["reason_code"] for r in label_rows(w)] == ["auto_fp_prompt_target"] and out["neutral_corrections"] == 0
+    assert label_rows(w) == [] and out["demotions"] == 0 and chain(w) == []
+    ids = [i["id"] for i in queue.pending(w.cfg, now="2026-10-19T12:00:00Z")]
+    assert all(labels.row_id(r) in ids for r in rows)
 
 
 def test_a_marker_that_starts_after_the_scan_or_for_another_detector_changes_nothing(tmp_path):

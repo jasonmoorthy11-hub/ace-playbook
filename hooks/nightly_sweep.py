@@ -28,6 +28,11 @@ def main() -> int:
         notes = nightly_notes.collect(cfg)
     except Exception:  # noqa: BLE001 - no detail is kept
         notes = []
+    try:                                              # a started arm phase whose signed marker is missing or unverified, or holdout on: never fails the night
+        from ace_playbook.compile import arm_check
+        notes += arm_check.check(cfg)
+    except Exception:  # noqa: BLE001 - no detail is kept
+        pass
     report, failed = {}, ""
     if not args.no_offline:
         try:                                          # the pass makes no API call, so --dry-run does not stop it

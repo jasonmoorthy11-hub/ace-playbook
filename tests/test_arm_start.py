@@ -1,6 +1,6 @@
 """`python -m ace_playbook.compile.arm_start` (sealed Pre-arm-start conditions (2) and (6), the `arm_start` line of Arm assignment, and the
-Amendments entry that names TEN files): the refusals, the entry, the signed marker, the operator lines. A tmp world: a data dir with a valid
-approvals chain, a PREREGISTRATION.md copy made SEALED again, a tmp git repo holding copies of the ten files. Invented ids, seeds and stamps."""
+Amendments entry that names THIRTEEN files): the refusals, the entry, the signed marker, the operator lines. A tmp world: a data dir with a valid
+approvals chain, a PREREGISTRATION.md copy made SEALED again, a tmp git repo holding copies of the thirteen files. Invented ids, seeds and stamps."""
 
 import hashlib
 import json
@@ -20,7 +20,7 @@ from .test_compile_seal import unsealed
 
 ROOT = Path(__file__).resolve().parent.parent
 DET, SHADOW, PERMUT = "rm_rf_nonscratch", "ab" * 32, "cd" * 32
-SEALED_AT, APPROVED, STAMP, NOW = "2026-10-30T00:00:00Z", "2026-10-31T00:00:00Z", "2026-11-01T00:00:00Z", "2026-11-01T00:00:05Z"
+SEALED_AT, APPROVED, STAMP, NOW = "2026-10-30T00:00:00Z", "2026-10-31T00:00:00Z", "2026-11-01T00:00:00Z", "2026-10-31T12:00:00Z"   # NOW < STAMP
 DEMOTION = {"from_mode": "warn", "to_mode": "observe", "cause": "label_fp", "ref": "0123abcd", "review_required": False}
 GIT = ["git", "-c", "user.name=t", "-c", "user.email=" + "t" + "@" + "t.invalid", "-c", "commit.gpgsign=false"]      # assembled: no address literal
 
@@ -44,18 +44,22 @@ class World:
         self.prereg = tmp_path / "PREREGISTRATION.md"
         self.prereg.write_text(sealed(unsealed((ROOT / "PREREGISTRATION.md").read_text())))
         self.repo = tmp_path / "repo"
-        shutil.copytree(ROOT / "ace_playbook" / "compile", self.repo / arm_start.SUBDIR, ignore=shutil.ignore_patterns("__pycache__", "watch"))
+        for f in arm_start.FILES:
+            (self.repo / f).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(ROOT / f, self.repo / f)
         git(self.repo, "init", "-q")
         git(self.repo, "add", "-A")
         git(self.repo, "commit", "-qm", "init")
         monkeypatch.setattr(seal, "PREREG", self.prereg)
         monkeypatch.setattr(arm_start, "REPO", self.repo)
-        monkeypatch.setattr(arm_start, "now_iso", lambda: NOW)
+        self.clock = NOW
+        monkeypatch.setattr(arm_start, "now_iso", lambda: self.clock)
         cs.approve_file(self.cfg, self.w.props[DET], "warn", row=True, ts=APPROVED)
-        self.answers, self.prompts = ["y"], []
+        self.answers, self.prompts, self.after_prompt = ["y"], [], None
 
     def ask(self, prompt):
         self.prompts.append(prompt)
+        self.clock = self.after_prompt or self.clock                 # the time the operator took to answer
         return self.answers.pop(0)
 
     def go(self, *argv, tty=True, cfg=None):
@@ -96,18 +100,20 @@ def test_the_dry_run_prints_the_entry_and_writes_nothing(world, capsys):
     assert world.prereg.read_text() == before and cs.tree_state(world.data) == tree
     head = git(world.repo, "rev-parse", "HEAD").strip()
     assert f"tree {head}" in lines and any(ln.startswith("phase marker ") and STAMP in ln for ln in lines)
-    assert [ln.split()[1] for ln in lines if ln.startswith("sha256 ")] == list(arm_start.FILES) and len(arm_start.FILES) == 10
+    assert [ln.split()[1] for ln in lines if ln.startswith("sha256 ")] == list(arm_start.FILES) and len(arm_start.FILES) == 13
     assert f"family {world.pid}" in lines and all(len(ln) <= 160 for ln in lines)
     text = before.rstrip("\n") + "\n\n" + out.rstrip("\n") + "\n"                 # as it would be appended: the analysis finds exactly this line
     assert arms_window.arm_starts(text) == {DET: STAMP} and arms_window.arm_heads(text) == {DET: world.head}
 
 
-def test_the_sha256_lines_match_the_bytes_of_the_ten_files(world, capsys):
+def test_the_sha256_lines_match_the_bytes_of_the_thirteen_files(world, capsys):
     world.go(DET, "--at", STAMP, "--dry-run", tty=False)
     got = {ln.split()[1]: ln.split()[2] for ln in capsys.readouterr().out.splitlines() if ln.startswith("sha256 ")}
-    assert got == {f: hashlib.sha256((world.repo / arm_start.SUBDIR / f).read_bytes()).hexdigest() for f in arm_start.FILES}
-    assert set(arm_start.FILES) == {"shadow.py", "offline.py", "events.py", "demotions.py", "modes.py", "approvals.py", "shadow_arm.py",
-                                    "shadow_guard.py", "phase.py", "offline_demote.py"}
+    assert got == {f: hashlib.sha256((world.repo / f).read_bytes()).hexdigest() for f in arm_start.FILES}
+    ten = {"shadow.py", "offline.py", "events.py", "demotions.py", "modes.py", "approvals.py", "shadow_arm.py", "shadow_guard.py", "phase.py",
+           "offline_demote.py"}
+    assert set(arm_start.FILES) == {"ace_playbook/compile/" + f for f in ten} | {"ace_playbook/compile/chains.py", "ace_playbook/reflect/runner.py",
+                                                                                  "ace_playbook/sweep.py"}
 
 
 def test_y_appends_exactly_one_entry_writes_the_marker_and_the_one_line_file(world, capsys):
@@ -122,9 +128,10 @@ def test_y_appends_exactly_one_entry_writes_the_marker_and_the_one_line_file(wor
     assert one.read_text() == world.line and (one.stat().st_mode & 0o777) == 0o600 and (world.data / phase.FILE).stat().st_mode & 0o777 == 0o600
     sha = hashlib.sha256(world.line.encode()).hexdigest()
     ops = out.splitlines()[-6:-1]
+    branch = git(world.repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
     repo = str(world.repo)
     assert ops[0] == f'git -C {repo} add PREREGISTRATION.md && git -C {repo} commit -m "arm start: {DET} {STAMP}"'
-    assert ops[1] == f'git -C {repo} tag -s arm-{DET} -m "arm start {DET} {STAMP}"' and ops[2] == f"git -C {repo} push origin main arm-{DET}"
+    assert ops[1] == f'git -C {repo} tag -s arm-{DET} -m "arm start {DET} {STAMP}"' and ops[2] == f"git -C {repo} push origin {branch} arm-{DET}"
     assert ops[3] == f"printf '%s' '{world.line}' | shasum -a 256" and ops[4] == f"ots stamp {one}"
     assert subprocess.run(["shasum", "-a", "256", str(one)], capture_output=True, text=True).stdout.startswith(sha)
 
@@ -236,18 +243,28 @@ def test_refuses_a_lowering_demotion_row_in_force_and_ignores_one_that_lowers_no
     refused(world, capsys, "demotions chain is broken")
 
 
-def test_refuses_a_working_tree_with_uncommitted_changes_to_one_of_the_ten_files(world, capsys):
-    target = world.repo / arm_start.SUBDIR / "phase.py"
+def test_refuses_a_working_tree_with_uncommitted_changes_to_one_of_the_thirteen_files(world, capsys):
+    target = world.repo / "ace_playbook/compile/phase.py"
     target.write_text(target.read_text() + "\n# edited\n")
     err = refused(world, capsys, "uncommitted changes")
     assert "phase.py" in err
     git(world.repo, "commit", "-qam", "edit")                                   # committed: clean again
     assert world.go(DET, "--at", STAMP, "--dry-run", tty=False) == 0
-    other = world.repo / arm_start.SUBDIR / "report.py"                         # a file outside the ten does not matter
+    other = world.repo / "ace_playbook/compile/other.py"                        # a tracked file outside the thirteen does not matter
+    other.write_text("x = 1\n")
+    git(world.repo, "add", "-A")
+    git(world.repo, "commit", "-qm", "other")
     other.write_text(other.read_text() + "\n# edited\n")
     assert world.go(DET, "--at", STAMP, "--dry-run", tty=False) == 0
-    (world.repo / arm_start.SUBDIR / "modes.py").unlink()                       # a missing one is a change too
+    (world.repo / "ace_playbook/compile/modes.py").unlink()                     # a missing one is a change too
     refused(world, capsys, "uncommitted changes")
+
+
+@pytest.mark.parametrize("path", ["ace_playbook/compile/chains.py", "ace_playbook/reflect/runner.py", "ace_playbook/sweep.py"])
+def test_the_three_files_added_by_the_operators_ruling_are_in_the_dirty_tree_check(world, capsys, path):
+    target = world.repo / path
+    target.write_text(target.read_text() + "\n# edited\n")
+    assert Path(path).name in refused(world, capsys, "uncommitted changes")
 
 
 def test_refuses_a_repo_that_git_cannot_read(world, capsys, monkeypatch, tmp_path):
@@ -265,11 +282,13 @@ def test_a_prompt_needs_a_terminal_but_a_dry_run_does_not(world, capsys):
     assert world.go(DET, "--at", STAMP, tty=False) == 2 and world.prompts == [] and not (world.data / phase.FILE).exists()
 
 
-def test_the_amendment_names_the_same_ten_files_the_verb_hashes():
+def test_the_amendment_names_the_same_thirteen_files_the_verb_hashes():
     text = (ROOT / "PREREGISTRATION.md").read_text()
     start = text.index("### 2026-10-29 - arm_start hash list")
     amendment = text[start:text.find("\n### ", start + 1) if text.find("\n### ", start + 1) > 0 else len(text)]
-    assert "TEN files" in amendment and all(f"`{f}`" in amendment for f in arm_start.FILES)
+    assert "THIRTEEN files" in amendment and all(f"`{Path(f).name}`" in amendment or f"`{f}`" in amendment for f in arm_start.FILES)
+    assert all(f"`{f}`" in amendment for f in arm_start.FILES[-3:]) and "operator's ruling" in amendment
+    assert "already outside `shadow.py` at the seal (298b06d)" in amendment and "TEN" not in amendment
     assert "8b9d55c625f53c4e9474cdaaf2a16f0605779b0c0722fd5d3a8e0e43ac93330d" in amendment
     assert arms_window.arm_starts("## Amendments\n\n" + amendment) == {} and all(len(ln) <= 160 for ln in amendment.splitlines())
 
@@ -279,3 +298,70 @@ def test_help_works_and_the_module_stays_under_its_line_cap():
     assert out.returncode == 0 and "--dry-run" in out.stdout and "--at" in out.stdout and "detector" in out.stdout
     src = (ROOT / "ace_playbook" / "compile" / "arm_start.py").read_text().splitlines()
     assert len(src) <= 200 and max(map(len, src)) <= 160
+
+
+# ------------------------------------------------------------------ Opus round 2: --at, holdout, the stamp after y, the repair line, the branch
+def test_an_at_that_has_already_passed_is_refused_and_one_hour_ahead_is_accepted(world, capsys):
+    err = refused_at(world, capsys, "2026-10-31T11:00:00Z")                      # NOW is 12:00
+    assert "already passed" in err
+    assert world.go(DET, "--at", "2026-10-31T13:00:00Z") == 0
+    assert arms_window.arm_starts(world.prereg.read_text()) == {DET: "2026-10-31T13:00:00Z"}
+    assert phase.load(world.cfg) == ({DET: "2026-10-31T13:00:00Z"}, False)
+
+
+def refused_at(world, capsys, at):
+    before = world.prereg.read_text()
+    assert world.go(DET, "--at", at) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("error: ") and err.count("\n") == 1 and world.prereg.read_text() == before and not (world.data / phase.FILE).exists()
+    return err
+
+
+def test_a_dry_run_also_refuses_a_stamp_that_has_passed(world, capsys):
+    assert world.go(DET, "--at", "2026-10-31T11:00:00Z", "--dry-run", tty=False) == 1 and "already passed" in capsys.readouterr().err
+
+
+def test_the_default_stamp_is_taken_after_the_y_and_appended_and_signed_under_it(world, capsys):
+    world.after_prompt = "2026-10-31T12:00:09Z"                                  # the operator took nine seconds to answer
+    assert world.go(DET) == 0
+    out = capsys.readouterr().out
+    assert f"arm_start {DET} {NOW} approvals=" in out and out.count("### ") == 2          # the first entry shown, the final one printed again
+    assert arms_window.arm_starts(world.prereg.read_text()) == {DET: world.after_prompt}
+    assert phase.load(world.cfg) == ({DET: world.after_prompt}, False)
+    assert (world.data / f"arm_start_{DET}.txt").read_text().startswith(f"arm_start {DET} {world.after_prompt} ")
+    assert f'commit -m "arm start: {DET} {world.after_prompt}"' in out
+
+
+def test_an_at_that_passes_while_the_prompt_is_open_is_refused_and_nothing_is_written(world, capsys):
+    world.after_prompt = "2026-10-31T13:00:01Z"                                  # the answer came after the requested stamp
+    assert world.go(DET, "--at", "2026-10-31T13:00:00Z") == 1 and "already passed" in capsys.readouterr().err
+    assert arms_window.arm_starts(world.prereg.read_text()) == {} and not (world.data / phase.FILE).exists()
+
+
+def test_refuses_while_holdout_is_enabled(world, capsys):
+    world.cfg.holdout_enabled = True
+    assert "holdout_enabled" in refused(world, capsys, "holdout")
+
+
+def test_a_marker_write_that_fails_after_the_append_prints_the_line_to_delete(world, capsys, monkeypatch):
+    def boom(cfg, add, ts):
+        raise ValueError("chain key missing")
+    monkeypatch.setattr(phase, "write", boom)
+    assert world.go(DET, "--at", STAMP) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("error: ") and err.count("\n") == 1 and world.line in err and "delete" in err and "rerun" in err and "Traceback" not in err
+    assert arms_window.arm_starts(world.prereg.read_text()) == {DET: STAMP}
+    text = world.prereg.read_text().replace(world.line + "\n", "")               # the repair: delete that line, rerun
+    world.prereg.write_text(text)
+    monkeypatch.undo()
+    monkeypatch.setattr(seal, "PREREG", world.prereg)
+    monkeypatch.setattr(arm_start, "REPO", world.repo)
+    monkeypatch.setattr(arm_start, "now_iso", lambda: world.clock)
+    world.answers = ["y"]
+    assert world.go(DET, "--at", STAMP) == 0 and phase.load(world.cfg) == ({DET: STAMP}, False)
+
+
+def test_the_push_line_names_the_current_branch(world, capsys):
+    git(world.repo, "checkout", "-q", "-b", "side-branch")
+    assert world.go(DET, "--at", STAMP) == 0
+    assert f"push origin side-branch arm-{DET}" in capsys.readouterr().out

@@ -1,14 +1,15 @@
 """`python -m ace_playbook.compile.arm_start <detector> [--dry-run] [--at <UTC stamp>]`: start a detector's arm phase (PREREGISTRATION.md, Arm
-assignment and Pre-arm-start conditions (2) and (6); the Amendments entry "arm_start hash list" makes the hash list TEN files).
+assignment and Pre-arm-start conditions (2) and (6); the Amendments entry "arm_start hash list" makes the hash list THIRTEEN files).
 
 Refuses (exit 1, one line, never a value) a detector unknown to the catalogue, a pre-registration that is not sealed, a stamp earlier than
-`sealed_at`, a detector that already has an `arm_start` line, unset config seeds, an approvals chain that is unreadable, broken or empty, a
-family that `arms_window.family` rejects (the same function the hashed analysis runs, built for the candidate start: no approved proposal at
-`warn`/`block`, one approved at `observe`, a lowering demotion in force, a broken demotions chain) and a working tree with uncommitted changes
-to the ten files (their sha256 lines must match a commit; a working-tree check, not a proof of the commit). It prints the dated entry, asks
-y/N at the terminal (`--dry-run` stops there), appends the entry under the top-level `## Amendments` heading, writes the one-line file the
+`sealed_at` or than the moment the marker is written (`--at` is now or later), a detector that already has an `arm_start` line, unset config
+seeds, `holdout_enabled` true, an approvals chain that is unreadable, broken or empty, a family that `arms_window.family` rejects (the same
+function the hashed analysis runs, built for the candidate start: no approved proposal at `warn`/`block`, one approved at `observe`, a
+lowering demotion in force, a broken demotions chain) and a working tree with uncommitted changes to the thirteen files (their sha256 lines
+must match a commit; a working-tree check, not a proof of the commit). It prints the dated entry, asks y/N at the terminal (`--dry-run` stops
+there), takes the default stamp AFTER the `y`, appends the entry under the top-level `## Amendments` heading, writes the one-line file the
 OpenTimestamps proof stamps and the signed phase marker (phase.py; written nowhere else), then prints the operator lines (commit, signed tag,
-push, the line's sha256, `ots stamp`, `arms report`); it only reads the repository and never runs `arms report`.
+push of the current branch, the line's sha256, `ots stamp`, `arms report`); it only reads the repository and never runs `arms report`.
 Not on the hook path: stdlib and sibling modules only, nothing imports it.
 """
 
@@ -19,8 +20,8 @@ import hashlib
 import subprocess
 import sys
 import textwrap
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from .. import config as cfgmod
 from ..atomic import write_private
@@ -28,9 +29,9 @@ from ..canon import now_iso
 from . import approvals, arms_window, catalogue, chains, phase, seal
 
 REPO = seal.REPO
-SUBDIR = "ace_playbook/compile"
-FILES = ("shadow.py", "offline.py", "events.py", "demotions.py", "modes.py", "approvals.py",
-         "shadow_arm.py", "shadow_guard.py", "phase.py", "offline_demote.py")
+C = "ace_playbook/compile/"                                     # the thirteen files, by path from the repository root (the printed sha256 lines)
+FILES = tuple(C + f for f in ("shadow.py", "offline.py", "events.py", "demotions.py", "modes.py", "approvals.py", "shadow_arm.py",
+                              "shadow_guard.py", "phase.py", "offline_demote.py", "chains.py")) + ("ace_playbook/reflect/runner.py", "ace_playbook/sweep.py")
 
 
 class Refused(Exception):
@@ -41,7 +42,7 @@ def parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="python -m ace_playbook.compile.arm_start", description=__doc__.split("\n\n")[0])
     ap.add_argument("detector", help="the detector whose arm phase starts")
     ap.add_argument("--dry-run", action="store_true", help="print the entry and write nothing")
-    ap.add_argument("--at", metavar="STAMP", help="the arm start, YYYY-MM-DDTHH:MM:SSZ (default: now)")
+    ap.add_argument("--at", metavar="STAMP", help="the arm start, YYYY-MM-DDTHH:MM:SSZ, now or later (default: now, taken after the y)")
     ap.add_argument("--config")
     return ap
 
@@ -57,17 +58,16 @@ def _vcs(*args: str) -> str:
 
 
 def _tree() -> tuple[dict[str, str], str]:
-    """({file: sha256 of its bytes}, HEAD): refuses uncommitted changes to the ten files and a file that cannot be read."""
-    paths = [f"{SUBDIR}/{f}" for f in FILES]
-    if dirty := _vcs("status", "--porcelain", "--", *paths).splitlines():
+    """({path: sha256 of its bytes}, HEAD): refuses uncommitted changes to the thirteen files and a file that cannot be read."""
+    if dirty := _vcs("status", "--porcelain", "--", *FILES).splitlines():
         raise Refused("uncommitted changes to the hashed files (commit them first): " + ", ".join(ln[3:].rsplit("/", 1)[-1] for ln in dirty))
     try:
-        return {f: hashlib.sha256((REPO / SUBDIR / f).read_bytes()).hexdigest() for f in FILES}, _vcs("rev-parse", "HEAD").strip()
+        return {f: hashlib.sha256((REPO / f).read_bytes()).hexdigest() for f in FILES}, _vcs("rev-parse", "HEAD").strip()
     except OSError:
         raise Refused("a hashed file cannot be read") from None
 
 
-def _check(cfg, det: str, stamp: str, text: str) -> tuple[str, list[str]]:
+def _check(cfg, det: str, stamp: str, text: str, explicit: bool) -> tuple[str, list[str]]:
     """(approvals head, family ids), or Refused. The window and family rules are the hashed analysis's own (`arms_window`)."""
     if det not in catalogue.CATALOGUE:
         raise Refused("unknown detector (not in the catalogue)")
@@ -78,10 +78,14 @@ def _check(cfg, det: str, stamp: str, text: str) -> tuple[str, list[str]]:
         raise Refused("--at must be a UTC stamp YYYY-MM-DDTHH:MM:SSZ")
     if at < arms_window._dt(sealed.group(1)):
         raise Refused(f"the stamp is earlier than sealed_at ({sealed.group(1)})")
+    if explicit and at < arms_window._dt(now_iso()):
+        raise Refused("--at has already passed (sessions since then ran with output in both arms): use now or a later stamp")
     if det in arms_window.arm_starts(text):
         raise Refused(f"{det} already started (an arm_start line exists)")
     if missing := seal.unset(cfg):
         raise Refused(f"the config field(s) {', '.join(missing)} are unset")
+    if getattr(cfg, "holdout_enabled", False):
+        raise Refused("holdout_enabled is true (it stays false during any arm phase): turn it off first")
     try:
         rows, broken = approvals.read_chain(cfg.data_dir, chains.key_of(cfg))
     except (OSError, ValueError):
@@ -116,26 +120,33 @@ def append(text: str, ent: str) -> str:
     return text[:end].rstrip("\n") + "\n\n" + ent + text[end:]
 
 
+def _plan(cfg, det: str, stamp: str, explicit: bool, text: str) -> tuple[str, str, str]:
+    """(entry, arm_start line, the new file text) for a start at `stamp`, or Refused; the entry must be read back by the analysis."""
+    head, ids = _check(cfg, det, stamp, text, explicit)
+    hashes, tree = _tree()
+    ent, line = entry(det, stamp, head, hashes, ids, tree)
+    new = append(text, ent)
+    starts = arms_window.arm_starts(new)
+    if starts.get(det) != stamp or arms_window.arm_heads(new).get(det) != head:
+        raise Refused("the entry would not be read back as an arm_start line (the Amendments section is malformed)")
+    try:
+        arms_window.check_starts(new, starts)
+    except ValueError as exc:
+        raise Refused(str(exc)) from None
+    return ent, line, new
+
+
 def _fail(code: int, msg: str) -> int:
     print(f"error: {msg}", file=sys.stderr)
     return code
 
 
 def run(cfg, args: argparse.Namespace, ask: Callable[[str], str], need_tty: Callable[[str], bool]) -> int:
-    det, stamp = args.detector, args.at or now_iso()
+    det, explicit = args.detector, bool(args.at)
     try:
         text = seal.PREREG.read_text(encoding="utf-8")
-        head, ids = _check(cfg, det, stamp, text)
-        hashes, tree = _tree()
-        ent, line = entry(det, stamp, head, hashes, ids, tree)
-        new = append(text, ent)
-        starts = arms_window.arm_starts(new)
-        if starts.get(det) != stamp or arms_window.arm_heads(new).get(det) != head:
-            raise Refused("the entry would not be read back as an arm_start line (the Amendments section is malformed)")
-        try:
-            arms_window.check_starts(new, starts)
-        except ValueError as exc:
-            raise Refused(str(exc)) from None
+        ent, line, new = _plan(cfg, det, args.at or now_iso(), explicit, text)
+        branch = _vcs("rev-parse", "--abbrev-ref", "HEAD").strip()
     except (Refused, OSError) as exc:
         return _fail(1, str(exc) if isinstance(exc, Refused) else "the pre-registration cannot be read")
     print(ent, end="")
@@ -143,17 +154,29 @@ def run(cfg, args: argparse.Namespace, ask: Callable[[str], str], need_tty: Call
         return 0
     if not need_tty("arm_start"):
         return 2
-    if ask(f"Start the {det} arm phase at {stamp} with the entry above? [y/N] ").lower() not in ("y", "yes"):
+    if ask(f"Start the {det} arm phase at {args.at or 'the moment you answer'} with the entry above? [y/N] ").lower() not in ("y", "yes"):
         return _fail(1, "not started")
     if seal.PREREG.read_text(encoding="utf-8") != text:
         return _fail(1, "the pre-registration file changed while the prompt was open; nothing written")
+    stamp = args.at or now_iso()                                 # the default stamp is taken after the y, then re-checked, appended and signed under it
+    try:
+        again = _plan(cfg, det, stamp, explicit, text)
+    except Refused as exc:
+        return _fail(1, str(exc))
+    if again[0] != ent:
+        ent, line, new = again
+        print(ent, end="")
     one = Path(cfg.data_dir) / f"arm_start_{det}.txt"
     seal._write(seal.PREREG, new)
-    write_private(one, line)                                     # no trailing newline: its sha256 is the line's (`printf '%s' | shasum`)
-    phase.write(cfg, {det: stamp}, now_iso())
+    try:
+        write_private(one, line)                                 # no trailing newline: its sha256 is the line's (`printf '%s' | shasum`)
+        phase.write(cfg, {det: stamp}, now_iso())
+    except (OSError, ValueError):
+        return _fail(1, f"the amendment is written but the marker is not: delete the line '{line}' from PREREGISTRATION.md, fix the cause, "
+                        "rerun the verb")
     vcs = f"git -C {REPO}"
     print(f'{vcs} add PREREGISTRATION.md && {vcs} commit -m "arm start: {det} {stamp}"\n{vcs} tag -s arm-{det} -m "arm start {det} {stamp}"\n'
-          f"{vcs} push origin main arm-{det}\nprintf '%s' '{line}' | shasum -a 256\nots stamp {one}\npython3 -m ace_playbook.compile.arms report")
+          f"{vcs} push origin {branch} arm-{det}\nprintf '%s' '{line}' | shasum -a 256\nots stamp {one}\npython3 -m ace_playbook.compile.arms report")
     return 0
 
 
