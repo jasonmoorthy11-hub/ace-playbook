@@ -127,12 +127,27 @@ def family(cfg, starts: dict[str, str], heads: dict[str, str]) -> dict[str, list
 
 def horizon_end(arm_start: str, starts: list[str], demoted: str | None = None) -> str:
     """The end of the half-open window: the earliest of 12 weeks after the arm start, one second after the start of the 400th eligible
-    session and the stamp of the first demotion. `starts` are the first-event stamps of the interactive sessions the detector consumes."""
+    session and the stamp of the first lowering demotion. `starts` are the first-event stamps of the interactive sessions the detector consumes."""
     t0 = _dt(arm_start)
     end = t0 + timedelta(weeks=WEEKS)
     inside = sorted(t for t in map(_dt, starts) if t is not None and t0 <= t < end)
     end = inside[CAP - 1] + timedelta(seconds=1) if len(inside) >= CAP else end
     return _fmt(min(end, _dt(demoted)) if demoted else end)
+
+
+def delivered_errors(cfg, arm_start: str, end: str) -> int | None:
+    """Lines of shadow.log stamped in [arm start, horizon end] whose message starts `error:delivered:` (the delivered path of the hook, the
+    warn/block output writes, logs its failures under that tag). None (printed `unknown`, never 0) for a log that is missing, unreadable or
+    at the hook's size cap (it has stopped recording), so a silent miss cannot pass as zero."""
+    from . import shadow
+    try:
+        raw = chains.read_regular(cfg.path("shadow.log"), 2 * shadow.LOG_CAP)
+    except OSError:
+        return None
+    if raw is None or len(raw) >= shadow.LOG_CAP:
+        return None
+    lines = raw.decode("utf-8", "replace").splitlines()
+    return sum(arm_start <= ln[:20] <= end and ln[21:].startswith("error:delivered:") for ln in lines)
 
 
 def _interactive(row: dict, detector: str) -> bool:

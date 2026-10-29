@@ -742,3 +742,32 @@ def test_an_evasion_pair_row_before_the_arm_start_does_not_refuse_the_family(w, 
     demotions.append(w.data, {"proposal_id": w.pid, **DEMOTION, "ts": "2026-10-31T13:00:00Z"})        # a lowering row: refused as before
     with pytest.raises(ValueError, match=f"proposal {w.pid} is approved at warn / has 1 demotion\\(s\\) in force"):
         arms.analyse(w.cfg, now="2027-02-01T00:00:00Z")
+
+
+# ------------------------------------------------------------------ round 7 docs-lens: the delivered-path error count is built before the seal
+def delivered_world(w, cause, log=True):
+    world(w)
+    demotions.append(w.data, {"proposal_id": w.pid, **DEMOTION, "cause": cause, "ts": "2026-11-10T00:00:00Z"})
+    if log:
+        lines = ["2026-10-30T00:00:00Z error:delivered:OSError", "2026-11-02T00:00:00Z error:delivered:OSError",
+                 "2026-11-03T00:00:00Z error:ValueError", "2026-11-09T00:00:00Z error:delivered:BrokenPipeError",
+                 "2026-11-12T00:00:00Z error:delivered:OSError", "2026-11-04T00:00:00Z note error:delivered:x"]
+        w.cfg.path("shadow.log").write_text("\n".join(lines) + "\n")
+    return next(iter(arms.analyse(w.cfg, now="2026-11-18T00:00:00Z")["detectors"].values()))
+
+
+def test_an_error_rate_demotion_prints_the_delivered_path_errors_inside_the_window(w, prereg):
+    v = delivered_world(w, "error_rate")
+    assert v["delivered_errors"] == 2                                  # two inside [arm start, horizon end]; one before, one after, two other
+    assert "  delivered-path errors in the horizon: 2\n" in arms.render(arms.analyse(w.cfg, now="2026-11-18T00:00:00Z"))
+
+
+def test_a_missing_shadow_log_gives_unknown_not_zero(w, prereg):
+    v = delivered_world(w, "error_rate", log=False)
+    assert v["delivered_errors"] is None
+    assert "  delivered-path errors in the horizon: unknown\n" in arms.render(arms.analyse(w.cfg, now="2026-11-18T00:00:00Z"))
+
+
+def test_another_cause_prints_no_delivered_path_line(w, prereg):
+    v = delivered_world(w, "label_fp")
+    assert v.get("delivered_errors") is None and "delivered-path" not in arms.render(arms.analyse(w.cfg, now="2026-11-18T00:00:00Z"))
