@@ -86,7 +86,7 @@ The comparison "compiled beats injected" needs a controlled synthetic task suite
 memory, a hand-written CLAUDE.md line, a plain recent-history notepad, an ACE-style playbook,
 injected lessons and a compiled hook. That suite is not built in stage 1.
 
-## Shadow-mode additions (DRAFT until sealed)
+## Shadow-mode additions (SEALED 2026-10-29 prereg-v1)
 
 These commitments cover the compiled path in shadow mode (docs/design/compiler.md, section 8). They
 are binding only once `compile seal` has frozen the block below and the repository is tagged
@@ -253,7 +253,26 @@ because they must still change before the first `arm_start` (the hook's arm and 
 `approvals.py` (they decide the family and condition (6)). The arm analysis that computes the primary (`arms.py`, `arms_stats.py`) is
 built and hashed here before the seal, never written after it.
 
-(filled by compile seal)
+```text
+detectors:
+  commit_without_push weak 0ecc11354e149bf971e1acc4d5f9dd20730235cd4fbe2163dc87d5c03dbae885
+  edit_unread_session strong df4de122c0027b40953e0903d6650452c198d929f84a130ee1d66dca9515adf2
+  edit_unread_turn weak f0c2e1d0e86f1047777c1b5ae22a184022cb868ea00fa21adfd06226352607cb
+  exitplan_question_block strong fd62ef5b1dfb4f01917e3dc9c326b5d22b9b3b429c507a4c9d6f265dffabf6ec
+  preclaim_audit_block strong 23833342205da79ed6a61b36321e0483056f105dd1d9b9910bc6598f35c579a6
+  rm_rf weak 0c3ae8a16b87f8d31b5e35ca995b11383ee679de0f1e318fdbb824b50127c47d
+  rm_rf_nonscratch strong 53678e1a045ff59356e76fd3c65656d5b1f7e5b18716d321ebe8233ceb296a92
+  unparseable weak b0ec0f6f044dee82b796923cf4829405a68c98d14a06878942846b2529e1a415
+  user_correction weak 9de3bc6caf76ed9c2b5ba24c319450f7e41b17998f39e72c8094c4a4e4f0da4e
+report_sha256 8b9d55c625f53c4e9474cdaaf2a16f0605779b0c0722fd5d3a8e0e43ac93330d
+proposals:
+  P-f9407d6c observe 5fdcedb9aa8e7c6ad0daffb6c88b268eb25b8199679663fbee5325187c41190c
+shadow_seed_sha256 4a1fbc5ea985224ffe33add3219bd246fdbc4f4ec86d1362a2d2d0b57bcc1d74
+permutation_seed_sha256 359736173bf92b85b4b0f03fd9882d2e22984a103271d0576922f4c28c943e59
+arm_rate 0.5
+measurement_start 2026-10-20T16:10:26Z
+sealed_at 2026-10-29T05:44:23Z
+```
 
 ### Amendments
 
