@@ -1,4 +1,5 @@
-# claude.ai connector tool names as seen by Claude Code on this Mac, 2026-10-22T00:32Z (snapshot source for hooks/brief_connector_tools.txt); re-diffed 2026-10-29: Linear added prepare_file_upload (write-capable, denied)
+# claude.ai connector tool names as seen by Claude Code on this Mac, 2026-10-22T00:32Z (snapshot source for hooks/brief_connector_tools.txt)
+# re-diffed 2026-10-29: Linear added prepare_file_upload (write-capable, denied)
 mcp__claude_ai_Gmail__apply_sensitive_message_label
 mcp__claude_ai_Gmail__apply_sensitive_thread_label
 mcp__claude_ai_Gmail__create_draft
