@@ -252,10 +252,10 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   (`docs/watch/SANDBOX.md`): launchd cannot restrict the network, so without a `pf` rule the fetcher's own guards are the only egress control.
   Moving `acewatch`'s proposals to the operator's store is a manual copy followed by `compile watch import <dir>`, which trusts the validation
   (`records.check`, the id and name rules, the size cap, stamps, http(s) URLs, targets known to the operator's own config), not the copy's origin:
-  a forged but valid record in the copy becomes a proposal. An imported record is evidence plus title: a diff is never taken from the copy
-  (a model pin gets the diff the operator's own inventory yields, else none) and its title shows ` (imported)`; a forged quote, URL or title can still mislead
-  a reader of the queue. An own scan's diff always wins over a diff-less imported twin (same id: the file is replaced in place; another id: the twin is
-  closed as superseded).
+  a forged but valid record in the copy becomes a proposal. An imported record is evidence plus title: an imported record never carries a diff
+  (a diff comes only from the operator's own scan, which supersedes the import) and its title shows ` (imported)`; a forged quote, URL or title can still
+  mislead a reader of the queue. An own scan's diff always wins over a diff-less imported twin (same id: the file is replaced in place; another id: the
+  twin is closed as superseded).
 - Watcher, sanitizer coverage: `strip_hidden` reads inline `style` attributes and simple single-selector `<style>` rules (a tag, `.class` or
   `#id` rule, no combinators; class and id names match without case, as in quirks mode). Media queries, descendant, child and attribute
   selectors, `@import` and external stylesheets are NOT handled, so text hidden that way is read as visible. The inline rules hide opacity

@@ -506,9 +506,9 @@ network, and it is never on a hook path.
    `proposals/W-*.json` (made by you, into a real directory) into your own store: every file is validated, a duplicate (same id or same
    proposal key) is counted and not written, the cap of five open still holds, and the summary reads `import: N imported, N duplicate, N rejected`
    with a `rejected <stem>: <reason>` line per rejection. An imported record is evidence plus title: its stamps, URLs and target are checked
-   against your own `watch_sources` and `watch_inventory_map` (both required), a diff is never taken from the copy (for a model pin it is computed
-   again from YOUR inventory, else dropped: `; N imported without diff`) and its title shows ` (imported)`; your own scan's diff always takes
-   priority over a diff-less imported twin. `--dry-run` writes nothing; the copy is never changed; exit 2 for a symlinked directory
+   against your own `watch_sources` and `watch_inventory_map` (both required), an imported record is evidence and a title: it never carries a diff
+   (`; N imported without diff` counts the copy's), a diff comes only from your own `watch scan`, which supersedes the import, and its title shows
+   ` (imported)`. `--dry-run` writes nothing; the copy is never changed; exit 2 for a symlinked directory
    (also `<link>/sub/..`), a `DISABLED` file or an unsafe `watch_dir`;
    a FIFO or any other non-file in the copy is rejected, never waited for. Review the imported proposals with `watch queue`.
 4. Kill switch: `touch <watch_dir>/DISABLED`. While it exists `scan` prints `watch: disabled` and fetches and writes nothing; remove it to resume.

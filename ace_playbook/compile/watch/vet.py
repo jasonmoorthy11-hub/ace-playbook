@@ -5,14 +5,13 @@ inode: a FIFO named `W-<hex>.json` is refused, never waited for). The record mus
 `inventory_hits` a list of at most 50 clean strings of at most 200 characters, a `tier` that is an int and not a bool), its stamps in the store's format,
 at most `records.DAYS` apart and not later than a day from now (`dates`), every evidence URL http(s) (`url`), its target one that the OPERATOR's own config
 knows (`target`: an inventory key or a mapped docs URL of `watch_inventory_map`, a source id of `watch_sources`, or `claude_version`). A diff is never taken
-from the copy: for a `model_pin` the diff and its `verify` are computed again by `pin.derived` from the operator's OWN inventory (the code the scan runs)
-and stored when that succeeds; otherwise `change.diff` and `diff_sha256` are null (the id does not depend on them). The title gets a visible ` (imported)`;
-`records.check` must still pass on what is stored.
+from the copy, and none is computed from its fields: `change.diff` and `diff_sha256` are null (the id does not depend on them), so an imported record is
+evidence and a title, and a diff comes only from the operator's own `watch scan`, which supersedes the import (`reconcile`). The title gets a visible
+` (imported)`; `records.check` must still pass on what is stored.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import stat
@@ -21,7 +20,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from ...config import Config
-from . import pin, records, store
+from . import records, store
 
 MARK, FMT, MAX_BYTES = " (imported)", "%Y-%m-%dT%H:%M:%SZ", 64 * 1024
 
@@ -33,8 +32,7 @@ def context(cfg: Config) -> dict:
         raise ValueError("import needs watch_sources and watch_inventory_map in the config (to know the targets)")
     mapping = inventory.load_map(Path(cfg.watch_inventory_map))
     ids = {s["id"] for s in fetch.load_sources(Path(cfg.watch_sources))}
-    return {"targets": {"claude_version", *mapping["targets"], *mapping["docs"], *ids}, "map": mapping, "inv": None,
-            "now": datetime.now(timezone.utc).replace(tzinfo=None)}
+    return {"targets": {"claude_version", *mapping["targets"], *mapping["docs"], *ids}, "now": datetime.now(timezone.utc).replace(tzinfo=None)}
 
 
 def _hits(rec: dict) -> bool:
@@ -62,30 +60,16 @@ def _reason(rec: dict, ctx: dict) -> str:
     return "" if rec["change"]["target"] in ctx["targets"] else "target"
 
 
-def _own_diff(rec: dict, ctx: dict) -> tuple[str, str] | None:
-    """(diff, verify) from the operator's own inventory for a model_pin that names a successor, else None."""
-    mid, succ = records.title_model(rec["title"])
-    if rec["class"] != "model_pin" or not mid or not succ:
-        return None
-    if ctx["inv"] is None:
-        from . import inventory                                         # lazy: it imports subprocess; no `claude --version` is run here
-        ctx["inv"] = inventory.build(ctx["map"], which=lambda name: None)
-    return pin.derived(ctx["inv"], rec["change"]["target"], mid, succ)
-
-
 def vet(rec: dict, ctx: dict) -> tuple[dict | None, str]:
-    """(the record to store, "") or (None, reason): checked, the diff recomputed or dropped, the title marked, `check` run again on the result."""
+    """(the record to store, "") or (None, reason): checked, the diff dropped (never taken from the copy), the title marked, `check` run again."""
     why = _reason(rec, ctx)
     if why:
         return None, why
     title = rec["title"] if rec["title"].endswith(MARK) else rec["title"] + MARK
-    own = _own_diff(rec, ctx) or (None, None)
-    for diff, verify in (own, (None, None)):                            # the operator's own diff first, then none
-        change = {**rec["change"], "diff": diff, "diff_sha256": hashlib.sha256(diff.encode()).hexdigest() if diff else None}
-        new = {**rec, "title": title, "status": "open", "change": change, "verify": verify or rec["verify"]}
-        if records.title_model(title) == records.title_model(rec["title"]) and records.check(new) is None:
-            return new, ""
-    return None, "title"
+    new = {**rec, "title": title, "status": "open", "change": {**rec["change"], "diff": None, "diff_sha256": None}}
+    if records.title_model(title) != records.title_model(rec["title"]) or records.check(new):      # too long to mark, or the mark changed the id
+        return None, "title"
+    return new, ""
 
 
 def read(dirfd: int, name: str, ctx: dict) -> tuple[dict | None, str, bool]:
@@ -118,4 +102,4 @@ def read(dirfd: int, name: str, ctx: dict) -> tuple[dict | None, str, bool]:
     if reason:
         return None, reason, False
     new, why = vet(rec, ctx)
-    return new, why, new is not None and rec["change"]["diff"] is not None and new["change"]["diff"] is None
+    return new, why, new is not None and rec["change"]["diff"] is not None

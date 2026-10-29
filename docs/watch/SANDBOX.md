@@ -253,9 +253,9 @@ install and the `inputs.legacy-<date>` name are written from that run, not paste
   `python3 -m ace_playbook.compile watch import ~/acewatch-copy` (add `--dry-run` to see the counts first). The import validates each file
   with the same record check, counts duplicates, keeps the cap of five open, never changes the copy, and prints `rejected <stem>: <reason>`
   for anything else; then `compile watch queue` reviews them. An imported record is evidence plus title: its stamps, URLs and target are checked
-  against the operator's own `watch_sources` and `watch_inventory_map` (both must be set), a diff in the copy is never trusted (for a model pin it
-  is computed again from the operator's own inventory, else dropped: `; N imported without diff` says how many), and its title shows ` (imported)`.
-  A later own scan with a diff always takes priority over a diff-less imported twin.
+  against the operator's own `watch_sources` and `watch_inventory_map` (both must be set), an imported record is evidence and a title: a diff in the copy
+  is never taken (`; N imported without diff` says how many) and none is computed from its fields; a diff comes only from the operator's own
+  `watch scan`, which supersedes the import. Its title shows ` (imported)`.
 
 ## Kill files
 

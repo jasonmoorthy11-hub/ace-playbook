@@ -1289,11 +1289,11 @@ never waited for), at most 64 KiB, that parse as a JSON object whose `id` is the
 that are shaped as the store's own readers need (`shape`: `store._shaped`, `inventory_hits` a list of at most 50 clean strings of at most 200 characters,
 an int `tier` that is not a bool), whose stamps are in the store's format, at most 30 days apart and `created` at most a day ahead of now (`dates`), whose
 evidence URLs are http(s) (`url`) and whose `change.target` is one the operator's own config knows (`target`: a key or mapped docs URL of
-`watch_inventory_map`, a source id of `watch_sources`, or `claude_version`; both files are required). An imported record is evidence plus title: a diff is
-never taken from the copy. For a `model_pin` that names a successor the diff and the `verify` command are computed again from the operator's OWN inventory
-by `pin.derived` (the function the scan's rule uses) and stored with their sha256; when that gives nothing, or for any other class, `change.diff` and
-`diff_sha256` are null (the id does not depend on them, and `records.check` passes the stored record). The summary counts `N imported without diff` for a
-copy's diff that was dropped. The title carries a visible ` (imported)` (a title too long to carry it is rejected, reason `title`); `watch status`, the
+`watch_inventory_map`, a source id of `watch_sources`, or `claude_version`; both files are required). An imported record is evidence and a title: a diff is
+never taken from the copy and none is computed from its fields (the title would choose the model and the successor), so `change.diff` and `diff_sha256` are
+always null (the id does not depend on them, and `records.check` passes the stored record). A diff comes only from the operator's own `watch scan`, which
+supersedes the import (below). The summary counts `N imported without diff` for a copy's diff that was dropped. The title carries a visible ` (imported)`
+(a title too long to carry it is rejected, reason `title`); `watch status`, the
 digest and the queue card show it. `status` is forced to `open`, and past the cap of five open (leads excepted) the record is written `queued` in ranking
 order. A record whose `reconcile.key` is in the store, or whose id exists (`write_proposal` is write-once), is a duplicate. The work holds
 `fsio.lock(watch_dir, blocking=True)` and ends with `store.rebalance`; a `DISABLED` file or an unsafe watch directory refuses (exit 2). Output is
@@ -1303,7 +1303,8 @@ order. A record whose `reconcile.key` is in the store, or whose id exists (`writ
 modified. The import trusts the validation, not the copy's origin, which is why a diff is never taken from it.
 
 An import does not hide the operator's own finding: `reconcile` gives a candidate of an own scan that HAS a diff priority over a live twin (same key) whose
-diff is null. With the same id the twin's file is replaced in place by the candidate (atomic; the id does not depend on the diff, a second file is
+diff is null (every imported record). With the same id the twin's file is replaced in place by the candidate (atomic; the id does not depend on the diff,
+a second file is
 impossible, the twin's decision rows stay; the scan's `new` count does not include it); with another id the twin is closed as `superseded` (a decision row)
 and the candidate is written.
 

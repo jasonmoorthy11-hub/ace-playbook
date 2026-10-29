@@ -81,20 +81,6 @@ def _diff(files: dict, rx: re.Pattern, new: str) -> str:
     return "\n".join(out) + "\n"
 
 
-def _whole(inv: dict, key: str, files: dict, mid: str, new: str | None) -> bool:
-    """True when the diff of target `key` may be written: a successor, the target not cut off, every matched line whole."""
-    cut = inv["targets"][key].get("truncated") or any(f.get("truncated") or f.get("too_large") for f in inv["targets"][key]["files"].values())
-    return bool(new and new != mid and not cut and all(len(str(t)) < MAX_LINE and "�" not in str(t) for ls in files.values() for _, t in ls))
-
-
-def derived(inv: dict, key: str, mid: str, succ: str) -> tuple[str, str] | None:
-    """(diff, verify) that the rule above writes for target `key` of THIS inventory and the named successor, else None (`carry` uses it)."""
-    files = _lines(inv, boundary(mid)).get(key) if SAFE.fullmatch(mid) and _real(succ) and MODEL_ID.fullmatch(succ) and SAFE.fullmatch(succ) else None
-    if not files or not _whole(inv, key, files, mid, succ):
-        return None
-    return _diff(files, boundary(mid), succ), f'grep -n "{mid}" ' + " ".join(sh(p) for p in sorted(files))
-
-
 def model_pin(inv: dict, results: list[dict], now: str) -> list[dict]:
     out = []
     for mid, m in sorted(state(results).items()):
@@ -104,7 +90,9 @@ def model_pin(inv: dict, results: list[dict], now: str) -> list[dict]:
         ev = {"url": m["res"]["url"], "sha256": m["res"]["sha256"], "quote": m["row"], "tier": m["res"]["tier"]}
         for key, files in sorted(_lines(inv, rx).items()):
             verify = f'grep -n "{mid}" ' + " ".join(sh(p) for p in sorted(files))
-            if _whole(inv, key, files, mid, new):
+            cut = inv["targets"][key].get("truncated") or any(f.get("truncated") or f.get("too_large") for f in inv["targets"][key]["files"].values())
+            whole = new and new != mid and not cut and all(len(str(t)) < MAX_LINE and "�" not in str(t) for ls in files.values() for _, t in ls)
+            if whole:
                 out.append(record("model_pin", f"Replace {mid} with {new} in {key}", ev, [key], key, _diff(files, rx, new), verify, now))
             else:
                 out.append(record("lead", f"retirement with no successor named: {mid} ({key})", ev, [key], key, None, verify, now))

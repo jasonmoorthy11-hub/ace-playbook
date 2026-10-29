@@ -3,8 +3,9 @@
 `<dir>` is opened with `O_NOFOLLOW | O_DIRECTORY` after its path is normalised (so `<link>/sub/..` is the link and is refused) and its entries are read
 through that descriptor. Only regular files named `W-<hex>.json` (never links, FIFOs or devices; at most 64 KiB) whose record passes `records.check`
 (no body), the id of which is the file stem, are taken, and `vet.py` holds the rest of the rules: shape, stamps, http(s) URLs, targets the OPERATOR's own
-config knows, the diff recomputed from the operator's own inventory (else dropped), the visible ` (imported)`. `status` is forced to open and the CAP of
-five open still holds (the rest are queued, leads excepted). A record whose `reconcile.key` is in the store, or whose id exists, is a duplicate. The copy
+config knows, no diff (never taken from the copy: a diff comes only from the operator's own scan), the visible ` (imported)`. `status` is
+forced to open and the CAP of five open still holds (the rest are queued, leads excepted). A record whose `reconcile.key` is in the store, or whose id
+exists, is a duplicate. The copy
 is never changed. Output is counts, reason words and the (already cleaned) titles: no file content. Loaded lazily like `scan` and `canary`.
 """
 
