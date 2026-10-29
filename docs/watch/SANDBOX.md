@@ -80,9 +80,10 @@ install and the `inputs.legacy-<date>` name are written from that run, not paste
    worked in the live install but is untested in CI. (Or point the venv at a system-wide 3.12.) A venv built in your own session symlinks its
    python into your home, which `acewatch` cannot read once step 1 holds. Check: `sudo -u acewatch <copy>/.venv/bin/python -c "import ace_playbook"`.
 4. `acewatch`'s own config, `ACE_PLAYBOOK_CONFIG` in the plists, is `/var/acewatch/.config/ace-playbook/config.json` (0600): its own
-   `data_dir` and `watch_dir` (0700, owned by `acewatch`; the watch directory is the one directory the scan writes, and `data_dir` holds the
-   Reader's own state), `watch_sources`, `watch_inventory_map`,
-   `watch_reader`, `watch_reader_model` and `watch_claude`. It never names `chain_key_path` or `api_key_path`. As installed:
+   `data_dir` and `watch_dir` (0700, owned by `acewatch`; the watch directory is the one directory the scan writes, Reader state included;
+   `data_dir` is the base directory the config requires (0700, acewatch's); the scan writes nothing there), `watch_sources`,
+   `watch_inventory_map`, `watch_reader`, `watch_reader_model` and `watch_claude`. It never names `chain_key_path` or `api_key_path`.
+   As installed, with `watch_reader` still false (flip it after the first canary):
 
    ```
    {"data_dir": "/var/acewatch/data", "watch_dir": "/var/acewatch/watch",
@@ -115,6 +116,9 @@ install and the `inputs.legacy-<date>` name are written from that run, not paste
    sudo install -o root -g acewatch -m 0750 <your copy of the claude-reader wrapper of step 6> $R/bin/claude-reader
    ```
 
+   The `false` in the first check stops the block only under `set -e`; pasted into a terminal, the next lines would still run. So if the check
+   prints, the rest of this block must NOT be pasted (or run the block as a script with `set -e`).
+
    Every test on a path under `$R` runs as root (`sudo test -e`), because the operator cannot search `/opt/acewatch` (`root:acewatch` 0750) and a
    plain `[ -e ... ]` would always say "absent": on a re-install the old tree would stay in place and `mv` would nest the new tree inside it.
 
@@ -135,7 +139,9 @@ install and the `inputs.legacy-<date>` name are written from that run, not paste
    never move it out to an operator-owned folder. Removing it later depends on who owns it. An `acewatch`-owned old wrapper directory is
    removed as `acewatch` (`sudo -u acewatch rm -r <the parked directory>`). The legacy operator-owned `watch/inputs` copy is the ONE exception to
    "root never deletes inside the tree": `acewatch` cannot write that directory, so only root can remove it (`sudo rm -r <the parked directory>`,
-   which does not follow symlinks), or it may stay parked.
+   which does not follow symlinks), or it may stay parked. `acewatch` owns `/var/acewatch` and `watch/`, so it could swap a parent folder for a symlink:
+   immediately before the `sudo rm -r`, run the symlink-and-owner check loop above on `/var/acewatch`, `/var/acewatch/watch` and the parked folder
+   itself (not a link, owned as expected).
 6. Its own claude and its own login. Install claude AS `acewatch` (its own claude install: its own `~/.local/bin/claude` under `/var/acewatch`,
    never the operator's binary and never a symlink into the operator's home), with the installer the installed version documents, run as
    `acewatch` with a bare environment:
@@ -158,12 +164,12 @@ install and the `inputs.legacy-<date>` name are written from that run, not paste
    ```
    sudo -u acewatch -H bash -c 'mkdir -p ~/.local/bin ~/.local/share/claude/versions'
    sudo -u acewatch -H bash -c 'cat > ~/.local/share/claude/versions/<ver> && chmod 0755 ~/.local/share/claude/versions/<ver>' < <file>
-   sudo -u acewatch -H bash -c 'ln -sfn ~/.local/share/claude/versions/<ver> ~/.local/bin/claude'
    sudo -u acewatch -H bash -c 'shasum -a 256 ~/.local/share/claude/versions/<ver>'
+   sudo -u acewatch -H bash -c 'ln -sfn ~/.local/share/claude/versions/<ver> ~/.local/bin/claude'
    sudo -u acewatch -H /var/acewatch/.local/bin/claude --version
    ```
 
-   The `shasum` line re-verifies the placed copy: it must print the manifest checksum before you run `--version`.
+   The `shasum` line re-verifies the placed copy: it must print the manifest checksum before you run the `ln -sfn` line, and `--version` comes last.
 
    Then, as `acewatch`, run `claude setup-token` and keep the token in
    ONE file in its config dir, mode 0600, for example `/var/acewatch/.config/ace-playbook/claude_credential`. The token file is consumed by the

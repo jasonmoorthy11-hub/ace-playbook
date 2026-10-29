@@ -172,10 +172,14 @@ def test_sandbox_step_5_puts_the_inputs_and_the_wrapper_in_a_root_owned_tree():
     assert "<watch_dir>/inputs/" not in flat(SANDBOX) and "owned by the operator, read-only" not in flat(SANDBOX)
     assert "sudo test -e \"$R/inputs\"" in five and "sudo test ! -e \"$R/.inputs.old\"" in five and "[ -e $R" not in five   # I-1: root-run tests
     assert "the operator cannot search `/opt/acewatch`" in five
-    assert "[ -L \"$R\" ] && { echo \"refusing: $R is a symlink\"; false; }" in five and "stop here if it prints" in five     # M-6: fail closed
+    assert "[ -L \"$R\" ] && { echo \"refusing: $R is a symlink\"; false; }" in five and "stop here if it prints" in five     # M-6: stop on print
+    assert "the rest of this block must NOT be pasted" in five and "run the block as a script with `set -e`" in five      # N-2: false needs set -e
     assert "ONE exception to \"root never deletes inside the tree\"" in five and "only root can remove it (`sudo rm -r <the parked directory>`" in five
+    assert "before the `sudo rm -r`" in five and "`/var/acewatch/watch`" in five and "the parked folder itself" in five            # N-4: chain check first
     assert "ONE exception" in step(2) and "can only be removed by root" in step(2)                                              # I-2
     assert "the one directory the scan writes" in step(4) and "ONE writable directory" not in step(4)                          # M-7
+    assert "holds the Reader" not in step(4) and "the scan writes nothing there" in step(4)                                     # N-1: state in watch_dir
+    assert "As installed, with `watch_reader` still false (flip it after the first canary):" in step(4)                         # N-5
     assert "\"watch_reader\": false" in step(4) and "\"watch_reader\": true" not in step(4) and "flip it to `true` after the first canary" in step(4)  # M-3
     assert "/opt/acewatch/inputs/" in flat(SANDBOX).split("## What it can and cannot do", 1)[1]
 
@@ -193,7 +197,7 @@ def test_sandbox_step_6_documents_the_installer_the_wrapper_the_credential_and_t
     assert "downloads.claude.ai/claude-code-releases" in flat(SANDBOX) and "DISABLE_AUTOUPDATER=1" in flat(SANDBOX)
     assert "(`darwin-x64` on Intel)" in six                                                                                     # M-4
     assert six.count("shasum -a 256") == 2 and "re-verifies the placed copy" in six                                             # M-5
-    assert six.index("ln -sfn") < six.rindex("shasum -a 256") < six.rindex("-H /var/acewatch/.local/bin/claude --version")
+    assert six.rindex("shasum -a 256") < six.index("ln -sfn") < six.rindex("-H /var/acewatch/.local/bin/claude --version")     # N-3: verify, link, run
     assert "prefixes 1" in six and "spaces 0" in six and "`prefixes 2` means the token was pasted twice" in six and "(seen live: 219 bytes)" in six
     assert "paste once" in six.lower() and "BEFORE the canary" in six and "bytes %s prefixes %s spaces %s" in six
 
