@@ -218,6 +218,20 @@ UNPROVEN = [
     ("child-prefix-not-literal", f"export D={SCR}; D=$X bash -c 'rm -rf \"$D\"'", f"D={SCR} bash -c 'rm -rf \"$D\"'"),
     ("child-env-i", f"export D={SCR}; env -i bash -c 'rm -rf \"$D\"'", f"export D={SCR}; env bash -c 'rm -rf \"$D\"'"),
     ("child-rebound-after-export", f"export D={SCR}; D={OUT}; bash -c 'rm -rf \"$D\"'", f"D={OUT}; export D={SCR}; bash -c 'rm -rf \"$D\"'"),
+    # Security review 6 (fix wave 4), finding 1: `export` with ANY flag token (-n, -f, -fn, -np, ...) never marks a name, assignment or bare
+    ("child-unexport-n-assign", f"export D={SCR}; export -n D={SCR}; bash -c 'rm -rf \"$D\"'", f"export D={SCR}; bash -c 'rm -rf \"$D\"'"),
+    ("child-export-f-assign", f"export -f D={SCR}; bash -c 'rm -rf \"$D\"'", f"export D={SCR}; bash -c 'rm -rf \"$D\"'"),
+    ("child-unexport-fn-assign", f"export D={SCR}; export -fn D={SCR}; bash -c 'rm -rf \"$D\"'", f"export D={SCR}; bash -c 'rm -rf \"$D\"'"),
+    ("child-unexport-np-assign", f"export D={SCR}; export -np D={SCR}; bash -c 'rm -rf \"$D\"'", f"export D={SCR}; bash -c 'rm -rf \"$D\"'"),
+    ("child-unexport-n-ddash-bare", f"export D={SCR}; export -n -- D; bash -c 'rm -rf \"$D\"'", f"export D={SCR}; bash -c 'rm -rf \"$D\"'"),
+    # finding 2: a glob component that is not the last one, or a last one that can match `.` / `..` (starts with `.`, `[` or `?`), is left
+    ("dot-glob-on-a-trusted-cwd", f"cd {SCR} && rm -rf ./.*", PLAIN_CD),
+    ("dot-bracket-glob-non-final", f"cd {SCR} && rm -rf ./.[.]/x", PLAIN_CD),
+    ("bracket-dot-glob-final", f"cd {SCR} && rm -rf ./[.][.]", PLAIN_CD),
+    ("question-dot-glob-final", f"cd {SCR} && rm -rf ./?.", PLAIN_CD),
+    ("bracket-negated-glob-final", f"cd {SCR} && rm -rf ./[!a]*", PLAIN_CD),
+    ("non-final-glob-component", f"cd {SCR} && rm -rf ./*/x", f"cd {SCR} && rm -rf ./sub/*"),
+    ("dot-glob-on-a-variable", f'D={SCR}; rm -rf "$D"/.*', f'D={SCR}; rm -rf "$D"/*'),
 ]
 
 

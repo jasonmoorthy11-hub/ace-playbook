@@ -635,6 +635,16 @@ PROVEN = [   # (case, command, fires)
     ("glued-redirect-on-cd", "cd /tmp/w>x && rm -rf ./*", True),
     ("glued-redirect-on-an-assignment", 'D=/tmp/w<f; rm -rf "$D"', True),
     ("glued-fd-redirect-on-cd", "cd /tmp/w2>/dev/null && rm -rf ./*", True),
+    # fix wave 4: an `export` flag (-n, -f, -fn, -np) un-exports, for an assignment as well as a bare name; a glob that can match . / .. is left
+    ("export-n-with-an-assignment-unexports", 'export D=/tmp/w; export -n D=/tmp/w; bash -c \'rm -rf "$D"\'', True),
+    ("export-f-with-an-assignment-never-exports", 'export -f D=/tmp/w; bash -c \'rm -rf "$D"\'', True),
+    ("export-fn-with-an-assignment-unexports", 'export D=/tmp/w; export -fn D=/tmp/w; bash -c \'rm -rf "$D"\'', True),
+    ("export-np-with-an-assignment-unexports", 'export D=/tmp/w; export -np D=/tmp/w; bash -c \'rm -rf "$D"\'', True),
+    ("export-n-then-a-plain-export-exports-again", 'export D=/tmp/w; export -n D=/tmp/w; export D=/tmp/w; bash -c \'rm -rf "$D"\'', False),
+    ("dot-glob-on-a-trusted-cwd", "cd /tmp/w && rm -rf ./.*", True),
+    ("dot-bracket-glob-on-a-trusted-cwd", "cd /tmp/w && rm -rf ./.[.]/x", True),
+    ("bracket-dot-glob-on-a-trusted-cwd", "cd /tmp/w && rm -rf ./[.][.]", True),
+    ("non-final-glob-on-a-trusted-cwd", "cd /tmp/w && rm -rf ./*/x", True),
 ]
 
 
@@ -679,11 +689,27 @@ def test_wave3_a_glued_redirection_is_neither_a_literal_nor_a_plain_segment():
     assert rp.plain(["cd", "/tmp/w"], ["cd", "/tmp/w"]) and rp.literal_text("/tmp/w-x_1.2", []) == "/tmp/w-x_1.2"
 
 
-def test_wave3_leftover_is_true_for_expansions_and_globs_next_to_dotdot_only():
-    for left in ("a/$X", "a/${X}", "./{a,b}", "a/{b,../../c}", "../*", "*/..", "a/../?", "a/[ab]/..", "./sub/../../*"):
+def test_wave4_leftover_is_true_for_expansions_non_final_globs_and_final_globs_that_can_match_dot_or_dotdot():
+    for left in ("a/$X", "a/${X}", "./{a,b}", "a/{b,../../c}", "../*", "*/..", "a/../?", "a/[ab]/..", "./sub/../../*",
+                 "./.*", "./.[.]/x", "./[.][.]", "./?.", "./[!a]*", "./*/x", "a/b*c/d", "/tmp/w/*/", ".*", "[.]"):
         assert rp.leftover(left), left
-    for fine in ("/tmp/w", "./*", "./sub/*", "a/../b", "*", "a/b*c/d", "/tmp/w/{a", "{a}"):
+    for fine in ("/tmp/w", "./*", "./sub/*", "a/../b", "*", "/tmp/w/{a", "{a}", "/tmp/w/sub/a*", "a/b*", "./*.log", "/tmp/w/x?"):
         assert not rp.leftover(fine), fine
+
+
+def test_wave4_an_export_flag_never_marks_a_name_for_an_assignment_or_a_bare_name():
+    def marks(cmd, env=None, exp=()):
+        events, quotes = shell.command_stream(cmd)
+        st = resolve._State(env=env, exp=exp)
+        resolve._run(events, quotes, st, 1, None, [])
+        return st.exp
+    assert marks("export D=/tmp/w") == {"D"} and marks("export D=/tmp/w E=/tmp/v") == {"D", "E"}
+    for flag in ("-n", "-f", "-fn", "-np", "-p", "--"):
+        assert marks(f"export {flag} D=/tmp/w", {"D": "/tmp/w"}, {"D"}) == set(), flag
+        assert marks(f"export {flag} D", {"D": "/tmp/w"}, {"D"}) == set(), flag
+        assert marks(f"export {flag} D=/tmp/w") == set(), flag
+    assert marks("export D", {"D": "/tmp/w"}) == {"D"} and marks("export D", {}) == set()
+    assert marks("declare D=/tmp/w") == set()
 
 
 def test_wave3_child_env_keeps_exported_names_and_literal_prefix_assignments_only():

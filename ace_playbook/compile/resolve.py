@@ -9,7 +9,8 @@ back to v1's literal rule for that token, so v2 fires wherever v1 fired except o
 cwd lives in one `&&` chain only (`;`, newline, `&` end it; `||` and `!` taint the rest of the chain); a bare `cd` is $HOME (never
 scratch); `cd -`, `popd`, `pushd +N`, `((..))`, `source`, `read`, `printf -v`, `let`, `unset`, `mapfile`, `getopts`, `declare -n` make it
 and the bindings unknown. A binding set after an `&&` (not first in its chain) dies with the chain. A resolved target that still holds
-`$`, `{a,b}` or a glob next to `..` is judged as v1 judged the token (every target, not only those with a `$`). A worktree added in the
+`$`, `{a,b}` or a glob that may reach `.`/`..` (not the last component, `.`/`[`/`?`-led, next to `..`) is judged as v1 judged
+the token (every target, not only those with a `$`). A worktree added in the
 same `&&` chain is scratch (never `~`, `..`, `/`, `.`, the repo or an ancestor, fewer than two components). `bash -c`, `sh -c` (a copy:
 the cwd and worktree marks, but only the EXPORTED names and literal `NAME=v` / `env NAME=v` prefix assignments; any other prefix passes
 none) and `eval` (shared state; a wrapped one runs on a copy and leaves the outer state unknown) are re-scanned one level deep;
@@ -69,7 +70,7 @@ def _path(tok: str, st: _State, quotes: list) -> str:
     s = pre.text(tok, st.env, quotes) if st.trust else v1
     if s is None:
         return "Q"
-    if st.trust and pre.leftover(_TMPDIR.sub("", s)):   # a `$`, a brace expansion or a glob next to `..` is left: no better than v1
+    if st.trust and pre.leftover(_TMPDIR.sub("", s)):   # a `$`, a brace expansion or a glob that may reach `.`/`..` is left: no better than v1
         return v1
     return posixpath.normpath(s if st.cwd is None or s.startswith(("/", "$", "~")) else posixpath.join(st.cwd, s))
 
@@ -83,21 +84,20 @@ def _abs(tok: str, st: _State, quotes: list) -> str | None:
 
 
 def _assign(toks: list[str], st: _State, quotes: list, ok: bool, first: bool, export: bool = False) -> None:
+    keep = ok and not any(a.startswith("-") for a in toks)    # `export` with any flag (-n, -f, -p, -fn, ...) marks NO name, bare or assigned
     for t in toks:
         m = _SET.match(t)
-        if not m:
-            if export and t in st.env:           # `export NAME` marks a bound name; `export -n NAME` un-marks it
-                (st.exp.add if ok and "-n" not in toks else st.exp.discard)(t)
-            continue
-        val = pre.literal_text(m.group(2), quotes) if ok else None
-        if val is None or len(val) > MAX_VALUE or (m.group(1) not in st.env and len(st.env) >= MAX_ENV):
-            st.drop(m.group(1))                  # not a proven literal: the name goes back to "unassigned"
-            st.cond.discard(m.group(1))
-        else:
-            st.env[m.group(1)] = val
-            (st.cond.discard if first else st.cond.add)(m.group(1))
-            if export and "-n" not in toks:
-                st.exp.add(m.group(1))
+        name = m.group(1) if m else t
+        if m:
+            val = pre.literal_text(m.group(2), quotes) if ok else None
+            if val is None or len(val) > MAX_VALUE or (name not in st.env and len(st.env) >= MAX_ENV):
+                st.drop(name)                    # not a proven literal: the name goes back to "unassigned"
+                st.cond.discard(name)
+            else:
+                st.env[name] = val
+                (st.cond.discard if first else st.cond.add)(name)
+        if export and name in st.env:            # `export NAME[=v]` marks a bound name; with a flag it un-marks it
+            (st.exp.add if keep else st.exp.discard)(name)
 
 
 def _cd(args: list[str], st: _State, quotes: list, ok: bool) -> None:

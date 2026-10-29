@@ -235,7 +235,7 @@ stale. CI never needs rebuild-lab, and the port still cannot drift from the numb
 Each row is a class and a variant (for example `flags/split-flags`, `interpreter/python-rmtree`, `xargs_find/find-delete`) built twice
 from one command template: once with an invented path outside scratch (ground truth: it should fire) and once with a scratch
 path (its benign twin: it must not fire). The strings are only data: they go through the hook's own path (hook payload,
-`event_from_hook`, `catalogue.evaluate`) and are never executed. 132 variants, 264 cases (43 and 86 under v1).
+`event_from_hook`, `catalogue.evaluate`) and are never executed. 144 variants, 288 cases (43 and 86 under v1).
 
 The survivors of a mutation run over the detectors, the tokenizer and `textrules` are pinned by `tests/test_mutation_survivors.py`.
 
@@ -248,7 +248,7 @@ change in either direction shows up. As of detector v2 (4.1.2, 2026-10-29):
 |---|---|---|---|
 | `alias_quote` | 3 | 0 | `$IFS` separators, `$(echo rm)` as the command word, `base64 -d \| sh` |
 | `interpreter` | 5 | 0 | python, node, perl, a `bash <<EOF` body, a `bash -c` inside a `bash -c` (`bash -c`, `sh -c` and `eval` themselves are read) |
-| `unproven` | 0 | 0 | 58 unproven constructs around a scratch value must fire; their plain twins must not (section 4.1.2) |
+| `unproven` | 0 | 0 | 70 unproven constructs around a scratch value must fire; their plain twins must not (section 4.1.2) |
 | `path` | 0 | 0 | week 1's two false positives are closed; the fail-closed rows (cd after `;`, `\|\|`, a rebound variable) must fire |
 | `worktree` | 0 | 0 | a worktree added and deleted in one `&&` chain is scratch; a path outside the chain or an earlier call is not |
 | `tool_indirection` | 2 | 0 | a script, or a Makefile whose `clean:` recipe deletes, written by `Write` and then run (`bash script`, `make -C dir clean`) |
@@ -300,14 +300,17 @@ on more: `bash -c`, `find`, `xargs`). A working directory, a variable binding or
   directory and the bindings unknown from there; a builtin behind a wrapper (`env cd X`, `sudo export D=x`, `time cd X`) does the same
   and is still scanned (`sudo eval "..."` and its targets count). A wrapped `eval` runs on a copy of the state; a bare `eval` runs in
   this shell. A `bash -c` / `sh -c` child starts from a copy that keeps the cwd and the worktree marks but only the EXPORTED
-  names: `export NAME=<literal>`, or `export NAME` after a plain binding (`export -n`, `unset`, a rebinding that is not a proven
-  literal, a chain end for a conditional name and the end of a `( )` scope un-export it), plus literal `NAME=<literal>` and
+  names: `export NAME=<literal>`, or `export NAME` after a plain binding (`export` with ANY flag word (`-n`, `-f`, `-p`, `-fn`, `-np`,
+  `--`) marks no name and un-marks the ones it names, an assignment (`export -n D=<scratch>`) as well as a bare name; `unset`, a
+  rebinding that is not a proven literal, a chain end for a conditional name and the end of a `( )` scope un-export it), plus literal `NAME=<literal>` and
   `env NAME=<literal>` assignments on that segment (a prefix value that is not a literal removes its name). A prefix holding anything
   but assignments and `env` (`sudo`, `nice`, `command`, `time`, `env -i`, `env -u`) passes NO names. So `D=<scratch>; bash -c 'rm -rf "$D"'`
   fires (the child sees an empty `$D`), and `export D=<scratch>; bash -c ...` or `D=<scratch> bash -c ...` does not;
 - (f) EVERY target is checked after expansion, not only those with a `$` or a quoted part: one that still holds `$` (other than a
-  leading `$TMPDIR`), a `{a,b}` brace expansion, or a glob character (`*`, `?`, `[`) in a path component next to a `..` component is
-  judged as v1 judged the token (`D=<scratch>; rm -rf "$D/$E"`, `cd <scratch> && rm -rf ./{a,../../x}` and `cd <scratch> && rm -rf ../*` fire); a
+  leading `$TMPDIR`), a `{a,b}` brace expansion, or a glob character (`*`, `?`, `[`) that may reach `.` or `..` is judged as v1
+  judged the token. A glob component may reach them when it is not the LAST path component, when the last one starts with `.`, `[`
+  or `?`, or when it follows a `..` component (no fnmatch: it lets `*` match `.`); `./*` and `./sub/*` stay proven
+  (`D=<scratch>; rm -rf "$D/$E"`, `cd <scratch> && rm -rf ./{a,../../x}`, `../*`, `./.*`, `./.[.]/x`, `./[.][.]` and `./*/x` fire); a
   literal token keeps exactly v1's `SCRATCH` test (`<scratch>/*` and `/tmp/x/$E` are scratch
   by the prefix, as before). A worktree is never marked for `~`, `..`, `/`, `.`, the repo, an ancestor of it, or fewer than two components.
 

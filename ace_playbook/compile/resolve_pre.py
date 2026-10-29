@@ -107,11 +107,15 @@ def text(tok: str, env: dict, quotes: list) -> str | None:
 
 
 def leftover(s: str) -> bool:
-    """True when a resolved target still holds `$`, a brace expansion or a glob in a component next to `..`: it proves nothing."""
+    """True when a resolved target still holds `$`, a brace expansion or a glob that may reach `.`/`..`: it proves nothing.
+
+    A glob component is left when it is not the final one, when the final one starts with `.`, `[` or `?` (it may match `.` or
+    `..`), or when it follows a `..`; a final `*`-led glob (`./*`, `./sub/*`) is the one proven shape. No fnmatch: it lets `*` match `.`."""
     if "$" in s or _BRACE.search(s):
         return True
     parts = s.split("/")
-    return any(_GLOB.search(p) and ".." in (parts[k - 1] if k else "", parts[k + 1] if k + 1 < len(parts) else "") for k, p in enumerate(parts))
+    last = len(parts) - 1
+    return any(_GLOB.search(p) and (k < last or p[0] in ".[?" or (k > 0 and parts[k - 1] == "..")) for k, p in enumerate(parts))
 
 
 def child_env(prefix: list[str], env: dict, exp: set, quotes: list) -> dict:
