@@ -694,7 +694,9 @@ the four token counts, `duration_ms`, `num_turns`,
 Tool scope), `unknown_tools` (how many other names the model called), and the plan windows read from
 the stream's `rate_limit_event`: `five_hour_before/after` and `seven_day_before/after` (utilization, 0 to 1; both readings come from the
 same stream, so compare consecutive rows for the share of a week). `uv run python -m ace_playbook.compile.brief status` prints the last
-brief, the needs-you count, the ledger row count and the last cost of each stage.
+brief, the needs-you count, the ledger row count, the last refusal and the last cost of each stage. Every `fail` path of `brief.sh` leaves
+a ledger row `{ts, stage: "run", refused: <reason>}` (the reason is one of a fixed list, else `other`; a stage timeout and a tool drift keep their own rows; the quiet
+exits leave none), and `status` shows the newest of these three kinds: `last refusal: tool drift 2h`, `stage1 timeout 1d`, `digest refused 5m` or `none`.
 
 The raw streams of a run hold mail the exclusion list has not seen, so `brief.sh` deletes them when it exits, also on SIGTERM, SIGINT or
 SIGHUP (exit 143, 130 and 129), which also stop the running `claude` or python step at once (every step runs in the background and is

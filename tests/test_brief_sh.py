@@ -168,14 +168,14 @@ def test_a_fenced_answer_is_tolerated(w):
 def test_stage_one_failure_stops_the_run_and_still_logs_its_cost(w):
     p = w.run("--force", ACE_FAKE_FAIL="stage1")
     assert p.returncode == 1 and p.stderr == "brief: stage 1 failed (exit 1)\n" and p.stdout == ""
-    assert [r["stage"] for r in w.ledger()] == ["stage1"] and not (w.dir / "brief.html").exists() and not (w.dir / "brief_state.json").exists()
+    assert [r["stage"] for r in w.ledger()] == ["stage1", "run"] and not (w.dir / "brief.html").exists() and not (w.dir / "brief_state.json").exists()
     assert not (w.fake / "argv_stage2.json").exists() and free(w)
 
 
 def test_stage_two_failure_leaves_no_page_and_no_state_so_the_next_wake_retries(w):
     p = w.run("--force", ACE_FAKE_FAIL="stage2")
     assert p.returncode == 1 and p.stderr == "brief: stage 2 failed (exit 1)\n"
-    assert [r["stage"] for r in w.ledger()] == ["stage1", "stage2"] and not (w.dir / "brief.html").exists() and not (w.dir / "brief_state.json").exists()
+    assert [r["stage"] for r in w.ledger()] == ["stage1", "stage2", "run"] and not (w.dir / "brief.html").exists() and not (w.dir / "brief_state.json").exists()
     assert w.run().returncode == 0 and (w.dir / "brief.html").exists()
 
 
@@ -245,12 +245,13 @@ def test_a_failing_lock_step_is_a_one_line_failure_never_a_silent_skip(w):
     """Only "somebody holds it" is the quiet exit 0; a lock step that cannot run or cannot see fd 9 (EBADF) fails the run with `brief: lock`
     and that line is ALL it prints: no traceback of the python child and no shell "No such file" line before it."""
     p = w.run("--force", ACE_PYTHON=str(w.tmp / "no-such-python"))
-    assert (p.returncode, p.stdout, p.stderr) == (1, "", "brief: lock\n") and not w.ledger()
+    assert (p.returncode, p.stdout, p.stderr) == (1, "", "brief: lock\n") and [r["refused"] for r in w.ledger()] == ["lock"]
     shim = w.tmp / "python-without-fd9"
     shim.write_text(f'#!/bin/bash\nexec 9>&-\nexec "{sys.executable}" "$@"\n')
     shim.chmod(0o755)
     p = w.run("--force", ACE_PYTHON=str(shim))
-    assert (p.returncode, p.stdout, p.stderr) == (1, "", "brief: lock\n") and "Traceback" not in p.stderr and not w.ledger() and free(w)
+    assert (p.returncode, p.stdout, p.stderr) == (1, "", "brief: lock\n") and "Traceback" not in p.stderr
+    assert [r["refused"] for r in w.ledger()] == ["lock", "lock"] and free(w)
 
 
 def test_three_concurrent_runs_make_exactly_one_ledger_pair_and_print_no_path(w):

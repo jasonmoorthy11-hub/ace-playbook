@@ -526,6 +526,8 @@ used because it drops the claude.ai
 connectors (probed 2026-10-22), so `disableAllHooks` keeps the operator's hooks out, which also disables the PreToolUse guard. Isolating
 with a private `CLAUDE_CONFIG_DIR` does not work: credentials are bound to the config dir, so a fresh one is "Not logged in". The window figures in its
 ledger are one reading per stream, so a single run cannot show its own cost in plan share; only the trend over consecutive rows does.
+The `last refusal:` line of `brief status` names only a reason from a fixed list (a stage timeout and a tool drift are the other two kinds, each from its own row); a run
+whose config or brief directory cannot be read has no ledger to write to, so its refusal stays on stderr only, and a quiet exit (another run holding the lock, not due) is not a refusal.
 
 ## Nightly check notes
 

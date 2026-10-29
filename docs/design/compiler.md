@@ -1575,7 +1575,11 @@ Order W3 of the watcher and cockpit design (section 7, "The brief"). Not on the 
   `extract <stream> --what rate_limit|result|text [--last]` (the result object gains `_tools_called`, the names that may be written, and
   `_unknown_tools`, the count of the others), `ledger <before> <after> <stage> <result>`,
   `state-mark` (writes `brief_state.json`: `last_brief`, `needs_you_count`), `tools-audit <stream> --allow <file>` (exit 2 on drift), `timeout-mark
-  <stage>` (a ledger row `{ts, stage, timeout}`) and `status`. They print counts and field paths, never mail content. A usage error (an unknown verb
+  <stage>` (a ledger row `{ts, stage, timeout}`), `refusal <reason>` (a ledger row `{ts, stage: "run", refused: <reason>}`; the reason is checked against the
+  FIXED set `brief_audit.REASONS`, the `fail` literals of `brief.sh` and `brief_lib.sh` without the `(exit N)` tail, and anything else is written as `other`, never
+  free text; `fail` calls it best effort before it exits, except for a stage timeout, which has its own row, and the quiet exits -- lock held, not due -- leave no row)
+  and `status` (prints `last refusal: <reason> <age>` between `ledger rows:` and `last stage costs:`: the LAST row that carries `drift`, shown as `tool drift`,
+  `timeout`, as `stage<N> timeout`, or `refused`; `none` when there is no such row). They print counts and field paths, never mail content. A usage error (an unknown verb
   or argument, a missing one) is ONE stderr line,
   `brief: usage: ...`, exit 2; `brief.sh` takes only `--force` and answers anything else with `brief: usage: brief.sh [--force]`, exit 2, before it
   reads the config or takes the lock. A number that is not finite (`Infinity`, `NaN` in a result file) is missing in a ledger row. Stream lines are split

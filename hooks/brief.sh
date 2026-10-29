@@ -81,7 +81,7 @@ ledger_stage() {   # $1 stage name, $2 its stream: one ledger row when the strea
     "$(cat "$REPO/hooks/brief_prompts/stage1.txt")" ) < /dev/null > "$RUN/stage1.jsonl" 2> "$RUN/stage1.err" &
 CHILD=$!; wait_stage stage1; rc=$?
 ledger_stage stage1 "$RUN/stage1.jsonl"
-[ "$rc" -ne 124 ] || fail "stage 1 timed out"
+[ "$rc" -ne 124 ] || fail "stage 1 timed out" row
 [ "$rc" -eq 0 ] || fail "stage 1 failed (exit $rc)"
 py tools-audit "$RUN/stage1.jsonl" --allow "$HOOKS/brief_allowed_tools.txt" > "$RUN/res_audit.json"; rc=$?      # a tool the allowlist does not name
 if [ "$rc" -ne 0 ]; then
@@ -99,7 +99,7 @@ py digest-apply "$RUN/digest_raw.json" --out "$RUN/digest_clean.json" || fail "d
     < "$RUN/digest_clean.json" > "$RUN/stage2.jsonl" 2> "$RUN/stage2.err" &
 CHILD=$!; wait_stage stage2; rc=$?
 ledger_stage stage2 "$RUN/stage2.jsonl"
-[ "$rc" -ne 124 ] || fail "stage 2 timed out"
+[ "$rc" -ne 124 ] || fail "stage 2 timed out" row
 [ "$rc" -eq 0 ] || fail "stage 2 failed (exit $rc)"
 py extract "$RUN/stage2.jsonl" --what text > "$RUN/brief_raw.json" || fail "stage 2 gave no result"
 py render "$RUN/brief_raw.json" > /dev/null || fail "brief refused"
