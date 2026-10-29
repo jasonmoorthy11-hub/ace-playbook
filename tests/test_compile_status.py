@@ -875,6 +875,7 @@ def test_agreement_is_always_a_dict_with_awaiting_scan_and_the_text_shows_it(w):
 
 # ------------------------------------------------------------------ the shared line caps (item 9)
 def test_the_new_modules_and_main_keep_every_line_within_160_characters():
-    for name in ("status.py", "digest.py", "queue.py", "dashboard.py", "dashboard_html.py", "__main__.py"):
+    for name in ("status.py", "digest.py", "queue.py", "dashboard.py", "dashboard_html.py", "__main__.py",
+                 "arms.py", "arms_stats.py", "arms_window.py", "labels_queue.py"):
         for n, line in enumerate((ROOT / "ace_playbook" / "compile" / name).read_text().splitlines(), 1):
             assert len(line) <= 160, f"{name}:{n} is {len(line)} characters"

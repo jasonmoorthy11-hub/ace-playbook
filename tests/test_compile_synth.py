@@ -275,21 +275,24 @@ def syn_row_of(w):
             "corpus": "synthetic"}
 
 
-def test_the_report_header_hash_covers_report_and_metrics_and_changes_with_either(tmp_path, monkeypatch):
-    a, b = tmp_path / "metrics.py", tmp_path / "report.py"
+def test_the_report_header_hash_covers_the_arm_labels_metrics_and_report_files_and_changes_with_any(tmp_path, monkeypatch):
+    c, a, b = tmp_path / "labels.py", tmp_path / "metrics.py", tmp_path / "report.py"
+    c.write_text("c = 1\n")
     a.write_text("a = 1\n")
     b.write_text("b = 1\n")
-    monkeypatch.setattr(report, "HASHED", (a, b))
+    monkeypatch.setattr(report, "HASHED", (c, a, b))
     base = report.source_sha256()
-    assert base == hashlib.sha256(b"a = 1\n\0b = 1\n").hexdigest() and [p.name for p in report.HASHED] == ["metrics.py", "report.py"]
-    a.write_text("a = 2\n")
-    assert report.source_sha256() != base
-    a.write_text("a = 1\n")
-    b.write_text("b = 2\n")
-    assert report.source_sha256() != base
+    assert base == hashlib.sha256(b"c = 1\n\0a = 1\n\0b = 1\n").hexdigest()
+    assert [p.name for p in report.HASHED] == ["labels.py", "metrics.py", "report.py"]
+    for path, new, old in ((c, "c = 2\n", "c = 1\n"), (a, "a = 2\n", "a = 1\n"), (b, "b = 2\n", "b = 1\n")):
+        path.write_text(new)
+        assert report.source_sha256() != base
+        path.write_text(old)
+        assert report.source_sha256() == base
     real = report.HASHED
     monkeypatch.undo()
-    assert {p.name for p in report.HASHED} == {"metrics.py", "report.py"} and real != report.HASHED
+    assert [p.name for p in report.HASHED] == ["arms.py", "arms_stats.py", "arms_window.py", "labels.py", "labels_queue.py", "metrics.py", "report.py"]
+    assert real != report.HASHED
 
 
 def test_the_cost_block_states_its_limits_per_corpus(w, capsys, monkeypatch):

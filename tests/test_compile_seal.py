@@ -2,6 +2,7 @@
 dry run, and the TTY-only rewrite of the pre-registration's shadow-mode heading. Invented ids and hashes only."""
 
 import argparse
+import hashlib
 import json
 import re
 import shutil
@@ -21,7 +22,14 @@ ROOT = Path(__file__).resolve().parent.parent
 DRAFT, SEALED = "## Shadow-mode additions (DRAFT until sealed)", "## Shadow-mode additions (SEALED 2026-11-01 prereg-v1)"
 FAKE = {"zeta_detector": "2" * 64, "alpha_detector": "1" * 64}
 STRENGTH = {"zeta_detector": "weak", "alpha_detector": "strong"}
-SEED = "e" * 64
+SHADOW, PERMUT = "c" * 64, "d" * 64                  # private seed values (never printed); the block holds only their sha256
+
+
+def sha(seed):
+    return hashlib.sha256(seed.encode()).hexdigest()
+
+
+SEED = sha(SHADOW)
 STAMP = "2026-11-01T12:00:00Z"
 
 
@@ -39,21 +47,16 @@ def world(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def seeded(world, monkeypatch):
-    """`world` whose block carries a 64-hex shadow_seed_sha256 and `arm_rate 0.5`: the executed seal's config fields do not exist yet, so
-    the real block holds `-` and `(planned)` and the seal refuses; the checks after that refusal are reached through this fixture."""
-    real = seal.frozen_block
-    monkeypatch.setattr(seal, "frozen_block", lambda cfg, sealed_at="-": real(cfg, sealed_at).replace(
-        "shadow_seed_sha256 -", f"shadow_seed_sha256 {SEED}").replace(seal.PLANNED, "arm_rate 0.5"))
-    return world
+def seeded(world):
+    """`world` with both seeds and the arm rate set in the config, so the block carries two sha256 lines and `arm_rate 0.5`."""
+    cfg, prereg = world
+    return cfgmod.Config(data_dir=cfg.data_dir, chain_key_path=None, shadow_seed=SHADOW, permutation_seed=PERMUT, arm_rate=0.5), prereg
 
 
 @pytest.fixture
 def ready(seeded):
-    """`seeded` with N filled by hand in the copy of the pre-registration."""
-    cfg, prereg = seeded
-    prereg.write_text(prereg.read_text().replace(seal.HAND, "40"))
-    return cfg, prereg
+    """`seeded`: the committed text already holds the entry gate and the horizon line, so nothing is filled by hand any more."""
+    return seeded
 
 
 def row(cfg, pid, mode, ts, ring=None):
@@ -84,7 +87,7 @@ def test_the_dry_run_prints_the_block_in_the_documented_format(world, capsys):
     assert go(cfg)[0] == 0
     assert capsys.readouterr().out == (
         f"detectors:\n  alpha_detector strong {'1' * 64}\n  zeta_detector weak {'2' * 64}\nreport_sha256 {report.source_sha256()}\n"
-        f"proposals:\n  P-00000001 observe {'a' * 64}\n  P-00000002 warn {'a' * 64}\nshadow_seed_sha256 -\narm_rate 0.5 (planned)\n"
+        f"proposals:\n  P-00000001 observe {'a' * 64}\n  P-00000002 warn {'a' * 64}\nshadow_seed_sha256 -\npermutation_seed_sha256 -\narm_rate -\n"
         "measurement_start 2026-10-19T00:00:00Z\nsealed_at -\n")
 
 
@@ -149,7 +152,8 @@ def test_seal_rewrites_the_heading_once_and_refuses_the_second_time(ready, capsy
     assert SEALED in text and DRAFT not in text and text.count("## Shadow-mode additions") == 1
     assert "(filled by compile seal)" not in text
     block = re.search(r"### Frozen instruments\n.*?```text\n(.*?)```", text, re.S).group(1)
-    assert block.startswith("detectors:\n  alpha_detector strong ") and f"shadow_seed_sha256 {SEED}\n" in block and f"sealed_at {STAMP}\n" in block and "sealed_at -" not in block
+    assert block.startswith("detectors:\n  alpha_detector strong ") and f"sealed_at {STAMP}\n" in block and "sealed_at -" not in block
+    assert f"shadow_seed_sha256 {SEED}\npermutation_seed_sha256 {sha(PERMUT)}\narm_rate 0.5\n" in block
     assert block.replace(f"sealed_at {STAMP}", "sealed_at -") == seal.frozen_block(cfg)
     capsys.readouterr()
     again, asked = go(cfg, dry=False)
@@ -204,10 +208,13 @@ def test_the_section_text_has_its_eight_subsections_and_the_filler_line():
     assert heads == ["Effect estimate (compiled path, descriptive)", "Eligibility", "Arm assignment", "Spillover", "Timing and stopping",
                      "Null handling", "Frozen instruments", "Amendments"]
     assert section.count("\n(filled by compile seal)\n") == 1
-    assert "10,000 seeded permutations" in section and "metrics.wilson" in section and "arm_rate" in section
-    assert section.count("\nN per detector: (filled by hand before the seal)\n") == 1 and "REPEAT fires" in section
+    assert "10,000 Bernoulli(`arm_rate`) re-draws" in section and "metrics.wilson" in section and "arm_rate" in section
+    assert "N per detector" not in section and seal.HAND not in section and "One primary per detector" in section
     assert "`name strength sha256`" in section and "`P-id mode proposal_sha256`" in section and "`ACE P-`" in section
-    assert "Interactive and automated sessions alike" in section
+    assert "Automated sessions are not eligible" in section and "Interactive and automated sessions alike" not in section
+    assert "a Bash tool can read any file the operator can" in section and "intention to treat" in section
+    tm = section.index("### Timing and stopping")
+    assert seal._timing(section, tm, section.index("### Null handling")) is None         # the committed text states the gate and the horizon
 
 
 def test_the_cli_wires_seal_dry_run(tmp_path, capsys, monkeypatch):

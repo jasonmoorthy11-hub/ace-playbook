@@ -3,6 +3,7 @@ heading rewrite, the filler slice, the N placeholder, the seed commitment, a fil
 
 import argparse
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,7 @@ import pytest
 from ace_playbook import config as cfgmod
 from ace_playbook.compile import chains, seal
 
-from .test_compile_seal import DRAFT, SEALED, SEED, ready, row, seeded, world  # noqa: F401  (fixtures)
+from .test_compile_seal import DRAFT, PERMUT, SEALED, SEED, SHADOW, ready, row, seeded, sha, world  # noqa: F401  (fixtures)
 from .test_compile_seal import go
 
 FILLER_LINE = "\n(filled by compile seal)\n"
@@ -89,53 +90,95 @@ def test_a_duplicated_filler_is_a_usage_error(ready):
     assert code == 2 and asked == [] and prereg.read_text() == twice
 
 
-def test_an_unfilled_n_refuses_before_the_chain_and_the_prompt(seeded, capsys):
-    cfg, prereg = seeded
-    before = prereg.read_bytes()
-    assert seal.HAND.encode() in before
+GATE = "at least 30 human-labelled sessions-with-fire"
+HORIZON = "Horizon (randomized phase): 12 calendar weeks from the detector's arm start or 400 eligible"
+
+
+def edited(prereg, old, new):
+    text = prereg.read_text()
+    assert old in text, old
+    prereg.write_text(text.replace(old, new, 1))                    # the first hit is in the shadow-mode section (the Amendments quote it later)
+    return prereg.read_bytes()
+
+
+def refused(cfg, prereg, before, capsys, needle):
     code, asked = real(cfg, prereg)
     err = capsys.readouterr().err
-    assert code == 1 and asked == [] and prereg.read_bytes() == before and "N per detector" in err and seal.HAND in err
+    assert code == 1 and asked == [] and prereg.read_bytes() == before and needle in err
+    return err
 
 
-def test_the_whole_n_line_deleted_refuses_too(ready, capsys):
+@pytest.mark.parametrize("wrong", ["at least 30 human-labelled fires", "at least 29 human-labelled sessions-with-fire",
+                                   "at least 15 human-labelled sessions-with-fire", "30 sessions"])
+def test_the_entry_gate_must_be_stated_over_sessions_and_at_least_30(ready, capsys, wrong):
     cfg, prereg = ready
+    refused(cfg, prereg, edited(prereg, GATE, wrong), capsys, "entry gate")
+
+
+@pytest.mark.parametrize("drop", ["0 FP", "0 unlabelled"])
+def test_the_gate_needs_zero_fp_and_zero_unlabelled(ready, capsys, drop):
+    cfg, prereg = ready
+    refused(cfg, prereg, edited(prereg, f", {drop}", ""), capsys, "entry gate")
+
+
+def test_the_gate_deleted_refuses_and_a_second_gate_refuses(ready, capsys):
+    cfg, prereg = ready
+    before = prereg.read_bytes()
+    refused(cfg, prereg, edited(prereg, GATE, "a gate"), capsys, "entry gate")
+    prereg.write_bytes(before)
+    refused(cfg, prereg, edited(prereg, "Horizon (", f"Also {GATE}, 0 FP, 0 unlabelled.\nHorizon ("), capsys, "entry gate")
+
+
+@pytest.mark.parametrize("wrong", ["Horizon (randomized phase): 12 weeks from the detector's arm start or 400 eligible",
+                                   "Horizon (randomized phase): 12 calendar weeks from the detector's arm start or 400 sessions",
+                                   "Time limit (randomized phase): 12 calendar weeks from the detector's arm start or 400 eligible"])
+def test_the_horizon_line_must_state_weeks_and_eligible_sessions(ready, capsys, wrong):
+    cfg, prereg = ready
+    refused(cfg, prereg, edited(prereg, HORIZON, wrong), capsys, "Horizon")
+
+
+def test_the_old_hand_fill_placeholder_still_refuses(ready, capsys):
+    cfg, prereg = ready
+    refused(cfg, prereg, edited(prereg, "### Null handling\n", f"### Null handling\n\n{seal.HAND}\n"), capsys, seal.HAND)
+
+
+@pytest.mark.parametrize("field", ["shadow_seed", "permutation_seed", "arm_rate"])
+def test_each_unset_arm_field_refuses_alone_and_is_named(ready, capsys, field):
+    cfg, prereg = ready
+    cfg = cfgmod.Config(data_dir=cfg.data_dir, **{**dict(shadow_seed=SHADOW, permutation_seed=PERMUT, arm_rate=0.5), field: None})
+    before = prereg.read_bytes()
+    assert refused(cfg, prereg, before, capsys, field) and seal.unset(cfg) == [field]
+    block = seal.frozen_block(cfg)
+    assert {"shadow_seed": f"shadow_seed_sha256 -\n", "permutation_seed": "permutation_seed_sha256 -\n", "arm_rate": "arm_rate -\n"}[field] in block
+
+
+@pytest.mark.parametrize("bad", [{"shadow_seed": "short"}, {"permutation_seed": "G" * 64}, {"shadow_seed": SHADOW.upper()},
+                                 {"arm_rate": 0.0}, {"arm_rate": 1.0}, {"arm_rate": True}, {"arm_rate": "0.5"}])
+def test_a_set_but_unusable_arm_field_is_a_config_error_that_never_prints_the_value(bad):
+    with pytest.raises(ValueError) as err:
+        cfgmod.from_dict({"data_dir": "/x", **bad})
+    key, value = next(iter(bad.items()))
+    assert key in str(err.value) and (not isinstance(value, str) or value not in str(err.value))
+
+
+def test_the_seed_values_never_appear_in_any_output_or_in_the_sealed_file(ready, capsys):
+    cfg, prereg = ready
+    row(cfg, "P-00000001", "observe", "2026-10-19T00:00:00Z")
+    assert go(cfg)[0] == 0                                                   # dry run
+    assert go(cfg, dry=False)[0] == 0                                        # the real seal
+    captured = capsys.readouterr()
     text = prereg.read_text()
-    assert "\nN per detector: 40\n" in text
-    prereg.write_text(text.replace("\nN per detector: 40\n", "\n", 1))
-    before = prereg.read_bytes()
-    code, asked = real(cfg, prereg)
-    assert code == 1 and asked == [] and prereg.read_bytes() == before and "N per detector" in capsys.readouterr().err
+    for seed in (SHADOW, PERMUT):
+        assert seed not in captured.out + captured.err + text and seed not in repr(cfg) and seed not in str(cfg)
+        assert sha(seed) in text
+    block = re.search(r"```text\n(.*?)```", text, re.S).group(1)
+    assert f"shadow_seed_sha256 {sha(SHADOW)}\npermutation_seed_sha256 {sha(PERMUT)}\narm_rate 0.5\n" in block
 
 
-def test_two_n_lines_refuse(ready):
-    cfg, prereg = ready
-    prereg.write_text(prereg.read_text().replace("\nN per detector: 40\n", "\nN per detector: 40\nN per detector: 50\n", 1))
-    before = prereg.read_bytes()
-    code, asked = real(cfg, prereg)
-    assert code == 1 and asked == [] and prereg.read_bytes() == before
-
-
-@pytest.mark.parametrize("value", ["-", "TBD", "n/a"])
-def test_an_n_value_without_a_number_refuses(ready, value):
-    cfg, prereg = ready
-    prereg.write_text(prereg.read_text().replace("\nN per detector: 40\n", f"\nN per detector: {value}\n", 1))
-    before = prereg.read_bytes()
-    code, asked = real(cfg, prereg)
-    assert code == 1 and asked == [] and prereg.read_bytes() == before
-
-
-@pytest.mark.parametrize("keep", ["seed", "arm"])
-def test_each_half_of_the_seed_and_arm_rate_refusal_refuses_alone(world, monkeypatch, capsys, keep):
-    orig = seal.frozen_block
-    fix = (lambda b: b.replace("shadow_seed_sha256 -", f"shadow_seed_sha256 {SEED}")) if keep == "seed" else (lambda b: b.replace(seal.PLANNED, "arm_rate 0.5"))
-    monkeypatch.setattr(seal, "frozen_block", lambda cfg, sealed_at="-": fix(orig(cfg, sealed_at)))
-    cfg, prereg = world
-    prereg.write_text(prereg.read_text().replace(seal.HAND, "40", 1))
-    before = prereg.read_bytes()
-    code, asked = real(cfg, prereg)
-    assert code == 1 and asked == [] and prereg.read_bytes() == before
-    assert "shadow_seed_sha256" in capsys.readouterr().err
+def test_every_check_before_the_chain_and_the_prompt_leaves_the_file_alone(seeded, capsys):
+    cfg, prereg = seeded
+    before = edited(prereg, GATE, "at least 30 human-labelled fires")
+    assert refused(cfg, prereg, before, capsys, "entry gate")
 
 
 def test_an_indented_duplicate_heading_is_a_usage_error(ready):
@@ -148,11 +191,10 @@ def test_an_indented_duplicate_heading_is_a_usage_error(ready):
 
 def test_the_real_block_has_no_seed_hash_so_the_seal_refuses(world, capsys):
     cfg, prereg = world
-    prereg.write_text(prereg.read_text().replace(seal.HAND, "40"))
     before = prereg.read_bytes()
     code, asked = real(cfg, prereg)
     err = capsys.readouterr().err
-    assert code == 1 and asked == [] and prereg.read_bytes() == before and "shadow_seed_sha256" in err and "arm_rate" in err
+    assert code == 1 and asked == [] and prereg.read_bytes() == before and "shadow_seed, permutation_seed, arm_rate" in err
     assert go(cfg)[0] == 0 and "shadow_seed_sha256 -\n" in capsys.readouterr().out          # the dry run still prints the placeholder
 
 

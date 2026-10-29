@@ -488,7 +488,7 @@ registration only resets per-turn state and logs observe rows.
    symlinks), hash must match `approvals.jsonl`, message re-checked with `inert_reason`
    (`textrules`). Any failure skips that proposal and logs the reason by type only (as inject/__main__.py:18-25).
 4. Effective mode = min(approved mode, any cap in `demotions.jsonl`, arm). The arm comes from
-   `coin(shadow_seed, session_id, proposal_id) < arm_rate` (injector.py:35-38) during a randomized
+   `arms.assign(session hash, shadow_seed, arm_rate, proposal_id)` (HMAC-SHA256, `compile/arms.py`) during a randomized
    phase; outside one the arm is always "active".
 5. Build the Event, run each matching detector with the session state, update state.
 6. Append one row per evaluated proposal to `shadow.jsonl` (below), then act on the strongest
@@ -940,7 +940,7 @@ inference, the spillover flag (they need the randomized phase).
 **Effect estimate.** For the compiled path, blocking prevents the action by construction, so the
 primary is false-block rate and friction, with recurrence descriptive (PREREGISTRATION.md:78-84).
 The descriptive effect is fires per eligible session with versus without the check, using a
-per-(session, proposal) arm drawn with the seeded coin (injector.py:35-38) at `arm_rate` 0.5 during
+per-(session, proposal) arm drawn with the HMAC coin of `arms.assign` at `arm_rate` 0.5 during
 the randomized phase: "without" sessions run in observe, "with" sessions run the approved mode. A
 hook has no memory across sessions, so the first attempt in a session cannot differ between arms;
 any real effect shows in **repeat fires** and evasion, and the report leads with those. The
@@ -1349,26 +1349,68 @@ section in PREREGISTRATION.md still says `(DRAFT until sealed)`. The sealing its
 
 - `--dry-run` needs no terminal, asks nothing and writes nothing. It prints the Frozen instruments block with live values:
   `detectors:` (one `name strength sha256` line per `catalogue.source_table()` entry, sorted; the strength is `Detector.strength` of
-  the registry), `report_sha256` (the bytes of `compile/metrics.py` then `compile/report.py`, joined by a NUL: exactly those two files;
+  the registry), `report_sha256` (the bytes of `compile/arms.py`, `arms_stats.py`, `arms_window.py`, `labels.py`,
+  `labels_queue.py`, `metrics.py` and `report.py` in name order, joined by a NUL: exactly those seven files, since
+  2026-10-29;
   the detector code is covered by the per-detector hashes), `proposals:` (the newest `approvals.jsonl` row of each proposal id that is
   not revoked, as `id mode proposal_sha256`, sorted; `(none)` when there are none, or a notice line when the chain is unreadable or
-  broken, still exit 0), `shadow_seed_sha256`, `arm_rate`, `measurement_start` (`measure.start_of`, the same value as `status`'s
+  broken, still exit 0), `shadow_seed_sha256`, `permutation_seed_sha256`, `arm_rate`, `measurement_start` (`measure.start_of`, the same value as `status`'s
   `measurement.start`: the greatest, over the listed proposals, of each one's newest `observe` row `ts`; `-` when none qualifies) and `sealed_at -`.
 - Without `--dry-run` the checks run in this order, and the first failure ends the command with nothing written: (1) no terminal: exit 2;
   (2) the file does not hold exactly one `## Shadow-mode additions` heading (counted loosely: an indented or double-spaced heading also
   counts): exit 2; (3) the heading already says SEALED (later changes go in dated amendments; this wins over every later check): exit 1;
   (4) the Frozen instruments subsection (that heading to the next `###`, inside the shadow-mode section) does not hold exactly one
-  `(filled by compile seal)` line: exit 2; (5) the Timing and stopping subsection does not hold exactly one line `N per detector: <value>` (a value containing a number)
-  that is not the placeholder `(filled by hand before the seal)` (a deleted line, the placeholder or a second line all refuse), or the
-  placeholder is still anywhere in the shadow-mode section: exit 1; (6) the approvals chain is broken or unreadable: exit 1; (7) the
-  block holds `shadow_seed_sha256 -` or `arm_rate 0.5 (planned)`: exit 1; (8) the y/N answer is anything but yes: exit 1; (9) the file
+  `(filled by compile seal)` line: exit 2; (5) the Timing and stopping subsection does not state the entry gate once (`at
+  least <n> human-labelled sessions-with-fire`, with
+  `0 FP` and `0 unlabelled` in the same sentence, n at least 30: the gate counts sessions, not fires) or does not hold
+  exactly one `Horizon ...: <weeks> calendar weeks ...
+  <n> eligible sessions` line, or the old hand-fill placeholder is still in the section: exit 1; (6) the approvals chain is
+  broken or unreadable: exit 1; (7) the
+  config lacks `shadow_seed`, `permutation_seed` or `arm_rate` (the block would hold `-`): exit 1, naming the missing keys;
+  (8) the y/N answer is anything but yes: exit 1; (9) the file
   changed while the prompt was open: exit 1; (10) the write: the matched heading is rewritten by its position (never by text search) to
   `## Shadow-mode additions (SEALED <date> prereg-v1)` and the filler line is replaced with the block in a `text` fence, through a
   fsynced temp file in the same directory and `os.replace`.
 - It prints the two commands `git -C <repo> tag -a prereg-v1 -m "pre-registration sealed <date>"` and `git -C <repo> push origin prereg-v1`
   for the operator to run; it never runs git and imports no `subprocess`.
-- Until the `shadow_seed` and `arm_rate` config fields land with the executed seal (the next version), `shadow_seed_sha256` is `-` and
-  `arm_rate` prints `0.5 (planned)`, and the real seal refuses (exit 1, naming `shadow_seed_sha256` and `arm_rate`) before it asks anything.
+- Config (since 2026-10-29): `shadow_seed` and `permutation_seed` (each 64 lowercase hex, `repr` hidden, the value never printed, logged or
+  written; only `sha256(seed)` appears in the block) and `arm_rate` (a number strictly between 0 and 1); all three default to unset, and the
+  real seal refuses (exit 1, naming the unset keys) before it asks anything. A bad value is a config error that names the key and never the value.
+
+### Arms (as built 2026-10-29)
+
+`python3 -m ace_playbook.compile.arms report [--json]` (`compile/arms.py`, `arms_stats.py`; not in `__main__.py`, not on the hook path) is the
+preregistered analysis of the shadow arm phase. It prints `not started` until the top-level Amendments section of
+PREREGISTRATION.md holds a line `arm_start <detector> <UTC stamp> approvals=<64 hex>` (the field is the `hash` of the last row of the
+verified approvals chain at that moment)
+(read nowhere else, refused when earlier than the block's `sealed_at` or when the head is missing, malformed or not in the chain;
+`arms_window.py` holds the window code). Per detector
+it computes the eligible sessions (interactive: `prompts` > 0 in the newest
+`_session` row; `start`, the first transcript event, in [arm start, horizon end); the horizon is the earliest of 12 weeks,
+the 400th eligible session and the first lowering demotion row of the detector's proposals at or after the arm start, whatever its
+cause, read from `demotions.jsonl`; the report prints the cause; an `evasion_pair` row keeps the mode and is not a demotion here), the
+arm of each session (`assign`: HMAC-SHA256 of `session hash|proposal id` under `shadow_seed`, first 4 bytes below `arm_rate` is the warn arm), the
+primary (`primary`: repeat fires per eligible session over rows with `agent_id_present` false; subagent rows are counted
+apart), D, and `permutation_test` (10,000 Bernoulli(`arm_rate`) re-draws from `random.Random(permutation_seed)`, p = (1 +
+hits) / 10,001, a
+draw that empties an arm counts as extreme, interval = D minus the 97.5th and 2.5th percentiles of D*), then `holm` over
+every detector with an `arm_start` (no adjusted p and no rejection is printed until all are final:
+`pending: N detectors not final`). The family is fixed at the arm start (intention to treat): a proposal of a started detector belongs when its newest
+`approvals.jsonl` row stamped at or before the arm start is not `revoked`, and it must then be approved at `warn` or `block` with no
+lowering demotion row in force at that start; rows stamped later (a revocation, a re-approval) change nothing, and the rows read are the chain prefix ending at
+the head row, so a row
+appended after it, even one stamped before the arm start, is ignored. Each member is its own
+hypothesis (conservative); a started detector whose proposal has no fires, or no eligible session in an arm, enters at D
+= 0, p = 1. Three refusals (exit 1): an `arm_start` for a detector with no approved proposal at the arm start, a member approved at
+`observe` or with a demotion in force, and an approved proposal with no readable proposal file. It refuses (exit 1)
+when a fire row of an eligible session lacks `arm` or `agent_id_present` or records an `arm` that `assign` does not give,
+when a seed in the config does not hash to the sealed line, when the approvals or demotions chain is broken, shows counts
+only before the analysis day (horizon end + 7 days) and never prints a seed. The `_session`
+row gained `start` (rows written before it have none and are reported as missing). `labels_queue.py` (split out of `labels.py` and `queue.py`) hides
+the resolved mode in `label --rows` and the queue card while any detector's phase runs. Still open, and conditions before any
+`arm_start` (PREREGISTRATION.md, Pre-arm-start conditions): the live hook does not yet
+write `arm` or `agent_id_present` (`shadow.py` holds no arm code, so today `arms report` refuses every row), the offline auto-FP rule (a) is still
+asymmetric, demotion and harm do not yet ignore auto labels during a phase, and the spillover comparison is not built.
 
 ### 8.x Brief (as built)
 

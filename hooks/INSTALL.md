@@ -391,7 +391,22 @@ status line and the menu-bar plugin print `DISABLED`. Remove the file to arm the
 (a throwaway state directory), writes `data_dir/shadow.synthetic.jsonl` (never `shadow.jsonl`; `--out` inside `data_dir` is refused unless it is that file) and exits 1 if any expected outcome
 differs; `compile report` then prints the synthetic table apart from the private one.
 
-**Seal preview.** `python3 -m ace_playbook.compile seal --dry-run` prints the pre-registration's Frozen instruments block (detector hashes, report hash, approved proposals, measurement start) and writes nothing; without `--dry-run` it needs a terminal, refuses until the `shadow_seed`/`arm_rate` config fields exist (the executed seal, next version) and until N is filled by hand in the pre-registration, and only prints the git tag commands, it never runs git.
+**Arm analysis.** `python3 -m ace_playbook.compile.arms report [--json]` prints `not started` until PREREGISTRATION.md holds
+an `arm_start <detector> <UTC stamp> approvals=<64 hex>` line (the hash of the last `approvals.jsonl` row at that moment);
+it needs `shadow_seed`, `permutation_seed` and `arm_rate` in the config, whose
+seeds must hash to the sealed lines, and never prints a seed. The Holm family is fixed at each `arm_start` (intention to treat): the
+proposals of the detector whose newest `approvals.jsonl` row stamped at or before it is not `revoked`, each approved at `warn` or
+`block` with no demotion in force; later rows change nothing, and only the chain prefix ending at the head row is read (a row
+appended after it, even one stamped earlier, is ignored; a missing, malformed or unknown head is refused). Run `arms report` right after
+adding the line; the first line of a detector wins, so a corrected second line does not replace a malformed first one.
+The report refuses (exit 1) when a started detector has no such proposal,
+when a member is approved at `observe` or has a demotion in force, or when an approved proposal has no readable proposal file.
+
+**Seal preview.** `python3 -m ace_playbook.compile seal --dry-run` prints the pre-registration's Frozen instruments block
+(detector hashes, report hash, approved proposals, measurement start) and writes nothing; without `--dry-run` it needs a
+terminal, refuses until the `shadow_seed`, `permutation_seed` (64 hex each, only their sha256 is printed) and `arm_rate`
+config fields are set and until the pre-registration states the entry gate over sessions (at least 30 human-labelled
+sessions-with-fire, 0 FP, 0 unlabelled) and a horizon line, and only prints the git tag commands, it never runs git.
 
 **Status.** `python3 -m ace_playbook.compile status` prints one screen (measurement day, per proposal fires over eligible sessions, tp/fp/unlabelled,
 precision, a verdict, the label queue, heartbeat ages, hook cost against 200 ms, notes) and writes `data_dir/status.json` (0600; `--out PATH` elsewhere,
