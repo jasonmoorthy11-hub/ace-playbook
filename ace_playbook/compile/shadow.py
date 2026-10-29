@@ -22,6 +22,7 @@ from pathlib import Path
 from .. import config as cfgmod
 from ..canon import canonical, now_iso
 from . import approvals, catalogue, chains, demotions, evidence, modes, proposal
+from . import shadow_arm
 from . import shadow_guard as guard
 from . import state as state_mod
 from .events import event_from_hook
@@ -228,13 +229,16 @@ def _evaluate(cfg, ev, sid: str, names: list[str], log) -> set[str]:
     return {f.detector for out in outs for f in out[0]}
 
 
-def _row(p: dict, mode: str, cause: str, event: str, ev, sid: str, raw: bytes, t0: float, tool: str = "") -> dict:
-    """`ev` None (an over-cap payload, never parsed) hashes the raw bytes and takes the scanned `tool` name."""
+def _row(cfg, p: dict, mode: str, cause: str, event: str, ev, sid: str, raw: bytes, t0: float, tool: str = "", payload=None) -> dict:
+    """`ev` None (an over-cap payload, never parsed) hashes the raw bytes and takes the scanned `tool` name; `payload` is the parsed input.
+    Every row carries `arm` and `agent_id_present` (shadow_arm.fields)."""
     tu = ev.tool_uses[0] if ev and ev.tool_uses else None
     phash = evidence.payload_hash({"tool_name": tu.name, "tool_input": tu.input}) if tu else hashlib.sha256(raw).hexdigest()
+    session = state_mod.session_hash(sid)
     return {"v": 1, "ts": now_iso(), "proposal_id": p["id"], "lesson_id": p["lesson_id"], "mode": mode, "event": event,
-            "tool_name": tu.name if tu else tool, "session": state_mod.session_hash(sid), "payload_sha256": phash,
-            "would_fire": True, "cause": cause, "tier": "live", "dur_ms": int((time.monotonic() - t0) * 1000)}
+            "tool_name": tu.name if tu else tool, "session": session, "payload_sha256": phash,
+            "would_fire": True, "cause": cause, "tier": "live", "dur_ms": int((time.monotonic() - t0) * 1000),
+            **shadow_arm.fields(cfg, session, p["id"], payload)}
 
 
 def _run(cfg, argv: list, log) -> None:
@@ -242,7 +246,7 @@ def _run(cfg, argv: list, log) -> None:
     if (event := EVENTS.get(argv[0]) if argv else None) is None:
         return
     raw = sys.stdin.buffer.read(MAX_STDIN + 1)
-    over, ev = len(raw) > MAX_STDIN, None
+    over, ev, payload = len(raw) > MAX_STDIN, None, None
     if over:                                                  # S-1 F1: never "nothing to decide"; fires like a cut command
         log("error:oversize")
         tool, sid, active = guard.scan(raw)
@@ -273,14 +277,10 @@ def _run(cfg, argv: list, log) -> None:
     for p, mode, cause in hits:
         try:
             _append(Path(cfg.data_dir) / "shadow.jsonl",
-                    json.dumps(_row(p, mode, cause, event, ev, sid, raw, t0, tool or ""), sort_keys=True) + "\n")
+                    json.dumps(_row(cfg, p, mode, cause, event, ev, sid, raw, t0, tool or "", payload), sort_keys=True) + "\n")
         except OSError as exc:                                # still act on the decision below
             log(f"error:row:{type(exc).__name__}")
-    warns, out = guard.decision(event, hits, active)
-    if warns:                                                 # the user-visible echo; the model never sees stderr
-        sys.stderr.write("".join(m + "\n" for m in warns))
-    if out is not None:                                       # the model-visible channel (design 11 question 1)
-        sys.stdout.write(json.dumps(out, sort_keys=True) + "\n")
+    shadow_arm.deliver(cfg, *guard.decision(event, hits, active), _log)    # stderr echo, then the stdout decision (design 11 question 1)
 
 
 def main(argv: list, cfg=None) -> int:

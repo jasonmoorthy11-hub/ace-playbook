@@ -204,7 +204,7 @@ ALLOWED_ACE = {"ace_playbook", "ace_playbook.config", "ace_playbook.canon", "ace
                "ace_playbook.compile", *("ace_playbook.compile." + m for m in (
                    "shadow", "state", "evidence", "proposal", "modes", "demotions", "approvals", "chains", "catalogue",
                    "detectors", "events", "shell", "srchash",
-                   "shadow_guard"))}                       # S-1 F1: the over-cap raw scan, the matcher test and the output decision; `re` only
+                   "shadow_guard", "shadow_arm"))}                       # S-1 F1: the over-cap raw scan, the matcher test and the output decision; `re` only
 ABSENT = ("seal", "dashboard", "dashboard_html", "status", "digest", "queue", "report", "synth", "metrics", "scrub", "measure",
           "brief", "brief_render", "brief_excl", "brief_audit", "nightly_notes",
           "watch", "fetch", "inventory", "match", "store", "summary", "chars", "fsio", "cssstyle", "records", "pin",

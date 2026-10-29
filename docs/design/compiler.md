@@ -503,15 +503,16 @@ registration only resets per-turn state and logs observe rows.
 | any error | type-only log line | none | fail open; a broken store never blocks a session |
 
 ```json
-{"ts": "2026-10-21T10:12:04Z", "v": 1, "row_id": "r:8d41c07e", "corpus": "private", "session": "sid:5f0c9e21aa03b7d4",
- "proposal_id": "P-3f9a0c12", "detector": "rm_rf_nonscratch", "tier": "live", "event": "PreToolUse",
- "mode": "observe", "arm": "active", "decision": "would_fire", "hits": 1,
- "payload_sha256": "c4a1...e9", "target_hashes": ["0d93aa61c2b4f5e0"], "agent_id_present": false,
- "dur_ms": 41}
+{"v": 1, "ts": "2026-10-21T10:12:04Z", "proposal_id": "P-3f9a0c12", "lesson_id": "L-0001", "mode": "observe",
+ "event": "PreToolUse", "tool_name": "Bash", "session": "5f0c9e21aa03b7d4...", "payload_sha256": "c4a1...e9",
+ "would_fire": true, "cause": "detector", "tier": "live", "dur_ms": 41, "arm": "warn", "agent_id_present": false}
 ```
 
-`row_id` is sha256(ts, session, proposal_id, payload_sha256)[:8]; `approve` and the report list
-fires by it. Rows hold only enums, ids, hashes, integers and timestamps. There is no free-text
+`arm` is `warn` or `observe` from `shadow_arm.assign` (the same algorithm as `arms.assign`), or `unassigned` until the private
+`shadow_seed` and `arm_rate` are both set; `agent_id_present` records only whether the payload carried an `agent_id` key (False for an
+over-cap payload, which is never parsed). `row_id` is not stored: it is sha256(ts, session, proposal_id, payload_sha256)[:8], computed by
+`labels.row_id` and ignoring the two arm keys; `approve` and the report list fires by it.
+Rows hold only enums, ids, hashes, integers and timestamps. There is no free-text
 field, so there is nothing for the scrubber to miss on the hot path; a test asserts the row schema.
 
 ### 7.2 Cost budget
@@ -1409,12 +1410,13 @@ when a seed in the config does not hash to the sealed line, when the approvals o
 only before the analysis day (horizon end + 7 days) and never prints a seed. The `_session`
 row gained `start` (rows written before it have none and are reported as missing). `labels_queue.py` (split out of `labels.py` and `queue.py`) hides
 the resolved mode in `label --rows` and the queue card while any detector's phase runs. Still open, and conditions before any
-`arm_start` (PREREGISTRATION.md, Pre-arm-start conditions): the live hook does not yet
-write `arm` or `agent_id_present` (`shadow.py` holds no arm code, so today `arms report` refuses every row), the offline auto-FP rule (a) is still
-asymmetric, demotion and harm do not yet ignore auto labels during a phase, the spillover comparison is not built, and condition (7) is half built: the
-analysis counts `error:delivered:` lines of `shadow.log` in the horizon of an `error_rate` demotion (`arms_window.delivered_errors`, `unknown` for a
-missing, unreadable or full log), but the hook does not yet log them and no family-lesson status change from a session carrying `ACE P-`
-and no lesson minting is frozen.
+`arm_start` (PREREGISTRATION.md, Pre-arm-start conditions): the offline auto-FP rule (a) is still
+asymmetric, demotion and harm do not yet ignore auto labels during a phase, the spillover comparison is not built, and no family-lesson status change from
+a session carrying `ACE P-` and no lesson minting is frozen. Built 2026-10-29 (`shadow_arm.py`, hook side of conditions (1) and (7)): the hook writes `arm`
+(`shadow_arm.assign`, a copy of `arms.assign` because the hook may not import `arms`; a test pins the identity on generated inputs and by body text;
+`unassigned` until the seed and rate are set, which `arms report` refuses) and `agent_id_present` on every shadow row, and logs each failed
+delivered write (stderr echo, stdout decision) as `<UTC stamp> error:delivered:<Type>`, which `arms_window.delivered_errors` counts in the horizon of an
+`error_rate` demotion (`unknown` for a missing, unreadable or full log).
 
 ### 8.x Brief (as built)
 

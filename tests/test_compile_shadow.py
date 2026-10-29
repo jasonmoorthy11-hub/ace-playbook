@@ -19,7 +19,7 @@ from . import compile_support as cs
 
 RM = "rm -rf /w/src"
 ROW_KEYS = {"v", "ts", "proposal_id", "lesson_id", "mode", "event", "tool_name", "session", "payload_sha256",
-            "would_fire", "cause", "tier", "dur_ms"}
+            "would_fire", "cause", "tier", "dur_ms", "arm", "agent_id_present"}
 
 
 class Runner:

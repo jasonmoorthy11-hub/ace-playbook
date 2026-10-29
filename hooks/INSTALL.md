@@ -391,7 +391,9 @@ status line and the menu-bar plugin print `DISABLED`. Remove the file to arm the
 (a throwaway state directory), writes `data_dir/shadow.synthetic.jsonl` (never `shadow.jsonl`; `--out` inside `data_dir` is refused unless it is that file) and exits 1 if any expected outcome
 differs; `compile report` then prints the synthetic table apart from the private one.
 
-**Arm analysis.** `python3 -m ace_playbook.compile.arms report [--json]` prints `not started` until PREREGISTRATION.md holds
+**Arm analysis.** Every shadow row now carries `arm` (from the private `shadow_seed`; `unassigned` until the seed and `arm_rate` are set) and
+`agent_id_present`; a failed warn/block write is logged as `error:delivered:<Type>` in `shadow.log`.
+`python3 -m ace_playbook.compile.arms report [--json]` prints `not started` until PREREGISTRATION.md holds
 an `arm_start <detector> <UTC stamp> approvals=<64 hex>` line (the hash of the last `approvals.jsonl` row at that moment);
 it needs `shadow_seed`, `permutation_seed` and `arm_rate` in the config, whose
 seeds must hash to the sealed lines, and never prints a seed. The Holm family is fixed at each `arm_start` (intention to treat): the

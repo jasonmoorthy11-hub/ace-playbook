@@ -67,6 +67,7 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
 
 ## Compiler (stage 2)
 
+- `agent_id_present` on a shadow row records only whether the hook payload carried an `agent_id` key, never its value (False for an over-cap payload).
 - The command scanner is a best-effort linear tokenizer, not a shell parser. Known shapes it does
   not see: `find ... -delete` and `-exec rm -rf`, `xargs` fed from a pipe, `bash -c`, `eval` and
   `bash <<EOF` bodies, shell functions and aliases, and anything past the 64 KB cap (reported as
