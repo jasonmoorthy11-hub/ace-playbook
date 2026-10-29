@@ -15,8 +15,8 @@ A candidate WITH a diff for a live twin of the same key whose diff is null (ever
 twin's file (atomic, `fsio.write_private`; the id does not depend on the diff, so a second file is impossible, and the twin's decision rows stay;
 `diffed` lists those ids); another id closes the twin as `superseded` and is written. This holds for an expired or auto-closed twin too (it is
 reopened by a fresh `reopened` row, or, with five open already, replaced with the twin's own dates so it stays out and the reopen path takes it when a slot
-frees), and for a twin of the candidate's id whatever its key; a dismissed or accepted twin of the SAME key is a decision and is not replaced, one of another
-key (a forged successor) is replaced and reopened.
+frees after any queued proposal is promoted), and for a twin of the candidate's id whatever its key; a dismissed or accepted twin of the SAME
+key is a decision and is not replaced, one of another key (a forged successor) is replaced and reopened.
 """
 
 from __future__ import annotations
@@ -109,6 +109,7 @@ def reconcile(wd: Path, cands: list[dict], results: list[dict], now: str, dry: b
                         store.append_decision(wd, c["id"], "reopened", renewed, now)
                         reopened.append(c["id"])
                 continue
+            continue                                                        # held and undone: waits for a free slot, closes no other-id twin
         if (c["change"]["diff"] is not None and old is not None and old[0]["change"]["diff"] is None and old[1] not in ("accepted", "dismissed")
                 and old[0]["id"] != c["id"]):
             twin = old[0]                                                   # another id, the same key: closed as superseded if live, candidate written

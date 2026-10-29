@@ -280,3 +280,21 @@ def test_an_accept_of_a_record_without_a_diff_hash_key_does_not_raise(world, cap
     assert store.write_proposal(world.wd, rec)
     assert cli.queue(cfgmod.load(), 5, lambda prompt: "1", lambda what: True) == 0
     assert [d["note"] for d in store.read_decisions(world.wd)] == ["diff_sha256 none"]
+
+
+def test_a_held_dismissed_twin_never_closes_a_live_other_id_twin_of_the_same_key(tmp_path, monkeypatch, capsys):
+    pin, mine = two_worlds(tmp_path, monkeypatch, capsys)
+    other = "W-" + "e" * 8
+    plant(mine, pin, title=pin["title"].replace(NEW, "claude-evil-9") + " (imported)")      # the own id, another key (a forged successor)
+    store.append_decision(mine.wd, pin["id"], "dismissed", "wrong successor", "2026-10-28T00:00:00Z")
+    plant(mine, pin, id=other)                                                               # another id, the own key, no diff, live
+    fill(mine, 4)                                                                            # the live other-id twin is the fifth open one
+    mine.run(capsys, "scan", "--force")
+    closed =[d for d in store.read_decisions(mine.wd) if d["id"] == other and d["decision"] == "closed"]
+    assert live_with_diff(mine) == [] and closed == []
+    assert dict((p["id"], s) for p, s in statuses(mine))[other] in ("open", "queued") and store.open_count(statuses(mine)) == 5
+    free_slots(mine)
+    mine.run(capsys, "scan", "--force")
+    [own] = live_with_diff(mine)
+    assert own["id"] == pin["id"] and own["status"] == "open" and store.open_count(statuses(mine)) <= 5
+    assert dict((p["id"], s) for p, s in statuses(mine))[other] == "open"                    # shipped behaviour: the same-id branch wins, the twin stays
