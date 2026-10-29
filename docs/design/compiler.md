@@ -1456,12 +1456,11 @@ operator-driven; `tests/test_arm_phase.py` fails if another appears), which is w
 (`compile/arm_start.py`, not in `__main__.py`, not on the hook path). It refuses, by the hashed analysis's own functions (`arms_window.family`,
 `arm_starts`, `check_starts`, `approvals.read_chain`), a detector unknown to the catalogue, an unsealed pre-registration, a stamp earlier than
 `sealed_at` (with `--at`, also one already in the past), an existing `arm_start` line, unset seeds, `holdout_enabled` true, an unreadable, broken or
-empty approvals chain, a family with no member at `warn`/`block`
-or with a member at `observe` or with a lowering demotion in force or a broken demotions chain, and a working tree with uncommitted changes to the thirteen
-files. It prints the
-dated entry (`### <date> - arm start: <detector>`, the `arm_start <detector> <stamp> approvals=<head>` line at column 0, thirteen `sha256 <path> <hex>`
-lines (paths from the repository root), the family ids, `tree <HEAD>`, the marker line), asks y/N, stamps the next whole second after the `y`, appends it
-under the top-level `## Amendments` heading, writes the signed marker
+empty approvals chain, a family with no member at `warn`/`block` or with a member at `observe` or with a lowering demotion in force or a broken
+demotions chain, and a working tree with uncommitted changes to the thirteen files. It prints the dated entry (`### <date> - arm start: <detector>`,
+the `arm_start <detector> <stamp> approvals=<head>` line at column 0, thirteen `sha256 <path> <hex>` lines (paths from the repository root), the
+family ids, `tree <HEAD>`, the marker line), asks y/N, stamps `--at`, or the next whole second after the `y`, appends it under the top-level
+`## Amendments` heading, writes the signed marker
 and `data_dir/arm_start_<detector>.txt` (the line without a newline: `printf '%s' <line> | shasum -a 256` is its sha256; `sha256sum` is the coreutils
 alternative to `shasum -a 256`) and prints the operator
 lines: `git add` and `commit`, `tag -s arm-<detector>`, the push of the current branch and the tag, the line's sha256, `ots stamp <that file>` and the
