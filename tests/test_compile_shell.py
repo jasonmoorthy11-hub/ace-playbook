@@ -473,3 +473,58 @@ FAIL_CLOSED = [   # (case, command, fires)
 @pytest.mark.parametrize("cmd,fires", [(c, f) for _n, c, f in FAIL_CLOSED], ids=[n for n, _c, _f in FAIL_CLOSED])
 def test_v2_fails_closed(cmd, fires):
     assert bad(cmd) is fires
+
+
+# ------------------------------------------------------------------ v2 fails closed, round 2: tainted chains, glued and wrapped rebinds
+TAINT_AND_REBINDS = [   # (case, command, fires)
+    # a `||` earlier in the chain may skip the cd / the assignment / the worktree add: nothing in the chain is trusted
+    ("or-skips-the-cd", "true || cd /tmp/w && rm -rf ./*", True),
+    ("cd-then-or-then-rm", "cd /tmp/w && true || rm -rf ./*", True),
+    ("or-skips-the-assignment", 'false || D=/tmp/w && rm -rf "$D"', True),
+    ("or-skips-the-export", 'false || export D=/tmp/w && rm -rf "$D"', True),
+    ("or-skips-the-worktree-add", "false || git worktree add /w/wt b && rm -rf /w/wt", True),
+    ("binding-before-the-chain-is-lost-after-or", 'D=/tmp/w; true || echo x; rm -rf "$D"', True),
+    ("or-in-a-subshell-chain", "true || (cd /tmp/w && rm -rf ./*)", True),
+    ("or-then-semicolon-ends-the-taint", "true || echo x; D=/tmp/w; rm -rf \"$D\"", False),
+    ("or-then-newline-ends-the-taint", "true || echo x\nD=/tmp/w\nrm -rf \"$D\"", False),
+    ("or-then-background-ends-the-taint", 'true || echo x & D=/tmp/w; rm -rf "$D"', False),
+    ("and-chain-without-or", "cd /tmp/w && rm -rf ./*", False),
+    ("and-and-chain", "cd /tmp/w && true && rm -rf ./*", False),
+    ("or-in-bash-c", "bash -c 'true || cd /tmp/w && rm -rf ./*'", True),
+    ("or-outside-bash-c", "true || bash -c 'cd /tmp/w && rm -rf ./*'", False),
+    ("or-then-absolute-scratch-target", "true || rm -rf /tmp/w/x", False),
+    ("or-then-outside-target", "true || rm -rf /w/src", True),
+    # printf -v glued, builtin/command prefixes, unknown shapes of binding builtins, wrapped builtins
+    ("printf-v-glued", 'printf -vD /w; rm -rf "$D"', True),
+    ("printf-v-glued-after-binding", 'D=/tmp/w; printf -vD /w; rm -rf "$D"', True),
+    ("printf-v-spaced", 'D=/tmp/w; printf -v D /w; rm -rf "$D"', True),
+    ("builtin-printf-v", 'D=/tmp/w; builtin printf -v D /w; rm -rf "$D"', True),
+    ("command-unset", 'D=/tmp/w; command unset D; rm -rf "$D"', True),
+    ("builtin-unset", 'D=/tmp/w; builtin unset D; rm -rf "$D"', True),
+    ("builtin-cd", "cd /tmp/w && builtin cd /w && rm -rf ./*", True),
+    ("command-cd", "command cd /tmp/w && rm -rf ./*", False),
+    ("env-cd-is-not-the-builtin", "env cd /tmp/w && rm -rf ./*", True),
+    ("sudo-cd-is-not-the-builtin", "sudo cd /tmp/w && rm -rf ./*", True),
+    ("env-export-is-not-the-builtin", 'env export D=/tmp/w && rm -rf "$D"', True),
+    ("let", 'D=/tmp/w; let D=1; rm -rf "$D"', True),
+    ("let-quoted", 'D=/tmp/w; let "D+=1"; rm -rf "$D"', True),
+    ("source-rebinds", 'D=/tmp/w; source x; rm -rf "$D"', True),
+    ("read-with-an-unknown-option", 'D=/tmp/w; read -t5 D; rm -rf "$D"', True),
+    ("read-plain-name", 'D=/tmp/w; read D; rm -rf "$D"', True),
+    ("declare-with-a-plus-option", 'D=/tmp/w; declare +x D; rm -rf "$D"', True),
+    ("declare-with-a-long-option", 'D=/tmp/w; declare --weird D; rm -rf "$D"', True),
+    ("local-nameref", 'D=/tmp/w; local -n D=X; rm -rf "$D"', True),
+    ("export-unknown-option", 'D=/tmp/w; export -Z D; rm -rf "$D"', True),
+    ("mapfile-option", 'D=/tmp/w; mapfile -t D < f; rm -rf "$D"', True),
+    ("getopts-option", 'D=/tmp/w; getopts -x ab D; rm -rf "$D"', True),
+    ("unset-unknown-option", 'D=/tmp/w; unset -q D; rm -rf "$D"', True),
+    ("declare-known-options-keep-the-binding", 'D=/tmp/w; declare -r E=1; rm -rf "$D"', False),
+    ("export-known-option-keeps-the-binding", 'D=/tmp/w; export -n E; rm -rf "$D"', False),
+    ("read-known-options-for-another-name", 'D=/tmp/w; read -r E; rm -rf "$D"', False),
+    ("plain-assignment-then-delete", 'D=/tmp/w && rm -rf "$D"', False),
+]
+
+
+@pytest.mark.parametrize("cmd,fires", [(c, f) for _n, c, f in TAINT_AND_REBINDS], ids=[n for n, _c, _f in TAINT_AND_REBINDS])
+def test_v2_fails_closed_on_tainted_chains_and_glued_or_wrapped_rebinds(cmd, fires):
+    assert bad(cmd) is fires

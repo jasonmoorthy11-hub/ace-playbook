@@ -4,7 +4,8 @@ Every world has ONE effective deletion root: the generator picks the root (a scr
 spells the delete one of many ways (plain, `./*` after `cd`, `$VAR`, `${VAR}/sub`, quoted, wrapped in sudo/env/nice, `--`,
 split flags, `bash -c`/`sh -c`/`eval`, `ls | xargs`, `find -delete`, one or two `cd`s, `&&`/`;`/newline joins). The oracle is
 "fires iff the root is outside scratch, or the world relies on something v2 does not trust": a relative target after a `cd` that
-is not joined by `&&` (the cwd is unknown after `;`, `||` or a newline: build() reports it as `forced`). Seeded
+is not joined by `&&` (the cwd is unknown after `;`, `||` or a newline), or an assignment before a `||` (a tainted chain trusts nothing);
+build() reports these as `forced`. Seeded
 (`random.Random(1234)`, override with PYTEST_SEED); stdlib only; the commands are DATA fed to the detector, nothing runs.
 """
 
@@ -50,7 +51,7 @@ def build(seed: int, root: str) -> tuple[str, bool]:
     rel = r.choice(["./*", "*", ".", "./"]) if not sub else "."
     kind = r.choice(["plain", "quoted", "cd", "cd2", "cd_sub", "var", "brace", "export", "pipe", "find", "findexec", "cdls"])
     other = r.choice(SCRATCH_ROOTS + OUTSIDE_ROOTS)
-    forced = kind in ("cd", "cd2", "cd_sub", "cdls") and join.strip() != "&&"
+    forced = (kind in ("cd", "cd2", "cd_sub", "cdls") and join.strip() != "&&") or (kind in ("var", "brace", "export") and join.strip() == "||")
     if kind in ("var", "brace", "export") and "$" in root:      # a binding with an unresolved value is dropped: same class, plain spelling
         root = "/tmp/vars" if d.SCRATCH.search(root) else "/srv/vars"
     if kind == "plain":

@@ -27,19 +27,19 @@ _REF = re.compile(r"\$(\w+)|\$\{(\w+)\}")
 _SET = re.compile(r"^(\w+)=(.*)$", re.S)
 _KEYWORDS = frozenset(("export", "declare", "typeset", "local", "readonly"))
 _BARRIER = frozenset(("|", "&"))                  # a cd beside these runs in a subshell or the background: the cwd stays
-_EXEC, _FIND_OPTS, _WT_VALUE = frozenset(("-exec", "-execdir", "-ok", "-okdir")), frozenset(("-H", "-L", "-P")), ("-b", "-B", "--reason")
+_EXEC, _WT_VALUE = frozenset(("-exec", "-execdir", "-ok", "-okdir")), ("-b", "-B", "--reason")
 HOME = "$HOME"                                    # a bare `cd`: unknown root, never scratch
 MAX_ENV, MAX_VALUE = 64, 4096
 
 
 class _State:
-    __slots__ = ("cwd", "env", "made")
+    __slots__ = ("cwd", "env", "made", "taint")      # taint: a `||` earlier in this chain may have skipped anything before it
 
-    def __init__(self, cwd=None, env=None, made=None):
-        self.cwd, self.env, self.made = cwd, dict(env or {}), set(made or ())
+    def __init__(self, cwd=None, env=None, made=None, taint=False):
+        self.cwd, self.env, self.made, self.taint = cwd, dict(env or {}), set(made or ()), taint
 
     def copy(self) -> "_State":
-        return _State(self.cwd, self.env, self.made)
+        return _State(self.cwd, self.env, self.made, self.taint)
 
 
 def _base(word: str) -> str:
@@ -82,7 +82,7 @@ def _path(tok: str, st: _State, quotes: list) -> str:
 
 
 def _assign(toks: list[str], st: _State, quotes: list) -> None:
-    for t in toks:
+    for t in (() if st.taint else toks):
         m = _SET.match(t)
         val = _text(m.group(2), st, quotes) if m else None
         if m and (val is None or "$" in val or "`" in val or len(val) > MAX_VALUE or (m.group(1) not in st.env and len(st.env) >= MAX_ENV)):
@@ -93,13 +93,13 @@ def _assign(toks: list[str], st: _State, quotes: list) -> None:
 
 def _cd(args: list[str], st: _State, quotes: list) -> None:
     args = [a for a in args if a == "-" or not a.startswith("-")]
-    st.cwd = HOME if not args else None if args[0] == "-" else _path(args[0], st, quotes)
+    st.cwd = None if st.taint or (args and args[0] == "-") else HOME if not args else _path(args[0], st, quotes)
 
 
 def _worktree(front: list[str], st: _State, quotes: list) -> None:
     """`git [-C repo] worktree add [opts] <path> ...`: <path> is scratch for the rest of this command."""
     sub, args = shell.git_subcommand(front)
-    if sub != "worktree" or args[:1] != ["add"]:
+    if sub != "worktree" or args[:1] != ["add"] or st.taint:
         return
     k, repo = len(front) - len(args) - 1, st.copy()           # front[k] is "worktree"
     if "-C" in front[:k] and front.index("-C") + 1 < k:
@@ -115,31 +115,15 @@ def _worktree(front: list[str], st: _State, quotes: list) -> None:
         st.made.add(p)
 
 
-def _roots(args: list[str]) -> list[str]:
-    """The start points of a `find`/`ls` argument list: the words before its first option or predicate."""
-    args = args[1:] if args and args[0] in _FIND_OPTS else args
-    return args[:next((k for k, a in enumerate(args) if a.startswith("-") or a in ("(", "!")), len(args))] or ["."]
-
-
-def _fed(events: list, i: int) -> list[str]:
-    """`<producer> | xargs rm -rf`: the paths the producer (ls or find, directly before the pipe) lists."""
-    src = shell.front(events[i - 2][1]) if i >= 2 and events[i - 1][0] == "|" and not events[i - 2][0] else []
-    name, flags = (_base(src[0]) if src else ""), [a for a in src[1:] if a.startswith("-") and not a.startswith("--")]
-    pos = [a for a in src[1:] if not a.startswith("-")]
-    if name == "ls":                             # `ls DIR` lists names inside DIR, not paths: only `ls -d <paths>` is understood
-        return pos if pos and any("d" in f for f in flags) else ["$UNKNOWN"]
-    return _roots(src[1:]) if name == "find" else []
-
-
 def _victims(raw: list[str], front: list[str], events: list, i: int) -> list[str]:
     if front and _base(front[0]) == "find":
         run = next((front[k + 1:] for k, t in enumerate(front) if t in _EXEC), None)
-        return _roots(front[1:]) if "-delete" in front or (run is not None and rm_args(run) is not None) else []
+        return shell.roots(front[1:]) if "-delete" in front or (run is not None and rm_args(run) is not None) else []
     args = rm_args(front)
     if args is None:
         return []
     xargs = any(_base(t) == "xargs" for t in raw[:len(raw) - len(front)])
-    return _fed(events, i) if xargs and not args else args
+    return shell.fed(events, i) if xargs and not args else args
 
 
 def _run(events: list, quotes: list, st: _State, depth: int, scratch, out: list) -> None:
@@ -153,14 +137,19 @@ def _run(events: list, quotes: list, st: _State, depth: int, scratch, out: list)
                 stack.append((sep, st.cwd, dict(st.env)))
             elif stack and stack[-1][0] == {")": "(", "`": "`"}.get(sep):
                 _, st.cwd, st.env = stack.pop()
-            elif sep not in ("&&", "|"):         # `;` `||` newline `&`: the cd (or the worktree add) may not have worked
-                st.cwd, st.made = None, set()
+            elif sep == "||":                    # what ran before may have been skipped, and so may what follows: trust nothing here
+                st.cwd, st.made, st.env, st.taint = None, set(), {}, True
+            elif sep not in ("&&", "|"):         # `;` newline `&`: the cd (or the worktree add) may not have worked; a new chain
+                st.cwd, st.made, st.taint = None, set(), False
             continue
-        front = shell.front(raw)
+        front, wrapped = shell.words(raw)
         if not front:
             _assign(raw, st, quotes)             # a bare `NAME=value` segment (the tokenizer's front drops it)
             continue
         name = _base(front[0])
+        if wrapped and name in shell.BUILTINS:   # `env cd X`, `sudo export D=x`: an external program, the shell state is untouched
+            st.cwd, st.env = None, {}
+            continue
         piped = any(events[j][0] in _BARRIER for j in (i - 1, i + 1) if 0 <= j < len(events))
         if name in ("cd", "pushd", "popd"):
             if not piped:
@@ -175,11 +164,20 @@ def _run(events: list, quotes: list, st: _State, depth: int, scratch, out: list)
         elif (script := shell.script(front, quotes)) is not None:
             if depth == 0 and script.strip():
                 sub, subq = shell.command_stream(script)
-                _run(sub, subq, st if name == "eval" else st.copy(), 1, scratch, out)
+                inner, was = (st, st.taint) if name == "eval" else (st.copy(), False)
+                inner.taint = False                  # the script is a chain of its own; an `eval` hands its state back
+                _run(sub, subq, inner, 1, scratch, out)
+                if name == "eval":
+                    st.taint = was
+                    if was:                              # the eval itself may have been skipped: nothing it set counts
+                        st.cwd, st.env, st.made = None, {}, set()
         elif targets := _victims(raw, front, events, i):
             paths = [_path(t, st, quotes) for t in targets]
             out.append([(p, bool(scratch.search(p)) or any(p == w or p.startswith(w + "/") for w in st.made)) for p in paths])
-        for n in shell.rebinds(raw, front):
+        gone = shell.rebinds(raw, front)
+        if gone is None:                         # a binding builtin in a shape rebinds cannot read: forget everything
+            st.cwd, st.env = None, {}
+        for n in gone or ():
             st.env.pop(n, None)
 
 
