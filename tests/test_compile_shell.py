@@ -270,9 +270,10 @@ def test_command_stream_carries_exactly_the_segments_command_segments_returns(cm
     assert [f for sep, raw in events if not sep and (f := shell.front(raw))] == shell.command_segments(cmd)
 
 
-def test_command_segments_output_is_unchanged_for_the_braces_v2_keeps_inline():
+def test_command_stream_masks_exactly_what_command_segments_masks():
     assert shell.command_segments('rm -rf "${D}/x"') == [["rm", "-rf", "Q"]]
-    assert shell.command_stream('rm -rf "${D}/x"')[0] == [("", ["rm", "-rf", "${D}/x"])]
+    assert shell.command_stream('rm -rf "${D}/x"') == ([("", ["rm", "-rf", "\x000\x00"])], [('"', "${D}/x")])
+    assert shell.command_stream('rm -rf "/tmp/x"')[0] == [("", ["rm", "-rf", "/tmp/x"])]
 
 
 def test_command_stream_events_separators_and_holes():
@@ -311,8 +312,8 @@ def targets(cmd):
     ("cd /tmp/w && cd - && rm -rf ./*", [[("*", False)]]),
     ("cd /tmp/w && popd && rm -rf x", [[("x", False)]]),
     ("cd -P /tmp/w && rm -rf .", [[("/tmp/w", True)]]),
-    ("cd $TMPDIR/w && rm -rf ./*", [[("$TMPDIR/w/*", True)]]),
-    ("cd $UNSET && rm -rf ./*", [[("$UNSET/*", False)]]),
+    ("cd $TMPDIR/w && rm -rf ./*", [[("*", False)]]),
+    ("cd $UNSET && rm -rf ./*", [[("*", False)]]),
     ("(cd /tmp/w && rm -rf .)", [[("/tmp/w", True)]]),
     ("(cd /tmp/w); rm -rf .", [[(".", False)]]),
     ("cd /tmp/w | cat; rm -rf .", [[(".", False)]]),
@@ -322,7 +323,7 @@ def targets(cmd):
     ('D=/tmp/w; rm -rf "${D}/x"', [[("/tmp/w/x", True)]]),
     ("export D=/w && rm -rf $D", [[("/w", False)]]),
     ("declare D=/w; rm -rf $D", [[("/w", False)]]),
-    ("A=/tmp; B=$A/x; rm -rf $B", [[("/tmp/x", True)]]),
+    ("A=/tmp; B=$A/x; rm -rf $B", [[("$B", False)]]),
     ("rm -rf $HOME/x $PWD/y ${NOPE}", [[("$HOME/x", False), ("$PWD/y", False), ("${NOPE}", False)]]),
     ("rm -rf $TMPDIR/x ${TMPDIR}/y", [[("$TMPDIR/x", True), ("${TMPDIR}/y", True)]]),
     ("D=/tmp/w; ( D=/w; true ); rm -rf $D", [[("/tmp/w", True)]]),
@@ -412,7 +413,7 @@ FAIL_CLOSED = [   # (case, command, fires)
     ("cd-while-body", "while true; do cd /tmp/w; rm -rf ./*; done", True),
     ("cd-and-rm", "cd /tmp/w && rm -rf ./*", False),
     ("cd-and-cd-and-rm", "cd /tmp/w && cd sub && rm -rf ./*", False),
-    ("cd-and-chain-in-a-loop", "for i in 1 2; do cd /tmp/w && rm -rf ./*; done", False),
+    ("cd-and-chain-in-a-loop", "for i in 1 2; do cd /tmp/w && rm -rf ./*; done", True),
     ("cd-and-subshell", "cd /tmp/w && (rm -rf ./*)", False),
     ("cd-in-subshell-and", "(cd /tmp/w && rm -rf ./*)", False),
     ("cd-pipe-rm", "cd /tmp/w | cat && rm -rf ./*", True),
@@ -438,7 +439,7 @@ FAIL_CLOSED = [   # (case, command, fires)
     ("eval-rebinds", 'D=/tmp/w; eval "D=/w"; rm -rf "$D"', True),
     ("source-rebinds", 'D=/tmp/w; source ./env.sh; rm -rf "$D"', True),
     ("dot-rebinds", 'D=/tmp/w; . ./env.sh; rm -rf "$D"', True),
-    ("resolved-rhs-is-kept", 'A=/tmp/w; D=$A/x; rm -rf "$D"', False),
+    ("rhs-with-a-reference-is-not-a-literal", 'A=/tmp/w; D=$A/x; rm -rf "$D"', True),
     ("bash-c-keeps-the-parent-binding", 'D=/tmp/w; bash -c \'unset D\'; rm -rf "$D"', False),
     # 3. a worktree is scratch only inside the same && chain, and never a wide or odd path
     ("worktree-same-chain", "git worktree add /w/wt b && rm -rf /w/wt", False),
@@ -502,7 +503,7 @@ TAINT_AND_REBINDS = [   # (case, command, fires)
     ("command-unset", 'D=/tmp/w; command unset D; rm -rf "$D"', True),
     ("builtin-unset", 'D=/tmp/w; builtin unset D; rm -rf "$D"', True),
     ("builtin-cd", "cd /tmp/w && builtin cd /w && rm -rf ./*", True),
-    ("command-cd", "command cd /tmp/w && rm -rf ./*", False),
+    ("command-cd-is-not-plain", "command cd /tmp/w && rm -rf ./*", True),
     ("env-cd-is-not-the-builtin", "env cd /tmp/w && rm -rf ./*", True),
     ("sudo-cd-is-not-the-builtin", "sudo cd /tmp/w && rm -rf ./*", True),
     ("env-export-is-not-the-builtin", 'env export D=/tmp/w && rm -rf "$D"', True),
@@ -582,3 +583,68 @@ WRAPPED_EVAL_STATE = [   # (case, command, fires)
 @pytest.mark.parametrize("cmd,fires", [(c, f) for _n, c, f in WRAPPED_EVAL_STATE], ids=[n for n, _c, _f in WRAPPED_EVAL_STATE])
 def test_v2_a_wrapped_eval_runs_on_a_copy_and_leaves_the_outer_state_unknown(cmd, fires):
     assert bad(cmd) is fires
+
+
+# ------------------------------------------------------------------ fix wave 2: only proven state is trusted (resolve_pre.py)
+from ace_playbook.compile import resolve_pre as rp   # noqa: E402
+
+PROVEN = [   # (case, command, fires)
+    ("first-in-chain-binding-survives-the-chain", 'D=/tmp/w && true; rm -rf "$D"', False),
+    ("binding-after-and-dies-with-the-chain", 'true && D=/tmp/w; rm -rf "$D"', True),
+    ("binding-after-and-used-in-the-chain", 'true && D=/tmp/w && rm -rf "$D"', False),
+    ("binding-survives-semicolon-and-newline", 'D=/tmp/w\ntrue; rm -rf "$D"/x', False),
+    ("binding-in-a-subshell-is-restored", 'D=/tmp/w; (D=/w/src); rm -rf "$D"', False),
+    ("worktree-in-a-subshell-is-dropped", "(git worktree add /w/wt b) && rm -rf /w/wt", True),
+    ("worktree-in-the-same-group", "(git worktree add /w/wt b && rm -rf /w/wt)", False),
+    ("cdpath-assignment", "export CDPATH=/w; cd /tmp/w && cd tmp && rm -rf ./*", True),
+    ("cdpath-prefix", "CDPATH=/w cd /tmp/w && rm -rf ./*", True),
+    ("backslash-in-a-quoted-target", 'rm -rf "/tmp/w/a\\\nb"', True),
+    ("quoted-literal-target-with-a-space", 'rm -rf "/tmp/my dir"', False),
+    ("arithmetic-restores-nothing", 'D=/tmp/w; (( D=1 )); rm -rf "$D"', True),
+    ("dollar-left-after-a-scratch-prefix", 'D=/tmp/w; rm -rf "$D/$E"', True),
+    ("brace-left-after-a-scratch-prefix", 'D=/tmp/w; rm -rf "$D"/{a,b}', True),
+    ("literal-token-keeps-v1s-prefix-rule", "rm -rf /tmp/w/$E", False),
+    ("literal-token-with-braces-keeps-v1s-prefix-rule", "rm -rf /tmp/w/{a,b}", False),
+    ("rm-after-ddash-flag-like-target", "rm -f -r -- -/w/src", True),
+    ("rm-ddash-then-scratch", "rm -rf -- /tmp/w/x", False),
+    ("an-eval-skipped-by-and-binds-nothing", 'true && eval "D=/tmp/w"; rm -rf "$D"', True),
+    ("an-eval-first-in-its-chain-binds-and-resolves", 'eval "D=/tmp/w"; rm -rf "$D"', False),
+]
+
+
+@pytest.mark.parametrize("cmd,fires", [(c, f) for _n, c, f in PROVEN], ids=[n for n, _c, _f in PROVEN])
+def test_v2_trusts_only_proven_state(cmd, fires):
+    assert bad(cmd) is fires
+
+
+def stream(cmd):
+    return shell.command_stream(cmd)
+
+
+@pytest.mark.parametrize("cmd,untrusted", [
+    ("cd /tmp/w && rm -rf ./*", False), ("(cd /tmp/w && rm -rf ./*)", False), ("bash -c 'cd /tmp/w && rm -rf ./*'", False),
+    ("if true; then rm -rf x; fi", True), ("while true; do x; done", True), ("for i in a; do x; done", True),
+    ("case x in x) y;; esac", True), ("{ a; }", True), ("f() { a; }", True), ("f(){ a; }", True), ("function f { a; }", True),
+    ("trap 'x' EXIT", True), ("alias a=b", True), ("IFS=:; a", True), ("read IFS", True), ("CDPATH=x cd y", True),
+    ("eval 'cd /tmp/w'", False), ("eval 'cd /tmp/w; rm -rf x'", False), ("eval \"$X\"", True), ("eval 'echo hi'", True),
+    ("eval 'f'", True), ("eval 'a && (b)'", True), ("eval 'if true; then cd x; fi'", True), ("echo if then fi", False),
+])
+def test_untrusted_gate(cmd, untrusted):
+    assert rp.untrusted(*stream(cmd)) is untrusted
+
+
+def test_literal_text_and_plain_segments():
+    q = [("'", "a b"), ('"', "x$y")]
+    assert rp.literal_text("/tmp/w", q) == "/tmp/w" and rp.literal_text("\x000\x00", q) is None and rp.literal_text("\x001\x00", q) is None
+    for bad_ in ("", "a b", "$X", "a*", "a?", "a[1]", "a{b", "a`b", "a\\b"):
+        assert rp.literal_text(bad_, q) is None, bad_
+    assert rp.plain(["cd", "/x"], ["cd", "/x"]) and rp.plain(["D=1"], []) and rp.plain(["D=1", "E=2"], [])
+    assert not rp.plain(["!", "cd", "/x"], ["cd", "/x"]) and not rp.plain(["env", "cd", "/x"], ["cd", "/x"])
+    assert not rp.plain(["cd", "/x", ">/dev/null"], ["cd", "/x", ">/dev/null"]) and not rp.plain(["D=1", "env"], [])
+    assert not rp.plain(["D=1", "cd", "/x"], ["cd", "/x"]) and not rp.plain(["D=1", ">f"], [])
+
+
+def test_rm_args_after_a_double_dash_everything_is_a_target():
+    assert resolve.rm_args(["rm", "-rf", "--", "-x", "y"]) == ["-x", "y"]
+    assert resolve.rm_args(["rm", "-r", "-f", "a", "--", "-b"]) == ["a", "-b"]
+    assert resolve.rm_args(["rm", "--", "-rf", "x"]) == ["-rf", "x"] and resolve.rm_args(["rm", "-rf", "--"]) == []

@@ -381,12 +381,14 @@ that your old head is no longer in the chain is the signal. Do not hand-write ro
 
 After a detector change, re-propose and re-approve that detector's proposals only: an edit inside one detector's own `fire` body retires only that
 detector's proposals, while any other edit to `detectors.py` or `catalogue.py` (any row's registry fields, a shared helper, an import, a decorator or
-signature, `evaluate`, `advance`, a new detector) or to `events.py`, `shell.py`, `resolve.py` or `textrules.py` retires every approved proposal (see
+signature, `evaluate`, `advance`, a new detector) or to `events.py`, `shell.py`, `resolve.py`, `resolve_pre.py` or `textrules.py` retires every
+approved proposal (see
 LIMITATIONS.md). One-time migration: the release that introduced the per-detector hash made every proposal written before it stale at once (`compile
 validate` says "catalogue source_sha256 is stale", the hook logs `skipped:P-xxxxxxxx:invalid:schema`, and the nightly pass records a `source_sha256`
 demotion), so re-propose and re-approve each live proposal once.
 
-Detector v2 (2026-10-29: `rm_rf_nonscratch` resolves cwd, variables and same-command worktrees; `compile/resolve.py` is hashed with the
+Detector v2 (2026-10-29: `rm_rf_nonscratch` resolves cwd, variables and same-command worktrees; `compile/resolve.py` and `compile/resolve_pre.py` are
+hashed with the
 catalogue) was such an edit: it retired P-f9407d6c, so the operator re-proposes and re-approves it in observe. The new proposal carries
 its contract worlds (`compile/contracts.py`).
 

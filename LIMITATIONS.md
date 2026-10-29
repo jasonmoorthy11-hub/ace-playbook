@@ -110,21 +110,24 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
   No production code path writes RETIRE, PATCH, MERGE or NARROW from a session
   (`store/promote.py` and `store/__main__.py` are operator-driven); tests/test_arm_phase.py fails if one appears elsewhere. The NOOP counters
   of a frozen session are not written either.
-- The command scanner is a best-effort linear tokenizer, not a shell parser. Known shapes it does not see: shell functions and aliases (a
-  function that rebinds a variable or changes directory is invisible to the target resolution), `bash <<EOF` bodies, and anything past the
-  64 KB cap (reported as `unparseable`). The control is the promotion ladder: a proposal starts in observe mode and every
-  counted true positive is read by a human before any mode change (`docs/design/compiler.md` 7.3).
-  A strict-xfail evasion matrix (`tests/test_detector_evasion_matrix.py`, `docs/design/compiler.md` 4.1.1) pins the documented
-  misses of `rm_rf_nonscratch` as of detector v2 (2026-10-29, 4.1.2): it does not see a recursive delete through an interpreter (python,
-  node, perl, a heredoc, a base64 pipe, a `bash -c` nested in a `bash -c`), through `rsync --delete`, `git clean`, `trash` or Finder, or
-  in a script or Makefile that was written and then run, nor through `$IFS` or `$(...)` as the command word, nor an `xargs` fed by anything
-  but `ls -d` or `find` (14 of 74 variants). v2 reads the working directory (only across `&&`), shell variables assigned in the same
-  command, a worktree added in the same `&&` chain, `bash -c`/`sh -c`/`eval` one level deep, `ls -d | xargs rm -rf`, `find -delete` and
-  `find -exec rm -rf`. A worktree made by an EARLIER tool call is not remembered (the detector keeps no state), a variable that came from the
-  environment (`$HOME`, `$PWD`, one exported earlier) is unresolved and not scratch, and whatever the scanner cannot prove is scratch fires: a `cd` after
-  `;`, a newline or `||`, anything after a `||` in the same chain, a rebound variable, a binding builtin behind `env` or `sudo`, a
-  worktree path under two components, `ls` without `-d`. It no longer flags a scratch delete written as `cd <scratch> && rm -rf ./*` or through
-  a variable (0 false positives in the matrix; week 1 read 36 on the live data).
+- The command scanner is a best-effort linear tokenizer, not a shell parser. Known shapes it does not see: shell functions and aliases that
+  exist in the user's shell but are not defined in the command, `bash <<EOF` bodies, and anything past the 64 KB cap (reported as
+  `unparseable`). The control is the promotion ladder: a proposal starts in observe mode and every counted true positive is read by a
+  human before any mode change (`docs/design/compiler.md` 7.3). A strict-xfail evasion matrix (`tests/test_detector_evasion_matrix.py`,
+  `docs/design/compiler.md` 4.1.1) pins the documented misses of `rm_rf_nonscratch` as of detector v2 (2026-10-29, 4.1.2): it does not
+  see a recursive delete through an interpreter (python, node, perl, a heredoc, a base64 pipe, `zsh -c`, `find -exec sh -c`,
+  `bash -c "$(printf ...)"`, a `bash -c` nested in a `bash -c`), through `rsync --delete`, `git clean`, `trash` or Finder, or in a script or
+  Makefile that was written and then run, nor through `$IFS` or `$(...)` as the command word, nor an `xargs` fed by anything but `ls -d`
+  or `find` (14 of 111 variants). v2 resolves a target only from PROVEN state; whatever it cannot prove falls back to v1's literal rule
+  for that token, so it fires wherever v1 fired except on proven scratch. Proven means: a plain `cd`, `NAME=`, `export NAME=` or
+  `git worktree add` segment with a literal value (no whitespace, `$`, glob, brace, backslash), in the current `&&` chain (a `;`,
+  newline or `&` ends it, a `||` or `!` taints the rest of it, a pipeline or a wrapper sets nothing), in a command with no compound
+  command (`if`, `while`, `for`, `case`, `{ }`), function, `trap`, `alias`, `IFS`/`CDPATH` assignment or unreadable `eval`, and not
+  followed by a rebinding builtin (`let`, `read`, `printf -v`, `unset`, `source`, `((..))`, `pushd +N`, ...). A worktree made by an EARLIER
+  tool call is not remembered (the detector keeps no state), and a variable that came from the environment (`$HOME`, `$PWD`, one exported
+  earlier) is unresolved and not scratch. The price is false positives that v1 also had: a `cd <scratch>` inside a loop or an `if`,
+  after a `;`, or a scratch value built with `$`, still fires (week 1 read 36 such fires on the live data; the matrix has 0 false
+  positives for the plain `cd <scratch> && rm -rf ./*` and `D=<scratch>; rm -rf "$D"` shapes).
 - A proposal's optional `contract` (`compile/contracts.py`) pins behaviour on a few synthetic payloads; it does not prove the detector complete.
 - Warn delivery, resolved: warn uses `additionalContext` (step 5b). The Claude Code hooks reference (read
   2026-10-19) says a hook's stderr on exit 0 never reaches the model, so the hook prints one
@@ -176,11 +179,12 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
 - A proposal's `provenance.source_sha256` is a per-detector hash by exclusion: the text of `detectors.py` and `catalogue.py`, minus
   the bodies of the other rows' `fire` functions (`catalogue.py` is hashed whole, the `CATALOGUE` registry literal included, because
   an expression inside it runs at import time in every process), plus the row's name, fire name and catalogue fields (the `meta`
-  label, redundant with the whole-file text and harmless) and the whole text of `events.py`, `shell.py`, `textrules.py` and `resolve.py`. Editing
+  label, redundant with the whole-file text and harmless) and the whole text of `events.py`, `shell.py`, `textrules.py`, `resolve.py` and
+  `resolve_pre.py`. Editing
   inside one detector's own fire body retires only that detector's proposals (re-propose, re-approve). Any other edit retires every
   approved proposal: any row's registry fields, a shared helper, an import, a constant, a decorator or signature of any fire, a rebinding, `evaluate`, the `Detector`
   class, `advance` or `blank_state` (hashed for every row: `evaluate` runs `advance` before the decision is emitted), any edit to
-  the four leaf modules, and adding a detector. Dynamic lookups are moot (nothing is followed, everything is text). What the hash
+  the five leaf modules, and adding a detector. Dynamic lookups are moot (nothing is followed, everything is text). What the hash
   does not see is any difference between the text on disk, read once when it is first used in a process, and the code actually
   loaded (a tampered `.pyc`, an in-memory monkeypatch, a file edited while a long-lived process runs); the old whole-file hash
   had the same blind spot. A fire in the registry must be the top-level function of `detectors.py` that carries its name

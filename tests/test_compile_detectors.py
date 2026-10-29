@@ -100,8 +100,8 @@ def test_source_sha256_changes_with_the_leaf_modules(monkeypatch):
     before = {n: r.source_sha256 for n, r in cat.CATALOGUE.items()}
     assert all(re.fullmatch(r"[0-9a-f]{64}", h) for h in before.values()) and len(set(before.values())) == len(before)
     texts = cat._source_texts()
-    assert len(texts) == 4 and all(texts)
-    for i in range(len(texts)):          # events, shell, textrules, resolve: any edit moves every hash (per-detector rules: test_compile_srchash)
+    assert len(texts) == 5 and all(texts)
+    for i in range(len(texts)):          # events, shell, textrules, resolve, resolve_pre: any edit moves every hash (per-detector rules: test_compile_srchash)
         changed = tuple(t + "# edit" if j == i else t for j, t in enumerate(texts))
         monkeypatch.setattr(cat, "_source_texts", lambda changed=changed: changed)
         assert all(r.source_sha256 != before[n] for n, r in cat.CATALOGUE.items()), i
@@ -417,7 +417,7 @@ V2_SCRATCH = [
     ("quoted-target-outside", 'rm -rf "/w/my dir"', True),
     ("quoted-command-substitution", 'rm -rf "/tmp/$(cat /w/x)"', True),
     ("single-quoted-variable-is-literal", "D=/tmp/x; rm -rf '$D'", True),
-    ("variable-in-the-value", "A=/tmp; B=$A/x; rm -rf $B", False),
+    ("variable-in-the-value-is-not-a-literal", "A=/tmp; B=$A/x; rm -rf $B", True),
     ("variable-reassigned-outside", "D=/tmp/x; D=/w/src; rm -rf $D", True),
     ("variable-with-command-substitution", "D=$(pwd); rm -rf $D", True),
     ("tmpdir-assigned-outside", "TMPDIR=/w/src; rm -rf $TMPDIR/a", True),

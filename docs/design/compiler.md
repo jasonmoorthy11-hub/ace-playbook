@@ -139,7 +139,7 @@ of its `fire` function; the row metadata as canonical JSON (`strength`, `tier`, 
 signatures and default arguments of those fires stay, because they run at import time in every process; a statement
 sharing a line with an excised body stays hashed); `catalogue.py` WHOLE, the `CATALOGUE = {...}` registry literal
 included, because any expression inside that literal runs at import time in every process (the hook too), so it is
-provenance like any other import-time code; and the full text of `events.py`, `shell.py`, `textrules.py` and `resolve.py`. The
+provenance like any other import-time code; and the full text of `events.py`, `shell.py`, `textrules.py`, `resolve.py` and `resolve_pre.py`. The
 row's own fields also enter through the canonical `meta` part; that is redundant now that the literal is hashed, and
 harmless (it keeps a row built at runtime honest). A fire that the remaining text still names (one fire calling another, or named
 in a kept signature) is kept whole. `advance` and `blank_state` are hashed for every row, stateless or not:
@@ -156,7 +156,8 @@ change other rows' results in the nightly pass and in evidence building (an offl
 because it runs only rows whose proposals are hash-valid and an edited row's proposals are stale. So an edit inside one
 detector's own `fire` body (an edit inside another row's fire body leaves this row's hash alone) retires only that row's
 proposals; any other edit to `detectors.py`, `catalogue.py`, `events.py`,
-`shell.py`, `resolve.py` or `textrules.py` (a registry field of any row, a shared helper, an import, `evaluate`, `advance`, a decorator or signature of
+`shell.py`, `resolve.py`, `resolve_pre.py` or `textrules.py` (a registry field of any row, a shared helper, an import, `evaluate`, `advance`, a
+decorator or signature of
 any fire) retires every approved proposal. Adding a detector also retires every proposal: it adds an import line
 and a registry row to `catalogue.py` and a placeholder for its fire in `detectors.py`. The check is pure AST and text, read
 from disk once per process (`srchash.module_text`): it describes the on-disk text, not the loaded code, so a
@@ -234,7 +235,7 @@ stale. CI never needs rebuild-lab, and the port still cannot drift from the numb
 Each row is a class and a variant (for example `flags/split-flags`, `interpreter/python-rmtree`, `xargs_find/find-delete`) built twice
 from one command template: once with an invented path outside scratch (ground truth: it should fire) and once with a scratch
 path (its benign twin: it must not fire). The strings are only data: they go through the hook's own path (hook payload,
-`event_from_hook`, `catalogue.evaluate`) and are never executed. 74 variants, 148 cases (43 and 86 under v1).
+`event_from_hook`, `catalogue.evaluate`) and are never executed. 111 variants, 222 cases (43 and 86 under v1).
 
 The survivors of a mutation run over the detectors, the tokenizer and `textrules` are pinned by `tests/test_mutation_survivors.py`.
 
@@ -247,6 +248,7 @@ change in either direction shows up. As of detector v2 (4.1.2, 2026-10-29):
 |---|---|---|---|
 | `alias_quote` | 3 | 0 | `$IFS` separators, `$(echo rm)` as the command word, `base64 -d \| sh` |
 | `interpreter` | 5 | 0 | python, node, perl, a `bash <<EOF` body, a `bash -c` inside a `bash -c` (`bash -c`, `sh -c` and `eval` themselves are read) |
+| `unproven` | 0 | 0 | 37 unproven constructs around a scratch value must fire; their plain twins must not (section 4.1.2) |
 | `path` | 0 | 0 | week 1's two false positives are closed; the fail-closed rows (cd after `;`, `\|\|`, a rebound variable) must fire |
 | `worktree` | 0 | 0 | a worktree added and deleted in one `&&` chain is scratch; a path outside the chain or an earlier call is not |
 | `tool_indirection` | 2 | 0 | a script, or a Makefile whose `clean:` recipe deletes, written by `Write` and then run (`bash script`, `make -C dir clean`) |
@@ -272,45 +274,51 @@ line in `shadow.log`; the other cases must exit 0 with an empty stdout and stder
 Week 1 of the measurement read 0 true positives and 36 false positives on `rm_rf_nonscratch`: every fire was a subagent cleaning its
 own scratch (the session scratchpad under `/private/tmp/claude-501/<project>/<session>/scratchpad`, or a worktree the agent had made),
 written as `cd <scratch> && rm -rf ./*`, through a shell variable, or against a worktree path. The lesson (L-b3d1fba9, a real
-7.8 GB loss) was encoded too broadly: scratch the agent made is not "a directory". Detector v2 (2026-10-29, decision D-204) keeps the name,
-the lesson and the family and resolves what the command deletes before it decides. `ace_playbook/compile/resolve.py` does it over one
-command (`shell.command_stream`: events, separators and quoted strings kept aside as holes); `detectors._rm_hits` hands it the
-`SCRATCH` pattern. `rm_rf` (weak) keeps Step 0's literal reading. The rules, and what each one leaves a miss:
+7.8 GB loss) was encoded too broadly: scratch the agent made is not "a directory". Detector v2 (2026-10-29, decision D-204) keeps the
+name, the lesson and the family and resolves what the command deletes before it decides. `rm_rf` (weak) keeps Step 0's literal reading.
 
-- **Working directory.** `cd X` and `pushd X` set the directory for the later segments of the SAME `&&` chain only: after `;`, a newline,
-  `&` or `||` it is unknown (the cd may have failed, so the delete may run where the shell started) and a relative target fires. A bare
-  `cd` is `$HOME` (never scratch); `cd -`, `popd`, a `cd` in a pipeline or in the background, and a `cd` behind `env`/`sudo` leave it
-  unknown; `( )` and backticks scope it. `cd <scratch> && rm -rf ./*` resolves to `<scratch>/*`; `cd <scratch>; rm -rf ./*` fires.
-- **Tainted chains.** A `||` anywhere earlier in a chain may have skipped anything before it (`true || cd <scratch> && rm -rf ./*` parses as
-  `(true || cd <scratch>) && rm`), so after it the directory, the worktree marks and every variable binding are unknown until the next `;`,
-  newline or `&`; assignments, `cd` and `git worktree add` inside the chain bind nothing.
-- **Variables.** `NAME=value` and `export NAME=value` earlier in the command fill `$NAME`, `${NAME}`, `"$NAME"` and `"${NAME}/x"` (not inside
-  single quotes). An unassigned name, `$HOME` and `$PWD` stay unresolved and are not scratch (a leading unknown variable fires);
-  `$TMPDIR` keeps the literal-prefix rule. A binding is dropped when its value stays unresolved (`$`, backticks, `$(`), when the name is
-  rebound (`unset`, `NAME+=`, `NAME[i]=`, `for`, `read`, `printf -v` also glued as `-vNAME`, `declare -n`, `mapfile`, `getopts`, `let`), or when
-  `source`/`.` runs; a binding builtin used with an option shape the scanner does not read, or run behind `env`/`sudo`, drops every
-  binding and the directory. A `builtin` prefix is looked through. Shell functions are not followed (a function that rebinds a variable
-  or changes directory is invisible).
-- **Scratch.** The `SCRATCH` pattern (the agent tree is already under `/private/tmp`) plus a path made by `git [-C repo] worktree add <path>` in
-  the same `&&` chain, never `~`, `..`, a `$`-prefixed path, `/`, `.`, the repo or one of its ancestors, or a path of fewer than two
-  components. A worktree made by an earlier tool call is not remembered (the detector stays `state: "none"`): the delete fires.
-- **Wrappers.** `bash -c '...'`, `sh -c '...'` (own copy of the state) and `eval '...'` (shared state) are re-scanned one level deep with
-  the quotes opened; a wrapper nested in a wrapper is a miss.
-- **xargs and find.** `ls -d <paths> | xargs rm -rf` deletes those paths and `find <roots> ... | xargs rm -rf`, `find <roots> -delete` and
-  `find <roots> -exec rm -rf ...` delete the roots (default `.`). `ls` without `-d` lists names inside a directory, not paths: unknown, fires.
-  Any other producer (`cat list | xargs rm -rf`) is not read.
-- **Quoted targets** are read as text (`rm -rf "/tmp/my dir"` is scratch); a quoted target with a command substitution is `Q` (fires).
-- **Still misses** (the matrix pins them): python, node and perl one-liners, a `bash <<EOF` body, base64 pipes, `$IFS` and `$(echo rm)` as
-  the command word, a script or Makefile written and then run, `rsync --delete`, `git clean`, `trash`, a Finder delete.
+**The invariant (fix wave 2, after Opus round 1).** v2 may call a target scratch only when the resolution is PROVEN; everything the
+scanner cannot prove falls back to v1's literal rule for that token, so v2 fires wherever v1 fired except on proven scratch (and fires
+on more: `bash -c`, `find`, `xargs`). A working directory, a variable binding or a worktree mark is trusted only when ALL hold
+(`resolve_pre.py` states them; `resolve.py` applies them segment by segment):
 
-A builtin behind a wrapper (`env cd X`, `sudo export D=x`, `time cd X`) is not read: the directory and the variables become unknown,
-but the segment is still scanned (`sudo eval "rm -rf ..."` and `time eval "..."` fire like the bare `eval`; `time cd <scratch> && rm -rf ./*`
-fires, conservatively). A wrapped `eval` runs its script on a copy of the state (its deletes are collected) and leaves the
-outer directory, variables and worktree marks unknown, so `env eval "cd <scratch>" && rm -rf ./*` fires; a bare `eval` runs in this shell, so
-`eval "cd <scratch>" && rm -rf ./*` resolves to scratch, as bash does.
+- (a) a PLAIN segment set it: exactly `cd <literal>`, `pushd <literal>`, `NAME=<literal>`, `export NAME=<literal>` or
+  `git [-C <literal>] worktree add [opts] <literal>`, with no `!`, wrapper (`env`, `sudo`, `time`, `command`), `builtin`, redirection or
+  assignment prefix;
+- (b) it sits in the CURRENT `&&` chain: `;`, a newline and `&` end a chain (the cd or the add may have failed, so the delete may run
+  where the shell started), a `||` or a `!` taints the rest of the chain (nothing in it is trusted and every earlier binding is
+  forgotten), a segment in a pipeline or before `&` sets nothing, and a name bound after an `&&` (not first in its chain) dies with the
+  chain; `( )` and `$( )` scope the cwd, the bindings and the worktree marks; `((..))` and `$((..))` make everything unknown;
+- (c) the literal has no whitespace, `$`, backtick, glob, brace or backslash (an unquoted `$D` is word-split and globbed, so only a
+  literal value may be substituted), and the command assigns neither `IFS` nor `CDPATH` anywhere;
+- (d) the whole command contains no compound command (`if`/`while`/`until`/`for`/`select`/`case`/`{ }`), no function definition, no
+  `trap` or `alias`, and no `eval` whose text is not plain `cd`/`rm`/`pushd`/`export`/assignment segments without `$` or backticks. When
+  any of this appears, nothing in the command is resolved (v1 for every token);
+- (e) `let`, `read`, `printf -v`/`-vNAME`, `declare/typeset/local -n`, `mapfile`/`readarray`, `getopts`, `unset`, `NAME+=`, `NAME[i]=`,
+  `for NAME`, `source`/`.`, `popd`, `cd -`, `pushd +N`, and a binding builtin in an option shape the scanner does not read, make the
+  directory and the bindings unknown from there; a builtin behind a wrapper (`env cd X`, `sudo export D=x`, `time cd X`) does the same
+  and is still scanned (`sudo eval "..."` and its targets count). A wrapped `eval` runs on a copy of the state; a bare `eval` runs in
+  this shell;
+- (f) a resolved target that still holds `$` (other than a leading `$TMPDIR`) or a `{a,b}` brace is judged as v1 judged the token
+  (`D=<scratch>; rm -rf "$D/$E"` fires); a literal token keeps exactly v1's `SCRATCH` test (`<scratch>/*` and `/tmp/x/$E` are scratch
+  by the prefix, as before). A worktree is never marked for `~`, `..`, `/`, `.`, the repo, an ancestor of it, or fewer than two components.
 
-`resolve.py` joins `events.py`, `shell.py` and `textrules.py` in the hashed text of every row (section 4), so the change moved all nine
-detector hashes; `tests/test_detector_v2_property.py` generates 400 commands per property against an oracle the generator knows.
+What v2 reads on top of that: `bash -c` and `sh -c` bodies (own copy of the state), a readable `eval` (shared state), `ls -d <paths> |
+xargs rm -rf` and `find <roots> ... | xargs rm -rf`, `find -delete`, `find -exec rm -rf`; any other `ls` producer is unknown (fires).
+After `--` every word is a target, even one that starts with `-`. Quoted targets are read as text (`rm -rf "/tmp/my dir"` is scratch);
+a quoted target with a command substitution or a backslash is `Q` (fires). `cd /tmp/work/..` is `/tmp`, which is scratch as it always was.
+
+**Misses and limits** (the matrix pins the first group): python, node and perl one-liners, a `bash <<EOF` body, base64 pipes, `$IFS` and
+`$(echo rm)` as the command word, a script or Makefile written and then run, `rsync --delete`, `git clean`, `trash`, a Finder delete,
+`zsh -c '...'`, `find -exec sh -c '...'`, `bash -c "$(printf ...)"`, a `bash -c` nested in a `bash -c`, an `xargs` fed by `cat` or `echo`.
+Not seen at all: a function or alias that exists in the user's shell but is not defined in the command, a worktree made by an
+earlier tool call (the detector keeps no state), a directory change by `CDPATH` exported earlier.
+
+`resolve.py` and `resolve_pre.py` join `events.py`, `shell.py` and `textrules.py` in the hashed text of every row (section 4), so the
+change moved all nine detector hashes. `tests/test_detector_v2_property.py` generates 400 commands per property against an oracle the
+generator knows, and holds the V1-FLOOR property: for every mutation of a trusted skeleton (negation, `||`, compound bodies, functions,
+pipes, wrappers, non-literal values, IFS, trap, unreadable eval, arithmetic, rebinding builtins) `v2_fires or not v1_fires`, with a
+frozen copy of v1's rule; removing the compound/function check, the taint or the chain scoping makes it fail.
 
 ### 4.2 Per-session state (`state.py`)
 

@@ -27,7 +27,6 @@ _ANSI_RUN = re.compile(r"(?:[^'\\]+|\\[\s\S])*")
 _SIMPLE = re.compile(r"^[\w./~$@%+=:,-]*$")
 _SPLIT = re.compile(r"&&|\|\||;|\||\n|\(|\)|`|(?<![>&])&(?![>&])")
 _ASSIGN = re.compile(r"^\w+=\S*$")
-_KEEP = re.compile(r"^[\w./~$@%+=:,{}-]*$")   # v2 keeps `{}` inline as well ("${D}/x" is one word, not prose)
 HOLE = re.compile(r"\x00(\d+)\x00")           # a quoted string `command_stream` kept aside: \x00N\x00 -> quotes[N]
 _REBIND = re.compile(r"^(\w+)(?:\+=|\[)")      # NAME+=x and NAME[i]=x change a variable without a plain `NAME=value`
 _SEP = re.compile(r"(&&|\|\||;|\||\n|\(|\)|`|(?<![>&])&(?![>&]))")
@@ -44,10 +43,6 @@ _WRAP_POSITIONAL = {"timeout": 1, "chroot": 1}   # leading positional arguments 
 
 def _mask(inner: str) -> str:
     return inner if _SIMPLE.match(inner) else "Q"
-
-
-def _plain(inner: str, kind: str) -> str:
-    return _mask(inner)
 
 
 def _ansi(inner: str) -> str:
@@ -95,15 +90,16 @@ def _parens(run: str, paren: int, arith: list[int]) -> int:
     return paren
 
 
-def _scan(s: str, mask=_plain) -> str:
+def _scan(s: str, mask=None) -> str:
     """Mask quoted strings (single tokens stay, prose becomes Q), drop comments and heredoc bodies.
 
-    `mask(inner, kind)` decides what a quoted string leaves behind; kind is `"`, `'` or `$'`.
+    `mask(inner, kind)` (default: `_mask(inner)`) decides what a quoted string leaves behind; kind is `"`, `'` or `$'`.
 
     A heredoc opener is queued and its body is cut when the scan reaches the real end of the command
     line, the first newline that is not backslash-continued, quoted or inside a comment.
     """
     out: list[str] = []
+    put = (lambda inner, kind: _mask(inner)) if mask is None else mask
     n, i, dead, ansi_dead, attempts, paren = len(s), 0, 0, 0, 0, 0
     arith: list[int] = []              # paren levels of the open arithmetic expressions
     pending: list[str] = []            # heredoc delimiters waiting for the end of their command line
@@ -144,7 +140,7 @@ def _scan(s: str, mask=_plain) -> str:
             if end >= 0:
                 if run.endswith("$") and not _escaped(s, p - 1):      # $"..": the $ is part of the quoting
                     out[-1] = run[:-1]
-                out.append(mask(s[p + 1:end], '"'))
+                out.append(put(s[p + 1:end], '"'))
                 i = end + 1
             else:
                 out.append('"')
@@ -154,13 +150,13 @@ def _scan(s: str, mask=_plain) -> str:
                 q = _ANSI_RUN.match(s, p + 1).end()
                 if q < n and s[q] == "'":
                     out[-1] = run[:-1]
-                    out.append(mask(_ansi(s[p + 1:q]), "$'"))
+                    out.append(put(_ansi(s[p + 1:q]), "$'"))
                     i = q + 1
                     continue
                 ansi_dead = q
             end = s.find("'", p + 1)
             if end >= 0:
-                out.append(mask(s[p + 1:end], "'"))
+                out.append(put(s[p + 1:end], "'"))
                 i = end + 1
             else:
                 out.append("'")
@@ -216,7 +212,7 @@ def command_stream(cmd: str | None) -> tuple[list[tuple[str, list[str]]], list[t
     quotes: list[tuple[str, str]] = []
 
     def mask(inner: str, kind: str) -> str:
-        if _KEEP.match(inner) and not (kind == "'" and "$" in inner):
+        if _SIMPLE.match(inner) and not (kind == "'" and "$" in inner):
             return inner
         quotes.append((kind, inner))
         return f"\x00{len(quotes) - 1}\x00"

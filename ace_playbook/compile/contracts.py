@@ -2,7 +2,7 @@
 
 A proposal may carry an OPTIONAL key `contract` = {"must_fire": [payload, ...], "must_not_fire": [payload, ...]}, each payload
 shaped like a `regression_examples` item (tool_name, tool_input, expect, source). `proposal.validate` runs every payload through
-the proposal's own check, at propose, validate and approve, so a detector change that breaks a world refuses the proposal
+the proposal's own check, at propose, validate and approve and when the hook loads the file, so a detector change that breaks a world refuses the proposal
 the same way a stale regression example does. `compile propose` copies CONTRACT_WORLDS[detector] into the record (data only:
 no detector reads this table, it is not hashed with the catalogue, and the proposal id covers whatever was recorded).
 A record without the key keeps today's behaviour. Stdlib only; on the hook path (proposal.py imports it), so it stays small.

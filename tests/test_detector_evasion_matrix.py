@@ -116,7 +116,7 @@ CUSTOM = [
     ("path", "cd-newline", [bash(f"cd {SCR}\nrm -rf .")], [bash(f"cd {SCR} && rm -rf .")]),
     ("path", "cd-or-true", [bash(f"cd {SCR} || true; rm -rf ./*")], [bash(f"cd {SCR} && rm -rf ./*")]),
     ("path", "or-skips-the-cd", [bash(f"true || cd {SCR} && rm -rf ./*")], [bash(f"cd {SCR} && rm -rf ./*")]),
-    ("path", "env-cd-is-external", [bash(f"env cd {SCR} && rm -rf ./*")], [bash(f"command cd {SCR} && rm -rf ./*")]),
+    ("path", "env-cd-is-external", [bash(f"env cd {SCR} && rm -rf ./*")], [bash(f"cd {SCR} && rm -rf ./*")]),
     ("path", "variable-printf-v-glued", [bash(f'D={SCR}; printf -vD {OUT}; rm -rf "$D"')], [bash(f'D={SCR}; printf -v E {OUT}; rm -rf "$D"')]),
     ("path", "variable-unset", [bash(f'D={SCR}; unset D; rm -rf "$D"')], [bash(f'D={SCR}; rm -rf "$D"')]),
     ("path", "variable-from-command", [bash(f'D={SCR}; D=$(pwd); rm -rf "$D"')], [bash(f'D={SCR}; rm -rf "$D"')]),
@@ -141,9 +141,65 @@ CUSTOM = [
 ]
 
 
+# Opus round 1 (fix wave 2): the resolver may trust only PROVEN state. Each row's evade payload is an UNPROVEN construct around a scratch
+# value (v1 fired on all of them, so must v2); its twin is the plain proven form of the same thing, which must not fire.
+PLAIN_VAR = f'D={SCR}; rm -rf "$D"'
+PLAIN_CD = f"cd {SCR} && rm -rf ./*"
+PLAIN_WT = f"git worktree add {OUT}/wt b && rm -rf {OUT}/wt"
+UNPROVEN = [
+    # bindings that outlive a statement that may not have run, or a pipeline / compound / function / wrapper that scoped them away
+    ("conditional-binding", f'[ -n "$CI" ] && D={SCR}; rm -rf "$D"', PLAIN_VAR),
+    ("conditional-binding-test-z", f'[ -z "$D" ] && D={SCR}; rm -rf "$D"', PLAIN_VAR),
+    ("binding-after-false", f'D={OUT}; false && D={SCR}; rm -rf "$D"', PLAIN_VAR),
+    ("binding-in-if", f'if true; then D={SCR}; fi; rm -rf "$D"', PLAIN_VAR),
+    ("binding-in-while", f'while true; do D={SCR}; break; done; rm -rf "$D"', PLAIN_VAR),
+    ("binding-in-for", f'for i in 1; do D={SCR}; done; rm -rf "$D"', PLAIN_VAR),
+    ("binding-in-case", f'case x in x) D={SCR};; esac; rm -rf "$D"', PLAIN_VAR),
+    ("binding-in-function", f'f() {{ D={SCR}; }}; f; rm -rf "$D"', PLAIN_VAR),
+    ("binding-in-group", f'{{ D={SCR}; }}; rm -rf "$D"', PLAIN_VAR),
+    ("binding-in-pipeline", f'D={SCR} | true; rm -rf "$D"', PLAIN_VAR),
+    ("binding-before-background", f'D={SCR} & rm -rf "$D"', PLAIN_VAR),
+    ("binding-behind-env", f'D={SCR} env; rm -rf "$D"', PLAIN_VAR),
+    ("binding-in-a-skipped-eval", f'false && eval "D={SCR}"; rm -rf "$D"', PLAIN_VAR),
+    # unquoted references are word-split
+    ("split-on-space", f'D="{SCR}/x /"; rm -rf $D', PLAIN_VAR),
+    ("split-two-paths", f'D="{SCR} {OUT}"; rm -rf $D', PLAIN_VAR),
+    ("split-on-ifs", f"IFS=:; D={SCR}:{OUT}; rm -rf $D", PLAIN_VAR),
+    # negation
+    ("negated-cd", f"! cd {SCR} && rm -rf ./*", PLAIN_CD),
+    ("negated-worktree-add", f"! git worktree add {OUT}/wt b && rm -rf {OUT}/wt", PLAIN_WT),
+    # the worktree add is not the last command of its pipeline
+    ("piped-worktree-add", f"git worktree add {OUT}/wt b | cat && rm -rf {OUT}/wt", PLAIN_WT),
+    # an eval whose text cannot be read
+    ("eval-of-a-variable", f'cd {SCR} && eval "$CMD" && rm -rf ./*', PLAIN_CD),
+    ("eval-of-a-substitution", f'D={SCR}; eval "$(cat f)"; rm -rf "$D"', PLAIN_VAR),
+    ("eval-of-a-function", f'cd {SCR} && eval "f" && rm -rf ./*', PLAIN_CD),
+    ("eval-of-another-command", f'D={SCR}; eval "x"; rm -rf "$D"', PLAIN_VAR),
+    # a `$` or a brace left after a scratch prefix
+    ("unresolved-suffix", f'D={SCR}; rm -rf "$D/$E"', f'D={SCR}; rm -rf "$D/x"'),
+    ("unresolved-cd-suffix", f"cd {SCR} && cd ../$X && rm -rf ./*", PLAIN_CD),
+    ("brace-expansion", f'D={SCR}; rm -rf "$D"/{{a,../../w}}', f'D={SCR}; rm -rf "$D"/x'),
+    # arithmetic, pushd +N
+    ("arithmetic-assignment", f'D={SCR}; (( D=1 )); rm -rf "$D"', PLAIN_VAR),
+    ("arithmetic-substitution", f'D={SCR}; : $(( D=1 )); rm -rf "$D"', PLAIN_VAR),
+    ("pushd-plus-n", f"cd {SCR} && pushd +1 && rm -rf ./*", PLAIN_CD),
+    # functions, traps and aliases defined in the same command
+    ("function-moves-the-cwd", f"f() {{ cd {OUT}; }}; cd {SCR} && f && rm -rf ./*", PLAIN_CD),
+    ("trap-debug", f"trap 'cd {OUT}' DEBUG; cd {SCR} && rm -rf ./*", PLAIN_CD),
+    ("alias-cd", f"alias cd=true; cd {SCR} && rm -rf ./*", PLAIN_CD),
+    # compound bodies around the cd
+    ("cd-in-if", f"if true; then cd {SCR} && rm -rf ./*; fi", PLAIN_CD),
+    ("cd-in-for", f"for i in 1; do cd {SCR} && rm -rf ./*; done", PLAIN_CD),
+    ("cd-in-group", f"{{ cd {SCR} && rm -rf ./*; }}", PLAIN_CD),
+    ("cd-behind-a-redirect", f"cd {SCR} >/dev/null && rm -rf ./*", PLAIN_CD),
+    # a target after `--` is a target even when it starts with `-`
+    ("dash-target-after-ddash", f"rm -f -r -- -{OUT}", f"rm -f -r -- {SCR}"),
+]
+
+
 def cases():
     rows = [(c, v, [bash(t.replace(T, OUT))], [bash(t.replace(T, SCR))]) for c, v, t in TEMPLATES]
-    return rows + CUSTOM
+    return rows + CUSTOM + [("unproven", v, [bash(fire)], [bash(twin)]) for v, fire, twin in UNPROVEN]
 
 
 CASES = [(f"{c}/{v}/{kind}", c, kind, payloads, kind == "evade")
@@ -198,7 +254,8 @@ def test_the_matrix_has_at_least_24_variants_each_with_an_evasion_and_a_benign_t
     ids = [c[0] for c in CASES]
     assert len(set(ids)) == len(ids)
     assert {i.rsplit("/", 1)[0] for i in ids if i.endswith("/evade")} == {i.rsplit("/", 1)[0] for i in ids if i.endswith("/twin")}
-    assert {"control", "flags", "alias_quote", "interpreter", "path", "tool_indirection", "xargs_find", "other_tools", "worktree"} <= {c[1] for c in CASES}
+    classes = {"control", "flags", "alias_quote", "interpreter", "path", "tool_indirection", "xargs_find", "other_tools", "worktree", "unproven"}
+    assert classes <= {c[1] for c in CASES}
     assert set(KNOWN_MISSES) <= set(ids)
 
 
