@@ -596,7 +596,7 @@ tool of Gmail, Google Calendar and Linear that the brief does not need, reads in
 `hooks/brief-settings.json` repeats the list in `permissions.deny` and a test keeps them equal).
 `-p` denies an unlisted tool, but your user-level `permissions.allow` and `defaultMode` still apply inside the run, which is why
 `--permission-mode default` is passed and every unneeded connector tool is denied by name. `hooks/brief_connector_tools.txt` is a dated
-snapshot of the connector tool names seen on 2026-10-22 and a test checks each is allowed or denied; refresh it by hand when a connector
+snapshot of the connector tool names seen on 2026-10-22 (re-diffed 2026-10-29 for Linear `prepare_file_upload`) and a test checks each is allowed or denied; refresh it by hand when a connector
 adds tools. A connector tool added after the snapshot, and any user-scope MCP server that is not in it, is NOT stopped by `--tools` (it
 controls built-ins only) or `--allowedTools` (it only adds allows): the default mode and `-p` deny it only when no user-level
 `permissions.allow` covers it. **Never keep a server-wide or wildcard `permissions.allow` entry for Gmail, Calendar or Linear (or any

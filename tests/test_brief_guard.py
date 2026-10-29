@@ -102,7 +102,8 @@ def test_the_connector_deny_list_names_every_write_tool_of_the_three_servers_and
     for name in ("Gmail__send_message", "Gmail__reply", "Gmail__forward", "Gmail__trash_thread", "Gmail__create_draft", "Gmail__update_draft",
                  "Google_Calendar__create_event", "Google_Calendar__update_event", "Google_Calendar__delete_event",
                  "Google_Calendar__respond_to_event", "Linear__save_issue", "Linear__save_comment", "Linear__delete_comment",
-                 "Linear__merge_diff", "Linear__share_issue", "Linear__mark_notification", "Linear__prepare_attachment_upload"):
+                 "Linear__merge_diff", "Linear__share_issue", "Linear__mark_notification", "Linear__prepare_attachment_upload",
+                 "Linear__prepare_file_upload"):
         assert f"mcp__claude_ai_{name}" in denied, name
     for server in ("Google_Drive", "Slack", "Canva", "Claude_Docs", "Microsoft_365", "rey_robin"):
         assert f"mcp__claude_ai_{server}" in denied
@@ -130,7 +131,7 @@ def denied_by(name, rules):
 def test_the_connector_snapshot_is_dated_and_holds_the_real_names():
     head = SNAPSHOT.read_text().splitlines()[0]
     snap = rule_lines(SNAPSHOT)
-    assert head.startswith("#") and "2026-10-22" in head and len(snap) == len(set(snap)) == 129
+    assert head.startswith("#") and "2026-10-22" in head and len(snap) == len(set(snap)) == 130
     assert all(n.startswith("mcp__") and n.count("__") == 2 for n in snap)
     assert {"mcp__claude_ai_Linear__extract_images", "mcp__claude_ai_Gmail__get_message", "mcp__claude_ai_Google_Calendar__suggest_time"} <= set(snap)
     assert set(names()) - {"ToolSearch"} <= set(snap)                                    # every allowed connector tool really exists
