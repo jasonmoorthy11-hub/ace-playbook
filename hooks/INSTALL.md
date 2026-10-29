@@ -401,6 +401,9 @@ appended after it, even one stamped earlier, is ignored; a missing, malformed or
 adding the line; the first line of a detector wins, so a corrected second line does not replace a malformed first one.
 The report refuses (exit 1) when a started detector has no such proposal,
 when a member is approved at `observe` or has a demotion in force, or when an approved proposal has no readable proposal file.
+A demotion in force before the arm start is lifted only by a re-approval that differs from the newest `approvals.jsonl` row of
+the proposal. `approvals.append` appends nothing when the proposal hash and the mode equal that row's (`approvals.py`). For a `warn`
+proposal lowered to `observe`: approve at `block`, or approve at `observe` and then, a second later, at `warn`.
 
 **Seal preview.** `python3 -m ace_playbook.compile seal --dry-run` prints the pre-registration's Frozen instruments block
 (detector hashes, report hash, approved proposals, measurement start) and writes nothing; without `--dry-run` it needs a

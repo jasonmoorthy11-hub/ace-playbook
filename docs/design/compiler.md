@@ -1388,7 +1388,8 @@ verified approvals chain at that moment)
 it computes the eligible sessions (interactive: `prompts` > 0 in the newest
 `_session` row; `start`, the first transcript event, in [arm start, horizon end); the horizon is the earliest of 12 weeks,
 the 400th eligible session and the first lowering demotion row of the detector's proposals at or after the arm start, whatever its
-cause, read from `demotions.jsonl`; the report prints the cause; an `evasion_pair` row keeps the mode and is not a demotion here), the
+cause, read from `demotions.jsonl`; the report prints the cause; an `evasion_pair` row keeps the mode and is not a demotion here;
+a lowering row at or after the natural end ends nothing and prints no cause), the
 arm of each session (`assign`: HMAC-SHA256 of `session hash|proposal id` under `shadow_seed`, first 4 bytes below `arm_rate` is the warn arm), the
 primary (`primary`: repeat fires per eligible session over rows with `agent_id_present` false; subagent rows are counted
 apart), D, and `permutation_test` (10,000 Bernoulli(`arm_rate`) re-draws from `random.Random(permutation_seed)`, p = (1 +
@@ -1410,7 +1411,10 @@ row gained `start` (rows written before it have none and are reported as missing
 the resolved mode in `label --rows` and the queue card while any detector's phase runs. Still open, and conditions before any
 `arm_start` (PREREGISTRATION.md, Pre-arm-start conditions): the live hook does not yet
 write `arm` or `agent_id_present` (`shadow.py` holds no arm code, so today `arms report` refuses every row), the offline auto-FP rule (a) is still
-asymmetric, demotion and harm do not yet ignore auto labels during a phase, and the spillover comparison is not built.
+asymmetric, demotion and harm do not yet ignore auto labels during a phase, the spillover comparison is not built, and condition (7) is half built: the
+analysis counts `error:delivered:` lines of `shadow.log` in the horizon of an `error_rate` demotion (`arms_window.delivered_errors`, `unknown` for a
+missing, unreadable or full log), but the hook does not yet log them and no family-lesson status change from a session carrying `ACE P-`
+and no lesson minting is frozen.
 
 ### 8.x Brief (as built)
 

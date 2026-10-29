@@ -7,7 +7,7 @@ assigned arm), a percentile-pivot interval for D, and Holm over every detector w
 call time; only their sha256 is compared with the sealed block and nothing prints a seed. The proposals of a detector are fixed at its arm
 start (`arms_window.family`, intention to treat: later approvals rows and rows appended after the head named on its `arm_start` line change
 nothing); each is its own hypothesis in the Holm family (conservative); a started detector with no fires enters at D = 0, p = 1. An
-`arm_start` for a detector with no approved proposal at that start, a member not approved at warn or block with no demotion in force, an
+`arm_start` for a detector with no approved proposal at that start, a member not approved at warn or block with no lowering demotion in force, an
 approved proposal with no readable file, or a line without a valid approvals head is refused.
 
 It REFUSES (ValueError; the CLI exits 1) when a fire row of an eligible session lacks `arm` or `agent_id_present`, or records an `arm` that
@@ -32,7 +32,7 @@ from .. import config as cfgmod
 from ..canon import now_iso
 from . import labels, metrics, report, seal
 from .arms_window import (CAP, LAG_DAYS, WEEKS, _dt, _fmt, arm_heads, arm_starts, check_starts, eligible_sessions,  # noqa: F401  (re-exported)
-                          family, first_demotion, horizon_end)
+                          delivered_errors, family, first_demotion, horizon_end)
 from .arms_stats import ALPHA, RUNS, holm, permutation_test  # noqa: F401  (the public names of the analysis)
 
 WARN, OBSERVE = "warn", "observe"
@@ -108,6 +108,8 @@ def analyse(cfg, now: str | None = None) -> dict:
         if not (pids := fam.get(det)):
             raise ValueError(f"arm_start {det} names a detector with no approved proposal at the arm start (approve one or do not start the arm)")
         (demoted, cause), ok[det] = first_demotion(cfg, pids, t0), True
+        if demoted and demoted >= eligible_sessions(ev_rows, t0, None, det)[1]:     # a lowering row at or after the natural end ends nothing
+            demoted = cause = None
         for pid in pids:
             sess, end, missing = eligible_sessions(ev_rows, t0, None, det, demoted)
             arm_of = lambda s, pid=pid: assign(s, cfg.shadow_seed, cfg.arm_rate, pid)       # noqa: E731
@@ -117,6 +119,8 @@ def analyse(cfg, now: str | None = None) -> dict:
             waiting = sum(r["proposal_id"] == pid and metrics._fire(r) and not metrics._scanned(r, scanned) for r in rows)
             row = {"detector": det, "arm_start": t0, "horizon_end": end, "analysis_due": due, "final": now >= due, "eligible": len(sess),
                    "missing_start": missing, "fires_awaiting_scan": waiting, "demoted_at": demoted, "demotion_cause": cause}
+            if cause == "error_rate":                           # condition (7): the delivered-path error count, built before the seal
+                row["delivered_errors"] = delivered_errors(cfg, t0, end)
             if row["final"]:
                 row |= {k: stat[k] for k in ("n", "mean", "rate_ratio", "sessions_with_fire", "subagent_fires")}
                 row["test"] = (permutation_test(stat, cfg.arm_rate, cfg.permutation_seed) if stat["D"] is not None
@@ -138,6 +142,8 @@ def render(d: dict) -> str:
         lines.append(f"{head}; arm start {v['arm_start']}, horizon end {v['horizon_end']}, analysis due {v['analysis_due']}")
         if v["demoted_at"]:
             lines.append(f"  horizon ended by demotion {v['demotion_cause']} at {v['demoted_at']}")
+        if "delivered_errors" in v:
+            lines.append(f"  delivered-path errors in the horizon: {'unknown' if v['delivered_errors'] is None else v['delivered_errors']}")
         if v["final"]:
             t = v["test"]
             lines.append(f"  n {v['n']}  mean {v['mean']}  D {t['D']}  p {t['p']}  ci95 {t['ci95']}")
