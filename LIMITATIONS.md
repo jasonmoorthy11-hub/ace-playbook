@@ -535,6 +535,9 @@ line and a line that contains a `/` all give
 wrote it, so what it prints is only as good as the script (a check line is shown as a plain note; a line whose first word carries a colon is
 rejected so it cannot pose as a digest category such as `silent:`); `compile status` shows at most four notes, each cut to 80 characters.
 
+The sandbox logs in `/var/acewatch/logs` are rotated only if the operator installs the newsyslog template (`hooks/acewatch/newsyslog.acewatch.conf`) as
+root; nothing in this repository installs it, and the other launchd jobs' logs (nightly, brief) are not covered by it.
+
 The `acewatch` note is the same kind of text: whatever the operator's `acewatch_check` script prints (the sample prints the first `open ...`, `none` or
 `disabled` line of `watch status` as `acewatch`), not a count this repository verified. The sudoers line it needs is the operator's, installed by hand.
 

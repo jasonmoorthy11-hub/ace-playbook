@@ -296,6 +296,22 @@ ended in an outage or an unavailable claude. A run that is down (an outage or an
 items read`, and with zero compliance it prints no proposals line. A call that ran and failed adds `canary: F failed` on stderr. A model change
 (`watch_reader_model`) is a reason to run it before the next scan.
 
+## Log rotation
+
+launchd appends `acewatch.out.log`, `acewatch.err.log` and `acewatch.weekly.out.log` / `.err.log` in `/var/acewatch/logs/` forever; the scan itself writes
+no log file. `hooks/acewatch/newsyslog.acewatch.conf` is a newsyslog(8) template, one line per file (owner `acewatch:staff`, mode 600, keep 5, rotate
+at 1024 KiB, compressed). Install it as root, by hand, once: replace the placeholder with acewatch's home and put the result where newsyslog reads it:
+
+```
+f=$(mktemp) && sed "s#__ACEWATCH_HOME__#/var/acewatch#g" hooks/acewatch/newsyslog.acewatch.conf > "$f"
+sudo install -m 644 "$f" /etc/newsyslog.d/acewatch.conf && rm "$f"
+sudo newsyslog -nvf /etc/newsyslog.d/acewatch.conf
+```
+
+(the last line is a dry run: it prints what it would rotate). launchd opens the log files again for every run, so the rotation needs no signal. The files are
+rotated as root and stay owned by `acewatch`; nothing in this repository installs the file. Linux: the same four files, the same numbers in a
+logrotate stanza (`rotate 5`, `size 1024k`, `compress`, `create 0600 acewatch acewatch`) under `/etc/logrotate.d/acewatch`.
+
 ## The operator-side status line
 
 `/var/acewatch` is `acewatch`'s own (0700), so the operator's `compile status` cannot read the watcher's store and shows nothing about it. The nightly

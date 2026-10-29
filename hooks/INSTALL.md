@@ -543,7 +543,8 @@ network, and it is never on a hook path.
    the Reader away from your files (the `acewatch` user in a group of its own, its own claude and login, two LaunchDaemon templates in
    `hooks/acewatch/`) is `docs/watch/SANDBOX.md`; nothing is installed for you. This repo's CI runs the three Reader test files under a bare PATH
    (`env -i PATH=/usr/bin:/bin`, a scratch HOME, `LANG=C`, which Python coerces to UTF-8) with the venv's python by absolute path: the PATH and
-   locale of the acewatch LaunchDaemon, not its user.
+   locale of the acewatch LaunchDaemon, not its user. The four launchd logs of the sandbox are rotated by a root-installed newsyslog template
+   (`hooks/acewatch/newsyslog.acewatch.conf`; SANDBOX.md "Log rotation").
 
 The count also reaches `status.json` (`watch_open` and friends), the `proposals` block of `compile digest` and the status line (`watch N`).
 
