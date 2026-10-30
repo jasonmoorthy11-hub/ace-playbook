@@ -1240,6 +1240,7 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   `scale` argument, a transparent `color` or `-webkit-text-fill-color`; also skipped are a closed `details`, `dialog`, `svg`, `math`, `iframe`,
   `object`, `embed`, `head`, `select` (all its option text), `progress` and `meter`. XML with a DTD or an ENTITY declaration is dropped (`xml`).
   Also: a `Content-Encoding` other than identity is dropped (`encoding`); a 304 for a URL with no stored validator is dropped (`etag`);
+  a URL that `urlsafe.py`'s guarded split rejects (None, e.g. a bracketed host that is no IPv6 literal) is dropped (`url`) before any request;
   a deprecations page that parses to no rows is a `parse` drop (never an empty table); the `md` kind is read in markdown mode
   (the HTML rules, except that a raw-text opener is prose when it is in a fenced block or in a code span that opens and closes on ONE plain
   line, outside every HTML block, and no closer for it follows later; a plain line has no block marker at its start, no backslash before a
@@ -1369,12 +1370,15 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   write with a unique O_EXCL temporary name, the scan lock).
 - `netguard.py`: the SSRF guard. A host that is, or resolves to, a loopback, link-local, private, multicast or reserved address is dropped
   (`address`) before any request; a redirect is followed only to the same scheme, host and port, at most three hops, with no userinfo in the
-  URL, and is dropped (`redirect`) otherwise. The DNS answer can change between the check and the connect (rebinding); the address is checked
-  before the connection, not on the connected socket, so that race stays. `resolve_failed(host)` is True only for a name whose lookup raised or gave
-  no answer (`blocked_address` keeps its contract: an unsafe answer and a failed lookup are both True). `scan.collect` uses it for the wake-up scan: on
-  the FIRST `address` drop of a scan whose lookup failed it waits `scan.DNS_WAIT` seconds (20, ONE wait per scan, `scan.SLEEP` is injectable),
-  fetches that one source again and adds the note `dns wait <N>s: <id> recovered|still dropped`; later address drops of the same scan never wait. A
-  source that is still dropped keeps no stamp and stays due for the second scan of the day.
+  URL, and is dropped (`redirect`) otherwise; both URLs go through `urlsafe.py`'s guarded split, and one it rejects (None) makes the guard raise
+  `RedirectRefused("url")` when `redirect_request` is called directly (defence in depth); `fetch.py` turns a `RedirectRefused` into the drop `redirect`.
+  Through urllib the stdlib's `http_error_302` parses the Location with `urlparse` BEFORE `redirect_request` runs, so a malformed Location reaches `fetch` as
+  a ValueError and is dropped as `network ValueError` (pinned by `tests/test_watch_urlsafe.py:91`). The DNS answer can change between the check and the
+  connect (rebinding); the address is checked before the connection, not on the connected socket, so that race stays. `resolve_failed(host)` is True only for
+  a name whose lookup raised or gave no answer (`blocked_address` keeps its contract: an unsafe answer and a failed lookup are both True). `scan.collect` uses
+  it for the wake-up scan: on the FIRST `address` drop of a scan whose lookup failed it waits `scan.DNS_WAIT` seconds (20, ONE wait per scan, `scan.SLEEP` is
+  injectable), fetches that one source again and adds the note `dns wait <N>s: <id> recovered|still dropped`; later address drops of the same scan never wait.
+  A source that is still dropped keeps no stamp and stays due for the second scan of the day.
 - `inventory.py`: the snapshot (`inventory.json`, 0600). Per target of the private map only the matching LINES with numbers plus the
   file sha256; `{"missing": true}` for a missing file; at most 50 files per target, a target with more is marked `truncated` and its
   `model_pin` becomes a lead with no diff; `claude --version` only when `claude` is on PATH.
@@ -1995,15 +1999,18 @@ became rung-aware and the date is the next rung's, not always warn's. It was nev
 
 ## Files read
 
+The counts are the line counts AT THE TIME OF READING, so they go stale by design (`clean/bashwrite.py` and `config.py` were re-counted
+at 144 and 230 on 2026-10-30).
+
 | File | Lines |
 |---|---|
 | ace-playbook/README.md (lines 55-85), LIMITATIONS.md, PREREGISTRATION.md (TBD grep), SECURITY.md | 131, 77, 88, 64 |
 | ace-playbook/docs/reviews/2026-10-17-opus-stage1-review.md | 24 |
-| ace-playbook/ace_playbook/config.py, enqueue.py, filelock.py | 129, 39, 22 |
+| ace-playbook/ace_playbook/config.py, enqueue.py, filelock.py | 230, 39, 22 |
 | ace-playbook/ace_playbook/store/schema.py (full), store/log.py (lines 20-40, def list) | 262, 130 |
 | ace-playbook/ace_playbook/inject/sanitize.py, citations.py, ledger.py, injector.py, __main__.py | 120, 26, 38, 140, 68 |
 | ace-playbook/ace_playbook/reflect/provenance.py (full), reflect/runner.py (lines 20-60, def list) | 92, 192 |
-| ace-playbook/ace_playbook/clean/transcript.py (lines 28-60, 84-134), clean/origins.py, clean/bashwrite.py | 254, 114, 127 |
+| ace-playbook/ace_playbook/clean/transcript.py (lines 28-60, 84-134), clean/origins.py, clean/bashwrite.py | 254, 114, 144 |
 | ace-playbook/ace_playbook/scrub/engine.py (lines 192-205, def list), scrub/quarantine.py (lines 20-60) | 230, 84 |
 | ace-playbook/hooks/sessionstart.sh, stop_citation_ledger.sh, sessionend.sh, pre-commit-scrub.sh | 5, 5, 6, 23 |
 | ace-playbook/hooks/INSTALL.md (grep, lines 80-105) | 158 |

@@ -6,6 +6,7 @@ import base64
 import hashlib
 import math
 import re
+import string
 from bisect import bisect_right
 from dataclasses import dataclass, field
 from typing import Iterable
@@ -100,12 +101,39 @@ def _entropy_hits(text: str, offset: int = 0, prefix: str = "") -> list[Hit]:
     return hits
 
 
+_B64_CHARS = frozenset(string.ascii_letters + string.digits + "+/")
+_URLSAFE = str.maketrans("-_", "+/")
+
+
+def _lenient_clean(s: str) -> str | None:
+    """What CPython 3.12's non-validating base64 decode (binascii a2b_base64, strict_mode=False) keeps of `s`, as a string the strict decode
+    accepts or refuses exactly where the lenient one did. Non-ASCII text is refused as `b64decode` does. A char outside `A-Za-z0-9+/` is
+    skipped; a `=` with fewer than 2 data chars in the quad is skipped, otherwise it counts as padding and, once the quad is complete, decoding
+    STOPS (the rest is ignored); a data char resets the padding count. Input ending mid-quad is returned unpadded, so the strict decode raises
+    (quad of 1: invalid length; 2 or 3 without completed padding: incorrect padding)."""
+    if not s.isascii():
+        return None
+    kept, quad, pads = [], 0, 0
+    for c in s:
+        if c == "=":
+            pads += quad >= 2
+            if quad >= 2 and quad + pads >= 4:
+                return "".join(kept) + "=" * (4 - quad)
+        elif c in _B64_CHARS:
+            kept.append(c)
+            quad, pads = (quad + 1) % 4, 0
+    return "".join(kept)
+
+
 def try_decode(token: str) -> str | None:
     pad = token + "=" * (-len(token) % 4)
-    for fn in (base64.b64decode, base64.urlsafe_b64decode):
+    for s in (pad, pad.translate(_URLSAFE)):          # main's two passes, same order; each decode is strict (3.15 warns on a lenient one)
+        clean = _lenient_clean(s)
+        if clean is None:
+            continue
         try:
-            raw = fn(pad)
-        except (ValueError, TypeError):
+            raw = base64.b64decode(clean, validate=True)
+        except (ValueError, TypeError):               # binascii.Error is a ValueError
             continue
         text = raw.decode("utf-8", errors="ignore")
         if len(text) >= 12 and sum(c.isprintable() for c in text) / len(text) >= 0.9:

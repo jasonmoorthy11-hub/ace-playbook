@@ -17,14 +17,13 @@ from __future__ import annotations
 import copy
 import os
 import time
-import urllib.parse
 from datetime import datetime
 from pathlib import Path
 
 from ...canon import now_iso
 from ...config import Config
 from . import fetch as fetchmod
-from . import fsio, inventory, match, model, netguard, store
+from . import fsio, inventory, match, model, netguard, store, urlsafe
 from .reconcile import reconcile  # noqa: F401 - tests call scan.reconcile
 from .records import quote_line
 
@@ -79,8 +78,8 @@ def collect(sources: list[dict], seen: dict, now: str, force: bool, opener=None)
         if _due(src, seen, now, force) or cached is None:
             get = lambda: fetchmod.fetch(src["url"], expect=fetchmod.EXPECT[src["kind"]], store=seen, kind=src["kind"], opener=opener, now=now)  # noqa: E731
             item = get()
-            if (not waited and item is not None and item.get("dropped") == "address"
-                    and netguard.resolve_failed(urllib.parse.urlsplit(src["url"]).hostname)):
+            split = urlsafe.split(src["url"]) if not waited and item is not None and item.get("dropped") == "address" else None
+            if split is not None and netguard.resolve_failed(split.hostname):
                 waited = True                                                   # DNS may not be up after a wake: wait once, try this source again
                 SLEEP(DNS_WAIT)
                 item = get()

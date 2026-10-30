@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import ipaddress
 import socket
-import urllib.parse
 import urllib.request
+
+from . import urlsafe
 
 MAX_HOPS = 3
 _PORTS = {"http": 80, "https": 443}
@@ -21,7 +22,7 @@ RESOLVE = socket.getaddrinfo                      # looked up at call time so te
 
 
 class RedirectRefused(Exception):
-    """A redirect to another host, another scheme or an unsafe address."""
+    """A redirect to another host, another scheme, an unsafe address or a URL the parser rejects."""
 
 
 def _unsafe(ip: ipaddress._BaseAddress) -> bool:
@@ -66,7 +67,9 @@ class SameHost(urllib.request.HTTPRedirectHandler):
     max_redirections = MAX_HOPS
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        old, new = urllib.parse.urlsplit(req.full_url), urllib.parse.urlsplit(newurl)
+        old, new = urlsafe.split(req.full_url), urlsafe.split(newurl)
+        if old is None or new is None:
+            raise RedirectRefused("url")                                            # never a bare ValueError out of the handler
         try:
             same = (new.scheme == old.scheme and new.scheme in ("http", "https") and new.hostname and old.hostname and not new.username
                     and new.hostname.lower() == old.hostname.lower() and (new.port or _PORTS[new.scheme]) == (old.port or _PORTS[old.scheme]))
