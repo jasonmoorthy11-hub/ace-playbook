@@ -82,6 +82,23 @@ def _flag_values(seqs: list[list[str]]) -> set[str]:
     return out
 
 
+def _url_split(u: str) -> tuple[str, str]:
+    """`(netloc, path)`; Python 3.11.4+ `urlparse` raises ValueError on a bracketed host that is no IPv6 literal (`https://[REDACTED]/x`,
+    `http://[abc`), so fail closed to a textual split: the raw host text is recorded as a parseable host would be, never dropped."""
+    try:
+        p = urlparse(u)
+        return p.netloc, p.path
+    except ValueError:
+        host, _, path = re.split(r"[?#]", u.split("://", 1)[-1], maxsplit=1)[0].partition("/")
+        return host, "/" + path
+
+
+def _url_host_seg(u: str) -> tuple[str, str]:
+    """A URL's host and its first path segment (both raw text, see `_url_split`)."""
+    host, path = _url_split(u)
+    return host, path.strip("/").split("/")[0]
+
+
 def _destinations(seqs: list[list[str]], names: set[str], found: set[str], urls: set[str]) -> set[str]:
     """Directories to record as written: the cwd and flag values (extraction, git, server names), glob/brace directories,
     and for every URL its host and first path segment (a recursive wget) under the cwd and under each marked directory."""
@@ -92,7 +109,7 @@ def _destinations(seqs: list[list[str]], names: set[str], found: set[str], urls:
         if m := GLOB_RE.search(w):
             dests.add(os.path.dirname(w[:m.start()]))
     for u in urls:
-        host, seg = urlparse(u).netloc, urlparse(u).path.strip("/").split("/")[0]
+        host, seg = _url_host_seg(u)
         under = {host, seg, os.path.join(host, seg)} - {""}
         dests |= under | {os.path.join(m, d) for m in found for d in under}
     return dests
@@ -120,7 +137,7 @@ def bash_analyse(cmd: str) -> tuple[set[str], bool]:
             root = True  # the cap bounds the work; a command over it taints the root instead of dropping pairs
         else:
             found |= {os.path.join(p, q) for p in found for q in qs}
-    bases = {n for u in urls for b in [os.path.basename(urlparse(u).path) or "index.html"] for n in (b, b.removesuffix(".git"))}
+    bases = {n for u in urls for b in [os.path.basename(_url_split(u)[1]) or "index.html"] for n in (b, b.removesuffix(".git"))}
     found |= bases | {os.path.join(p, b) for p in found for b in bases}
     if expanding or names & ROOT_WORDS or any("CDPATH" in w for s in seqs for w in s):
         root = True  # the tracker does not model the shell's working directory (a cd, eval, find, xargs...) nor any expansion
