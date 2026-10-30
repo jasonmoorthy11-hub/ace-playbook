@@ -462,13 +462,14 @@ GRAMMAR_TWINS = [
     f'DIR={AGENT}; rm -r -f -- "${{DIR}}/b" $DIR/c', f'D={SCR}; rm -rf "$D/sub/*" "$D"',
     "git worktree add /w/wt && rm -rf /w/wt", "git worktree add -b nb /w/wt HEAD && rm -rf /w/wt", "git -C /w/repo worktree add /w/wt main && rm -fr /w/wt",
     "git worktree add wt && rm -rf wt", "git worktree add ./wt b && rm -rf wt", "git worktree add /w/a/wt main && rm -r -f -- /w/a/wt",
+    f"cd  {SCR}  &&  rm  -rf   ./*   sub/x", f'D={SCR};   rm  -r  -f  --  "$D"   $D/y', "git  worktree  add  -b  nb  /w/wt  &&  rm  -rf  /w/wt",
 ]
 # Near misses of those shapes: each must FIRE (v1's literal rule), because something is not exactly the shape.
 NEAR_MISSES = [
     f"cd {SCR}; rm -rf ./*", f"cd {SCR} && rm -rf ../x", f"cd {SCR} && rm -rf ./.*", f"cd {SCR} && rm -rf ./*(P:x:)", f"cd {SCR} && rm -rf ./*\n",
     f"cd {SCR} &&\trm -rf ./*", f"cd {SCR}>x && rm -rf ./*", f'D={SCR}; E=$D; rm -rf "$E"', f"cd {SCR} && true && rm -rf ./*",
     f"cd {SCR} && rm -rf ./x && ls", f"cd {SCR} && rm -rf ./x; echo", f'cd "{SCR}" && rm -rf ./*', f"cd {SCR} && rm -rf ./x\\ y", "cd $D && rm -rf ./*",
-    f"cd {SCR} && env -C {OUT} rm -rf ./*", f"cd {SCR}  && rm -rf ./*", f" cd {SCR} && rm -rf ./x", f"cd {SCR} && rm -rf ./x ", "cd /srv/x && rm -rf ./*",
+    f"cd {SCR} && env -C {OUT} rm -rf ./*", f" cd {SCR} && rm -rf ./x", f"cd {SCR} && rm -rf ./x ", "cd /srv/x && rm -rf ./*",
     f'D={SCR}; rm -rf "$E"', f'D={SCR}; rm -rf "$D"/../x', f"D={SCR}; rm -rf $D/.*", f'IFS={SCR}; rm -rf "$IFS"', f"PATH={SCR}; rm -rf $PATH",
     f"export D={SCR}; rm -rf $D", "git worktree add /w/wt && rm -rf /w", "git worktree add /w/wt && rm -rf /w/wt2", "git worktree add /w/wt; rm -rf /w/wt",
     "git -C /w/repo worktree add wt && rm -rf wt", "git worktree add /w/../wt && rm -rf /w/../wt", "git worktree add /w/wt && rm -rf /w/wt /w/other",

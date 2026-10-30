@@ -5,7 +5,7 @@ S2 `NAME=<scr>; rm -rf "$NAME"...`, S3 `git worktree add <p> && rm -rf <p>`) is 
 shapes with a scratch or an outside root; the oracle is "proven iff every joined target is scratch", and the detector must fire exactly when
 v1 fires and the shape is not proven. The V1 FLOOR: `v2_fires or not v1_fires or proven`, where `v1_fires` is a frozen copy of v1's rule kept
 below and `proven` = the generator built a grammar shape with scratch targets. Every mutation of a shape (a forbidden character, a trailing
-newline, a tab, a `..` or leading-dot component, another NAME, a `;` in S1) is NOT proven. Five mutants of grammar.py must each fail a test.
+newline, a tab, a `..` or leading-dot component, another NAME, a `;` in S1) is NOT proven. Eight mutants of grammar.py (the five named in the brief and three more) must each fail a test.
 Seeded (`random.Random(1234)`, override with PYTEST_SEED); stdlib only; the commands are DATA fed to the detector, nothing runs.
 """
 
@@ -131,6 +131,16 @@ def test_the_detector_fires_exactly_when_v1_fires_and_the_shape_is_not_proven():
                 assert v2 is (v1 and not oracle), (seed, cmd)
 
 
+def test_extra_spaces_between_tokens_change_nothing():
+    """A shape separates its tokens by one or more spaces (never a tab or a newline): the verdict and the detector are the same."""
+    for seed, scr, out in worlds(N // 4, 8):
+        for root in (scr, out):
+            for cmd, oracle in shapes(random.Random(seed), root):
+                wide = cmd.replace(" ", "   ")
+                assert proven(wide) is proven(cmd) and proven(cmd) is oracle, (seed, wide)
+                assert fires(wide) is fires(cmd), (seed, wide)
+
+
 def test_the_generator_covers_every_variant_of_every_shape():
     text = "\n".join(c for seed, scr, _o in worlds(N, 3) for c, _ in shapes(random.Random(seed), scr))
     for token in ("-rf", "-fr", "-Rf", "-fR", "-r -f", "-f -r", " --", "${", '"$', "/*", "./", "&&", ";", "-b nb", "-C ", "HEAD", "worktree add"):
@@ -152,7 +162,6 @@ def mutate_chars(r: random.Random, cmd: str):
     yield "trailing tab", cmd + "\t"
     for k in [i for i, c in enumerate(cmd) if c == " "][:6]:
         yield f"tab for the space at {k}", cmd[:k] + "\t" + cmd[k + 1:]
-        yield f"double space at {k}", cmd[:k] + "  " + cmd[k + 1:]
         yield f"newline for the space at {k}", cmd[:k] + "\n" + cmd[k + 1:]
 
 
@@ -218,10 +227,9 @@ def structured_mutants(r: random.Random, root: str):
     yield "s2 pipe", f'D={root} | rm -rf "$D"'
     yield "s2 export", f'export D={root}; rm -rf "$D"'
     yield "s2 quoted value", f'D="{root}"; rm -rf "$D"'
-    yield "s2 two spaces after the semicolon", f'D={root};  rm -rf "$D"'
     yield "s2 no space after the semicolon", f'D={root};rm -rf "$D"'
     for bad in ("IFS", "PATH", "path", "Path", "HOME", "CDPATH", "TMPDIR", "PWD", "OLDPWD", "ENV", "BASH_ENV", "BASHPID", "LD_PRELOAD", "LC_ALL", "_",
-                "SHELLOPTS", "GLOBIGNORE", "RANDOM", "ZDOTDIR"):
+                "SHELLOPTS", "GLOBIGNORE", "RANDOM", "ZDOTDIR", "status", "ARGC", "GID", "pipestatus"):
         yield f"s2 special name {bad}", f'{bad}={root}; rm -rf "${bad}"'
     wt = "/w/repo/wt"
     yield "s3 other rm path", f"git worktree add {wt} && rm -rf {wt}2"
@@ -262,7 +270,7 @@ def test_every_structured_mutation_is_not_proven_and_the_floor_holds():
 def test_the_denied_names_and_the_allowed_names_of_s2():
     for name in NAMES:
         assert proven(f'{name}=/tmp/w; rm -rf "${name}"'), name
-    for name in ("IFS", "PATH", "path", "cdpath", "HOME", "BASH_ENV", "BASH_XYZ", "LD_LIBRARY_PATH", "DYLD_X", "LC_ALL", "ZSH_X", "_", "RANDOM"):
+    for name in ("IFS", "PATH", "path", "cdpath", "HOME", "BASH_ENV", "BASH_XYZ", "LD_LIBRARY_PATH", "DYLD_X", "LC_ALL", "ZSH_X", "_", "RANDOM", "status", "ARGV", "UID"):
         assert not proven(f'{name}=/tmp/w; rm -rf "${name}"'), name
 
 
