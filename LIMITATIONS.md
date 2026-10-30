@@ -111,10 +111,11 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
   (`store/promote.py` and `store/__main__.py` are operator-driven); tests/test_arm_phase.py fails if one appears elsewhere. The NOOP counters
   of a frozen session are not written either.
 - The command scanner is a best-effort linear tokenizer, not a shell parser. Known shapes it does not see: `bash -c` and `eval` in any form
-  (quoted or not), `bash <<EOF` bodies, shell functions and aliases (a one-line `function f { ...; }` body and `alias` definitions are not read,
-  nor a call of any of them; `f() { ... }` and `function f() { ... }` bodies and a multi-line `function f {` body are read as commands, as on
-  main), and anything past the 64 KB cap (reported as `unparseable`). The control is the
-  promotion ladder: a proposal starts in observe mode and every counted true positive is read by a
+  (quoted or not), `bash <<EOF` bodies, shell functions and aliases (after `function NAME {` the ONE command written directly after the
+  brace on the same line is not read, whether the body is one line or several, and `alias` definitions are not read, nor a call of any of
+  them; every later command in a `function NAME {` body, on that line or on a later one, is read, and `f() { ... }` and `function f() { ... }`
+  bodies are read in full, as on main: the shell scanner splits on `(` and `)` and strips a leading `{`), and anything past the 64 KB cap
+  (reported as `unparseable`). The control is the promotion ladder: a proposal starts in observe mode and every counted true positive is read by a
   human before any mode change (`docs/design/compiler.md` 7.3). A strict-xfail evasion matrix (`tests/test_detector_evasion_matrix.py`,
   `docs/design/compiler.md` 4.1.1) pins the documented misses of `rm_rf_nonscratch` as of detector v2 (2026-10-29, D-209, 4.1.2): it does not
   see a recursive delete through an interpreter (python, node, perl, a heredoc, a base64 pipe, `bash -c`/`sh -c`/`eval`, quoted or not),
@@ -125,8 +126,9 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
   v1's own rule (S3: the path this command's `worktree add` created, whatever its root; nothing is checked against SCRATCH for S3, and a
   relative `-C` is not proven; an absolute `-C` is compared with WT textually, after `normpath`: case aliases such as `-C /x/PROJ` for WT `/x/proj`
   on this Mac's case-insensitive APFS, and the `/var` to `/private/var` and `/etc` to `/private/etc` symlinks, are not resolved, so those `-C`
-  forms are proven and silent although v1 fires; they are unreachable, because `git worktree add` refuses a non-empty WT, so the add path is
-  the proof and the `-C` check is defence in depth; the matrix pins five such forms);
+  forms are proven and silent although v1 fires; they are unreachable except when WT is an existing EMPTY directory (`git worktree add` accepts
+  it); the delete then removes only the checkout; a non-empty WT is refused, so the add path is the proof and the `-C` check is defence in
+  depth; the matrix pins five such forms);
   anything else, a `;`, a second command, a tab, a quote, a redirection, a wrapper, `bash -c`, gets v1's literal rule
   unchanged, so v2 never fires less than v1 except on those three shapes. The price is precision: a scratch delete that is not exactly a shape
   still fires (`cd <scratch>; rm`, `cd <scratch> && true && rm ...`, `export D=<scratch> && rm -rf $D`, `(cd <scratch> && rm ...)`, `rm ... 2>/dev/null`,
@@ -135,7 +137,10 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
   live data; the matrix has 0 for the plain `cd <scratch> && rm -rf ./*` and `D=<scratch>; rm -rf "$D"` shapes.
   Not seen by the shapes: a shell function or alias of the user's shell (a `cd` or `rm` function would
   change what a shape does), `CDPATH` or `cdable_vars` in the environment, a `mv`, `ln` or `cp` that swaps a directory or symlink under a proven path, and an
-  existing empty directory that `git worktree add` accepts. The S2 variable name is checked against a FROZEN list of shell specials (the zsh 5.9 and
+  existing empty directory that `git worktree add` accepts. Inherited-environment residuals the grammar cannot see (the frozen list covers
+  shell-special NAMES, not attributes set at runtime): a value attribute the user's shell set on NAME before the command (`typeset -L3 D` makes
+  `D=/tmp/w` store `/tm`), and an inherited `IFS` that splits an unquoted `$D` under bash; a readonly NAME is safe, because both shells abort
+  the `-c` script. The S2 variable name is checked against a FROZEN list of shell specials (the zsh 5.9 and
   bash 3.2 names of one Mac, found by `print -l ${(k)parameters}` and `compgen -v` with the 36 modules of /usr/lib/zsh/5.9 loaded (35 load;
   zsh/deltochar does not), plus `POSTEDIT`, `RPROMPT`
   and `RPROMPT2` and the prefixes in `grammar.py`; zsh cuts the value of `KEYBOARD_HACK`, `HISTCHARS` and `histchars`, which is why a name list

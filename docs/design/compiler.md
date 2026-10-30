@@ -313,7 +313,8 @@ component, none of the three starts with `//` (`normpath` keeps exactly two lead
 `WT` is not `.` or `/`, an absolute `WT` has at least two components, a `-C` repository is an absolute path that is, textually and after `normpath`,
 neither `WT` nor a descendant of it (a relative `-C` is not proven: it is never compared with `WT`; case and symlink aliases are not resolved:
 `-C /x/PROJ` for WT `/x/proj` on a case-insensitive APFS, and `/private/var`, `/private/etc` for `/var`, `/etc`, pass the check, so those `-C` forms
-are proven and silent although v1 fires; they are unreachable, because `add` refuses a non-empty `WT`: the add path is the proof, the `-C` check is
+are proven and silent although v1 fires; they are unreachable except when WT is an existing EMPTY directory (`git worktree add` accepts
+it); the delete then removes only the checkout; a non-empty `WT` is refused, so the add path is the proof, the `-C` check is
 defence in depth, and `S3_ALIAS_TWINS` in the matrix test pins five), and a relative `WT` has no `-C` (git would put it under the
 repository while `rm` stays in the cwd). Its parent never qualifies. In S2 the name
 is 1 to 32 characters of `[A-Za-z_][A-Za-z0-9_]*` and not a name a shell treats specially (compared in upper case, so `path` is `PATH` too): a FROZEN
@@ -365,10 +366,15 @@ python, node and perl one-liners, a `bash <<EOF` body, base64 pipes, `$IFS` and 
 or `eval` (quoted or not) holding the delete, `ls -d ... | xargs rm -rf`, `find -delete`, `find -exec rm -rf`, `find -f`, a script
 or Makefile written and then run, `rsync --delete`, `git clean`, `trash`, a Finder delete, `rm -- -x`. A function or alias of the user's shell
 that is not defined in the command is invisible to every shape: `cd <scratch> && rm -rf ./*` is proven by its text, and a user function named
-`cd` or `rm` could make it do anything. One DEFINED in the command: a one-line `function f { ...; }` body and `alias` definitions are not read (silent
-on v1 and v2); `f() { ... }` and `function f() { ... }` bodies and a multi-line `function f {` body are read as commands (v1 and v2 fire).
+`cd` or `rm` could make it do anything. One DEFINED in the command: after `function NAME {` the ONE command written directly after the brace on the
+same line is not read, whether the body is one line or several, and `alias` definitions are not read, nor a call of any of them (silent on v1 and
+v2); every later command in a `function NAME {` body, on that line or on a later one, is read, and `f() { ... }` and `function f() { ... }` bodies
+are read in full (v1 and v2 fire; `shell.py` splits on `(` and `)` and strips a leading `{`).
 `CDPATH` or `cdable_vars` set in the environment, a `mv`, `ln` or `cp` that swaps a directory or a
-symlink under a proven path (names are read, never the filesystem), and a delete that follows a symlink are not seen either.
+symlink under a proven path (names are read, never the filesystem), and a delete that follows a symlink are not seen either. Inherited-environment
+residuals the grammar cannot see (the frozen list covers shell-special NAMES, not attributes set at runtime): a value attribute the user's shell
+set on NAME before the command (`typeset -L3 D` makes `D=/tmp/w` store `/tm`), and an inherited `IFS` that splits an unquoted `$D` under bash; a
+readonly NAME is safe, because both shells abort the `-c` script.
 
 `grammar.py` joins `events.py`, `shell.py` and `textrules.py` in the hashed text of every row (section 4): four leaf modules, so the change
 moved all nine detector hashes (the table keeps one line per detector; only the hashes move); `shell.py` is byte-identical to main.

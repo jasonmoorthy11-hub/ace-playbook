@@ -495,10 +495,15 @@ NEAR_MISSES += [f"git -C . worktree add {_P} && rm -rf {_P}", f"git -C sub workt
 # fix wave 11 (docs-lens round 2): the function bodies v1 reads fire (so LIMITATIONS may say a `function f() { }` and a multi-line `function f {` body are
 # read), and a scratch NAME must be the LAST component (`/srv/build/x` is not scratch); the one-line `function f { ...; }` and `alias` forms are silent.
 NEAR_MISSES += [f"function f() {{ rm -rf {OUT}; }}; f", f"function f {{{NL}rm -rf {OUT}{NL}}}{NL}f", "cd /srv/build/x && rm -rf ."]
-V1_SILENT_DEFINITIONS = [f"function f {{ rm -rf {OUT}; }}; f", f"alias k='rm -rf {OUT}'; k", f'alias k="rm -rf {OUT}"; k']
+# fix wave 12 (docs-lens round 3, I2): after `function NAME {` only the ONE command directly after the brace on the same line is unread (shell.py splits on
+# `(` and `)` and strips a leading `{`); a later command in the body fires, one-line (`echo a; rm ...`) or multi-line (`true` then `rm ...`).
+NEAR_MISSES += [f"function f {{ echo a; rm -rf {OUT}; }}; f", f"function f {{ true{NL}rm -rf {OUT}{NL}}}{NL}f"]
+V1_SILENT_DEFINITIONS = [f"function f {{ rm -rf {OUT}; }}; f", f"alias k='rm -rf {OUT}'; k", f'alias k="rm -rf {OUT}"; k',
+                         f"function f {{ rm -rf {OUT}{NL}}}{NL}f"]   # the multi-line body whose FIRST command sits directly after the brace is unread too
 # The `-C` repository is compared with WT TEXTUALLY, after normpath (docs-lens round 2, NEW-1): a case alias (the Mac's APFS is case-insensitive) and
-# the fixed /var -> /private/var and /etc -> /private/etc symlinks are not resolved. Proven under v2 and silent, v1 fires. Unreachable: `git worktree add`
-# refuses a non-empty WT, so the add path is the proof and the `-C` check is defence in depth (compiler.md 4.1.2).
+# the fixed /var -> /private/var and /etc -> /private/etc symlinks are not resolved. Proven under v2 and silent, v1 fires. Unreachable except when WT is an
+# existing EMPTY directory (`git worktree add` accepts it); the delete then removes only the checkout. A non-empty WT is refused, so the add path is the
+# proof and the `-C` check is defence in depth (compiler.md 4.1.2).
 S3_ALIAS_TWINS = [f"git -C {_P.upper()} worktree add {_P} && rm -rf {_P}",
                   f"git -C {_P.replace('proj', 'PROJ')}/sub worktree add {_P} && rm -rf {_P}",
                   "git -C /VAR/x/wt/sub worktree add /var/x/wt && rm -rf /var/x/wt", "git -C /private/var/x/wt worktree add /var/x/wt && rm -rf /var/x/wt",
@@ -521,7 +526,7 @@ def test_an_s3_dash_c_alias_of_wt_is_proven_and_silent_under_v2_though_v1_fires(
 
 
 @pytest.mark.parametrize("cmd", V1_SILENT_DEFINITIONS)
-def test_a_one_line_function_keyword_body_and_an_alias_are_not_read_by_v1_or_v2(cmd):
+def test_the_command_directly_after_a_function_keyword_brace_and_an_alias_are_not_read_by_v1_or_v2(cmd):
     assert not grammar.proven_scratch(cmd, d.SCRATCH) and not fires([bash(cmd)]) and not v1_fires(cmd)
 
 
