@@ -489,8 +489,19 @@ GRAMMAR_TWINS += [f'WORK={SCR}; rm -rf "$WORK"/x', f'{"N" * 32}={SCR}; rm -rf "$
 _U = "/Us" + "ers"                                         # built from parts: no added line carries the literal home path (the added-lines gate)
 NEAR_MISSES += ["git worktree add // && rm -rf //", "git worktree add //. && rm -rf //", f"git worktree add /{_U} && rm -rf /{_U}",
                 "git worktree add //x && rm -rf //x", f"git -C /{_U}/a/repo worktree add {_U}/a && rm -rf {_U}/a"]
+# fix wave 10 (docs-lens round 1): git puts a relative WT under `-C`, and a relative `-C` was never compared with WT, so S3 proves only an ABSOLUTE `-C`.
+_P = f"{_U}/FAKEuser/proj"
+NEAR_MISSES += [f"git -C . worktree add {_P} && rm -rf {_P}", f"git -C sub worktree add {_P} && rm -rf {_P}"]
 # Scratch-path S3 twins: proven and silent. v1's literal rule does not fire on a /tmp target either, so they are not GRAMMAR_TWINS (which assert v1 fired).
 S3_SCRATCH_TWINS = ["git worktree add /tmp/x/wt && rm -rf /tmp/x/wt", "git -C /tmp/r worktree add /tmp/x/wt && rm -rf /tmp/x/wt"]
+# v1's own residuals, carried into S1 (docs-lens round 1, important): S1 and S2 inherit v1's SCRATCH rule, so a scratch PARENT (`/tmp`, `/var/folders`,
+# `/private/tmp`) and a scratch NAME anywhere in the path (`.../build`) are proven like any scratch dir. v1 FIRES on each; v2 does not (compiler.md 4.1.2).
+V1_RESIDUAL_TWINS = ["cd /tmp && rm -rf *", "cd /tmp && rm -rf .", "cd /var/folders && rm -rf *", "cd /private/tmp && rm -rf *", "cd /srv/x/build && rm -rf ."]
+
+
+@pytest.mark.parametrize("cmd", V1_RESIDUAL_TWINS)
+def test_a_v1_residual_is_proven_by_s1_and_silent_under_v2_though_v1_fires(cmd):
+    assert grammar.proven_scratch(cmd, d.SCRATCH) and not fires([bash(cmd)]) and v1_fires(cmd)
 
 
 @pytest.mark.parametrize("cmd", S3_SCRATCH_TWINS)

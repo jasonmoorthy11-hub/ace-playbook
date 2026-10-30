@@ -2,11 +2,13 @@
 
 `proven_scratch(command)` is True ONLY when the RAW command text equals, in full (`\\A ... \\Z`, never `$`), one of three exact
 shapes whose every delete target is scratch. No shell is modelled: no tokenizer, no quotes, no state. Spaces (one or more) separate
-tokens; a tab, newline, quote, backslash, `$(`, `;` (outside S2's own), `|`, `&` (outside `&&`), parenthesis, brace, bracket,
-redirection, `#` or `!` is in no shape, so it never matches. Everything else is v1's literal rule, unchanged.
+tokens; a tab, newline, backslash, `$(`, `;` (outside S2's own), `|`, `&` (outside `&&`), parenthesis, bracket, redirection, `#` or `!`
+is in no shape, and a quote, `$` or brace only as S2's own `$NAME`, `${NAME}` and their quoted forms; any other never matches.
+Everything else is v1's literal rule, unchanged.
   S1  cd <SCR> && rm <FLAGS> <REL>( <REL>)*
   S2  NAME=<SCR>(;| &&) rm <FLAGS> <VREF>( <VREF>)*    VREF: $NAME ${NAME} "$NAME" "${NAME}" + optional /<REL>, the same NAME; NAME 1-32 chars, no shell special
   S3  git( -C <LIT>)? worktree add( -b <LIT>)? <WT>( <LIT>)? && rm <FLAGS> <WT>    (the rm path is the path the add just created; none starts with `//`)
+      S3 proves an absolute `-C` repository, never WT or a descendant of it; a relative `-C` is not proven
 """
 
 from __future__ import annotations
@@ -86,7 +88,7 @@ def _s3(m, scratch) -> bool:
     wn = posixpath.normpath(wt)
     if any(".." in p.split("/") for p in (wt, rm, c or "")) or wn != posixpath.normpath(rm) or wn in (".", "/"):
         return False
-    if c and not wt.startswith("/"):                                            # `git -C <dir>` puts a relative path under <dir>
+    if c and not (wt.startswith("/") and c.startswith("/")):                    # `-C <dir>` puts a relative WT under <dir>; a relative <dir> is not proven
         return False
     if c and (posixpath.normpath(c) + "/").startswith(wn.rstrip("/") + "/"):    # never the repository itself or one of its parents
         return False
