@@ -608,6 +608,8 @@ def test_the_grammar_default_scratch_is_the_detectors_own_rule():
 
 # ------------------------------------------------------------------ the 64 KB gate: <= 50 ms locally, asserted at 3x for a slow CI runner
 CI_FACTOR_MS = 150
+# the grammar alone: about 15 ms measured locally on the worst matching shape (20 ms budget), asserted at 3x = 60 ms (a loaded runner flakes at 1x)
+GRAMMAR_BUDGET_MS = 60
 _ENV = "".join(f"D{i}=/tmp/a{i}; " for i in range(64))
 TIMING_SHAPES = {
     "dollar-paren-pairs": _ENV + "$(a) " * 13000, "paren-pairs": _ENV + "(a)" * 21000, "backtick-pairs": _ENV + "`a` " * 16000,
@@ -617,6 +619,9 @@ TIMING_SHAPES = {
     "worktree-adds-then-many-targets": "git worktree add /a/b/c1 && " * 1000 + "rm -rf " + " ".join(f"/a/b/c{i}/x" for i in range(5000)),
     "negations": "! x; " * 13000,
     "s1-many-rels": "cd /tmp/w && rm -rf " + "a " * 32000, "s1-one-huge-rel": "cd /tmp/w && rm -rf " + "a" * 64000,
+    # the two MATCHING worst shapes (docs-lens round 2, NEW-2): the s1-many-rels and s2-many-refs shapes end in a space or a bad tail and
+    # never match, so they time only the failing path; these end in a target, so the whole 64 KB is matched (test_the_matching_shapes_match)
+    "s1-many-rels-matching": "cd /tmp/w && rm -rf " + "a " * 32000 + "a", "s2-many-refs-matching": 'D=/tmp/w; rm -rf ' + '"$D/x" ' * 9000 + '"$D"',
     "s1-huge-rel-bad-tail": "cd /tmp/w && rm -rf " + "a/" * 30000 + "!", "s1-star-runs": "cd /tmp/w && rm -rf " + "a*" * 30000 + "\n",
     "s1-many-components": "cd " + "/a" * 30000 + " && rm -rf x", "s2-many-refs": 'D=/tmp/w; rm -rf ' + '"$D/x" ' * 10000,
     "s2-many-refs-bad-name": 'D=/tmp/w; rm -rf ' + '"$D/x" ' * 10000 + '"$E"', "s3-long-lit": "git worktree add " + "a" * 30000 + " && rm -rf " + "a" * 30000,
@@ -639,4 +644,11 @@ def test_the_64kb_budget_holds(name):
         best_g = min(best_g, (time.perf_counter() - t0) * 1000)
     assert errors == []
     print(f"timing {name}: evaluate best {best:.1f} ms, grammar alone {best_g:.2f} ms")
-    assert best <= CI_FACTOR_MS and best_g <= 15, (name, best, best_g)
+    assert best <= CI_FACTOR_MS and best_g <= GRAMMAR_BUDGET_MS, (name, best, best_g)
+
+
+def test_the_matching_shapes_match():
+    # a timing shape that never matches times only the failing path (docs-lens round 2, NEW-2): pin that these two do match, whole
+    for name in ("s1-many-rels-matching", "s2-many-refs-matching"):
+        cmd = TIMING_SHAPES[name]
+        assert len(cmd) <= 65000 and proven(cmd) is True, name

@@ -310,8 +310,11 @@ reference that has a `/REL`; in S3, nothing is checked against `SCRATCH`, becaus
 `add` refuses an existing path, so the path is one this very command created (an existing EMPTY directory is accepted by git; the delete
 then removes what the add checked out there). S3 holds when `RM` and `WT` are equal after `normpath`, none of `WT`, `RM` and the `-C` path has a `..`
 component, none of the three starts with `//` (`normpath` keeps exactly two leading slashes, so `//` is the root and would slip the next three guards),
-`WT` is not `.` or `/`, an absolute `WT` has at least two components, a `-C` repository is an absolute path, never `WT` or a descendant of it
-(a relative `-C` is not proven: it is never compared with `WT`), and a relative `WT` has no `-C` (git would put it under the
+`WT` is not `.` or `/`, an absolute `WT` has at least two components, a `-C` repository is an absolute path that is, textually and after `normpath`,
+neither `WT` nor a descendant of it (a relative `-C` is not proven: it is never compared with `WT`; case and symlink aliases are not resolved:
+`-C /x/PROJ` for WT `/x/proj` on a case-insensitive APFS, and `/private/var`, `/private/etc` for `/var`, `/etc`, pass the check, so those `-C` forms
+are proven and silent although v1 fires; they are unreachable, because `add` refuses a non-empty `WT`: the add path is the proof, the `-C` check is
+defence in depth, and `S3_ALIAS_TWINS` in the matrix test pins five), and a relative `WT` has no `-C` (git would put it under the
 repository while `rm` stays in the cwd). Its parent never qualifies. In S2 the name
 is 1 to 32 characters of `[A-Za-z_][A-Za-z0-9_]*` and not a name a shell treats specially (compared in upper case, so `path` is `PATH` too): a FROZEN
 tuple in `grammar.py` (`_SPECIAL`, 235 names), generated once on one Mac and never computed at hook time, frozen again in the test. What was run:
@@ -328,23 +331,27 @@ cuts the VALUE of
 `KEYBOARD_HACK` to its first character and of `HISTCHARS` / `histchars` to three, so `HISTCHARS=<scratch>; rm -rf "$HISTCHARS/x"` deletes `/tm/x`,
 outside scratch (Opus grammar round 1). A special added by a later shell is a documented residual; a name on the list only costs precision.
 `proven_scratch` never raises (an input it cannot read is not a proof), and its anchored regexes
-have bounded token classes and no ambiguous nesting (`(?:RC/)*` inside `( +REL)*` is unambiguous: 64 KB adversarial inputs
-take at most 5 ms): a 64 KB command costs about 5 ms in the grammar on the worst shape (32 000
-relative paths) and at most 20 ms through `catalogue.evaluate` (measured with a fresh event per run: 16 ms on the worst shape).
+have bounded token classes and no ambiguous nesting (`(?:RC/)*` inside `( +REL)*` is unambiguous). A 64 KB command costs about 15 ms in the grammar
+on the worst MATCHING shape (`cd /tmp/w && rm -rf a a ... a`, 32 001 targets; the timing test pins that the two matching shapes do match: a shape that
+ends in a space or a bad tail never matches and times only the failing path, about 5 ms) and about 19 ms through `catalogue.evaluate` (a fresh event
+per run, best of 3, three runs on an idle machine); every 64 KB shape in the timing test stays under 20 ms. The hook budget of 200 ms stands; the test
+asserts the grammar alone at 60 ms (3 times the 20 ms allowance, so a loaded runner does not flake) and `evaluate` at 150 ms.
 
 **What v2 fires on that a resolver would not (precision residuals).** v1 flags every relative target and every variable, so a scratch delete
 that is not exactly a shape keeps v1's fire: `cd <scratch>; rm -rf ./*` (a `;`), `cd a && cd b && rm ...`, `cd <scratch> && true && rm ...`
 (or `echo`, `mkdir`), `eval "cd <scratch>" && rm ...`, `(cd <scratch> && rm ...)`, `export D=<scratch> && rm -rf $D`, `D=<scratch>; E=$D;
 rm -rf "$E"`, `cd <scratch> && rm -rf ./a 2>/dev/null`, `cd <scratch> && ls -d ./* | xargs rm -rf ./a`, a quoted `cd "<scratch>"`, a second
-command after the rm, a relative `git -C <repo> worktree add wt` (the matrix pins 39 such `residual` rows), and a worktree made
-by an EARLIER tool call (the detector keeps no state; that world is a twin row, not a `residual` one). They are the price of proving
+command after the rm, a relative `git -C <repo> worktree add wt`, and a worktree made
+by an EARLIER tool call (the detector keeps no state; that world is a twin row, not a `residual` one); the matrix pins 39 such `residual` rows
+for the whole list. They are the price of proving
 nothing outside the shapes: a human reading the fire sees a
 scratch delete and labels it a false positive. A scratch delete v1 never read (`bash -c 'cd <scratch> && rm -rf ./*'`, `find <scratch> -delete`,
 `ls -d <scratch>/* | xargs rm -rf`) stays silent, like its outside-scratch twin (a miss, below).
 
 **v1's own residuals, which v2 keeps** (the rounds named them; v1 on main has them). S1 and S2 inherit v1's SCRATCH rule, so the grammar CARRIES
-two of them into the proven shapes: a scratch PARENT (`/tmp`, `/var/folders`, `/private/tmp`) and a scratch NAME anywhere in the path (`.../build`)
-are proven like any scratch dir. `cd /tmp && rm -rf *`, `cd /tmp && rm -rf .`, `cd /var/folders && rm -rf *`, `cd /private/tmp && rm -rf *` and
+two of them into the proven shapes: a scratch PARENT (`/tmp`, `/var/folders`, `/private/tmp`) and a path whose LAST component is a scratch name
+(`.../build`; `/srv/build/x` is not scratch, and `cd /srv/build/x && rm -rf .` fires) are proven like any scratch dir.
+`cd /tmp && rm -rf *`, `cd /tmp && rm -rf .`, `cd /var/folders && rm -rf *`, `cd /private/tmp && rm -rf *` and
 `cd <x>/build && rm -rf .` are proven and silent under v2 while v1 fires on each (`V1_RESIDUAL_TWINS` in the matrix test pins the five). The others
 are v1's own and no shape touches them: `rm -rf /tmp/*`
 and `rm -rf /tmp` are scratch by v1's literal prefix (the parent of every scratch tree); `rm -rf <scratch>/.[.]/x` is scratch by that prefix
@@ -358,7 +365,9 @@ python, node and perl one-liners, a `bash <<EOF` body, base64 pipes, `$IFS` and 
 or `eval` (quoted or not) holding the delete, `ls -d ... | xargs rm -rf`, `find -delete`, `find -exec rm -rf`, `find -f`, a script
 or Makefile written and then run, `rsync --delete`, `git clean`, `trash`, a Finder delete, `rm -- -x`. A function or alias of the user's shell
 that is not defined in the command is invisible to every shape: `cd <scratch> && rm -rf ./*` is proven by its text, and a user function named
-`cd` or `rm` could make it do anything. `CDPATH` or `cdable_vars` set in the environment, a `mv`, `ln` or `cp` that swaps a directory or a
+`cd` or `rm` could make it do anything. One DEFINED in the command: a one-line `function f { ...; }` body and `alias` definitions are not read (silent
+on v1 and v2); `f() { ... }` and `function f() { ... }` bodies and a multi-line `function f {` body are read as commands (v1 and v2 fire).
+`CDPATH` or `cdable_vars` set in the environment, a `mv`, `ln` or `cp` that swaps a directory or a
 symlink under a proven path (names are read, never the filesystem), and a delete that follows a symlink are not seen either.
 
 `grammar.py` joins `events.py`, `shell.py` and `textrules.py` in the hashed text of every row (section 4): four leaf modules, so the change

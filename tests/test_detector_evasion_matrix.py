@@ -492,6 +492,17 @@ NEAR_MISSES += ["git worktree add // && rm -rf //", "git worktree add //. && rm 
 # fix wave 10 (docs-lens round 1): git puts a relative WT under `-C`, and a relative `-C` was never compared with WT, so S3 proves only an ABSOLUTE `-C`.
 _P = f"{_U}/FAKEuser/proj"
 NEAR_MISSES += [f"git -C . worktree add {_P} && rm -rf {_P}", f"git -C sub worktree add {_P} && rm -rf {_P}"]
+# fix wave 11 (docs-lens round 2): the function bodies v1 reads fire (so LIMITATIONS may say a `function f() { }` and a multi-line `function f {` body are
+# read), and a scratch NAME must be the LAST component (`/srv/build/x` is not scratch); the one-line `function f { ...; }` and `alias` forms are silent.
+NEAR_MISSES += [f"function f() {{ rm -rf {OUT}; }}; f", f"function f {{{NL}rm -rf {OUT}{NL}}}{NL}f", "cd /srv/build/x && rm -rf ."]
+V1_SILENT_DEFINITIONS = [f"function f {{ rm -rf {OUT}; }}; f", f"alias k='rm -rf {OUT}'; k", f'alias k="rm -rf {OUT}"; k']
+# The `-C` repository is compared with WT TEXTUALLY, after normpath (docs-lens round 2, NEW-1): a case alias (the Mac's APFS is case-insensitive) and
+# the fixed /var -> /private/var and /etc -> /private/etc symlinks are not resolved. Proven under v2 and silent, v1 fires. Unreachable: `git worktree add`
+# refuses a non-empty WT, so the add path is the proof and the `-C` check is defence in depth (compiler.md 4.1.2).
+S3_ALIAS_TWINS = [f"git -C {_P.upper()} worktree add {_P} && rm -rf {_P}",
+                  f"git -C {_P.replace('proj', 'PROJ')}/sub worktree add {_P} && rm -rf {_P}",
+                  "git -C /VAR/x/wt/sub worktree add /var/x/wt && rm -rf /var/x/wt", "git -C /private/var/x/wt worktree add /var/x/wt && rm -rf /var/x/wt",
+                  "git -C /private/etc/a/wt worktree add /etc/a/wt && rm -rf /etc/a/wt"]
 # Scratch-path S3 twins: proven and silent. v1's literal rule does not fire on a /tmp target either, so they are not GRAMMAR_TWINS (which assert v1 fired).
 S3_SCRATCH_TWINS = ["git worktree add /tmp/x/wt && rm -rf /tmp/x/wt", "git -C /tmp/r worktree add /tmp/x/wt && rm -rf /tmp/x/wt"]
 # v1's own residuals, carried into S1 (docs-lens round 1, important): S1 and S2 inherit v1's SCRATCH rule, so a scratch PARENT (`/tmp`, `/var/folders`,
@@ -502,6 +513,16 @@ V1_RESIDUAL_TWINS = ["cd /tmp && rm -rf *", "cd /tmp && rm -rf .", "cd /var/fold
 @pytest.mark.parametrize("cmd", V1_RESIDUAL_TWINS)
 def test_a_v1_residual_is_proven_by_s1_and_silent_under_v2_though_v1_fires(cmd):
     assert grammar.proven_scratch(cmd, d.SCRATCH) and not fires([bash(cmd)]) and v1_fires(cmd)
+
+
+@pytest.mark.parametrize("cmd", S3_ALIAS_TWINS)
+def test_an_s3_dash_c_alias_of_wt_is_proven_and_silent_under_v2_though_v1_fires(cmd):
+    assert grammar.proven_scratch(cmd, d.SCRATCH) and not fires([bash(cmd)]) and v1_fires(cmd)
+
+
+@pytest.mark.parametrize("cmd", V1_SILENT_DEFINITIONS)
+def test_a_one_line_function_keyword_body_and_an_alias_are_not_read_by_v1_or_v2(cmd):
+    assert not grammar.proven_scratch(cmd, d.SCRATCH) and not fires([bash(cmd)]) and not v1_fires(cmd)
 
 
 @pytest.mark.parametrize("cmd", S3_SCRATCH_TWINS)

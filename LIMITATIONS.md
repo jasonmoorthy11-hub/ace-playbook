@@ -111,8 +111,9 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
   (`store/promote.py` and `store/__main__.py` are operator-driven); tests/test_arm_phase.py fails if one appears elsewhere. The NOOP counters
   of a frozen session are not written either.
 - The command scanner is a best-effort linear tokenizer, not a shell parser. Known shapes it does not see: `bash -c` and `eval` in any form
-  (quoted or not), `bash <<EOF` bodies, shell functions and aliases (an `f() { ... }` body is read as a command, but `function f { ... }` and
-  `alias` definitions are not, nor a call of any of them), and anything past the 64 KB cap (reported as `unparseable`). The control is the
+  (quoted or not), `bash <<EOF` bodies, shell functions and aliases (a one-line `function f { ...; }` body and `alias` definitions are not read,
+  nor a call of any of them; `f() { ... }` and `function f() { ... }` bodies and a multi-line `function f {` body are read as commands, as on
+  main), and anything past the 64 KB cap (reported as `unparseable`). The control is the
   promotion ladder: a proposal starts in observe mode and every counted true positive is read by a
   human before any mode change (`docs/design/compiler.md` 7.3). A strict-xfail evasion matrix (`tests/test_detector_evasion_matrix.py`,
   `docs/design/compiler.md` 4.1.1) pins the documented misses of `rm_rf_nonscratch` as of detector v2 (2026-10-29, D-209, 4.1.2): it does not
@@ -122,12 +123,15 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
   modelled: v2 hides a scratch delete only when the RAW command text is, in full, one of three exact shapes (`cd <scratch> && rm -rf <rel>...`,
   `NAME=<scratch>; rm -rf "$NAME"...`, `git worktree add <p> && rm -rf <p>`; the regexes are in 4.1.2) and every joined target is scratch by
   v1's own rule (S3: the path this command's `worktree add` created, whatever its root; nothing is checked against SCRATCH for S3, and a
-  relative `-C` is not proven);
+  relative `-C` is not proven; an absolute `-C` is compared with WT textually, after `normpath`: case aliases such as `-C /x/PROJ` for WT `/x/proj`
+  on this Mac's case-insensitive APFS, and the `/var` to `/private/var` and `/etc` to `/private/etc` symlinks, are not resolved, so those `-C`
+  forms are proven and silent although v1 fires; they are unreachable, because `git worktree add` refuses a non-empty WT, so the add path is
+  the proof and the `-C` check is defence in depth; the matrix pins five such forms);
   anything else, a `;`, a second command, a tab, a quote, a redirection, a wrapper, `bash -c`, gets v1's literal rule
   unchanged, so v2 never fires less than v1 except on those three shapes. The price is precision: a scratch delete that is not exactly a shape
   still fires (`cd <scratch>; rm`, `cd <scratch> && true && rm ...`, `export D=<scratch> && rm -rf $D`, `(cd <scratch> && rm ...)`, `rm ... 2>/dev/null`,
-  `ls -d ./* | xargs rm -rf ./a`, a relative `git -C <repo> worktree add wt` (the matrix pins 39 such
-  false positives), and a worktree made by an earlier tool call (a twin row, not counted in the 39). Week 1 read 36 false positives on the
+  `ls -d ./* | xargs rm -rf ./a`, a relative `git -C <repo> worktree add wt`, and a worktree made by an earlier tool call: the matrix pins 39
+  such false positives (the earlier-call worktree is a twin row, not one of the 39). Week 1 read 36 false positives on the
   live data; the matrix has 0 for the plain `cd <scratch> && rm -rf ./*` and `D=<scratch>; rm -rf "$D"` shapes.
   Not seen by the shapes: a shell function or alias of the user's shell (a `cd` or `rm` function would
   change what a shape does), `CDPATH` or `cdable_vars` in the environment, a `mv`, `ln` or `cp` that swaps a directory or symlink under a proven path, and an
