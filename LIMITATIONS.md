@@ -111,11 +111,15 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
   (`store/promote.py` and `store/__main__.py` are operator-driven); tests/test_arm_phase.py fails if one appears elsewhere. The NOOP counters
   of a frozen session are not written either.
 - The command scanner is a best-effort linear tokenizer, not a shell parser. Known shapes it does not see: `bash -c` and `eval` in any form
-  (quoted or not), `bash <<EOF` bodies, shell functions and aliases (after `function NAME {` the ONE command written directly after the
-  brace on the same line is not read, whether the body is one line or several, and `alias` definitions are not read, nor a call of any of
-  them; every later command in a `function NAME {` body, on that line or on a later one, is read, and `f() { ... }` and `function f() { ... }`
-  bodies are read in full, as on main: the shell scanner splits on `(` and `)` and strips a leading `{`), and anything past the 64 KB cap
-  (reported as `unparseable`). The control is the promotion ladder: a proposal starts in observe mode and every counted true positive is read by a
+  (quoted or not), `bash <<EOF` bodies, `noglob rm -rf ...`, `nocorrect rm -rf ...` (zsh precommand modifiers) and `coproc rm -rf ...`
+  (silent under v1 and v2: the command word is not `rm`), shell functions and aliases (the scanner splits a command into SEGMENTS at `;`,
+  `&&`, `||`, `|`, a single `&`, a newline, `(`, `)` and a backtick (a backslash-newline does not end a segment; `shell.py:28` and `:197`).
+  A segment whose first word is `function` (named, two-name or zsh's anonymous `function {`) or `alias` is not read, wherever it sits,
+  including inside an `f() { ... }` body, and neither is a call of one. Everything in any other segment is read (its first word, after what
+  `shell.py:174` strips, is checked for `rm`, `detectors.py:68`), so a delete in a later segment of a `function` body (after a `;`, a newline
+  or inside `( ... )` or `$( ... )`) is seen; the delete written directly after `function NAME {` on the same segment is not), and
+  anything past the 64 KB cap (reported as `unparseable`). The control is the promotion ladder: a proposal starts in observe mode and every
+  counted true positive is read by a
   human before any mode change (`docs/design/compiler.md` 7.3). A strict-xfail evasion matrix (`tests/test_detector_evasion_matrix.py`,
   `docs/design/compiler.md` 4.1.1) pins the documented misses of `rm_rf_nonscratch` as of detector v2 (2026-10-29, D-209, 4.1.2): it does not
   see a recursive delete through an interpreter (python, node, perl, a heredoc, a base64 pipe, `bash -c`/`sh -c`/`eval`, quoted or not),
@@ -139,8 +143,9 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
   change what a shape does), `CDPATH` or `cdable_vars` in the environment, a `mv`, `ln` or `cp` that swaps a directory or symlink under a proven path, and an
   existing empty directory that `git worktree add` accepts. Inherited-environment residuals the grammar cannot see (the frozen list covers
   shell-special NAMES, not attributes set at runtime): a value attribute the user's shell set on NAME before the command (`typeset -L3 D` makes
-  `D=/tmp/w` store `/tm`), and an inherited `IFS` that splits an unquoted `$D` under bash; a readonly NAME is safe, because both shells abort
-  the `-c` script. The S2 variable name is checked against a FROZEN list of shell specials (the zsh 5.9 and
+  `D=/tmp/w` store `/tm`), and an `IFS` set in the user's shell before the command that splits an unquoted `$D` under bash (an exported IFS
+  from the environment is ignored by bash 3.2); a readonly NAME is safe, because both shells abort the `-c` script. The S2 variable name is
+  checked against a FROZEN list of shell specials (the zsh 5.9 and
   bash 3.2 names of one Mac, found by `print -l ${(k)parameters}` and `compgen -v` with the 36 modules of /usr/lib/zsh/5.9 loaded (35 load;
   zsh/deltochar does not), plus `POSTEDIT`, `RPROMPT`
   and `RPROMPT2` and the prefixes in `grammar.py`; zsh cuts the value of `KEYBOARD_HACK`, `HISTCHARS` and `histchars`, which is why a name list

@@ -366,15 +366,18 @@ python, node and perl one-liners, a `bash <<EOF` body, base64 pipes, `$IFS` and 
 or `eval` (quoted or not) holding the delete, `ls -d ... | xargs rm -rf`, `find -delete`, `find -exec rm -rf`, `find -f`, a script
 or Makefile written and then run, `rsync --delete`, `git clean`, `trash`, a Finder delete, `rm -- -x`. A function or alias of the user's shell
 that is not defined in the command is invisible to every shape: `cd <scratch> && rm -rf ./*` is proven by its text, and a user function named
-`cd` or `rm` could make it do anything. One DEFINED in the command: after `function NAME {` the ONE command written directly after the brace on the
-same line is not read, whether the body is one line or several, and `alias` definitions are not read, nor a call of any of them (silent on v1 and
-v2); every later command in a `function NAME {` body, on that line or on a later one, is read, and `f() { ... }` and `function f() { ... }` bodies
-are read in full (v1 and v2 fire; `shell.py` splits on `(` and `)` and strips a leading `{`).
+`cd` or `rm` could make it do anything. `noglob rm -rf ...`, `nocorrect rm -rf ...` (zsh precommand modifiers) and `coproc rm -rf ...` are silent
+under v1 and v2 (the command word is not `rm`). One DEFINED in the command: the scanner splits a command into SEGMENTS at `;`, `&&`, `||`, `|`, a
+single `&`, a newline, `(`, `)` and a backtick (a backslash-newline does not end a segment; `shell.py:28` and `:197`). A segment whose first word
+is `function` (named, two-name or zsh's anonymous `function {`) or `alias` is not read, wherever it sits, including inside an `f() { ... }` body, and
+neither is a call of one (silent on v1 and v2). Everything in any other segment is read (its first word, after what `shell.py:174` strips, is
+checked for `rm`, `detectors.py:68`), so a delete in a later segment of a `function` body (after a `;`, a newline or inside `( ... )` or
+`$( ... )`) is seen (v1 and v2 fire); the delete written directly after `function NAME {` on the same segment is not.
 `CDPATH` or `cdable_vars` set in the environment, a `mv`, `ln` or `cp` that swaps a directory or a
 symlink under a proven path (names are read, never the filesystem), and a delete that follows a symlink are not seen either. Inherited-environment
 residuals the grammar cannot see (the frozen list covers shell-special NAMES, not attributes set at runtime): a value attribute the user's shell
-set on NAME before the command (`typeset -L3 D` makes `D=/tmp/w` store `/tm`), and an inherited `IFS` that splits an unquoted `$D` under bash; a
-readonly NAME is safe, because both shells abort the `-c` script.
+set on NAME before the command (`typeset -L3 D` makes `D=/tmp/w` store `/tm`), and an `IFS` set in the user's shell before the command that splits an
+unquoted `$D` under bash (an exported IFS from the environment is ignored by bash 3.2); a readonly NAME is safe, because both shells abort the `-c` script.
 
 `grammar.py` joins `events.py`, `shell.py` and `textrules.py` in the hashed text of every row (section 4): four leaf modules, so the change
 moved all nine detector hashes (the table keeps one line per detector; only the hashes move); `shell.py` is byte-identical to main.

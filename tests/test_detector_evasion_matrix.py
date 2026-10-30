@@ -500,6 +500,15 @@ NEAR_MISSES += [f"function f() {{ rm -rf {OUT}; }}; f", f"function f {{{NL}rm -r
 NEAR_MISSES += [f"function f {{ echo a; rm -rf {OUT}; }}; f", f"function f {{ true{NL}rm -rf {OUT}{NL}}}{NL}f"]
 V1_SILENT_DEFINITIONS = [f"function f {{ rm -rf {OUT}; }}; f", f"alias k='rm -rf {OUT}'; k", f'alias k="rm -rf {OUT}"; k',
                          f"function f {{ rm -rf {OUT}{NL}}}{NL}f"]   # the multi-line body whose FIRST command sits directly after the brace is unread too
+# fix wave 13 (docs-lens round 4, I2): the rule is the scanner's SEGMENT rule (shell.py:28 splits on `;` `&&` `||` `|` a single `&` newline `(` `)` and a
+# backtick; backslash-newline does not end a segment): a segment whose first word is `function` (named, two-name, zsh's anonymous `function {`) or
+# `alias` is unread wherever it sits, even inside an `f() { }` body; a delete in any LATER segment of a function body (after `;` or a newline, inside
+# `( )` or `$( )`) fires. Fire rows assert v1 fires too (NEAR_MISSES); silent rows are silent on v1 and v2 (V1_SILENT_DEFINITIONS).
+NEAR_MISSES += [f"function f {{ ( rm -rf {OUT} ); }}; f", f"function f {{ $(rm -rf {OUT}); }}; f", f"function f {{{NL}  rm -rf {OUT}; }}; f"]
+V1_SILENT_DEFINITIONS += [f"f() {{ function g {{ rm -rf {OUT}; }}; g; }}; f", f"function {{ rm -rf {OUT}; }}", f"function f g {{ rm -rf {OUT}; }}; f",
+                          f"function f {{ \\{NL}rm -rf {OUT}; }}; f", f"function f {{ rm -rf {OUT} || true; }}; f", f"alias k=rm; k -rf {OUT}"]
+# zsh precommand modifiers and `coproc` hide the command word `rm` from the scanner (compiler.md 4.1.2 misses): silent on v1 and v2.
+V1_SILENT_MODIFIERS = [f"noglob rm -rf {OUT}", f"nocorrect rm -rf {OUT}", f"coproc rm -rf {OUT}"]
 # The `-C` repository is compared with WT TEXTUALLY, after normpath (docs-lens round 2, NEW-1): a case alias (the Mac's APFS is case-insensitive) and
 # the fixed /var -> /private/var and /etc -> /private/etc symlinks are not resolved. Proven under v2 and silent, v1 fires. Unreachable except when WT is an
 # existing EMPTY directory (`git worktree add` accepts it); the delete then removes only the checkout. A non-empty WT is refused, so the add path is the
@@ -525,7 +534,7 @@ def test_an_s3_dash_c_alias_of_wt_is_proven_and_silent_under_v2_though_v1_fires(
     assert grammar.proven_scratch(cmd, d.SCRATCH) and not fires([bash(cmd)]) and v1_fires(cmd)
 
 
-@pytest.mark.parametrize("cmd", V1_SILENT_DEFINITIONS)
+@pytest.mark.parametrize("cmd", V1_SILENT_DEFINITIONS + V1_SILENT_MODIFIERS)
 def test_the_command_directly_after_a_function_keyword_brace_and_an_alias_are_not_read_by_v1_or_v2(cmd):
     assert not grammar.proven_scratch(cmd, d.SCRATCH) and not fires([bash(cmd)]) and not v1_fires(cmd)
 
