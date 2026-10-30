@@ -59,6 +59,8 @@ TABLE = [
     ('YWJjZGVmZ2hp' 'amtsbW4==jun' 'k=more', 'abcdefghijklmn'),
     ('YWJjZGVmZ2hp' 'amtsbQ===zzz' 'z', 'abcdefghijklm'),
     ('YWJjZGVmZ2hp' 'amtsbW4=A=A=' '=', 'abcdefghijklmn'),
+    ('aGVsbG8gd29y' 'bGQsIH=RoaX=' 'MgaXMgdGV4dC' 'E=', 'hello world, this is text!'),     # a data char after a "=" resets the pads
+    ('dGhlIH=F1aWN' 'rIGJyb3=duIG' 'ZveCBqdW1wcy' 'BvdmVyIHRoZS' 'BsYXp5IGRvZw', None),
     ('b!G!9!u!Z!y!' 'B!z!Z!W!N!y!' 'Z!X!Q!g!d!m!' 'F!s!d!W!U!g!' 'd!2!l!0!a!C!' 'B!w!b!G!F!p!' 'b!i!B!0!Z!X!' 'h!0!', 'long secret value with plain text'),
     ('AAAAAAAAAAAA' 'AAAAAAAAAAAA', None),
     ('////////////' '////////', None),
@@ -94,6 +96,26 @@ def _fuzz_tokens() -> list[str]:
     return ["".join(rnd.choice(alphabet) for _ in range(rnd.randint(0, 40))) for _ in range(2000)]
 
 
+def _constructed_tokens() -> list[str]:
+    """1,200 tokens that mostly DO decode on main: base64 (standard and URL-safe; padded, stripped or doubled padding) of printable payloads of
+    12-40 chars, each with 0-3 noise characters inserted at random positions."""
+    rnd = random.Random(20261031)
+    pool = string.ascii_letters + string.digits + string.punctuation + "  "
+    out = []
+    for i in range(1200):
+        raw = "".join(rnd.choice(pool) for _ in range(rnd.randint(12, 40))).encode()
+        tok = (base64.b64encode, base64.urlsafe_b64encode)[i % 2](raw).decode()
+        if i % 4 >= 2:
+            tok = tok.rstrip("=")                      # padding stripped
+        if i % 7 == 0:
+            tok += "=="                                # padding doubled
+        for _ in range(rnd.randint(0, 3)):
+            at = rnd.randint(0, len(tok))
+            tok = tok[:at] + rnd.choice("=-_+/ \t\n") + tok[at:]
+        out.append(tok)
+    return out
+
+
 def _legacy(token: str) -> str | None:
     """Main's exact two-pass code (4bafa5a), the Python 3.12 reference."""
     pad = token + "=" * (-len(token) % 4)
@@ -121,15 +143,19 @@ def test_try_decode_matches_the_frozen_python_312_value(token, expected):
 def test_try_decode_equals_the_legacy_function_on_2000_seeded_tokens():
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        bad = [t for t in _fuzz_tokens() if try_decode(t) != _legacy(t)]
+        bad = [t for t in _fuzz_tokens() + _constructed_tokens() if try_decode(t) != _legacy(t)]
+        decoded_on_main = sum(_legacy(t) is not None for t in _constructed_tokens())
     assert bad == []
+    assert decoded_on_main >= 500, decoded_on_main            # the comparison is not mostly None against None
 
 
-def test_try_decode_raises_no_warning_and_never_raises_on_the_table_and_the_fuzz_tokens():
+def test_try_decode_raises_no_warning_and_never_raises_on_the_table_the_fuzz_and_the_constructed_tokens():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        for token in [t for t, _ in TABLE] + _fuzz_tokens():
-            try_decode(token)
+        decoded = 0
+        for token in [t for t, _ in TABLE] + _fuzz_tokens() + _constructed_tokens():
+            decoded += try_decode(token) is not None
+    assert decoded >= 500, decoded
 
 
 def test_a_base64_wrapped_secret_touching_an_underscore_is_still_reported_as_decoded():
