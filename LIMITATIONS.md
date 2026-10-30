@@ -111,14 +111,17 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
   (`store/promote.py` and `store/__main__.py` are operator-driven); tests/test_arm_phase.py fails if one appears elsewhere. The NOOP counters
   of a frozen session are not written either.
 - The command scanner is a best-effort linear tokenizer, not a shell parser. Known shapes it does not see: `bash -c` and `eval` in any form
-  (quoted or not), `bash <<EOF` bodies, `noglob rm -rf ...`, `nocorrect rm -rf ...` (zsh precommand modifiers) and `coproc rm -rf ...`
-  (silent under v1 and v2: the command word is not `rm`), shell functions and aliases (the scanner splits a command into SEGMENTS at `;`,
-  `&&`, `||`, `|`, a single `&`, a newline, `(`, `)` and a backtick (a backslash-newline does not end a segment; `shell.py:28` and `:197`).
-  A segment whose first word is `function` (named, two-name or zsh's anonymous `function {`) or `alias` is not read, wherever it sits,
-  including inside an `f() { ... }` body, and neither is a call of one. Everything in any other segment is read (its first word, after what
-  `shell.py:174` strips, is checked for `rm`, `detectors.py:68`), so a delete in a later segment of a `function` body (after a `;`, a newline
-  or inside `( ... )` or `$( ... )`) is seen; the delete written directly after `function NAME {` on the same segment is not), and
-  anything past the 64 KB cap (reported as `unparseable`). The control is the promotion ladder: a proposal starts in observe mode and every
+  (quoted or not), `bash <<EOF` bodies, `noglob rm -rf ...`, `nocorrect rm -rf ...`, `- rm -rf ...` (zsh precommand modifiers) and
+  `coproc rm -rf ...` (silent under v1 and v2: the command word is not `rm`), shell functions and aliases defined in the command (the segment
+  rule follows this list), and anything past the 64 KB cap (reported as `unparseable`).
+  The segment rule: the scanner splits a command into SEGMENTS at an unquoted `;`, `&&`, `||`, `|`, a single `&`, a newline, `(`, `)` or a
+  backtick. Quoted text is masked first (`shell.py:90`), an escaped `\;` still splits, and a backslash-newline does not end a segment
+  (`shell.py:28` and `:197`). A segment whose first word is `function` (named, two-name or zsh's anonymous `function {`) or `alias` is not
+  read, wherever it sits, including inside an `f() { ... }` body. A call is read only by its own first word: `k -rf ...` for an alias or
+  function named `k` is not `rm` and is unread, while an alias or function NAMED `rm` is read as `rm` and fires. Everything in any other
+  segment is read (its first word, after what `shell.py:174` strips, is checked for `rm`, `detectors.py:68`), so a delete in a later segment
+  of a `function` body is seen: after a `;` or a newline, or inside `( ... )` or `$( ... )`. The delete written directly after
+  `function NAME {` on the same segment is not. The control is the promotion ladder: a proposal starts in observe mode and every
   counted true positive is read by a
   human before any mode change (`docs/design/compiler.md` 7.3). A strict-xfail evasion matrix (`tests/test_detector_evasion_matrix.py`,
   `docs/design/compiler.md` 4.1.1) pins the documented misses of `rm_rf_nonscratch` as of detector v2 (2026-10-29, D-209, 4.1.2): it does not

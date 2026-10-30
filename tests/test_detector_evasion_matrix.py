@@ -507,8 +507,12 @@ V1_SILENT_DEFINITIONS = [f"function f {{ rm -rf {OUT}; }}; f", f"alias k='rm -rf
 NEAR_MISSES += [f"function f {{ ( rm -rf {OUT} ); }}; f", f"function f {{ $(rm -rf {OUT}); }}; f", f"function f {{{NL}  rm -rf {OUT}; }}; f"]
 V1_SILENT_DEFINITIONS += [f"f() {{ function g {{ rm -rf {OUT}; }}; g; }}; f", f"function {{ rm -rf {OUT}; }}", f"function f g {{ rm -rf {OUT}; }}; f",
                           f"function f {{ \\{NL}rm -rf {OUT}; }}; f", f"function f {{ rm -rf {OUT} || true; }}; f", f"alias k=rm; k -rf {OUT}"]
-# zsh precommand modifiers and `coproc` hide the command word `rm` from the scanner (compiler.md 4.1.2 misses): silent on v1 and v2.
-V1_SILENT_MODIFIERS = [f"noglob rm -rf {OUT}", f"nocorrect rm -rf {OUT}", f"coproc rm -rf {OUT}"]
+# fix wave 14 (docs-lens round 5, I-1): a call is read ONLY by its own first word, so a call of an alias or function NAMED `rm` is read as `rm` and fires
+# (v1 fires too: NEAR_MISSES), while a call of one named `k` is not `rm` and stays unread (V1_SILENT_DEFINITIONS).
+NEAR_MISSES += [f"alias rm='rm -i'; rm -rf {OUT}", f"function rm {{ echo no; }}; rm -rf {OUT}"]
+V1_SILENT_DEFINITIONS += [f"alias k='rm -i'; k -rf {OUT}", f"function k {{ echo no; }}; k -rf {OUT}"]
+# zsh precommand modifiers (`noglob`, `nocorrect`, `-`) and `coproc` hide the command word `rm` from the scanner (compiler.md 4.1.2): silent on v1 and v2.
+V1_SILENT_MODIFIERS = [f"noglob rm -rf {OUT}", f"nocorrect rm -rf {OUT}", f"- rm -rf {OUT}", f"coproc rm -rf {OUT}"]
 # The `-C` repository is compared with WT TEXTUALLY, after normpath (docs-lens round 2, NEW-1): a case alias (the Mac's APFS is case-insensitive) and
 # the fixed /var -> /private/var and /etc -> /private/etc symlinks are not resolved. Proven under v2 and silent, v1 fires. Unreachable except when WT is an
 # existing EMPTY directory (`git worktree add` accepts it); the delete then removes only the checkout. A non-empty WT is refused, so the add path is the
@@ -535,7 +539,7 @@ def test_an_s3_dash_c_alias_of_wt_is_proven_and_silent_under_v2_though_v1_fires(
 
 
 @pytest.mark.parametrize("cmd", V1_SILENT_DEFINITIONS + V1_SILENT_MODIFIERS)
-def test_the_command_directly_after_a_function_keyword_brace_and_an_alias_are_not_read_by_v1_or_v2(cmd):
+def test_the_segments_v1_and_v2_do_not_read(cmd):
     assert not grammar.proven_scratch(cmd, d.SCRATCH) and not fires([bash(cmd)]) and not v1_fires(cmd)
 
 

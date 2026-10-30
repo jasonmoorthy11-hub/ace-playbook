@@ -366,13 +366,15 @@ python, node and perl one-liners, a `bash <<EOF` body, base64 pipes, `$IFS` and 
 or `eval` (quoted or not) holding the delete, `ls -d ... | xargs rm -rf`, `find -delete`, `find -exec rm -rf`, `find -f`, a script
 or Makefile written and then run, `rsync --delete`, `git clean`, `trash`, a Finder delete, `rm -- -x`. A function or alias of the user's shell
 that is not defined in the command is invisible to every shape: `cd <scratch> && rm -rf ./*` is proven by its text, and a user function named
-`cd` or `rm` could make it do anything. `noglob rm -rf ...`, `nocorrect rm -rf ...` (zsh precommand modifiers) and `coproc rm -rf ...` are silent
-under v1 and v2 (the command word is not `rm`). One DEFINED in the command: the scanner splits a command into SEGMENTS at `;`, `&&`, `||`, `|`, a
-single `&`, a newline, `(`, `)` and a backtick (a backslash-newline does not end a segment; `shell.py:28` and `:197`). A segment whose first word
-is `function` (named, two-name or zsh's anonymous `function {`) or `alias` is not read, wherever it sits, including inside an `f() { ... }` body, and
-neither is a call of one (silent on v1 and v2). Everything in any other segment is read (its first word, after what `shell.py:174` strips, is
-checked for `rm`, `detectors.py:68`), so a delete in a later segment of a `function` body (after a `;`, a newline or inside `( ... )` or
-`$( ... )`) is seen (v1 and v2 fire); the delete written directly after `function NAME {` on the same segment is not.
+`cd` or `rm` could make it do anything. `noglob rm -rf ...`, `nocorrect rm -rf ...`, `- rm -rf ...` (zsh precommand modifiers) and
+`coproc rm -rf ...` are silent under v1 and v2 (the command word is not `rm`). One DEFINED in the command: the scanner splits a command into
+SEGMENTS at an unquoted `;`, `&&`, `||`, `|`, a single `&`, a newline, `(`, `)` or a backtick. Quoted text is masked first (`shell.py:90`), an
+escaped `\;` still splits, and a backslash-newline does not end a segment (`shell.py:28` and `:197`). A segment whose first word is `function`
+(named, two-name or zsh's anonymous `function {`) or `alias` is not read, wherever it sits, including inside an `f() { ... }` body. A call is read
+only by its own first word: `k -rf ...` for an alias or function named `k` is not `rm` and is unread (silent on v1 and v2), while an alias or
+function NAMED `rm` is read as `rm` and fires (v1 and v2 fire). Everything in any other segment is read (its first word, after what
+`shell.py:174` strips, is checked for `rm`, `detectors.py:68`), so a delete in a later segment of a `function` body is seen: after a `;` or a
+newline, or inside `( ... )` or `$( ... )` (v1 and v2 fire). The delete written directly after `function NAME {` on the same segment is not.
 `CDPATH` or `cdable_vars` set in the environment, a `mv`, `ln` or `cp` that swaps a directory or a
 symlink under a proven path (names are read, never the filesystem), and a delete that follows a symlink are not seen either. Inherited-environment
 residuals the grammar cannot see (the frozen list covers shell-special NAMES, not attributes set at runtime): a value attribute the user's shell
