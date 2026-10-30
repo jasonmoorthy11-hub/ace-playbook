@@ -480,6 +480,9 @@ NEAR_MISSES = [
     f'D={SCR}&& rm -rf "$D"', "cd /var && rm -rf folders/x", "cd /usr/local && rm -rf ./x", f'{"N" * 33}={SCR}; rm -rf "${"N" * 33}"',
     # security review 7: names bash or zsh ignores or rewrites on assignment (the pre-wave-7 deny set held them)
     f'FUNCNAME={SCR}; rm -rf "$FUNCNAME/x"', f'SRANDOM={SCR}; rm -rf "$SRANDOM"',
+    # fix wave 8 (Opus grammar round 2): the zftp module's parameters (zsh/net/tcp must load first) and the unset-by-default scalar specials
+    f'ZFTP_PREFS={SCR}; rm -rf "$ZFTP_PREFS"', f'ZFTP_TMOUT={SCR} && rm -rf $ZFTP_TMOUT/x', f'RPROMPT={SCR}; rm -rf "$RPROMPT/x"',
+    f'RPROMPT2={SCR}; rm -rf "${{RPROMPT2}}"', f'POSTEDIT={SCR}; rm -rf "$POSTEDIT/x"', f'zftp_foo={SCR}; rm -rf "$zftp_foo"',
 ]
 GRAMMAR_TWINS += [f'WORK={SCR}; rm -rf "$WORK"/x', f'{"N" * 32}={SCR}; rm -rf "${"N" * 32}"']   # ordinary names (not shell specials) stay proven
 

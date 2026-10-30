@@ -6,7 +6,7 @@ shapes with a scratch or an outside root; the oracle is "proven iff every joined
 v1 fires and the shape is not proven. The V1 FLOOR: `v2_fires or not v1_fires or proven`, where `v1_fires` is a frozen copy of v1's rule kept
 below and `proven` = the generator built a grammar shape with scratch targets. Every mutation of a shape (a forbidden character, a trailing
 newline, a tab, a `..` or leading-dot component, another NAME, a `;` in S1) is NOT proven.
-Fourteen mutants of grammar.py and one of detectors.py (the `truncated` guard) must each fail a test.
+Seventeen mutants of grammar.py and one of detectors.py (the `truncated` guard) must each fail a test.
 Seeded (`random.Random(1234)`, override with PYTEST_SEED); stdlib only; the commands are DATA fed to the detector, nothing runs.
 """
 
@@ -270,8 +270,9 @@ def test_every_structured_mutation_is_not_proven_and_the_floor_holds():
     assert count >= 3000
 
 
-# The names a shell treats specially: zsh `print -l ${(k)parameters}` (every loadable module) U bash `compgen -v` on this Mac (zsh 5.9, bash 3.2),
-# upper-cased, plus the specials those commands cannot list (zle widget variables, env-borne names). FROZEN: a future shell adding a name is a
+# The names a shell treats specially: zsh 5.9 `print -l ${(k)parameters}` (plain, after compinit, and with the 36 modules under /usr/lib/zsh/5.9 loaded,
+# zsh/net/tcp first; zsh/deltochar does not load on this Mac) U bash 3.2 `compgen -v`, upper-cased, plus the specials those commands cannot list
+# (POSTEDIT, RPROMPT, RPROMPT2: unset by default; zle widget variables; env-borne names). FROZEN: a future shell adding a name is a
 # change to this tuple AND to grammar._SPECIAL, never a silent miss. zsh truncates the VALUE of KEYBOARD_HACK / HISTCHARS / histchars, so S2 proved
 # a delete outside scratch (Opus grammar round 1, blocking). The list is a deny list of NAMES inside an allow-list of SPELLINGS ([A-Za-z_]\w{0,31}).
 FROZEN_SPECIALS = tuple((
@@ -285,21 +286,24 @@ FROZEN_SPECIALS = tuple((
     "IPREFIX ISUFFIX JOBDIRS JOBSTATES JOBTEXTS KEYBOARD_HACK KEYMAP KEYMAPS KEYS KEYS_QUEUED_COUNT KEYTIMEOUT LANG LANGINFO "
     "LASTABORTEDSEARCH LASTSEARCH LASTWIDGET LBUFFER LESS LINENO LINES LISTMAX LOGCHECK LOGNAME MACHTYPE MAIL MAILCHECK MAILPATH "
     "MANPATH MAPFILE MARK MATCH MBEGIN MEND MODULES MODULE_PATH NAMEDDIRS NULLCMD NUMERIC OLDPWD OPTARG OPTERR OPTIND OPTIONS "
-    "OSTYPE PARAMETERS PATCHARS PATH PENDING PIPESTATUS POSIXLY_CORRECT POSTDISPLAY PPID PREBUFFER PREDISPLAY PREFIX PROMPT "
-    "PROMPT2 PROMPT3 PROMPT4 PROMPT_COMMAND PS0 PS1 PS2 PS3 PS4 PSVAR PWD QIPREFIX QISUFFIX RANDOM RBUFFER READLINE_LINE "
-    "READLINE_MARK READLINE_POINT READNULLCMD REGION_ACTIVE REPLY RESWORDS SALIASES SAVEHIST SECONDS SHELL SHELLOPTS SHLVL SIGNALS "
-    "SPROMPT SRANDOM STATUS SUFFIX SYSPARAMS TERM TERMCAP TERMINFO TIMEFMT TIMEFORMAT TMOUT TMPDIR TMPPREFIX TRY_BLOCK_ERROR "
-    "TRY_BLOCK_INTERRUPT TTY TTYIDLE TZ UID USER USERDIRS USERGROUPS USERNAME VENDOR WATCH WATCHFMT WIDGETS WORDCHARS "
-    "ZCURSES_ATTRS ZCURSES_COLORS ZCURSES_COLOR_PAIRS ZCURSES_KEYCODES ZCURSES_WINDOWS ZDOTDIR ZLE_BRACKETED_PASTE "
-    "ZLE_LINE_ABORTED ZLE_REMOVE_SUFFIX_CHARS ZLE_RPROMPT_INDENT ZLE_SPACE_SUFFIX_CHARS ZLE_STATE ZSH_ARGZERO ZSH_EVAL_CONTEXT "
-    "ZSH_EXECUTION_STRING ZSH_NAME ZSH_PATCHLEVEL ZSH_SCHEDULED_EVENTS ZSH_SUBSHELL ZSH_VERSION _ _COMPAUTOS _COMPS _COMP_DUMPFILE "
-    "_COMP_OPTIONS _COMP_SETUP _LASTCOMP _PATCOMPS _POSTPATCOMPS _SERVICES"
+    "OSTYPE PARAMETERS PATCHARS PATH PENDING PIPESTATUS POSIXLY_CORRECT POSTDISPLAY POSTEDIT PPID PREBUFFER PREDISPLAY PREFIX "
+    "PROMPT PROMPT2 PROMPT3 PROMPT4 PROMPT_COMMAND PS0 PS1 PS2 PS3 PS4 PSVAR PWD QIPREFIX QISUFFIX RANDOM RBUFFER READLINE_LINE "
+    "READLINE_MARK READLINE_POINT READNULLCMD REGION_ACTIVE REPLY RESWORDS RPROMPT RPROMPT2 SALIASES SAVEHIST SECONDS SHELL "
+    "SHELLOPTS SHLVL SIGNALS SPROMPT SRANDOM STATUS SUFFIX SYSPARAMS TERM TERMCAP TERMINFO TIMEFMT TIMEFORMAT TMOUT TMPDIR "
+    "TMPPREFIX TRY_BLOCK_ERROR TRY_BLOCK_INTERRUPT TTY TTYIDLE TZ UID USER USERDIRS USERGROUPS USERNAME VENDOR WATCH WATCHFMT "
+    "WIDGETS WORDCHARS ZCURSES_ATTRS ZCURSES_COLORS ZCURSES_COLOR_PAIRS ZCURSES_KEYCODES ZCURSES_WINDOWS ZDOTDIR ZFTP_PREFS "
+    "ZFTP_SESSION ZFTP_TMOUT ZFTP_VERBOSE ZLE_BRACKETED_PASTE ZLE_LINE_ABORTED ZLE_REMOVE_SUFFIX_CHARS ZLE_RPROMPT_INDENT "
+    "ZLE_SPACE_SUFFIX_CHARS ZLE_STATE ZSH_ARGZERO ZSH_EVAL_CONTEXT ZSH_EXECUTION_STRING ZSH_NAME ZSH_PATCHLEVEL "
+    "ZSH_SCHEDULED_EVENTS ZSH_SUBSHELL ZSH_VERSION _ _COMPAUTOS _COMPS _COMP_DUMPFILE _COMP_OPTIONS _COMP_SETUP _LASTCOMP "
+    "_PATCOMPS _POSTPATCOMPS _SERVICES"
 ).split())
 
 
 def test_the_frozen_special_names_are_the_grammars_and_sorted():
     assert grammar._SPECIAL == FROZEN_SPECIALS and list(FROZEN_SPECIALS) == sorted(set(FROZEN_SPECIALS)) and len(FROZEN_SPECIALS) >= 200
-    assert all(n == n.upper() for n in FROZEN_SPECIALS) and {"KEYBOARD_HACK", "HISTCHARS", "IFS", "PATH", "_"} <= set(FROZEN_SPECIALS)
+    assert all(n == n.upper() for n in FROZEN_SPECIALS)
+    assert {"KEYBOARD_HACK", "HISTCHARS", "IFS", "PATH", "_"} <= set(FROZEN_SPECIALS)
+    assert {"POSTEDIT", "RPROMPT", "RPROMPT2", "ZFTP_PREFS", "ZFTP_SESSION", "ZFTP_TMOUT", "ZFTP_VERBOSE"} <= set(FROZEN_SPECIALS)
 
 
 def test_every_special_name_is_denied():
@@ -315,7 +319,7 @@ def test_every_special_prefix_is_denied_and_the_prefixes_are_pinned():
     assert grammar._SPECIAL_PREFIX == ("BASH", "COMP", "DIS_", "DYLD_", "EPOCH", "FUNC", "HIST", "KEYBOARD", "LANG", "LC_", "LD_", "LESS",
                                        "MAIL", "MATCH", "OPT",
                                        "PROMPT", "PS0", "PS1", "PS2", "PS3", "PS4", "PS5", "PS6", "PS7", "PS8", "PS9", "REPLY", "RPS", "TERM",
-                                       "UNDO_", "WATCH", "WIDGET", "WORD", "YANK", "ZLE_", "ZSH", "_COMP")
+                                       "UNDO_", "WATCH", "WIDGET", "WORD", "YANK", "ZFTP_", "ZLE_", "ZSH", "_COMP")
     for pre in grammar._SPECIAL_PREFIX:
         for name in (pre + "X", pre.lower() + "x", pre + "_1"):
             assert not proven(f'{name}=/tmp/w; rm -rf "${name}"'), name
@@ -356,8 +360,12 @@ def check(fn) -> list:
     """Every killer world for the named mutants, run through `fn(command, SCRATCH)`; the real grammar returns []."""
     bad = []
 
-    def want(cmd, expected, why):
-        if fn(cmd, d.SCRATCH) is not expected:
+    def want(cmd, expected, why, scr=d.SCRATCH):
+        try:
+            got = fn(cmd, scr)
+        except Exception:                                                              # noqa: BLE001  a mutant that lets it escape
+            got = "raised"
+        if got is not expected:
             bad.append(why)
 
     for seed, scr, out in worlds(60, 7):
@@ -384,24 +392,37 @@ def check(fn) -> list:
     want('D=/tmp/w&& rm -rf "$D"', False, "s2 spelling")                                   # one or more spaces before `&&`, never none
     for nm in ("KEYBOARD_HACK", "HISTCHARS", "histchars"):                                # zsh cuts the value: the delete lands outside scratch
         want(f'{nm}=/tmp/w; rm -rf "${nm}/x"', False, "s2 truncating " + nm)
-    for nm in ("LC_FOO", "ZSH_FOO", "HISTFOO", "PS7", "BASHFOO", "MAILFOO", "COMPFOO", "KEYBOARDX", "WORDX"):
+    for nm in ("LC_FOO", "ZSH_FOO", "HISTFOO", "PS7", "BASHFOO", "MAILFOO", "COMPFOO", "KEYBOARDX", "WORDX", "ZFTP_FOO"):
         want(f'{nm}=/tmp/w; rm -rf "${nm}"', False, "s2 prefix " + nm)
-    for nm in ("IFS", "PATH", "SHELL", "UID", "status", "path", "SRANDOM"):                  # names only the frozen tuple holds (no prefix covers them)
+    for nm in ("IFS", "PATH", "SHELL", "UID", "status", "path", "SRANDOM",
+               "POSTEDIT", "RPROMPT", "RPROMPT2", "ZFTP_PREFS", "ZFTP_TMOUT"):                  # names only the frozen tuple holds (no prefix covers them)
         want(f'{nm}=/tmp/w; rm -rf "${nm}"', False, "s2 special " + nm)
     want(f'{"N" * 33}=/tmp/w; rm -rf "${"N" * 33}"', False, "s2 name length")
     want(f'{"N" * 32}=/tmp/w; rm -rf "${"N" * 32}"', True, "s2 name length ok")
+    class Boom:
+        def search(self, _p):
+            raise RuntimeError("the scratch rule cannot read it")
+
+    for scr in (object(), Boom()):                                                         # the fail-closed `except` (Opus grammar round 2, important)
+        for cmd in ("cd /tmp/w && rm -rf ./x", 'D=/tmp/w; rm -rf "$D"'):
+            want(cmd, False, "raising scratch rule is not a proof", scr)
+    for odd in (None, 5, b"cd /tmp/w && rm -rf ./x", [], object()):                       # a non-str command is not a proof
+        want(odd, False, "non-str command")
     want("cd /tmp/w && rm -rf ./x", True, "s1 plain")
     want('D=/tmp/w; rm -rf "$D"', True, "s2 plain")
     want("git worktree add /w/wt && rm -rf /w/wt", True, "s3 plain")
     return bad
 
 
-def mutant(old: str, new: str):
+def mutant(*pairs: str):
+    """`mutant(old, new[, old, new ...])`: the grammar source with every (old -> new) pair applied, loaded as a module."""
     src = Path(grammar.__file__).read_text()
-    assert src.count(old) >= 1, old
+    for old, new in zip(pairs[::2], pairs[1::2]):
+        assert src.count(old) >= 1, old
+        src = src.replace(old, new)
     mod = types.ModuleType("ace_playbook.compile.grammar_mutant")
     mod.__package__ = "ace_playbook.compile"
-    exec(compile(src.replace(old, new), "grammar_mutant.py", "exec"), mod.__dict__)
+    exec(compile(src, "grammar_mutant.py", "exec"), mod.__dict__)
     return mod.proven_scratch
 
 
@@ -420,6 +441,11 @@ MUTANTS = {
     "s2-special-prefixes-removed": ("name.startswith(_SPECIAL_PREFIX) or ", ""),
     "s2-name-length-unbounded": ("[A-Za-z0-9_]{{0,31}})=", "[A-Za-z0-9_]*)="),
     "s2-name-compared-case-sensitively": ('name = m["n"].upper()', 'name = m["n"]'),
+    "except-fails-open": ("is not a proof\n        return False", "is not a proof\n        return True"),         # grammar.py: the fail-closed branch
+    "except-narrowed-so-errors-escape": ("except Exception:", "except ZeroDivisionError:"),
+    "isinstance-check-and-except-removed": ("        if not isinstance(command, str):\n            return False\n", "",
+                                            "except Exception:", "except ZeroDivisionError:"),
+    "s2-special-prefix-zftp-removed": ('"YANK", "ZFTP_", "ZLE_"', '"YANK", "ZLE_"'),
 }
 DETECTOR_MUTANTS = {"truncated-guard-removed": ("not tu.truncated and ", "")}      # detectors.py:83 (Opus grammar round 1, important)
 
@@ -435,6 +461,12 @@ def test_each_mutant_of_the_grammar_fails_a_test(name):
 
 def test_the_mutant_loader_changes_nothing_when_the_edit_is_the_identity():
     assert check(mutant("(?P=n)", "(?P=n)")) == []
+
+
+def test_the_isinstance_check_alone_is_an_equivalent_mutant_of_the_except():
+    """With the `except` in place a non-str command raises inside the `try` (`re.match` on bytes, None, a list) and is caught: the check is a
+    guard in depth, not a behaviour, so no test can tell it away. Removing it AND the `except` is killed above."""
+    assert check(mutant("        if not isinstance(command, str):\n            return False\n", "")) == []
 
 
 def detector_mutant(old: str, new: str):
@@ -555,6 +587,11 @@ def test_the_grammar_never_raises_on_1000_garbage_strings_and_the_detector_stays
         assert errors == []
     for odd in (None, 5, b"cd /tmp/w && rm -rf x", [], {}, "", "\x00", "\u202e", "cd /tmp/w && rm -rf x\u0301"):
         assert grammar.proven_scratch(odd, d.SCRATCH) is False
+    # the fail-closed `except`: a scratch rule that cannot be read (no `.search`, or one that raises) is not a proof (Opus grammar round 2, important)
+    assert grammar.proven_scratch("cd /tmp/w && rm -rf ./x", object()) is False
+    assert grammar.proven_scratch('D=/tmp/w; rm -rf "$D"', object()) is False
+    boom = types.SimpleNamespace(search=lambda _p: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert grammar.proven_scratch("cd /tmp/w && rm -rf ./x", boom) is False and grammar.proven_scratch('D=/tmp/w; rm -rf "$D"', boom) is False
 
 
 def test_the_grammar_default_scratch_is_the_detectors_own_rule():
@@ -584,9 +621,9 @@ TIMING_SHAPES = {
 @pytest.mark.parametrize("name", sorted(TIMING_SHAPES))
 def test_the_64kb_budget_holds(name):
     cmd = TIMING_SHAPES[name][:65000]
-    ev = event_from_hook(cs.pre_payload(cmd), probe=lambda _p: False)
     best, best_g = 1e9, 1e9
     for _ in range(3):
+        ev = event_from_hook(cs.pre_payload(cmd), probe=lambda _p: False)       # fresh every run: a reused event serves cached segments
         t0 = time.perf_counter()
         _out, _state, errors = cat.evaluate(ev, None, names=[NAME, "rm_rf"], strict=True)
         best = min(best, (time.perf_counter() - t0) * 1000)
