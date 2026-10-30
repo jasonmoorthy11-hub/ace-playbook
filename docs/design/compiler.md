@@ -312,15 +312,21 @@ then removes what the add checked out there). S3 holds when `RM` and `WT` are eq
 component, `WT` is not `.` or `/`, an absolute `WT` has at least two components, a `-C` repository is not `WT` or a descendant of it, and a
 relative `WT` has no `-C` (git would put it under the repository while `rm` stays in the cwd). Its parent never qualifies. In S2 the name
 is 1 to 32 characters of `[A-Za-z_][A-Za-z0-9_]*` and not a name a shell treats specially (compared in upper case, so `path` is `PATH` too): a FROZEN
-tuple in `grammar.py` (`_SPECIAL`, 228 names: zsh 5.9 `print -l ${(k)parameters}` with every loadable module, bash 3.2 `compgen -v`, and the zle
-and environment names those cannot list; generated once on one Mac, never computed at hook time, frozen again in the test) and the prefixes of
-`_SPECIAL_PREFIX` (`BASH`, `LC_`, `LD_`, `DYLD_`, `ZSH`, `EPOCH`, `FUNC`, `HIST`, `PS0` to `PS9`, ...). The list is not only about search paths: zsh
+tuple in `grammar.py` (`_SPECIAL`, 235 names), generated once on one Mac and never computed at hook time, frozen again in the test. What was run:
+zsh 5.9 `/bin/zsh -f -c 'print -l ${(k)parameters}'` three ways (plain; after `compinit`; and after `zmodload` of the 36 modules under
+`/usr/lib/zsh/5.9/zsh`, found by a recursive glob and loaded with `zsh/net/tcp` first because `zsh/zftp` needs its symbols; `zsh/deltochar`
+does not load on this Mac, and defines no parameter), bash 3.2 `/bin/bash -c 'compgen -v'` (no bash 5 is installed), and a hand-written list of
+names those cannot list: the zle widget variables and the environment names of the round-1 verdict, and `POSTEDIT`, `RPROMPT` and `RPROMPT2`
+(zsh scalar specials that are unset by default, so `${(k)parameters}` never shows them). The list is checked against the shells, not derived
+from their man pages: the Opus grammar round 2 scanned 14,768 candidate names (man pages of zsh, bash, ksh and dash among them) and found none
+that drifts and is not denied. Prefixes of `_SPECIAL_PREFIX` (`BASH`, `LC_`, `LD_`, `DYLD_`, `ZSH`, `ZFTP_`, `EPOCH`, `FUNC`, `HIST`,
+`PS0` to `PS9`, ...) cover the families. The list is not only about search paths: zsh
 cuts the VALUE of
 `KEYBOARD_HACK` to its first character and of `HISTCHARS` / `histchars` to three, so `HISTCHARS=<scratch>; rm -rf "$HISTCHARS/x"` deletes `/tm/x`,
 outside scratch (Opus grammar round 1). A special added by a later shell is a documented residual; a name on the list only costs precision.
 `proven_scratch` never raises (an input it cannot read is not a proof), and its anchored regexes
-have bounded token classes with no nested quantifier: a 64 KB command costs at most 5 ms in the grammar (4.4 ms on the worst shape, 32 000
-relative paths) and about 11 ms through `catalogue.evaluate`.
+have bounded token classes with no nested quantifier: a 64 KB command costs about 5 ms in the grammar on the worst shape (32 000
+relative paths) and at most 20 ms through `catalogue.evaluate` (measured with a fresh event per run: 16 ms on the worst shape).
 
 **What v2 fires on that a resolver would not (precision residuals).** v1 flags every relative target and every variable, so a scratch delete
 that is not exactly a shape keeps v1's fire: `cd <scratch>; rm -rf ./*` (a `;`), `cd a && cd b && rm ...`, `cd <scratch> && true && rm ...`
@@ -354,12 +360,14 @@ joined target is scratch; for S3, the path its `worktree add` created, whatever 
 copy of v1's rule, checks that no character-level mutation of a proven shape (one inserted character from the forbidden set, a trailing
 newline, a tab, a leading or trailing space) and no structural one (a `..` or leading-dot component, another NAME, a `;` in S1, a flag, a wrapper, a
 relative root) is proven, checks that extra spaces between tokens change nothing, feeds 1000 garbage strings (never raises) and times the
-64 KB shapes. Fourteen mutants of `grammar.py` and one of `detectors.py` must each
+64 KB shapes. Seventeen mutants of `grammar.py` and one of `detectors.py` must each
 fail a test: `\Z` becomes `$`; the `..` check of S3; the `SCRATCH` check of the joined target in S1 and in S2; S3's equality of the `rm` and
 the `add` path; the NAME equality; S3's repository-parent check; the dot-free component class; S1's own `SCRATCH` check of the `cd` path; the
 optional space before `&&` in S2;
-the frozen names; the prefixes; the 32-character bound of NAME; the upper-casing of NAME; and, in `detectors.py`, the `not tu.truncated`
-guard (a command cut by the 64 KB cap is never proven).
+the frozen names; the prefixes (the `ZFTP_` one included); the 32-character bound of NAME; the upper-casing of NAME; the fail-closed `except` (it
+returns True, or catches only `ZeroDivisionError`, or loses the `isinstance` check as well: a scratch rule that cannot be read, and a command that
+is not a string, are not proofs); and, in `detectors.py`, the `not tu.truncated` guard (a command cut by the 64 KB cap is never proven). The
+`isinstance` check alone is an equivalent mutant: `re.match` raises on a non-string and the `except` catches it.
 
 ### 4.2 Per-session state (`state.py`)
 
