@@ -129,11 +129,13 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
   `D=<scratch>; rm -rf "$D"` shapes. Not seen by the shapes: a shell function or alias of the user's shell (a `cd` or `rm` function would
   change what a shape does), `CDPATH` or `cdable_vars` in the environment, a `mv`, `ln` or `cp` that swaps a directory or symlink under a proven path, and an
   existing empty directory that `git worktree add` accepts. The S2 variable name is checked against a FROZEN list of shell specials (the zsh 5.9 and
-  bash 3.2 names of one Mac, found by `print -l ${(k)parameters}` and `compgen -v` with the 36 zsh modules loaded, plus `POSTEDIT`, `RPROMPT`
+  bash 3.2 names of one Mac, found by `print -l ${(k)parameters}` and `compgen -v` with the 36 modules of /usr/lib/zsh/5.9 loaded (35 load;
+  zsh/deltochar does not), plus `POSTEDIT`, `RPROMPT`
   and `RPROMPT2` and the prefixes in `grammar.py`; zsh cuts the value of `KEYBOARD_HACK`, `HISTCHARS` and `histchars`, which is why a name list
   is needed at all): a special added by a later shell, and any special that is unset by default and that no listing shows (the three above were
   found by hand, not by the generator), is a documented residual. The Opus grammar round 2 found no such name that changes the value
-  among 14,768 candidates; the ones that only abort or store the literal (`ZFTP_TMOUT`, `ZFTP_SESSION`) are denied for precision, not safety.
+  among 14,768 candidates; the ones that only abort or store the literal (`ZFTP_TMOUT`, `ZFTP_SESSION`) are denied for completeness;
+  denying them costs only precision.
   v1's own residuals stay, named by the review rounds: `rm -rf /tmp/*` and `rm -rf /tmp`
   are scratch by prefix (the parent of every scratch tree), an absolute `rm -rf <scratch>/.[.]/x` (`.[.]` matches `..` in bash 3.2 or without
   `globskipdots`, never in zsh), `<scratch>/\.\./...` and `<scratch>/*(P:...:)` are scratch by prefix, `2>/dev/null` reads as a target (so a

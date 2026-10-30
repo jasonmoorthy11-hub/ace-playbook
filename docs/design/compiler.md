@@ -309,7 +309,8 @@ redefined): in S1, `SCR` itself and `normpath(join(SCR, REL))` for each `REL`; i
 reference that has a `/REL`; in S3, nothing is checked against `SCRATCH`, because `&&` guarantees that `git worktree add` succeeded and
 `add` refuses an existing path, so the path is one this very command created (an existing EMPTY directory is accepted by git; the delete
 then removes what the add checked out there). S3 holds when `RM` and `WT` are equal after `normpath`, none of `WT`, `RM` and the `-C` path has a `..`
-component, `WT` is not `.` or `/`, an absolute `WT` has at least two components, a `-C` repository is not `WT` or a descendant of it, and a
+component, none of the three starts with `//` (`normpath` keeps exactly two leading slashes, so `//` is the root and would slip the next three guards),
+`WT` is not `.` or `/`, an absolute `WT` has at least two components, a `-C` repository is not `WT` or a descendant of it, and a
 relative `WT` has no `-C` (git would put it under the repository while `rm` stays in the cwd). Its parent never qualifies. In S2 the name
 is 1 to 32 characters of `[A-Za-z_][A-Za-z0-9_]*` and not a name a shell treats specially (compared in upper case, so `path` is `PATH` too): a FROZEN
 tuple in `grammar.py` (`_SPECIAL`, 235 names), generated once on one Mac and never computed at hook time, frozen again in the test. What was run:
@@ -360,10 +361,10 @@ joined target is scratch; for S3, the path its `worktree add` created, whatever 
 copy of v1's rule, checks that no character-level mutation of a proven shape (one inserted character from the forbidden set, a trailing
 newline, a tab, a leading or trailing space) and no structural one (a `..` or leading-dot component, another NAME, a `;` in S1, a flag, a wrapper, a
 relative root) is proven, checks that extra spaces between tokens change nothing, feeds 1000 garbage strings (never raises) and times the
-64 KB shapes. Seventeen mutants of `grammar.py` and one of `detectors.py` must each
-fail a test: `\Z` becomes `$`; the `..` check of S3; the `SCRATCH` check of the joined target in S1 and in S2; S3's equality of the `rm` and
-the `add` path; the NAME equality; S3's repository-parent check; the dot-free component class; S1's own `SCRATCH` check of the `cd` path; the
-optional space before `&&` in S2;
+64 KB shapes. Nineteen mutants of `grammar.py` and one of `detectors.py` must each
+fail a test: `\Z` becomes `$`; the `..` check of S3; the `//` check of S3; the `SCRATCH` check of the joined target in S1 and in S2;
+S3's equality of the `rm` and the `add` path; the NAME equality; S3's repository-parent check; the dot-free component class;
+S1's own `SCRATCH` check of the `cd` path; the optional space before `&&` in S2;
 the frozen names; the prefixes (the `ZFTP_` one included); the 32-character bound of NAME; the upper-casing of NAME; the fail-closed `except` (it
 returns True, or catches only `ZeroDivisionError`, or loses the `isinstance` check as well: a scratch rule that cannot be read, and a command that
 is not a string, are not proofs); and, in `detectors.py`, the `not tu.truncated` guard (a command cut by the 64 KB cap is never proven). The
