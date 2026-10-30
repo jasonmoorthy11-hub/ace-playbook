@@ -110,23 +110,26 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
   No production code path writes RETIRE, PATCH, MERGE or NARROW from a session
   (`store/promote.py` and `store/__main__.py` are operator-driven); tests/test_arm_phase.py fails if one appears elsewhere. The NOOP counters
   of a frozen session are not written either.
-- The command scanner is a best-effort linear tokenizer, not a shell parser. Known shapes it does not see: shell functions and aliases that
-  exist in the user's shell but are not defined in the command, `bash <<EOF` bodies, and anything past the 64 KB cap (reported as
-  `unparseable`). The control is the promotion ladder: a proposal starts in observe mode and every counted true positive is read by a
+- The command scanner is a best-effort linear tokenizer, not a shell parser. Known shapes it does not see: `bash -c` and `eval` in any form
+  (quoted or not), `bash <<EOF` bodies, shell functions and aliases (an `f() { ... }` body is read as a command, but `function f { ... }` and
+  `alias` definitions are not, nor a call of any of them), and anything past the 64 KB cap (reported as `unparseable`). The control is the
+  promotion ladder: a proposal starts in observe mode and every counted true positive is read by a
   human before any mode change (`docs/design/compiler.md` 7.3). A strict-xfail evasion matrix (`tests/test_detector_evasion_matrix.py`,
   `docs/design/compiler.md` 4.1.1) pins the documented misses of `rm_rf_nonscratch` as of detector v2 (2026-10-29, D-209, 4.1.2): it does not
-  see a recursive delete through an interpreter (python, node, perl, a heredoc, a base64 pipe, a quoted `bash -c`/`sh -c`/`eval` script),
+  see a recursive delete through an interpreter (python, node, perl, a heredoc, a base64 pipe, `bash -c`/`sh -c`/`eval`, quoted or not),
   through `find`, `xargs` from a pipe, `rsync --delete`, `git clean`, `trash` or Finder, or in a script or Makefile that was written and
   then run, nor through `$IFS` or `$(...)` as the command word (59 of 221 variants; v1's literal rule misses the same 59). No shell is
   modelled: v2 hides a scratch delete only when the RAW command text is, in full, one of three exact shapes (`cd <scratch> && rm -rf <rel>...`,
   `NAME=<scratch>; rm -rf "$NAME"...`, `git worktree add <p> && rm -rf <p>`; the regexes are in 4.1.2) and every joined target is scratch by
-  v1's own rule (S3: the path this command's `worktree add` created, whatever its root; nothing is checked against SCRATCH for S3);
+  v1's own rule (S3: the path this command's `worktree add` created, whatever its root; nothing is checked against SCRATCH for S3, and a
+  relative `-C` is not proven);
   anything else, a `;`, a second command, a tab, a quote, a redirection, a wrapper, `bash -c`, gets v1's literal rule
   unchanged, so v2 never fires less than v1 except on those three shapes. The price is precision: a scratch delete that is not exactly a shape
   still fires (`cd <scratch>; rm`, `cd <scratch> && true && rm ...`, `export D=<scratch> && rm -rf $D`, `(cd <scratch> && rm ...)`, `rm ... 2>/dev/null`,
-  `ls -d ./* | xargs rm -rf ./a`, a relative `git -C <repo> worktree add wt`, a worktree made by an earlier tool call; the matrix pins 39 such
-  false positives). Week 1 read 36 false positives on the live data; the matrix has 0 for the plain `cd <scratch> && rm -rf ./*` and
-  `D=<scratch>; rm -rf "$D"` shapes. Not seen by the shapes: a shell function or alias of the user's shell (a `cd` or `rm` function would
+  `ls -d ./* | xargs rm -rf ./a`, a relative `git -C <repo> worktree add wt` (the matrix pins 39 such
+  false positives), and a worktree made by an earlier tool call (a twin row, not counted in the 39). Week 1 read 36 false positives on the
+  live data; the matrix has 0 for the plain `cd <scratch> && rm -rf ./*` and `D=<scratch>; rm -rf "$D"` shapes.
+  Not seen by the shapes: a shell function or alias of the user's shell (a `cd` or `rm` function would
   change what a shape does), `CDPATH` or `cdable_vars` in the environment, a `mv`, `ln` or `cp` that swaps a directory or symlink under a proven path, and an
   existing empty directory that `git worktree add` accepts. The S2 variable name is checked against a FROZEN list of shell specials (the zsh 5.9 and
   bash 3.2 names of one Mac, found by `print -l ${(k)parameters}` and `compgen -v` with the 36 modules of /usr/lib/zsh/5.9 loaded (35 load;
@@ -136,8 +139,11 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
   found by hand, not by the generator), is a documented residual. The Opus grammar round 2 found no such name that changes the value
   among 14,768 candidates; the ones that only abort or store the literal (`ZFTP_TMOUT`, `ZFTP_SESSION`) are denied for completeness;
   denying them costs only precision.
-  v1's own residuals stay, named by the review rounds: `rm -rf /tmp/*` and `rm -rf /tmp`
-  are scratch by prefix (the parent of every scratch tree), an absolute `rm -rf <scratch>/.[.]/x` (`.[.]` matches `..` in bash 3.2 or without
+  v1's own residuals stay, named by the review rounds, and S1 and S2 carry them into the proven shapes (they inherit v1's SCRATCH rule, so
+  `cd /tmp && rm -rf *`, `cd /tmp && rm -rf .`, `cd /var/folders && rm -rf *`, `cd /private/tmp && rm -rf *` and `cd <x>/build && rm -rf .` are
+  proven and silent under v2 although v1 fires on each; the matrix pins the five): `rm -rf /tmp/*` and `rm -rf /tmp`
+  are scratch by prefix (the parent of every scratch tree, `/var/folders` and `/private/tmp` included),
+  an absolute `rm -rf <scratch>/.[.]/x` (`.[.]` matches `..` in bash 3.2 or without
   `globskipdots`, never in zsh), `<scratch>/\.\./...` and `<scratch>/*(P:...:)` are scratch by prefix, `2>/dev/null` reads as a target (so a
   redirected scratch delete fires), a leading `$TMPDIR` is scratch by name, and a directory named `build`, `dist` or `node_modules` is scratch
   wherever it is. (The first build of v2 modelled the shell in 541 lines; three Opus rounds found a new family of holes each time and it

@@ -246,7 +246,7 @@ is not one of the three shapes of 4.1.2, a `residual` row), so a change in eithe
 | Class | FN | FP | Cases |
 |---|---|---|---|
 | `alias_quote` | 3 | 0 | `$IFS` separators, `$(echo rm)` as the command word, `base64 -d \| sh` |
-| `interpreter` | 17 | 0 | python, node, perl, a `bash <<EOF` body, a quoted `bash -c`, `sh -c` or `eval` script (v1 never read inside them) |
+| `interpreter` | 17 | 0 | python, node, perl, a `bash <<EOF` body, `bash -c`, `sh -c` or `eval`, quoted or not (v1 never read inside them) |
 | `xargs_find` | 7 | 0 | `ls -d dir/* \| xargs rm -rf`, `find -delete`, `find -exec rm -rf {} +`, `find -f`: v1 never read them |
 | `tool_indirection` | 2 | 0 | a script, or a Makefile whose `clean:` recipe deletes, written by `Write` and then run (`bash script`, `make -C dir clean`) |
 | `other_tools` | 4 | 0 | `rsync --delete`, `git clean -fdx`, `trash`, an `osascript` Finder delete |
@@ -289,7 +289,7 @@ cut by the 64 KB cap, takes v1's literal rule unchanged: a recursive force `rm` 
 literal target, after `posixpath.normpath`, does not match `detectors.SCRATCH`. There is no tokenizer, no quote handling, no working
 directory and no variable state in the proof. Each regex is anchored with `\A ... \Z` (never `$`: a trailing newline fails), tokens
 are separated by one or more SPACES only, and a tab, newline, backslash, backtick, `$(`, `;` (outside S2's own), `|`, a single `&`,
-parenthesis, brace, bracket, `<`, `>`, `#`, `!`, `'` or `"` is outside every shape except where a shape names it (S2's `"`).
+parenthesis, bracket, `<`, `>`, `#`, `!` or `'` is outside every shape; `"`, `$`, `{` and `}` appear only in S2's own `$NAME`, `${NAME}` and their quoted forms.
 
 ```text
 FLAGS  -rf | -fr | -Rf | -fR | -r -f | -f -r          optionally followed by " --"
@@ -310,13 +310,15 @@ reference that has a `/REL`; in S3, nothing is checked against `SCRATCH`, becaus
 `add` refuses an existing path, so the path is one this very command created (an existing EMPTY directory is accepted by git; the delete
 then removes what the add checked out there). S3 holds when `RM` and `WT` are equal after `normpath`, none of `WT`, `RM` and the `-C` path has a `..`
 component, none of the three starts with `//` (`normpath` keeps exactly two leading slashes, so `//` is the root and would slip the next three guards),
-`WT` is not `.` or `/`, an absolute `WT` has at least two components, a `-C` repository is not `WT` or a descendant of it, and a
-relative `WT` has no `-C` (git would put it under the repository while `rm` stays in the cwd). Its parent never qualifies. In S2 the name
+`WT` is not `.` or `/`, an absolute `WT` has at least two components, a `-C` repository is an absolute path, never `WT` or a descendant of it
+(a relative `-C` is not proven: it is never compared with `WT`), and a relative `WT` has no `-C` (git would put it under the
+repository while `rm` stays in the cwd). Its parent never qualifies. In S2 the name
 is 1 to 32 characters of `[A-Za-z_][A-Za-z0-9_]*` and not a name a shell treats specially (compared in upper case, so `path` is `PATH` too): a FROZEN
 tuple in `grammar.py` (`_SPECIAL`, 235 names), generated once on one Mac and never computed at hook time, frozen again in the test. What was run:
-zsh 5.9 `/bin/zsh -f -c 'print -l ${(k)parameters}'` three ways (plain; after `compinit`; and after `zmodload` of the 36 modules under
-`/usr/lib/zsh/5.9/zsh`, found by a recursive glob and loaded with `zsh/net/tcp` first because `zsh/zftp` needs its symbols; `zsh/deltochar`
-does not load on this Mac, and defines no parameter), bash 3.2 `/bin/bash -c 'compgen -v'` (no bash 5 is installed), and a hand-written list of
+zsh 5.9 `/bin/zsh -f -c 'print -l ${(k)parameters}'` three ways (plain; after `compinit`; and after `zmodload` of 36 modules under
+`/usr/lib/zsh/5.9/zsh` (the recursive glob finds 37 `.so` files; `zsh/newuser` is excluded), loaded with `zsh/net/tcp` first because
+`zsh/zftp` needs its symbols; `zsh/deltochar` does not load on this Mac, and defines no parameter),
+bash 3.2 `/bin/bash -c 'compgen -v'` (no bash 5 is installed), and a hand-written list of
 names those cannot list: the zle widget variables and the environment names of the round-1 verdict, and `POSTEDIT`, `RPROMPT` and `RPROMPT2`
 (zsh scalar specials that are unset by default, so `${(k)parameters}` never shows them). The list is checked against the shells, not derived
 from their man pages: the Opus grammar round 2 scanned 14,768 candidate names (man pages of zsh, bash, ksh and dash among them) and found none
@@ -326,19 +328,25 @@ cuts the VALUE of
 `KEYBOARD_HACK` to its first character and of `HISTCHARS` / `histchars` to three, so `HISTCHARS=<scratch>; rm -rf "$HISTCHARS/x"` deletes `/tm/x`,
 outside scratch (Opus grammar round 1). A special added by a later shell is a documented residual; a name on the list only costs precision.
 `proven_scratch` never raises (an input it cannot read is not a proof), and its anchored regexes
-have bounded token classes with no nested quantifier: a 64 KB command costs about 5 ms in the grammar on the worst shape (32 000
+have bounded token classes and no ambiguous nesting (`(?:RC/)*` inside `( +REL)*` is unambiguous: 64 KB adversarial inputs
+take at most 5 ms): a 64 KB command costs about 5 ms in the grammar on the worst shape (32 000
 relative paths) and at most 20 ms through `catalogue.evaluate` (measured with a fresh event per run: 16 ms on the worst shape).
 
 **What v2 fires on that a resolver would not (precision residuals).** v1 flags every relative target and every variable, so a scratch delete
 that is not exactly a shape keeps v1's fire: `cd <scratch>; rm -rf ./*` (a `;`), `cd a && cd b && rm ...`, `cd <scratch> && true && rm ...`
 (or `echo`, `mkdir`), `eval "cd <scratch>" && rm ...`, `(cd <scratch> && rm ...)`, `export D=<scratch> && rm -rf $D`, `D=<scratch>; E=$D;
 rm -rf "$E"`, `cd <scratch> && rm -rf ./a 2>/dev/null`, `cd <scratch> && ls -d ./* | xargs rm -rf ./a`, a quoted `cd "<scratch>"`, a second
-command after the rm, a relative `git -C <repo> worktree add wt`, and a worktree made by an EARLIER tool call (the detector keeps no
-state). The matrix pins 39 of them (`residual` rows). They are the price of proving nothing outside the shapes: a human reading the fire sees a
+command after the rm, a relative `git -C <repo> worktree add wt` (the matrix pins 39 such `residual` rows), and a worktree made
+by an EARLIER tool call (the detector keeps no state; that world is a twin row, not a `residual` one). They are the price of proving
+nothing outside the shapes: a human reading the fire sees a
 scratch delete and labels it a false positive. A scratch delete v1 never read (`bash -c 'cd <scratch> && rm -rf ./*'`, `find <scratch> -delete`,
 `ls -d <scratch>/* | xargs rm -rf`) stays silent, like its outside-scratch twin (a miss, below).
 
-**v1's own residuals, which v2 keeps** (the rounds named them; v1 on main has them, the grammar neither adds nor removes them): `rm -rf /tmp/*`
+**v1's own residuals, which v2 keeps** (the rounds named them; v1 on main has them). S1 and S2 inherit v1's SCRATCH rule, so the grammar CARRIES
+two of them into the proven shapes: a scratch PARENT (`/tmp`, `/var/folders`, `/private/tmp`) and a scratch NAME anywhere in the path (`.../build`)
+are proven like any scratch dir. `cd /tmp && rm -rf *`, `cd /tmp && rm -rf .`, `cd /var/folders && rm -rf *`, `cd /private/tmp && rm -rf *` and
+`cd <x>/build && rm -rf .` are proven and silent under v2 while v1 fires on each (`V1_RESIDUAL_TWINS` in the matrix test pins the five). The others
+are v1's own and no shape touches them: `rm -rf /tmp/*`
 and `rm -rf /tmp` are scratch by v1's literal prefix (the parent of every scratch tree); `rm -rf <scratch>/.[.]/x` is scratch by that prefix
 (`.[.]` matches `..` in bash 3.2 or without `globskipdots`, never in zsh), as are `<scratch>/\.\./...` and `<scratch>/*(P:...:)` written
 absolutely; `rm -rf /tmp/x 2>/dev/null` reads `2>/dev/null` as a target, and so v1 fires on it whatever the target; a leading `$TMPDIR` or
@@ -346,8 +354,8 @@ absolutely; `rm -rf /tmp/x 2>/dev/null` reads `2>/dev/null` as a target, and so 
 the like is scratch wherever it is.
 
 **Misses and limits** (the matrix pins them; every one is a world v1's literal rule never read, so v2 adds no recall and loses none):
-python, node and perl one-liners, a `bash <<EOF` body, base64 pipes, `$IFS` and `$(echo rm)` as the command word, a quoted
-`bash -c`/`sh -c` script (and `eval`) holding the delete, `ls -d ... | xargs rm -rf`, `find -delete`, `find -exec rm -rf`, `find -f`, a script
+python, node and perl one-liners, a `bash <<EOF` body, base64 pipes, `$IFS` and `$(echo rm)` as the command word, `bash -c`/`sh -c`
+or `eval` (quoted or not) holding the delete, `ls -d ... | xargs rm -rf`, `find -delete`, `find -exec rm -rf`, `find -f`, a script
 or Makefile written and then run, `rsync --delete`, `git clean`, `trash`, a Finder delete, `rm -- -x`. A function or alias of the user's shell
 that is not defined in the command is invisible to every shape: `cd <scratch> && rm -rf ./*` is proven by its text, and a user function named
 `cd` or `rm` could make it do anything. `CDPATH` or `cdable_vars` set in the environment, a `mv`, `ln` or `cp` that swaps a directory or a
@@ -361,8 +369,9 @@ joined target is scratch; for S3, the path its `worktree add` created, whatever 
 copy of v1's rule, checks that no character-level mutation of a proven shape (one inserted character from the forbidden set, a trailing
 newline, a tab, a leading or trailing space) and no structural one (a `..` or leading-dot component, another NAME, a `;` in S1, a flag, a wrapper, a
 relative root) is proven, checks that extra spaces between tokens change nothing, feeds 1000 garbage strings (never raises) and times the
-64 KB shapes. Nineteen mutants of `grammar.py` and one of `detectors.py` must each
-fail a test: `\Z` becomes `$`; the `..` check of S3; the `//` check of S3; the `SCRATCH` check of the joined target in S1 and in S2;
+64 KB shapes. Twenty mutants of `grammar.py` and one of `detectors.py` must each
+fail a test: `\Z` becomes `$`; the `..` check of S3; the `//` check of S3; the relative-`-C` check of S3;
+the `SCRATCH` check of the joined target in S1 and in S2;
 S3's equality of the `rm` and the `add` path; the NAME equality; S3's repository-parent check; the dot-free component class;
 S1's own `SCRATCH` check of the `cd` path; the optional space before `&&` in S2;
 the frozen names; the prefixes (the `ZFTP_` one included); the 32-character bound of NAME; the upper-casing of NAME; the fail-closed `except` (it
@@ -485,7 +494,7 @@ unknown. `proposal_id` covers the contract, and a record without the key keeps i
 `contracts.CONTRACT_WORLDS[detector]` (data only; 32 must-fire and 11 must-not-fire worlds for `rm_rf_nonscratch`: the near misses of the
 three shapes and the shapes the three Opus rounds found holes in must fire; the shapes themselves must not);
 the table is not hashed with the catalogue and `contracts.py` is on the hook
-path only because `proposal.py` imports it (no imports beyond __future__, data and four small functions). The point: a later detector edit that breaks a
+path only because `proposal.py` imports it (no imports beyond __future__, data and five small functions). The point: a later detector edit that breaks a
 world refuses the proposal at `approve`, whoever else still passes.
 
 Validation, all fail-closed, before the file is written:

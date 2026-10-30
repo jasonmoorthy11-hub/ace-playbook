@@ -388,7 +388,7 @@ validate` says "catalogue source_sha256 is stale", the hook logs `skipped:P-xxxx
 demotion), so re-propose and re-approve each live proposal once.
 
 Detector v2 (2026-10-29: `rm_rf_nonscratch` proves three exact scratch shapes over the raw command text, D-209; `compile/grammar.py` is
-hashed with the catalogue) was such an edit: it retired P-f9407d6c, so the operator re-proposes and re-approves it in observe. The new proposal carries
+hashed with the catalogue) was such an edit: it retired P-f9407d6c, so the operator re-proposes it and approves the new id in observe. The new proposal carries
 its contract worlds (`compile/contracts.py`).
 
 Two things to know. The matcher is `Bash` only, narrower than the design's list (no approvable proposal
