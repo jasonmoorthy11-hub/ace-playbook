@@ -5,7 +5,8 @@ S2 `NAME=<scr>; rm -rf "$NAME"...`, S3 `git worktree add <p> && rm -rf <p>`) is 
 shapes with a scratch or an outside root; the oracle is "proven iff every joined target is scratch", and the detector must fire exactly when
 v1 fires and the shape is not proven. The V1 FLOOR: `v2_fires or not v1_fires or proven`, where `v1_fires` is a frozen copy of v1's rule kept
 below and `proven` = the generator built a grammar shape with scratch targets. Every mutation of a shape (a forbidden character, a trailing
-newline, a tab, a `..` or leading-dot component, another NAME, a `;` in S1) is NOT proven. Eight mutants of grammar.py (the five named in the brief and three more) must each fail a test.
+newline, a tab, a `..` or leading-dot component, another NAME, a `;` in S1) is NOT proven.
+Eight mutants of grammar.py (the five named in the brief and three more) must each fail a test.
 Seeded (`random.Random(1234)`, override with PYTEST_SEED); stdlib only; the commands are DATA fed to the detector, nothing runs.
 """
 
@@ -270,7 +271,8 @@ def test_every_structured_mutation_is_not_proven_and_the_floor_holds():
 def test_the_denied_names_and_the_allowed_names_of_s2():
     for name in NAMES:
         assert proven(f'{name}=/tmp/w; rm -rf "${name}"'), name
-    for name in ("IFS", "PATH", "path", "cdpath", "HOME", "BASH_ENV", "BASH_XYZ", "LD_LIBRARY_PATH", "DYLD_X", "LC_ALL", "ZSH_X", "_", "RANDOM", "status", "ARGV", "UID"):
+    denied = ("IFS", "PATH", "path", "cdpath", "HOME", "BASH_ENV", "BASH_XYZ", "LD_LIBRARY_PATH", "DYLD_X", "LC_ALL", "ZSH_X", "_", "RANDOM")
+    for name in denied + ("status", "ARGV", "UID"):
         assert not proven(f'{name}=/tmp/w; rm -rf "${name}"'), name
 
 
@@ -319,13 +321,13 @@ def mutant(old: str, new: str):
 
 MUTANTS = {
     "anchor-Z-becomes-dollar": ('\\Z")', '$")'),
-    "the-S3-dotdot-check-removed": ('any(".." in p.split("/") for p in (wt, rm, c or "")) or ', ""),
-    "the-joined-target-SCRATCH-check-removed-in-S1": ('and _dir(posixpath.join(m["scr"], t), scratch) for t', "and True for t"),
-    "the-joined-target-SCRATCH-check-removed-in-S2": ('if rest and not _dir(posixpath.join(m["scr"], rest[1:]), scratch):', "if False:"),
-    "the-S3-rm-equals-add-check-removed": (" or wn != posixpath.normpath(rm)", ""),
-    "the-S3-repository-parent-check-removed": ('if c and (posixpath.normpath(c) + "/").startswith(wn.rstrip("/") + "/"):', "if False:"),
-    "the-NAME-equality-removed": ("(?P=n)", "[A-Za-z_][A-Za-z0-9_]*"),
-    "the-dot-free-component-class-removed": ('_COMP = r"[A-Za-z0-9_-][A-Za-z0-9._-]*"', '_COMP = r"[A-Za-z0-9._-]+"'),
+    "s3-dotdot-check-removed": ('any(".." in p.split("/") for p in (wt, rm, c or "")) or ', ""),
+    "s1-joined-target-check-removed": ('and _dir(posixpath.join(m["scr"], t), scratch) for t', "and True for t"),
+    "s2-joined-target-check-removed": ('if rest and not _dir(posixpath.join(m["scr"], rest[1:]), scratch):', "if False:"),
+    "s3-rm-equals-add-check-removed": (" or wn != posixpath.normpath(rm)", ""),
+    "s3-repo-parent-check-removed": ('if c and (posixpath.normpath(c) + "/").startswith(wn.rstrip("/") + "/"):', "if False:"),
+    "s2-name-equality-removed": ("(?P=n)", "[A-Za-z_][A-Za-z0-9_]*"),
+    "dot-free-component-class-removed": ('_COMP = r"[A-Za-z0-9_-][A-Za-z0-9._-]*"', '_COMP = r"[A-Za-z0-9._-]+"'),
 }
 
 
