@@ -115,10 +115,12 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
   `coproc rm -rf ...` (silent under v1 and v2: the command word is not `rm`), shell functions and aliases defined in the command (the segment
   rule follows this list), and anything past the 64 KB cap (reported as `unparseable`).
   The segment rule: the scanner splits a command into SEGMENTS at an unquoted `;`, `&&`, `||`, `|`, a single `&`, a newline, `(`, `)` or a
-  backtick. Quoted text is masked first (`shell.py:90`), an escaped `\;` still splits, and a backslash-newline does not end a segment
+  backtick. Quoted prose is masked first (`shell.py:41`, `_mask`; a quoted single word such as `"rm"` keeps its text), and any escaped
+  separator (`\;`, `\&`, `\|`, `\(`) still splits. A backslash-newline does not end a segment
   (`shell.py:28` and `:197`). A segment whose first word is `function` (named, two-name or zsh's anonymous `function {`) or `alias` is not
   read, wherever it sits, including inside an `f() { ... }` body. A call is read only by its own first word: `k -rf ...` for an alias or
-  function named `k` is not `rm` and is unread, while an alias or function NAMED `rm` is read as `rm` and fires. Everything in any other
+  function named `k` is not `rm` and is unread, while a call `rm -rf …` of an alias or function NAMED `rm` is read as `rm` by its own words
+  and fires; a bare `rm` whose `-rf` sits in the definition is silent. Everything in any other
   segment is read (its first word, after what `shell.py:174` strips, is checked for `rm`, `detectors.py:68`), so a delete in a later segment
   of a `function` body is seen: after a `;` or a newline, or inside `( ... )` or `$( ... )`. The delete written directly after
   `function NAME {` on the same segment is not. The control is the promotion ladder: a proposal starts in observe mode and every
@@ -127,7 +129,8 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
   `docs/design/compiler.md` 4.1.1) pins the documented misses of `rm_rf_nonscratch` as of detector v2 (2026-10-29, D-209, 4.1.2): it does not
   see a recursive delete through an interpreter (python, node, perl, a heredoc, a base64 pipe, `bash -c`/`sh -c`/`eval`, quoted or not),
   through `find`, `xargs` from a pipe, `rsync --delete`, `git clean`, `trash` or Finder, or in a script or Makefile that was written and
-  then run, nor through `$IFS` or `$(...)` as the command word (59 of 221 variants; v1's literal rule misses the same 59). No shell is
+  then run, nor through `$IFS`, `$(...)` or a variable (`${RM} -rf …`) as the command word (59 of 221 variants; v1's literal rule misses the
+  same 59). No shell is
   modelled: v2 hides a scratch delete only when the RAW command text is, in full, one of three exact shapes (`cd <scratch> && rm -rf <rel>...`,
   `NAME=<scratch>; rm -rf "$NAME"...`, `git worktree add <p> && rm -rf <p>`; the regexes are in 4.1.2) and every joined target is scratch by
   v1's own rule (S3: the path this command's `worktree add` created, whatever its root; nothing is checked against SCRATCH for S3, and a
