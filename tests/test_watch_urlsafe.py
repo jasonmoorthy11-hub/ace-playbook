@@ -88,7 +88,7 @@ def chain(routes):
 def test_a_redirect_to_a_bracketed_host_is_dropped_and_a_same_host_redirect_still_works():
     fake, op = chain({GOOD: (302, BAD, b"")})
     out = get(GOOD, opener=op)
-    assert out["dropped"] in ("redirect", "network ValueError") and fake.asked == [GOOD]
+    assert out["dropped"] == "network ValueError" and fake.asked == [GOOD]
     fake, op = chain({GOOD: (302, "https://example.test/feed2", b""), "https://example.test/feed2": (200, None, fixture("rss_ok.xml"))})
     assert len(get(GOOD, opener=op)["data"]) == 2 and fake.asked == [GOOD, "https://example.test/feed2"]
 
