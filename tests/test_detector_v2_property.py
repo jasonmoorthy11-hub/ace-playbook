@@ -312,7 +312,8 @@ def test_every_special_name_is_denied():
 
 
 def test_every_special_prefix_is_denied_and_the_prefixes_are_pinned():
-    assert grammar._SPECIAL_PREFIX == ("BASH", "COMP", "DIS_", "DYLD_", "EPOCH", "FUNC", "HIST", "KEYBOARD", "LANG", "LC_", "LD_", "LESS", "MAIL", "MATCH", "OPT",
+    assert grammar._SPECIAL_PREFIX == ("BASH", "COMP", "DIS_", "DYLD_", "EPOCH", "FUNC", "HIST", "KEYBOARD", "LANG", "LC_", "LD_", "LESS",
+                                       "MAIL", "MATCH", "OPT",
                                        "PROMPT", "PS0", "PS1", "PS2", "PS3", "PS4", "PS5", "PS6", "PS7", "PS8", "PS9", "REPLY", "RPS", "TERM",
                                        "UNDO_", "WATCH", "WIDGET", "WORD", "YANK", "ZLE_", "ZSH", "_COMP")
     for pre in grammar._SPECIAL_PREFIX:
@@ -385,7 +386,7 @@ def check(fn) -> list:
         want(f'{nm}=/tmp/w; rm -rf "${nm}/x"', False, "s2 truncating " + nm)
     for nm in ("LC_FOO", "ZSH_FOO", "HISTFOO", "PS7", "BASHFOO", "MAILFOO", "COMPFOO", "KEYBOARDX", "WORDX"):
         want(f'{nm}=/tmp/w; rm -rf "${nm}"', False, "s2 prefix " + nm)
-    for nm in ("IFS", "PATH", "SHELL", "UID", "status", "path", "SRANDOM", "FUNCNAME"):                         # names only the frozen tuple holds (no prefix covers them)
+    for nm in ("IFS", "PATH", "SHELL", "UID", "status", "path", "SRANDOM"):                  # names only the frozen tuple holds (no prefix covers them)
         want(f'{nm}=/tmp/w; rm -rf "${nm}"', False, "s2 special " + nm)
     want(f'{"N" * 33}=/tmp/w; rm -rf "${"N" * 33}"', False, "s2 name length")
     want(f'{"N" * 32}=/tmp/w; rm -rf "${"N" * 32}"', True, "s2 name length ok")

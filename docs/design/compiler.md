@@ -297,6 +297,7 @@ SCR    (/[A-Za-z0-9_-][A-Za-z0-9._-]*)+                an absolute literal path:
 REL    . | ./ | * | ./* | [./]a/b/c                    components [A-Za-z0-9_-][A-Za-z0-9._*?-]*; the LAST may be "*"; no "..",
                                                        no component starting with ".", "?" or "["
 LIT    [A-Za-z0-9_./][A-Za-z0-9_./-]*                  a git path or ref, never an option
+NAME   [A-Za-z_][A-Za-z0-9_]{0,31}                     1 to 32 characters, and not a shell special (see below)
 S1     \Acd SCR && rm FLAGS REL( REL)*\Z
 S2     \ANAME=SCR(;| &&) rm FLAGS VREF( VREF)*\Z       VREF = $NAME | ${NAME} | "$NAME" | "${NAME}", each optionally followed by
                                                        /REL inside the quotes or unquoted ("$NAME"/REL); the SAME NAME throughout
@@ -310,12 +311,16 @@ reference that has a `/REL`; in S3, nothing is checked against `SCRATCH`, becaus
 then removes what the add checked out there). S3 holds when `RM` and `WT` are equal after `normpath`, none of `WT`, `RM` and the `-C` path has a `..`
 component, `WT` is not `.` or `/`, an absolute `WT` has at least two components, a `-C` repository is not `WT` or a descendant of it, and a
 relative `WT` has no `-C` (git would put it under the repository while `rm` stays in the cwd). Its parent never qualifies. In S2 the name
-may not be one the shell or the C library reads (compared in upper case, so `path` is `PATH` too): `IFS`, `CDPATH`, `PATH`, `HOME`,
-`TMPDIR`, `PWD`, `OLDPWD`, `ENV`, `BASH_ENV`, `SHELL`, `SHELLOPTS`, `GLOBIGNORE`, `ZDOTDIR`, `RANDOM` and the other special parameters
-listed in `grammar.py`, and any name starting with `BASH`, `LD_`, `DYLD_`, `LC_` or `ZSH` (a longer list than the nine the design needed;
-a name on it only costs precision). `proven_scratch` never raises (an input it cannot read is not a proof), and its anchored regexes
+is 1 to 32 characters of `[A-Za-z_][A-Za-z0-9_]*` and not a name a shell treats specially (compared in upper case, so `path` is `PATH` too): a FROZEN
+tuple in `grammar.py` (`_SPECIAL`, 228 names: zsh 5.9 `print -l ${(k)parameters}` with every loadable module, bash 3.2 `compgen -v`, and the zle
+and environment names those cannot list; generated once on one Mac, never computed at hook time, frozen again in the test) and the prefixes of
+`_SPECIAL_PREFIX` (`BASH`, `LC_`, `LD_`, `DYLD_`, `ZSH`, `EPOCH`, `FUNC`, `HIST`, `PS0` to `PS9`, ...). The list is not only about search paths: zsh
+cuts the VALUE of
+`KEYBOARD_HACK` to its first character and of `HISTCHARS` / `histchars` to three, so `HISTCHARS=<scratch>; rm -rf "$HISTCHARS/x"` deletes `/tm/x`,
+outside scratch (Opus grammar round 1). A special added by a later shell is a documented residual; a name on the list only costs precision.
+`proven_scratch` never raises (an input it cannot read is not a proof), and its anchored regexes
 have bounded token classes with no nested quantifier: a 64 KB command costs at most 5 ms in the grammar (4.4 ms on the worst shape, 32 000
-relative paths) and 10 ms through `catalogue.evaluate`.
+relative paths) and about 11 ms through `catalogue.evaluate`.
 
 **What v2 fires on that a resolver would not (precision residuals).** v1 flags every relative target and every variable, so a scratch delete
 that is not exactly a shape keeps v1's fire: `cd <scratch>; rm -rf ./*` (a `;`), `cd a && cd b && rm ...`, `cd <scratch> && true && rm ...`
@@ -344,13 +349,17 @@ symlink under a proven path (names are read, never the filesystem), and a delete
 `grammar.py` joins `events.py`, `shell.py` and `textrules.py` in the hashed text of every row (section 4): four leaf modules, so the change
 moved all nine detector hashes (the table keeps one line per detector; only the hashes move); `shell.py` is byte-identical to main.
 `tests/test_detector_v2_property.py` generates 400 worlds per property against an oracle the generator knows (a shape is proven iff every
-joined target is scratch), holds the V1 FLOOR `v2_fires or not v1_fires or proven` (`proven` = the generator built a shape) with a frozen
+joined target is scratch; for S3, the path its `worktree add` created, whatever its root), holds the V1 FLOOR `v2_fires or not v1_fires or proven`
+(`proven` = the generator built a shape) with a frozen
 copy of v1's rule, checks that no character-level mutation of a proven shape (one inserted character from the forbidden set, a trailing
 newline, a tab, a leading or trailing space) and no structural one (a `..` or leading-dot component, another NAME, a `;` in S1, a flag, a wrapper, a
 relative root) is proven, checks that extra spaces between tokens change nothing, feeds 1000 garbage strings (never raises) and times the
-64 KB shapes. Eight mutants of `grammar.py` must each
+64 KB shapes. Fourteen mutants of `grammar.py` and one of `detectors.py` must each
 fail a test: `\Z` becomes `$`; the `..` check of S3; the `SCRATCH` check of the joined target in S1 and in S2; S3's equality of the `rm` and
-the `add` path; the NAME equality; S3's repository-parent check; the dot-free component class.
+the `add` path; the NAME equality; S3's repository-parent check; the dot-free component class; S1's own `SCRATCH` check of the `cd` path; the
+optional space before `&&` in S2;
+the frozen names; the prefixes; the 32-character bound of NAME; the upper-casing of NAME; and, in `detectors.py`, the `not tu.truncated`
+guard (a command cut by the 64 KB cap is never proven).
 
 ### 4.2 Per-session state (`state.py`)
 

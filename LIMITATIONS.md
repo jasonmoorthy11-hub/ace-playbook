@@ -120,14 +120,18 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
   then run, nor through `$IFS` or `$(...)` as the command word (59 of 221 variants; v1's literal rule misses the same 59). No shell is
   modelled: v2 hides a scratch delete only when the RAW command text is, in full, one of three exact shapes (`cd <scratch> && rm -rf <rel>...`,
   `NAME=<scratch>; rm -rf "$NAME"...`, `git worktree add <p> && rm -rf <p>`; the regexes are in 4.1.2) and every joined target is scratch by
-  v1's own rule; anything else, a `;`, a second command, a tab, a quote, a redirection, a wrapper, `bash -c`, gets v1's literal rule
+  v1's own rule (S3: the path this command's `worktree add` created, whatever its root; nothing is checked against SCRATCH for S3);
+  anything else, a `;`, a second command, a tab, a quote, a redirection, a wrapper, `bash -c`, gets v1's literal rule
   unchanged, so v2 never fires less than v1 except on those three shapes. The price is precision: a scratch delete that is not exactly a shape
   still fires (`cd <scratch>; rm`, `cd <scratch> && true && rm ...`, `export D=<scratch> && rm -rf $D`, `(cd <scratch> && rm ...)`, `rm ... 2>/dev/null`,
   `ls -d ./* | xargs rm -rf ./a`, a relative `git -C <repo> worktree add wt`, a worktree made by an earlier tool call; the matrix pins 39 such
   false positives). Week 1 read 36 false positives on the live data; the matrix has 0 for the plain `cd <scratch> && rm -rf ./*` and
   `D=<scratch>; rm -rf "$D"` shapes. Not seen by the shapes: a shell function or alias of the user's shell (a `cd` or `rm` function would
   change what a shape does), `CDPATH` or `cdable_vars` in the environment, a `mv`, `ln` or `cp` that swaps a directory or symlink under a proven path, and an
-  existing empty directory that `git worktree add` accepts. v1's own residuals stay, named by the review rounds: `rm -rf /tmp/*` and `rm -rf /tmp`
+  existing empty directory that `git worktree add` accepts. The S2 variable name is checked against a FROZEN list of shell specials (the zsh 5.9 and
+  bash 3.2 names of one Mac plus the prefixes in `grammar.py`; zsh cuts the value of `KEYBOARD_HACK`, `HISTCHARS` and `histchars`, which
+  is why a name list is needed at all): a special added by a later shell is a documented residual. v1's own residuals stay, named by the review
+  rounds: `rm -rf /tmp/*` and `rm -rf /tmp`
   are scratch by prefix (the parent of every scratch tree), an absolute `rm -rf <scratch>/.[.]/x` (`.[.]` matches `..` in bash 3.2 or without
   `globskipdots`, never in zsh), `<scratch>/\.\./...` and `<scratch>/*(P:...:)` are scratch by prefix, `2>/dev/null` reads as a target (so a
   redirected scratch delete fires), a leading `$TMPDIR` is scratch by name, and a directory named `build`, `dist` or `node_modules` is scratch
