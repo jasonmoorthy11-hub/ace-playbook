@@ -140,7 +140,7 @@ def test_try_decode_matches_the_frozen_python_312_value(token, expected):
 
 
 @pytest.mark.skipif(sys.version_info >= (3, 13), reason="lenient stdlib decode is the 3.12 reference")
-def test_try_decode_equals_the_legacy_function_on_2000_seeded_tokens():
+def test_try_decode_equals_the_legacy_function_on_the_fuzz_and_constructed_tokens():
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         bad = [t for t in _fuzz_tokens() + _constructed_tokens() if try_decode(t) != _legacy(t)]

@@ -1371,15 +1371,14 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
 - `netguard.py`: the SSRF guard. A host that is, or resolves to, a loopback, link-local, private, multicast or reserved address is dropped
   (`address`) before any request; a redirect is followed only to the same scheme, host and port, at most three hops, with no userinfo in the
   URL, and is dropped (`redirect`) otherwise; both URLs go through `urlsafe.py`'s guarded split, and one it rejects (None) makes the guard raise
-  `RedirectRefused("url")` when `redirect_request` is called directly (defence in depth); `fetch.py` turns a `RedirectRefused` into the drop
-  `redirect`. Through urllib the stdlib's `http_error_302` parses the Location with `urlparse` BEFORE `redirect_request` runs, so a malformed
-  Location reaches `fetch` as a ValueError and is dropped as `network ValueError` (pinned by `tests/test_watch_urlsafe.py:91`). The DNS answer
-  can change between the check and the connect (rebinding); the address is
-  checked before the connection, not on the connected socket, so that race stays. `resolve_failed(host)` is True only for a name whose lookup raised or gave
-  no answer (`blocked_address` keeps its contract: an unsafe answer and a failed lookup are both True). `scan.collect` uses it for the wake-up scan: on the
-  FIRST `address` drop of a scan whose lookup failed it waits `scan.DNS_WAIT` seconds (20, ONE wait per scan, `scan.SLEEP` is injectable), fetches that one
-  source again and adds the note `dns wait <N>s: <id> recovered|still dropped`; later address drops of the same scan never wait. A source that is still
-  dropped keeps no stamp and stays due for the second scan of the day.
+  `RedirectRefused("url")` when `redirect_request` is called directly (defence in depth); `fetch.py` turns a `RedirectRefused` into the drop `redirect`.
+  Through urllib the stdlib's `http_error_302` parses the Location with `urlparse` BEFORE `redirect_request` runs, so a malformed Location reaches `fetch` as
+  a ValueError and is dropped as `network ValueError` (pinned by `tests/test_watch_urlsafe.py:91`). The DNS answer can change between the check and the
+  connect (rebinding); the address is checked before the connection, not on the connected socket, so that race stays. `resolve_failed(host)` is True only for
+  a name whose lookup raised or gave no answer (`blocked_address` keeps its contract: an unsafe answer and a failed lookup are both True). `scan.collect` uses
+  it for the wake-up scan: on the FIRST `address` drop of a scan whose lookup failed it waits `scan.DNS_WAIT` seconds (20, ONE wait per scan, `scan.SLEEP` is
+  injectable), fetches that one source again and adds the note `dns wait <N>s: <id> recovered|still dropped`; later address drops of the same scan never wait.
+  A source that is still dropped keeps no stamp and stays due for the second scan of the day.
 - `inventory.py`: the snapshot (`inventory.json`, 0600). Per target of the private map only the matching LINES with numbers plus the
   file sha256; `{"missing": true}` for a missing file; at most 50 files per target, a target with more is marked `truncated` and its
   `model_pin` becomes a lead with no diff; `claude --version` only when `claude` is on PATH.

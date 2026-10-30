@@ -22,7 +22,7 @@ RESOLVE = socket.getaddrinfo                      # looked up at call time so te
 
 
 class RedirectRefused(Exception):
-    """A redirect to another host, another scheme or an unsafe address."""
+    """A redirect to another host, another scheme, an unsafe address or a URL the parser rejects."""
 
 
 def _unsafe(ip: ipaddress._BaseAddress) -> bool:
