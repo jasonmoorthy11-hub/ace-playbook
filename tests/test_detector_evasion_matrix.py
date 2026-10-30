@@ -478,6 +478,8 @@ NEAR_MISSES = [
     # delete outside scratch; `cd /var && rm -rf folders/x` has a non-scratch cwd whose join looks scratch; `D=<scr>&& …` is not the spelling
     f'KEYBOARD_HACK={SCR}; rm -rf "${{KEYBOARD_HACK}}/x"', f'HISTCHARS={SCR}; rm -rf "$HISTCHARS/x"', f"histchars={SCR} && rm -rf $histchars",
     f'D={SCR}&& rm -rf "$D"', "cd /var && rm -rf folders/x", "cd /usr/local && rm -rf ./x", f'{"N" * 33}={SCR}; rm -rf "${"N" * 33}"',
+    # security review 7: names bash or zsh ignores or rewrites on assignment (the pre-wave-7 deny set held them)
+    f'FUNCNAME={SCR}; rm -rf "$FUNCNAME/x"', f'SRANDOM={SCR}; rm -rf "$SRANDOM"',
 ]
 GRAMMAR_TWINS += [f'WORK={SCR}; rm -rf "$WORK"/x', f'{"N" * 32}={SCR}; rm -rf "${"N" * 32}"']   # ordinary names (not shell specials) stay proven
 
