@@ -1995,15 +1995,18 @@ became rung-aware and the date is the next rung's, not always warn's. It was nev
 
 ## Files read
 
+The counts are the line counts AT THE TIME OF READING, so they go stale by design (`clean/bashwrite.py` and `config.py` were re-counted
+at 144 and 230 on 2026-10-30).
+
 | File | Lines |
 |---|---|
 | ace-playbook/README.md (lines 55-85), LIMITATIONS.md, PREREGISTRATION.md (TBD grep), SECURITY.md | 131, 77, 88, 64 |
 | ace-playbook/docs/reviews/2026-10-17-opus-stage1-review.md | 24 |
-| ace-playbook/ace_playbook/config.py, enqueue.py, filelock.py | 129, 39, 22 |
+| ace-playbook/ace_playbook/config.py, enqueue.py, filelock.py | 230, 39, 22 |
 | ace-playbook/ace_playbook/store/schema.py (full), store/log.py (lines 20-40, def list) | 262, 130 |
 | ace-playbook/ace_playbook/inject/sanitize.py, citations.py, ledger.py, injector.py, __main__.py | 120, 26, 38, 140, 68 |
 | ace-playbook/ace_playbook/reflect/provenance.py (full), reflect/runner.py (lines 20-60, def list) | 92, 192 |
-| ace-playbook/ace_playbook/clean/transcript.py (lines 28-60, 84-134), clean/origins.py, clean/bashwrite.py | 254, 114, 127 |
+| ace-playbook/ace_playbook/clean/transcript.py (lines 28-60, 84-134), clean/origins.py, clean/bashwrite.py | 254, 114, 144 |
 | ace-playbook/ace_playbook/scrub/engine.py (lines 192-205, def list), scrub/quarantine.py (lines 20-60) | 230, 84 |
 | ace-playbook/hooks/sessionstart.sh, stop_citation_ledger.sh, sessionend.sh, pre-commit-scrub.sh | 5, 5, 6, 23 |
 | ace-playbook/hooks/INSTALL.md (grep, lines 80-105) | 158 |

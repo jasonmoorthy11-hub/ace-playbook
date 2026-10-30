@@ -3,8 +3,8 @@
 `fetch` returns an item `{url, sha256, fetched_at, content_type, body, prev_sha256, data}`, None when the page is unchanged (a 304 or
 the same sha256 as the store's), or a dropped record `{url, fetched_at, dropped: reason}` for a scheme other than http(s), a host that is
 or resolves to a loopback, link-local, private, multicast or reserved address (`address`, no request is made), a redirect to another host
-or past three hops (`redirect`, see `netguard`), an XML body with a DTD or ENTITY declaration (`xml`), a Content-Type outside `expect`
-(checked before the body is read), a body over `cap` bytes (at most cap + 1 bytes are read), a network
+or past three hops (`redirect`, see `netguard`), a URL the parser rejects (`url`), an XML body with a DTD or ENTITY declaration (`xml`),
+a Content-Type outside `expect` (checked before the body is read), a body over `cap` bytes (at most cap + 1 bytes are read), a network
 error or a body that does not parse as its `kind`. `body` is visible text only (`sanitize.strip_hidden`; feeds are rendered from their
 parsed, cleaned fields). Every successful fetch records url, sha256 and fetched_at in the seen store. `compile watch` is the one
 network-using module of ace-playbook and is never on the hook path (tests/test_hook_conformance.py).
@@ -17,12 +17,11 @@ import http.client
 import json
 import re
 import urllib.error
-import urllib.parse
 import urllib.request
 from pathlib import Path
 
 from ...canon import now_iso
-from . import netguard
+from . import netguard, urlsafe
 from .parsers import PARSERS, DTDRefused
 from .sanitize import plain, strip_hidden
 
@@ -45,8 +44,9 @@ def load_sources(path: Path) -> list[dict]:
         raise ValueError("watch_sources must be a non-empty JSON list")
     out, ids = [], set()
     for s in raw:
+        parts = urlsafe.split(s.get("url")) if isinstance(s, dict) else None                # None: no URL, or one the parser rejects
         ok = (isinstance(s, dict) and isinstance(s.get("id"), str) and SOURCE_ID.fullmatch(s["id"]) and s["id"] not in ids
-              and isinstance(s.get("url"), str) and urllib.parse.urlsplit(s["url"]).scheme in ("http", "https")
+              and parts is not None and parts.scheme in ("http", "https")
               and s.get("kind") in EXPECT and s.get("tier") in (0, 1) and not isinstance(s.get("tier"), bool))
         if not ok:
             raise ValueError("watch_sources has a bad entry (id, url, kind, tier)")
@@ -71,7 +71,9 @@ def fetch(url: str, *, expect: tuple[str, ...], store: dict, timeout: float = 20
     """One conditional GET of `url` (see the module docstring). `store` is the seen dict (its `fetched` map is updated); `kind` (a key
     of `parsers.PARSERS`) makes the body parse; `opener(request, timeout=...)` replaces `urllib.request.urlopen` (tests)."""
     now = now or now_iso()
-    parts = urllib.parse.urlsplit(url)
+    parts = urlsafe.split(url)
+    if parts is None:
+        return _drop(url, "url", now)                                             # malformed (a bracketed host that is no IPv6 literal)
     if parts.scheme not in ("http", "https"):
         return _drop(url, "scheme", now)
     if netguard.blocked_address(parts.hostname):                              # loopback, link-local, private, metadata: no request at all

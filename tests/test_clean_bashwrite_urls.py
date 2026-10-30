@@ -37,6 +37,11 @@ def test_query_is_not_part_of_the_basename_of_a_rejected_url():
     assert "file" in raw
 
 
+def test_fragment_only_is_not_part_of_the_basename_of_a_rejected_url():
+    raw, _ = bash_analyse("curl -O http://[abc/file#f")
+    assert "file" in raw and "file#f" not in raw
+
+
 def test_valid_ipv6_literal_is_unchanged():
     raw, ok = bash_analyse("wget -r http://[::1]/a/b")
     assert ok and raw == {"\0\0", "\0[::1]", "\0[::1]/a", "\0a", "\0wget/[::1]", "\0wget/[::1]/a", "\0wget/a", "b", "wget", "wget/b"}

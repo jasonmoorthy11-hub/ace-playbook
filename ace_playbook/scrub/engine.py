@@ -102,10 +102,11 @@ def _entropy_hits(text: str, offset: int = 0, prefix: str = "") -> list[Hit]:
 
 def try_decode(token: str) -> str | None:
     pad = token + "=" * (-len(token) % 4)
-    for fn in (base64.b64decode, base64.urlsafe_b64decode):
+    std, url = bool({"+", "/"} & set(token)), bool({"-", "_"} & set(token))
+    for alt in ([] if std and url else [b"-_"] if url else [None]):    # one alphabet, chosen by the token's own characters (3.15 warns on a guess)
         try:
-            raw = fn(pad)
-        except (ValueError, TypeError):
+            raw = base64.b64decode(pad, altchars=alt, validate=True)
+        except (ValueError, TypeError):               # binascii.Error is a ValueError
             continue
         text = raw.decode("utf-8", errors="ignore")
         if len(text) >= 12 and sum(c.isprintable() for c in text) / len(text) >= 0.9:
