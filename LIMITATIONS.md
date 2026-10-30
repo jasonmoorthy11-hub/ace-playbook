@@ -114,42 +114,25 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
   exist in the user's shell but are not defined in the command, `bash <<EOF` bodies, and anything past the 64 KB cap (reported as
   `unparseable`). The control is the promotion ladder: a proposal starts in observe mode and every counted true positive is read by a
   human before any mode change (`docs/design/compiler.md` 7.3). A strict-xfail evasion matrix (`tests/test_detector_evasion_matrix.py`,
-  `docs/design/compiler.md` 4.1.1) pins the documented misses of `rm_rf_nonscratch` as of detector v2 (2026-10-29, 4.1.2): it does not
-  see a recursive delete through an interpreter (python, node, perl, a heredoc, a base64 pipe, `zsh -c`, `find -exec sh -c`,
-  `bash -c "$(printf ...)"`, a `bash -c` nested in a `bash -c`), through `rsync --delete`, `git clean`, `trash` or Finder, or in a script or
-  Makefile that was written and then run, nor through `$IFS` or `$(...)` as the command word, nor an `xargs` fed by anything but `ls -d`
-  or `find` (14 of 189 variants). v2 never fires less than v1 except on scratch it has proven under (a)-(g) of `docs/design/compiler.md` 4.1.2:
-  it resolves a target only from PROVEN state, and whatever it cannot prove falls back to v1's literal rule for that token. Proven
-  means: a plain `cd`, `pushd`, `NAME=`, `export NAME=` or `git worktree add` segment with a literal value (no whitespace, `$`, glob,
-  brace, backslash, redirection; `local`, `readonly`, `declare` and `typeset` are not binding forms), in the current `&&` chain (a `;`,
-  newline or `&` ends it, a `||` or `!` taints the rest of it, a pipeline or a wrapper sets nothing), in a command with no compound
-  command (`if`, `while`, `for`, `case`, `{ }`), function, `trap`, `alias`, `shopt`/`setopt`, `IFS`/`CDPATH` assignment or unreadable
-  `eval`, not followed by a rebinding builtin (`let`, `read`, `printf -v`, `unset`, `((..))`, `pushd +N`, ...), and with EVERY segment
-  between it and the delete a recognised shape or a literal word on a short allow-list (`true`, `:`, `echo`, `ls`, `mkdir`, `touch`,
-  `cp`, `mv`, `cat`, `test`, `[`, `git`, `printf`, `rm`, `find`, `xargs`, `sleep`, `pwd`). Any other command word ends the trust from there
-  on: a non-literal word (`$CD x`, `$(echo cd) x`), an unknown name, which is also how a function or alias of the user's shell snapshot
-  is handled even though v2 never sees it, a zsh precommand (`repeat`, `noglob`, `nocorrect`), `source`, a bare path (zsh AUTO_CD) or
-  `./cd`. Not covered: a snapshot function or alias that shadows a RECOGNISED or allow-listed name (a `cd` or `ls` function), a `mv`,
-  `ln` or `cp` that moves or swaps the directory the shell is in or a symlink under a trusted path (names are read, never the
-  filesystem), `CDPATH` or `cdable_vars` set in the environment (`cd <scratch> && cd sub` joins `sub` onto the trusted directory), and
-  an absolute `rm -rf <scratch>/.[.]/x`, which v1 already called scratch on main by its literal prefix (`.[.]` matches `..` in bash 3.2
-  or without `globskipdots`, never in zsh). Closed after security review 5: a
-  redirection glued to a literal (`cd <scratch>>x`, `D=<scratch><f`,
-  `cd <scratch>2>/dev/null`) is not a plain segment; the leftover check (`$`, a brace expansion, a glob next to `..`) runs on every
-  target (`cd <scratch> && rm -rf ./{a,../../x}` and `cd <scratch> && rm -rf ../*` fire); a `bash -c` / `sh -c` child inherits only
-  exported names and literal prefix assignments (`D=<scratch>; bash -c 'rm -rf "$D"'` fires). Closed after security review 6: `export` with any flag
-  (`-n`, `-f`, `-fn`, `-np`) marks no name, for an assignment (`export -n D=<scratch>`) as well as a bare name; a glob component that
-  is not the last one, or a last one starting with `.`, `[` or `?`, is left (`cd <scratch> && rm -rf ./.*`, `./.[.]/x`, `./[.][.]`,
-  `./*/x` fire; `./*` and `./sub/*` do not). Closed after the Opus round-2 review (fix wave 5): an unknown command word between the
-  trusted set-point and the delete (clause (g) above); an `xargs`-fed delete whose stdin is not an `ls -d` / `find` producer has an
-  unknown target whatever its positional arguments, and a redirection token (`2>/dev/null`, `> f`, `< list`) is never a target (the
-  old "redirect token as target" over-fire is closed for v2; v1's rule still counts it); a double-quoted or unquoted `bash -c` /
-  `sh -c` script is expanded with the outer trusted names first and rescanned with trust off when a `$` or backtick is left
-  (`D=<out>; bash -c "D=<scratch>; rm -rf $D"` fires; `D=<scratch>; bash -c "rm -rf $D"` does not). A worktree made by an EARLIER
-  tool call is not remembered (the detector keeps no state), and a variable that came from the environment (`$HOME`, `$PWD`, one exported
-  earlier) is unresolved and not scratch. The price is false positives that v1 also had: a `cd <scratch>` inside a loop or an `if`,
-  after a `;`, or a scratch value built with `$`, still fires (week 1 read 36 such fires on the live data; the matrix has 0 false
-  positives for the plain `cd <scratch> && rm -rf ./*` and `D=<scratch>; rm -rf "$D"` shapes).
+  `docs/design/compiler.md` 4.1.1) pins the documented misses of `rm_rf_nonscratch` as of detector v2 (2026-10-29, D-209, 4.1.2): it does not
+  see a recursive delete through an interpreter (python, node, perl, a heredoc, a base64 pipe, a quoted `bash -c`/`sh -c`/`eval` script),
+  through `find`, `xargs` from a pipe, `rsync --delete`, `git clean`, `trash` or Finder, or in a script or Makefile that was written and
+  then run, nor through `$IFS` or `$(...)` as the command word (59 of 221 variants; v1's literal rule misses the same 59). No shell is
+  modelled: v2 hides a scratch delete only when the RAW command text is, in full, one of three exact shapes (`cd <scratch> && rm -rf <rel>...`,
+  `NAME=<scratch>; rm -rf "$NAME"...`, `git worktree add <p> && rm -rf <p>`; the regexes are in 4.1.2) and every joined target is scratch by
+  v1's own rule; anything else, a `;`, a second command, a tab, a quote, a redirection, a wrapper, `bash -c`, gets v1's literal rule
+  unchanged, so v2 never fires less than v1 except on those three shapes. The price is precision: a scratch delete that is not exactly a shape
+  still fires (`cd <scratch>; rm`, `cd <scratch> && true && rm ...`, `export D=<scratch> && rm -rf $D`, `(cd <scratch> && rm ...)`, `rm ... 2>/dev/null`,
+  `ls -d ./* | xargs rm -rf ./a`, a relative `git -C <repo> worktree add wt`, a worktree made by an earlier tool call; the matrix pins 39 such
+  false positives). Week 1 read 36 false positives on the live data; the matrix has 0 for the plain `cd <scratch> && rm -rf ./*` and
+  `D=<scratch>; rm -rf "$D"` shapes. Not seen by the shapes: a shell function or alias of the user's shell (a `cd` or `rm` function would
+  change what a shape does), `CDPATH` or `cdable_vars` in the environment, a `mv`, `ln` or `cp` that swaps a directory or symlink under a proven path, and an
+  existing empty directory that `git worktree add` accepts. v1's own residuals stay, named by the review rounds: `rm -rf /tmp/*` and `rm -rf /tmp`
+  are scratch by prefix (the parent of every scratch tree), an absolute `rm -rf <scratch>/.[.]/x` (`.[.]` matches `..` in bash 3.2 or without
+  `globskipdots`, never in zsh), `<scratch>/\.\./...` and `<scratch>/*(P:...:)` are scratch by prefix, `2>/dev/null` reads as a target (so a
+  redirected scratch delete fires), a leading `$TMPDIR` is scratch by name, and a directory named `build`, `dist` or `node_modules` is scratch
+  wherever it is. (The first build of v2 modelled the shell in 541 lines; three Opus rounds found a new family of holes each time and it
+  was removed, D-209.)
 - A proposal's optional `contract` (`compile/contracts.py`) pins behaviour on a few synthetic payloads; it does not prove the detector complete.
 - Warn delivery, resolved: warn uses `additionalContext` (step 5b). The Claude Code hooks reference (read
   2026-10-19) says a hook's stderr on exit 0 never reaches the model, so the hook prints one
@@ -201,12 +184,11 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
 - A proposal's `provenance.source_sha256` is a per-detector hash by exclusion: the text of `detectors.py` and `catalogue.py`, minus
   the bodies of the other rows' `fire` functions (`catalogue.py` is hashed whole, the `CATALOGUE` registry literal included, because
   an expression inside it runs at import time in every process), plus the row's name, fire name and catalogue fields (the `meta`
-  label, redundant with the whole-file text and harmless) and the whole text of `events.py`, `shell.py`, `textrules.py`, `resolve.py`,
-  `resolve_pre.py` and `resolve_chain.py`. Editing
+  label, redundant with the whole-file text and harmless) and the whole text of `events.py`, `shell.py`, `textrules.py` and `grammar.py`. Editing
   inside one detector's own fire body retires only that detector's proposals (re-propose, re-approve). Any other edit retires every
   approved proposal: any row's registry fields, a shared helper, an import, a constant, a decorator or signature of any fire, a rebinding, `evaluate`, the `Detector`
   class, `advance` or `blank_state` (hashed for every row: `evaluate` runs `advance` before the decision is emitted), any edit to
-  the six leaf modules, and adding a detector. Dynamic lookups are moot (nothing is followed, everything is text). What the hash
+  the four leaf modules, and adding a detector. Dynamic lookups are moot (nothing is followed, everything is text). What the hash
   does not see is any difference between the text on disk, read once when it is first used in a process, and the code actually
   loaded (a tampered `.pyc`, an in-memory monkeypatch, a file edited while a long-lived process runs); the old whole-file hash
   had the same blind spot. A fire in the registry must be the top-level function of `detectors.py` that carries its name
