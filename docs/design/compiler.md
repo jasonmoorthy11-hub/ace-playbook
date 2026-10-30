@@ -369,19 +369,18 @@ or Makefile written and then run, `rsync --delete`, `git clean`, `trash`, a Find
 that is not defined in the command is invisible to every shape: `cd <scratch> && rm -rf ./*` is proven by its text, and a user function named
 `cd` or `rm` could make it do anything. `noglob rm -rf ...`, `nocorrect rm -rf ...`, `- rm -rf ...` (zsh precommand modifiers) and
 `coproc rm -rf ...` are silent under v1 and v2 (the command word is not `rm`).
-The scanner reads only the first word of each segment (a segment ends at an unquoted `;`, `&&`, `||`, `|`, a single `&`,
-a newline, `(`, `)` or a backtick; quoted prose is masked first, `shell.py:41` `_mask`, a quoted single word keeps its text;
-any escaped separator still splits; a backslash-newline does not end a segment, `shell.py:28` and `:197`).
-Nothing else about a function, an alias or a call is modelled.
-In particular these are documented MISS classes, silent under v1 and v2 alike:
-a delete written in the first segment of a `function NAME {` body or of an alias definition;
-a call of a function or alias whose name is not `rm`; a bare call of a function or alias named `rm` whose flags sit in the definition;
-a variable, a `$(…)` or a backtick substitution as the command word;
-the zsh precommand modifiers `noglob`, `nocorrect`, `-` and the `coproc` keyword.
-A delete whose own segment starts with `rm` is read wherever it sits — including inside a function body after a separator,
-in `f() { … }` and `function f() { … }` bodies, and in a call `rm -rf …` of a function or alias named `rm`.
-The matrix pins the silent forms (`V1_SILENT_DEFINITIONS`, `V1_SILENT_MODIFIERS`, `V1_SILENT_COMMAND_WORDS`)
-and the firing ones (`NEAR_MISSES`); the lists are examples, not an enumeration of every form.
+The scanner reads only the first word of each segment, after what `shell.py:174` strips (a segment ends at an unquoted `;`, `&&`, `||`, `|`,
+a single `&`, a newline, `(`, `)` or a backtick; quoted prose is masked first by the scanner's own rules, `shell.py:41` `_mask`,
+which are not a shell's; a quoted single word keeps its text; any escaped separator still splits; a backslash-newline does not end a segment,
+`shell.py:112-113`). Whether a given form fires is pinned in the matrix, not stated here. These are documented MISS classes,
+silent under v1 and v2 alike; the matrix rows are examples, not an enumeration of every form:
+a delete on the same line directly after `function NAME {`, or inside an alias definition; a call of a function or alias whose name is not `rm`;
+a bare call of a function or alias named `rm` whose flags sit in the definition (the call carries no flags; the body may still be read); a variable,
+a `$(…)` or a backtick substitution as the whole command word; the zsh precommand modifiers `noglob`, `nocorrect`, `-` and the `coproc` keyword;
+a delete the scanner's masking hides although a shell would run it: after an escaped quote (`echo \"; rm -rf …`),
+after a heredoc whose delimiter is quoted mid-word (`<<E"OF"`), with a redirection glued to the command word (`rm>/dev/null -rf …`),
+or with a brace expansion on it (`rm{,} -rf …`). The matrix pins the silent forms (`V1_SILENT_DEFINITIONS`, `V1_SILENT_MODIFIERS`,
+`V1_SILENT_COMMAND_WORDS`, `V1_SILENT_MASKING`) and the firing forms (`NEAR_MISSES`).
 `CDPATH` or `cdable_vars` set in the environment, a `mv`, `ln` or `cp` that swaps a directory or a
 symlink under a proven path (names are read, never the filesystem), and a delete that follows a symlink are not seen either. Inherited-environment
 residuals the grammar cannot see (the frozen list covers shell-special NAMES, not attributes set at runtime): a value attribute the user's shell

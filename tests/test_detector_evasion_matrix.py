@@ -518,6 +518,14 @@ V1_SILENT_DEFINITIONS += [f"function rm {{ command rm -rf {OUT}; }}; rm", f'func
 V1_SILENT_COMMAND_WORDS = [f"${{RM}} -rf {OUT}", f"`echo rm` -rf {OUT}", f"$(echo rm) -rf {OUT}"]
 # zsh precommand modifiers (`noglob`, `nocorrect`, `-`) and `coproc` hide the command word `rm` from the scanner (compiler.md 4.1.2): silent on v1 and v2.
 V1_SILENT_MODIFIERS = [f"noglob rm -rf {OUT}", f"nocorrect rm -rf {OUT}", f"- rm -rf {OUT}", f"coproc rm -rf {OUT}"]
+# fix wave 17 (docs-lens round 8, I-1): the scanner's own masking hides a real delete (an escaped quote the masker never checks, a heredoc delimiter quoted
+# mid-word, a redirection glued to the command word, brace expansion on it): silent on v1 and v2 alike, a miss class and not a differential.
+V1_SILENT_MASKING = [f'echo \\"; rm -rf {OUT}; echo "x"', f"echo \\'; rm -rf {OUT}; echo 'x'", f'f() {{ echo \\"; rm -rf {OUT}; echo "x"; }}; f',
+                     f'cat <<E"OF"{NL}x{NL}EOF{NL}rm -rf {OUT}{NL}E', f"cat <<'E'OF{NL}x{NL}EOF{NL}rm -rf {OUT}{NL}E",
+                     f"rm>/dev/null -rf {OUT}", f"rm&>/dev/null -rf {OUT}", f"rm</dev/null -rf {OUT}", f"rm{{,}} -rf {OUT}"]
+# fix wave 17 (docs-lens round 8): safe-side forms the passage's miss classes do not cover: v1 and v2 both read them, so they fire.
+NEAR_MISSES += [f"function f {{{NL}rm -rf {OUT}{NL}}}; f", f"function rm {{{NL}command rm -rf {OUT}{NL}}}{NL}rm", f"rm() {{ rm -rf {OUT}; }}; rm",
+                f"$D/rm -rf {OUT}", f"`:`rm -rf {OUT}", f"$(:)rm -rf {OUT}", f"sudo rm -rf {OUT}", f"command rm -rf {OUT}"]
 # The `-C` repository is compared with WT TEXTUALLY, after normpath (docs-lens round 2, NEW-1): a case alias (the Mac's APFS is case-insensitive) and
 # the fixed /var -> /private/var and /etc -> /private/etc symlinks are not resolved. Proven under v2 and silent, v1 fires. Unreachable except when WT is an
 # existing EMPTY directory (`git worktree add` accepts it); the delete then removes only the checkout. A non-empty WT is refused, so the add path is the
@@ -543,7 +551,7 @@ def test_an_s3_dash_c_alias_of_wt_is_proven_and_silent_under_v2_though_v1_fires(
     assert grammar.proven_scratch(cmd, d.SCRATCH) and not fires([bash(cmd)]) and v1_fires(cmd)
 
 
-@pytest.mark.parametrize("cmd", V1_SILENT_DEFINITIONS + V1_SILENT_MODIFIERS + V1_SILENT_COMMAND_WORDS)
+@pytest.mark.parametrize("cmd", V1_SILENT_DEFINITIONS + V1_SILENT_MODIFIERS + V1_SILENT_COMMAND_WORDS + V1_SILENT_MASKING)
 def test_the_segments_v1_and_v2_do_not_read(cmd):
     assert not grammar.proven_scratch(cmd, d.SCRATCH) and not fires([bash(cmd)]) and not v1_fires(cmd)
 
