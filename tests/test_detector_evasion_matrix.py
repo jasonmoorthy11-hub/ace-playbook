@@ -511,8 +511,11 @@ V1_SILENT_DEFINITIONS += [f"f() {{ function g {{ rm -rf {OUT}; }}; g; }}; f", f"
 # (v1 fires too: NEAR_MISSES), while a call of one named `k` is not `rm` and stays unread (V1_SILENT_DEFINITIONS).
 NEAR_MISSES += [f"alias rm='rm -i'; rm -rf {OUT}", f"function rm {{ echo no; }}; rm -rf {OUT}"]
 V1_SILENT_DEFINITIONS += [f"alias k='rm -i'; k -rf {OUT}", f"function k {{ echo no; }}; k -rf {OUT}"]
-# fix wave 15 (docs-lens round 6): a bare `rm` whose `-rf` sits in the definition is silent on v1 and v2, and so is a variable as the command word.
-V1_SILENT_DEFINITIONS += [f"function rm {{ command rm -rf {OUT}; }}; rm", f"${{RM}} -rf {OUT}"]
+# fix wave 15 (docs-lens round 6): a bare `rm` whose `-rf` sits in the definition is silent on v1 and v2.
+# fix wave 16 (docs-lens round 7, m1): so is a wrapper CALL `rm OUT` whose `-rf` sits in the definition (the flags come through "$@").
+V1_SILENT_DEFINITIONS += [f"function rm {{ command rm -rf {OUT}; }}; rm", f'function rm {{ command rm -rf "$@"; }}; rm {OUT}']
+# fix wave 16 (docs-lens round 7, m2): a variable or a substitution as the command word is a miss class of its own, silent on v1 and v2.
+V1_SILENT_COMMAND_WORDS = [f"${{RM}} -rf {OUT}", f"`echo rm` -rf {OUT}", f"$(echo rm) -rf {OUT}"]
 # zsh precommand modifiers (`noglob`, `nocorrect`, `-`) and `coproc` hide the command word `rm` from the scanner (compiler.md 4.1.2): silent on v1 and v2.
 V1_SILENT_MODIFIERS = [f"noglob rm -rf {OUT}", f"nocorrect rm -rf {OUT}", f"- rm -rf {OUT}", f"coproc rm -rf {OUT}"]
 # The `-C` repository is compared with WT TEXTUALLY, after normpath (docs-lens round 2, NEW-1): a case alias (the Mac's APFS is case-insensitive) and
@@ -540,7 +543,7 @@ def test_an_s3_dash_c_alias_of_wt_is_proven_and_silent_under_v2_though_v1_fires(
     assert grammar.proven_scratch(cmd, d.SCRATCH) and not fires([bash(cmd)]) and v1_fires(cmd)
 
 
-@pytest.mark.parametrize("cmd", V1_SILENT_DEFINITIONS + V1_SILENT_MODIFIERS)
+@pytest.mark.parametrize("cmd", V1_SILENT_DEFINITIONS + V1_SILENT_MODIFIERS + V1_SILENT_COMMAND_WORDS)
 def test_the_segments_v1_and_v2_do_not_read(cmd):
     assert not grammar.proven_scratch(cmd, d.SCRATCH) and not fires([bash(cmd)]) and not v1_fires(cmd)
 

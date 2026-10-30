@@ -114,16 +114,20 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
   (quoted or not), `bash <<EOF` bodies, `noglob rm -rf ...`, `nocorrect rm -rf ...`, `- rm -rf ...` (zsh precommand modifiers) and
   `coproc rm -rf ...` (silent under v1 and v2: the command word is not `rm`), shell functions and aliases defined in the command (the segment
   rule follows this list), and anything past the 64 KB cap (reported as `unparseable`).
-  The segment rule: the scanner splits a command into SEGMENTS at an unquoted `;`, `&&`, `||`, `|`, a single `&`, a newline, `(`, `)` or a
-  backtick. Quoted prose is masked first (`shell.py:41`, `_mask`; a quoted single word such as `"rm"` keeps its text), and any escaped
-  separator (`\;`, `\&`, `\|`, `\(`) still splits. A backslash-newline does not end a segment
-  (`shell.py:28` and `:197`). A segment whose first word is `function` (named, two-name or zsh's anonymous `function {`) or `alias` is not
-  read, wherever it sits, including inside an `f() { ... }` body. A call is read only by its own first word: `k -rf ...` for an alias or
-  function named `k` is not `rm` and is unread, while a call `rm -rf …` of an alias or function NAMED `rm` is read as `rm` by its own words
-  and fires; a bare `rm` whose `-rf` sits in the definition is silent. Everything in any other
-  segment is read (its first word, after what `shell.py:174` strips, is checked for `rm`, `detectors.py:68`), so a delete in a later segment
-  of a `function` body is seen: after a `;` or a newline, or inside `( ... )` or `$( ... )`. The delete written directly after
-  `function NAME {` on the same segment is not. The control is the promotion ladder: a proposal starts in observe mode and every
+  The scanner reads only the first word of each segment (a segment ends at an unquoted `;`, `&&`, `||`, `|`, a single `&`,
+  a newline, `(`, `)` or a backtick; quoted prose is masked first, `shell.py:41` `_mask`, a quoted single word keeps its text;
+  any escaped separator still splits; a backslash-newline does not end a segment, `shell.py:28` and `:197`).
+  Nothing else about a function, an alias or a call is modelled.
+  In particular these are documented MISS classes, silent under v1 and v2 alike:
+  a delete written in the first segment of a `function NAME {` body or of an alias definition;
+  a call of a function or alias whose name is not `rm`; a bare call of a function or alias named `rm` whose flags sit in the definition;
+  a variable, a `$(…)` or a backtick substitution as the command word;
+  the zsh precommand modifiers `noglob`, `nocorrect`, `-` and the `coproc` keyword.
+  A delete whose own segment starts with `rm` is read wherever it sits — including inside a function body after a separator,
+  in `f() { … }` and `function f() { … }` bodies, and in a call `rm -rf …` of a function or alias named `rm`.
+  The matrix pins the silent forms (`V1_SILENT_DEFINITIONS`, `V1_SILENT_MODIFIERS`, `V1_SILENT_COMMAND_WORDS`)
+  and the firing ones (`NEAR_MISSES`); the lists are examples, not an enumeration of every form.
+  The control is the promotion ladder: a proposal starts in observe mode and every
   counted true positive is read by a
   human before any mode change (`docs/design/compiler.md` 7.3). A strict-xfail evasion matrix (`tests/test_detector_evasion_matrix.py`,
   `docs/design/compiler.md` 4.1.1) pins the documented misses of `rm_rf_nonscratch` as of detector v2 (2026-10-29, D-209, 4.1.2): it does not

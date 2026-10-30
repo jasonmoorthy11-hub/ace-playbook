@@ -368,16 +368,20 @@ or `eval` (quoted or not) holding the delete, `ls -d ... | xargs rm -rf`, `find 
 or Makefile written and then run, `rsync --delete`, `git clean`, `trash`, a Finder delete, `rm -- -x`. A function or alias of the user's shell
 that is not defined in the command is invisible to every shape: `cd <scratch> && rm -rf ./*` is proven by its text, and a user function named
 `cd` or `rm` could make it do anything. `noglob rm -rf ...`, `nocorrect rm -rf ...`, `- rm -rf ...` (zsh precommand modifiers) and
-`coproc rm -rf ...` are silent under v1 and v2 (the command word is not `rm`). One DEFINED in the command: the scanner splits a command into
-SEGMENTS at an unquoted `;`, `&&`, `||`, `|`, a single `&`, a newline, `(`, `)` or a backtick. Quoted prose is masked first (`shell.py:41`,
-`_mask`; a quoted single word such as `"rm"` keeps its text), and any escaped separator (`\;`, `\&`, `\|`, `\(`) still splits. A
-backslash-newline does not end a segment (`shell.py:28` and `:197`). A segment whose first word is `function`
-(named, two-name or zsh's anonymous `function {`) or `alias` is not read, wherever it sits, including inside an `f() { ... }` body. A call is read
-only by its own first word: `k -rf ...` for an alias or function named `k` is not `rm` and is unread (silent on v1 and v2), while an alias or
-function NAMED `rm` is read as `rm` by its own words and fires; a bare `rm` whose `-rf` sits in the definition is silent.
-Everything in any other segment is read (its first word, after what
-`shell.py:174` strips, is checked for `rm`, `detectors.py:68`), so a delete in a later segment of a `function` body is seen: after a `;` or a
-newline, or inside `( ... )` or `$( ... )` (v1 and v2 fire). The delete written directly after `function NAME {` on the same segment is not.
+`coproc rm -rf ...` are silent under v1 and v2 (the command word is not `rm`).
+The scanner reads only the first word of each segment (a segment ends at an unquoted `;`, `&&`, `||`, `|`, a single `&`,
+a newline, `(`, `)` or a backtick; quoted prose is masked first, `shell.py:41` `_mask`, a quoted single word keeps its text;
+any escaped separator still splits; a backslash-newline does not end a segment, `shell.py:28` and `:197`).
+Nothing else about a function, an alias or a call is modelled.
+In particular these are documented MISS classes, silent under v1 and v2 alike:
+a delete written in the first segment of a `function NAME {` body or of an alias definition;
+a call of a function or alias whose name is not `rm`; a bare call of a function or alias named `rm` whose flags sit in the definition;
+a variable, a `$(…)` or a backtick substitution as the command word;
+the zsh precommand modifiers `noglob`, `nocorrect`, `-` and the `coproc` keyword.
+A delete whose own segment starts with `rm` is read wherever it sits — including inside a function body after a separator,
+in `f() { … }` and `function f() { … }` bodies, and in a call `rm -rf …` of a function or alias named `rm`.
+The matrix pins the silent forms (`V1_SILENT_DEFINITIONS`, `V1_SILENT_MODIFIERS`, `V1_SILENT_COMMAND_WORDS`)
+and the firing ones (`NEAR_MISSES`); the lists are examples, not an enumeration of every form.
 `CDPATH` or `cdable_vars` set in the environment, a `mv`, `ln` or `cp` that swaps a directory or a
 symlink under a proven path (names are read, never the filesystem), and a delete that follows a symlink are not seen either. Inherited-environment
 residuals the grammar cannot see (the frozen list covers shell-special NAMES, not attributes set at runtime): a value attribute the user's shell
