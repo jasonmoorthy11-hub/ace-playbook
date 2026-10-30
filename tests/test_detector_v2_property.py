@@ -6,7 +6,7 @@ shapes with a scratch or an outside root; the oracle is "proven iff every joined
 v1 fires and the shape is not proven. The V1 FLOOR: `v2_fires or not v1_fires or proven`, where `v1_fires` is a frozen copy of v1's rule kept
 below and `proven` = the generator built a grammar shape with scratch targets. Every mutation of a shape (a forbidden character, a trailing
 newline, a tab, a `..` or leading-dot component, another NAME, a `;` in S1) is NOT proven.
-Seventeen mutants of grammar.py and one of detectors.py (the `truncated` guard) must each fail a test.
+Nineteen mutants of grammar.py and one of detectors.py (the `truncated` guard) must each fail a test.
 Seeded (`random.Random(1234)`, override with PYTEST_SEED); stdlib only; the commands are DATA fed to the detector, nothing runs.
 """
 
@@ -385,6 +385,9 @@ def check(fn) -> list:
     want("git worktree add /w/wt && rm -rf /w", False, "s3 parent")
     want("git -C /w/repo/a worktree add /w/repo && rm -rf /w/repo", False, "s3 repository parent")     # never the repo or a parent of it
     want("git -C /w/repo worktree add /w/repo/wt && rm -rf /w/repo/wt", True, "s3 repository child")
+    for cmd in ("git worktree add // && rm -rf //", "git worktree add //x && rm -rf //x", "git -C //w/repo worktree add /w/a/wt && rm -rf /w/a/wt"):
+        want(cmd, False, "s3 double slash")                                                # normpath keeps a leading `//` (Opus grammar round 3)
+    want("git worktree add /tmp/x/wt && rm -rf /tmp/x/wt", True, "s3 scratch path")
     want('D=/tmp/w; rm -rf "$E"', False, "s2 NAME")                                       # the NAME equality
     want('D=/tmp/w; rm -rf "${E}/x"', False, "s2 NAME braced")
     want("cd /var && rm -rf folders/x", False, "s1 cwd")                                  # S1's OWN check of the cd path (the join alone looks scratch)
@@ -446,6 +449,7 @@ MUTANTS = {
     "isinstance-check-and-except-removed": ("        if not isinstance(command, str):\n            return False\n", "",
                                             "except Exception:", "except ZeroDivisionError:"),
     "s2-special-prefix-zftp-removed": ('"YANK", "ZFTP_", "ZLE_"', '"YANK", "ZLE_"'),
+    "s3-double-slash-check-removed": ('if any(p.startswith("//") for p in (wt, rm, c or "")):', "if False:"),   # Opus grammar round 3, important
 }
 DETECTOR_MUTANTS = {"truncated-guard-removed": ("not tu.truncated and ", "")}      # detectors.py:83 (Opus grammar round 1, important)
 

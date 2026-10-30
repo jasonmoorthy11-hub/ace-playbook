@@ -6,7 +6,7 @@ tokens; a tab, newline, quote, backslash, `$(`, `;` (outside S2's own), `|`, `&`
 redirection, `#` or `!` is in no shape, so it never matches. Everything else is v1's literal rule, unchanged.
   S1  cd <SCR> && rm <FLAGS> <REL>( <REL>)*
   S2  NAME=<SCR>(;| &&) rm <FLAGS> <VREF>( <VREF>)*    VREF: $NAME ${NAME} "$NAME" "${NAME}" + optional /<REL>, the same NAME; NAME 1-32 chars, no shell special
-  S3  git( -C <LIT>)? worktree add( -b <LIT>)? <WT>( <LIT>)? && rm <FLAGS> <WT>    (the rm path is the path the add just created)
+  S3  git( -C <LIT>)? worktree add( -b <LIT>)? <WT>( <LIT>)? && rm <FLAGS> <WT>    (the rm path is the path the add just created; none starts with `//`)
 """
 
 from __future__ import annotations
@@ -81,6 +81,8 @@ def _s2(m, scratch) -> bool:
 
 def _s3(m, scratch) -> bool:
     c, wt, rm = m["c"], m["wt"], m["rm"]
+    if any(p.startswith("//") for p in (wt, rm, c or "")):                      # normpath keeps exactly two leading slashes (`//` is the root)
+        return False
     wn = posixpath.normpath(wt)
     if any(".." in p.split("/") for p in (wt, rm, c or "")) or wn != posixpath.normpath(rm) or wn in (".", "/"):
         return False

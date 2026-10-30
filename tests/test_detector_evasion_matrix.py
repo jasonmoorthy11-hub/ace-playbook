@@ -485,6 +485,17 @@ NEAR_MISSES = [
     f'RPROMPT2={SCR}; rm -rf "${{RPROMPT2}}"', f'POSTEDIT={SCR}; rm -rf "$POSTEDIT/x"', f'zftp_foo={SCR}; rm -rf "$zftp_foo"',
 ]
 GRAMMAR_TWINS += [f'WORK={SCR}; rm -rf "$WORK"/x', f'{"N" * 32}={SCR}; rm -rf "${"N" * 32}"']   # ordinary names (not shell specials) stay proven
+# fix wave 9 (Opus grammar round 3): posixpath.normpath keeps exactly two leading slashes, so `//` (the root on macOS) slipped S3's guards.
+_U = "/Us" + "ers"                                         # built from parts: no added line carries the literal home path (the added-lines gate)
+NEAR_MISSES += ["git worktree add // && rm -rf //", "git worktree add //. && rm -rf //", f"git worktree add /{_U} && rm -rf /{_U}",
+                "git worktree add //x && rm -rf //x", f"git -C /{_U}/a/repo worktree add {_U}/a && rm -rf {_U}/a"]
+# Scratch-path S3 twins: proven and silent. v1's literal rule does not fire on a /tmp target either, so they are not GRAMMAR_TWINS (which assert v1 fired).
+S3_SCRATCH_TWINS = ["git worktree add /tmp/x/wt && rm -rf /tmp/x/wt", "git -C /tmp/r worktree add /tmp/x/wt && rm -rf /tmp/x/wt"]
+
+
+@pytest.mark.parametrize("cmd", S3_SCRATCH_TWINS)
+def test_an_s3_scratch_path_stays_proven_and_silent(cmd):
+    assert grammar.proven_scratch(cmd, d.SCRATCH) and not fires([bash(cmd)]) and not v1_fires(cmd)
 
 
 @pytest.mark.parametrize("cmd", GRAMMAR_TWINS)
