@@ -110,16 +110,68 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
   No production code path writes RETIRE, PATCH, MERGE or NARROW from a session
   (`store/promote.py` and `store/__main__.py` are operator-driven); tests/test_arm_phase.py fails if one appears elsewhere. The NOOP counters
   of a frozen session are not written either.
-- The command scanner is a best-effort linear tokenizer, not a shell parser. Known shapes it does
-  not see: `find ... -delete` and `-exec rm -rf`, `xargs` fed from a pipe, `bash -c`, `eval` and
-  `bash <<EOF` bodies, shell functions and aliases, and anything past the 64 KB cap (reported as
-  `unparseable`). The control is the promotion ladder: a proposal starts in observe mode and every
-  counted true positive is read by a human before any mode change (`docs/design/compiler.md` 7.3).
-  A strict-xfail evasion matrix (`tests/test_detector_evasion_matrix.py`, `docs/design/compiler.md` 4.1.1) pins the documented
-  misses of `rm_rf_nonscratch` as of this writing: it does not see a recursive delete through an interpreter (python, node, perl,
-  `bash -c`, `sh -c`, `eval`, a heredoc, a base64 pipe), through `find`, `xargs` from a pipe, `rsync --delete`, `git clean`, `trash` or
-  Finder, or in a script or Makefile that was written and then run, nor through `$IFS` or `$(...)` as the command word
-  (19 of 43 variants); and it flags a scratch delete written as `cd <scratch> && rm -rf ./*` or through a variable (2 false positives).
+- The command scanner is a best-effort linear tokenizer, not a shell parser. Known shapes it does not see: `bash -c` and `eval` in any form
+  (quoted or not), `bash <<EOF` bodies, `noglob rm -rf ...`, `nocorrect rm -rf ...`, `- rm -rf ...` (zsh precommand modifiers) and
+  `coproc rm -rf ...` (silent under v1 and v2: the command word is not `rm`), shell functions and aliases defined in the command (the segment
+  rule follows this list), and anything past the 64 KB cap (reported as `unparseable`).
+  The scanner reads only the first word of each segment, after what `shell.py:174` strips (a segment ends at an unquoted `;`, `&&`, `||`, `|`,
+  a single `&`, a newline, `(`, `)` or a backtick; quoted prose is masked first by the scanner's own rules, `shell.py:41` `_mask`,
+  which are not a shell's; a quoted single word keeps its text; any escaped separator still splits; a backslash-newline does not end a segment,
+  `shell.py:112-113`). Whether a given form fires is pinned in the matrix, not stated here. These are documented MISS classes,
+  silent under v1 and v2 alike; the matrix rows are examples, not an enumeration of every form:
+  a delete on the same line directly after `function NAME {`, or inside an alias definition; a call of a function or alias whose name is not `rm`;
+  a bare call of a function or alias named `rm` whose flags sit in the definition (the call carries no flags; the body may still be read); a variable,
+  a `$(…)` or a backtick substitution as the whole command word; the zsh precommand modifiers `noglob`, `nocorrect`, `-` and the `coproc` keyword;
+  a delete the scanner's masking hides although a shell would run it: after an escaped quote (`echo \"; rm -rf …`),
+  after a heredoc whose delimiter is quoted mid-word (`<<E"OF"`), with a redirection glued to the command word (`rm>/dev/null -rf …`),
+  or with a brace expansion on it (`rm{,} -rf …`). The matrix pins the silent forms (`V1_SILENT_DEFINITIONS`, `V1_SILENT_MODIFIERS`,
+  `V1_SILENT_COMMAND_WORDS`, `V1_SILENT_MASKING`) and the firing forms (`NEAR_MISSES`).
+  The control is the promotion ladder: a proposal starts in observe mode and every
+  counted true positive is read by a
+  human before any mode change (`docs/design/compiler.md` 7.3). A strict-xfail evasion matrix (`tests/test_detector_evasion_matrix.py`,
+  `docs/design/compiler.md` 4.1.1) pins the documented misses of `rm_rf_nonscratch` as of detector v2 (2026-10-29, D-209, 4.1.2): it does not
+  see a recursive delete through an interpreter (python, node, perl, a heredoc, a base64 pipe, `bash -c`/`sh -c`/`eval`, quoted or not),
+  through `find`, `xargs` from a pipe, `rsync --delete`, `git clean`, `trash` or Finder, or in a script or Makefile that was written and
+  then run, nor through `$IFS`, `$(...)` or a variable (`${RM} -rf …`) as the command word (59 of 221 variants; v1's literal rule misses the
+  same 59). No shell is
+  modelled: v2 hides a scratch delete only when the RAW command text is, in full, one of three exact shapes (`cd <scratch> && rm -rf <rel>...`,
+  `NAME=<scratch>; rm -rf "$NAME"...`, `git worktree add <p> && rm -rf <p>`; the regexes are in 4.1.2) and every joined target is scratch by
+  v1's own rule (S3: the path this command's `worktree add` created, whatever its root; nothing is checked against SCRATCH for S3, and a
+  relative `-C` is not proven; an absolute `-C` is compared with WT textually, after `normpath`: case aliases such as `-C /x/PROJ` for WT `/x/proj`
+  on this Mac's case-insensitive APFS, and the `/var` to `/private/var` and `/etc` to `/private/etc` symlinks, are not resolved, so those `-C`
+  forms are proven and silent although v1 fires; they are unreachable except when WT is an existing EMPTY directory (`git worktree add` accepts
+  it); the delete then removes only the checkout; a non-empty WT is refused, so the add path is the proof and the `-C` check is defence in
+  depth; the matrix pins five such forms);
+  anything else, a `;`, a second command, a tab, a quote, a redirection, a wrapper, `bash -c`, gets v1's literal rule
+  unchanged, so v2 never fires less than v1 except on those three shapes. The price is precision: a scratch delete that is not exactly a shape
+  still fires (`cd <scratch>; rm`, `cd <scratch> && true && rm ...`, `export D=<scratch> && rm -rf $D`, `(cd <scratch> && rm ...)`, `rm ... 2>/dev/null`,
+  `ls -d ./* | xargs rm -rf ./a`, a relative `git -C <repo> worktree add wt`, and a worktree made by an earlier tool call: the matrix pins 39
+  such false positives (the earlier-call worktree is a twin row, not one of the 39). Week 1 read 36 false positives on the
+  live data; the matrix has 0 for the plain `cd <scratch> && rm -rf ./*` and `D=<scratch>; rm -rf "$D"` shapes.
+  Not seen by the shapes: a shell function or alias of the user's shell (a `cd` or `rm` function would
+  change what a shape does), `CDPATH` or `cdable_vars` in the environment, a `mv`, `ln` or `cp` that swaps a directory or symlink under a proven path, and an
+  existing empty directory that `git worktree add` accepts. Inherited-environment residuals the grammar cannot see (the frozen list covers
+  shell-special NAMES, not attributes set at runtime): a value attribute the user's shell set on NAME before the command (`typeset -L3 D` makes
+  `D=/tmp/w` store `/tm`), and an `IFS` set in the user's shell before the command that splits an unquoted `$D` under bash (an exported IFS
+  from the environment is ignored by bash 3.2); a readonly NAME is safe, because both shells abort the `-c` script. The S2 variable name is
+  checked against a FROZEN list of shell specials (the zsh 5.9 and
+  bash 3.2 names of one Mac, found by `print -l ${(k)parameters}` and `compgen -v` with the 36 modules of /usr/lib/zsh/5.9 loaded (35 load;
+  zsh/deltochar does not), plus `POSTEDIT`, `RPROMPT`
+  and `RPROMPT2` and the prefixes in `grammar.py`; zsh cuts the value of `KEYBOARD_HACK`, `HISTCHARS` and `histchars`, which is why a name list
+  is needed at all): a special added by a later shell, and any special that is unset by default and that no listing shows (the three above were
+  found by hand, not by the generator), is a documented residual. The Opus grammar round 2 found no such name that changes the value
+  among 14,768 candidates; the ones that only abort or store the literal (`ZFTP_TMOUT`, `ZFTP_SESSION`) are denied for completeness;
+  denying them costs only precision.
+  v1's own residuals stay, named by the review rounds, and S1 and S2 carry them into the proven shapes (they inherit v1's SCRATCH rule, so
+  `cd /tmp && rm -rf *`, `cd /tmp && rm -rf .`, `cd /var/folders && rm -rf *`, `cd /private/tmp && rm -rf *` and `cd <x>/build && rm -rf .` are
+  proven and silent under v2 although v1 fires on each; the matrix pins the five): `rm -rf /tmp/*` and `rm -rf /tmp`
+  are scratch by prefix (the parent of every scratch tree, `/var/folders` and `/private/tmp` included),
+  an absolute `rm -rf <scratch>/.[.]/x` (`.[.]` matches `..` in bash 3.2 or without
+  `globskipdots`, never in zsh), `<scratch>/\.\./...` and `<scratch>/*(P:...:)` are scratch by prefix, `2>/dev/null` reads as a target (so a
+  redirected scratch delete fires), a leading `$TMPDIR` is scratch by name, and a directory named `build`, `dist` or `node_modules` is scratch
+  wherever it is. (The first build of v2 modelled the shell in 541 lines; three Opus rounds found a new family of holes each time and it
+  was removed, D-209.)
+- A proposal's optional `contract` (`compile/contracts.py`) pins behaviour on a few synthetic payloads; it does not prove the detector complete.
 - Warn delivery, resolved: warn uses `additionalContext` (step 5b). The Claude Code hooks reference (read
   2026-10-19) says a hook's stderr on exit 0 never reaches the model, so the hook prints one
   `hookSpecificOutput.additionalContext` JSON object on stdout (and echoes the message on stderr for the debug log).
@@ -170,11 +222,11 @@ line. `PREREGISTRATION.md` describes the rest as plans only.
 - A proposal's `provenance.source_sha256` is a per-detector hash by exclusion: the text of `detectors.py` and `catalogue.py`, minus
   the bodies of the other rows' `fire` functions (`catalogue.py` is hashed whole, the `CATALOGUE` registry literal included, because
   an expression inside it runs at import time in every process), plus the row's name, fire name and catalogue fields (the `meta`
-  label, redundant with the whole-file text and harmless) and the whole text of `events.py`, `shell.py` and `textrules.py`. Editing
+  label, redundant with the whole-file text and harmless) and the whole text of `events.py`, `shell.py`, `textrules.py` and `grammar.py`. Editing
   inside one detector's own fire body retires only that detector's proposals (re-propose, re-approve). Any other edit retires every
   approved proposal: any row's registry fields, a shared helper, an import, a constant, a decorator or signature of any fire, a rebinding, `evaluate`, the `Detector`
   class, `advance` or `blank_state` (hashed for every row: `evaluate` runs `advance` before the decision is emitted), any edit to
-  the three leaf modules, and adding a detector. Dynamic lookups are moot (nothing is followed, everything is text). What the hash
+  the four leaf modules, and adding a detector. Dynamic lookups are moot (nothing is followed, everything is text). What the hash
   does not see is any difference between the text on disk, read once when it is first used in a process, and the code actually
   loaded (a tampered `.pyc`, an in-memory monkeypatch, a file edited while a long-lived process runs); the old whole-file hash
   had the same blind spot. A fire in the registry must be the top-level function of `detectors.py` that carries its name

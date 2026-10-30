@@ -139,7 +139,7 @@ of its `fire` function; the row metadata as canonical JSON (`strength`, `tier`, 
 signatures and default arguments of those fires stay, because they run at import time in every process; a statement
 sharing a line with an excised body stays hashed); `catalogue.py` WHOLE, the `CATALOGUE = {...}` registry literal
 included, because any expression inside that literal runs at import time in every process (the hook too), so it is
-provenance like any other import-time code; and the full text of `events.py`, `shell.py` and `textrules.py`. The
+provenance like any other import-time code; and the full text of `events.py`, `shell.py`, `textrules.py` and `grammar.py`. The
 row's own fields also enter through the canonical `meta` part; that is redundant now that the literal is hashed, and
 harmless (it keeps a row built at runtime honest). A fire that the remaining text still names (one fire calling another, or named
 in a kept signature) is kept whole. `advance` and `blank_state` are hashed for every row, stateless or not:
@@ -156,8 +156,8 @@ change other rows' results in the nightly pass and in evidence building (an offl
 because it runs only rows whose proposals are hash-valid and an edited row's proposals are stale. So an edit inside one
 detector's own `fire` body (an edit inside another row's fire body leaves this row's hash alone) retires only that row's
 proposals; any other edit to `detectors.py`, `catalogue.py`, `events.py`,
-`shell.py` or `textrules.py` (a registry field of any row, a shared helper, an import, `evaluate`, `advance`, a decorator or signature of
-any fire) retires every approved proposal. Adding a detector also retires every proposal: it adds an import line
+`shell.py`, `grammar.py` or `textrules.py` (a registry field of any row, a shared helper, an import, `evaluate`, `advance`, a decorator or
+signature of any fire) retires every approved proposal. Adding a detector also retires every proposal: it adds an import line
 and a registry row to `catalogue.py` and a placeholder for its fire in `detectors.py`. The check is pure AST and text, read
 from disk once per process (`srchash.module_text`): it describes the on-disk text, not the loaded code, so a
 tampered `.pyc` or an in-memory monkeypatch is invisible to it, as it was to the old whole-file scheme.
@@ -234,30 +234,36 @@ stale. CI never needs rebuild-lab, and the port still cannot drift from the numb
 Each row is a class and a variant (for example `flags/split-flags`, `interpreter/python-rmtree`, `xargs_find/find-delete`) built twice
 from one command template: once with an invented path outside scratch (ground truth: it should fire) and once with a scratch
 path (its benign twin: it must not fire). The strings are only data: they go through the hook's own path (hook payload,
-`event_from_hook`, `catalogue.evaluate`) and are never executed. 43 variants, 86 cases.
+`event_from_hook`, `catalogue.evaluate`) and are never executed. 221 variants, 442 cases (43 and 86 under v1).
 
 The survivors of a mutation run over the detectors, the tokenizer and `textrules` are pinned by `tests/test_mutation_survivors.py`.
 
-Where the frozen detector disagrees with the ground truth the case is a strict `xfail` (`documented miss: <class>`), so the suite is
-green today and turns red the day a detector edit fixes a case, which forces the expectation to be updated in the same change. A
-second test pins the miss count per class (FN = a delete outside scratch that does not fire, FP = a scratch delete that does), so a
-change in either direction shows up. As of this commit:
+Where the detector disagrees with the ground truth the case is a strict `xfail` (`documented miss: <class>`), so the suite turns red
+the day a detector edit fixes a case or regresses one, which forces the expectation to be updated in the same change. A
+second test pins the miss count per class (FN = a delete outside scratch that does not fire, FP = a scratch delete that does and that
+is not one of the three shapes of 4.1.2, a `residual` row), so a change in either direction shows up. As of detector v2 (4.1.2, D-209, 2026-10-29):
 
 | Class | FN | FP | Cases |
 |---|---|---|---|
 | `alias_quote` | 3 | 0 | `$IFS` separators, `$(echo rm)` as the command word, `base64 -d \| sh` |
-| `interpreter` | 7 | 0 | python, node, perl, `bash -c`, `sh -c`, `eval`, a `bash <<EOF` body |
-| `path` | 0 | 2 | `cd <scratch> && rm -rf ./*` and `D=<scratch>; rm -rf "$D"` fire (the target cannot be resolved) |
+| `interpreter` | 17 | 0 | python, node, perl, a `bash <<EOF` body, `bash -c`, `sh -c` or `eval`, quoted or not (v1 never read inside them) |
+| `xargs_find` | 7 | 0 | `ls -d dir/* \| xargs rm -rf`, `find -delete`, `find -exec rm -rf {} +`, `find -f`: v1 never read them |
 | `tool_indirection` | 2 | 0 | a script, or a Makefile whose `clean:` recipe deletes, written by `Write` and then run (`bash script`, `make -C dir clean`) |
-| `xargs_find` | 3 | 0 | `ls -d dir/* \| xargs rm -rf`, `find -delete`, `find -exec rm -rf {} +` |
 | `other_tools` | 4 | 0 | `rsync --delete`, `git clean -fdx`, `trash`, an `osascript` Finder delete |
+| `v1_silent` | 26 | 2 | 26 deletes v1 never read (a `bash -c` that rebinds, `xargs` fed by anything but `ls -d`, `rm -- -x`); 2 scratch twins fire |
+| `unproven` | 0 | 29 | 113 constructs around scratch (a pipe, `if`, `env -C`, a quoted newline, `./.*`, ...) fire; 29 scratch twins that are no shape fire |
+| `path` | 0 | 7 | `cd <scratch> && rm -rf ./*` and `D=<scratch>; rm -rf "$D"` pass (week 1's false positives); 7 scratch deletes that are no shape fire |
+| `worktree` | 0 | 1 | a worktree added and deleted in one `&&` chain passes; `git -C <repo> worktree add wt` followed by the absolute path fires |
 | `control`, `flags`, `shell_construct` | 0 | 0 | |
 
-That is 19 false negatives and 2 false positives. `trash` and the Finder delete are recoverable, but they still count as should-fire:
+That is 59 false negatives and 39 false positives. The same 442 cases under v1's rule read 59 and 135 (v2 adds no recall: every miss is
+a world v1 never read; it only stops flagging the three shapes), and under the resolver of fix waves 2 to 5 (abandoned, D-209) 42 and 1.
+On the original 43 variants v1 read 19 and 2. `trash` and the Finder delete are recoverable, but they still count as should-fire:
 the lesson's letter is "confirm the target first", and a recoverable delete outside scratch has not been confirmed.
-The matrix is the input to the next detector edit after the measurement week
-ends: fix a class, flip its cases from xfail to plain, update the pinned counts, and re-propose and re-approve (the edit moves
-`source_sha256`). Nothing in the detector changes while the week runs. `tests/test_hook_conformance.py` is the other half: the real
+Detector v2 (4.1.2) was the edit the matrix was kept for: the two week-1 false positives flipped from fire to plain, the
+counts above are the ones pinned now, and the edit moved `source_sha256` of every row (it retired P-f9407d6c;
+the operator re-proposes and re-approves in observe).
+`tests/test_hook_conformance.py` is the other half: the real
 `hooks/shadow.sh` in a child process against malformed, empty, non-UTF-8 and over-cap stdin (exactly `MAX_STDIN` is evaluated, one
 byte more is skipped), a command of exactly 64 KiB (the row carries `dur_ms`), a state lock held by another process, a missing or
 read-only data directory, `ACE_PLAYBOOK_KEYED=1` without a key (`chain_key:missing` once across processes), and an allow-list of
@@ -265,6 +271,139 @@ every module the hook path loads, checked twice in a child process: at import, a
 `catalogue.evaluate` and the row write have all run); `seal`, `dashboard`, `report`, `synth`, `metrics` and `scrub` must not be among
 them. Every hostile-input case (malformed, empty, non-UTF-8, over the cap) must exit 0 and write nothing but at most one type-only
 line in `shadow.log`; the other cases must exit 0 with an empty stdout and stderr, and pin what they do write (a row, a log note).
+
+### 4.1.2 Scratch shapes (v2)
+
+Week 1 of the measurement read 0 true positives and 36 false positives on `rm_rf_nonscratch`: every fire was a subagent cleaning its
+own scratch (the session scratchpad under `/private/tmp/claude-501/<project>/<session>/scratchpad`, or a worktree the agent had made),
+written as `cd <scratch> && rm -rf ./*`, through a shell variable, or against a worktree path. The lesson (L-b3d1fba9, a real
+7.8 GB loss) was encoded too broadly: scratch the agent made is not "a directory". Detector v2 (2026-10-29, decision D-204) keeps the
+name, the lesson and the family. Its first build resolved the target by modelling bash and zsh (541 lines over fix waves 2 to 5); three
+Opus rounds each found a new family of shell-semantics holes in it (trusted state, unknown command words, the quoted-newline mask,
+`chdir` wrappers, assignments inside arguments, zsh glob qualifiers, backslash escapes), and the operator narrowed it (D-209): no shell is
+modelled at all. `rm_rf` (weak) keeps Step 0's literal reading.
+
+**The rule.** `rm_rf_nonscratch` does not fire on a Bash tool use only when `grammar.proven_scratch(command)` is true: the RAW command
+text equals, in full, one of three exact shapes and every path the shape deletes is scratch. Everything else, including every command
+cut by the 64 KB cap, takes v1's literal rule unchanged: a recursive force `rm` (found by `shell.command_segments`) fires when a
+literal target, after `posixpath.normpath`, does not match `detectors.SCRATCH`. There is no tokenizer, no quote handling, no working
+directory and no variable state in the proof. Each regex is anchored with `\A ... \Z` (never `$`: a trailing newline fails), tokens
+are separated by one or more SPACES only, and a tab, newline, backslash, backtick, `$(`, `;` (outside S2's own), `|`, a single `&`,
+parenthesis, bracket, `<`, `>`, `#`, `!` or `'` is outside every shape; `"`, `$`, `{` and `}` appear only in S2's own `$NAME`, `${NAME}` and their quoted forms.
+
+```text
+FLAGS  -rf | -fr | -Rf | -fR | -r -f | -f -r          optionally followed by " --"
+SCR    (/[A-Za-z0-9_-][A-Za-z0-9._-]*)+                an absolute literal path: no "..", no component starting with ".", no glob
+REL    . | ./ | * | ./* | [./]a/b/c                    components [A-Za-z0-9_-][A-Za-z0-9._*?-]*; the LAST may be "*"; no "..",
+                                                       no component starting with ".", "?" or "["
+LIT    [A-Za-z0-9_./][A-Za-z0-9_./-]*                  a git path or ref, never an option
+NAME   [A-Za-z_][A-Za-z0-9_]{0,31}                     1 to 32 characters, and not a shell special (see below)
+S1     \Acd SCR && rm FLAGS REL( REL)*\Z
+S2     \ANAME=SCR(;| &&) rm FLAGS VREF( VREF)*\Z       VREF = $NAME | ${NAME} | "$NAME" | "${NAME}", each optionally followed by
+                                                       /REL inside the quotes or unquoted ("$NAME"/REL); the SAME NAME throughout
+S3     \Agit( -C LIT)? worktree add( -b LIT)? WT( LIT)? && rm FLAGS RM\Z
+```
+
+A match is proven only when every target it deletes is scratch by v1's own rule (`SCRATCH`, imported from `detectors.py`, never
+redefined): in S1, `SCR` itself and `normpath(join(SCR, REL))` for each `REL`; in S2, `SCR` itself and `normpath(join(SCR, rest))` for each
+reference that has a `/REL`; in S3, nothing is checked against `SCRATCH`, because `&&` guarantees that `git worktree add` succeeded and
+`add` refuses an existing path, so the path is one this very command created (an existing EMPTY directory is accepted by git; the delete
+then removes what the add checked out there). S3 holds when `RM` and `WT` are equal after `normpath`, none of `WT`, `RM` and the `-C` path has a `..`
+component, none of the three starts with `//` (`normpath` keeps exactly two leading slashes, so `//` is the root and would slip the next three guards),
+`WT` is not `.` or `/`, an absolute `WT` has at least two components, a `-C` repository is an absolute path that is, textually and after `normpath`,
+neither `WT` nor a descendant of it (a relative `-C` is not proven: it is never compared with `WT`; case and symlink aliases are not resolved:
+`-C /x/PROJ` for WT `/x/proj` on a case-insensitive APFS, and `/private/var`, `/private/etc` for `/var`, `/etc`, pass the check, so those `-C` forms
+are proven and silent although v1 fires; they are unreachable except when WT is an existing EMPTY directory (`git worktree add` accepts
+it); the delete then removes only the checkout; a non-empty `WT` is refused, so the add path is the proof, the `-C` check is
+defence in depth, and `S3_ALIAS_TWINS` in the matrix test pins five), and a relative `WT` has no `-C` (git would put it under the
+repository while `rm` stays in the cwd). Its parent never qualifies. In S2 the name
+is 1 to 32 characters of `[A-Za-z_][A-Za-z0-9_]*` and not a name a shell treats specially (compared in upper case, so `path` is `PATH` too): a FROZEN
+tuple in `grammar.py` (`_SPECIAL`, 235 names), generated once on one Mac and never computed at hook time, frozen again in the test. What was run:
+zsh 5.9 `/bin/zsh -f -c 'print -l ${(k)parameters}'` three ways (plain; after `compinit`; and after `zmodload` of 36 modules under
+`/usr/lib/zsh/5.9/zsh` (the recursive glob finds 37 `.so` files; `zsh/newuser` is excluded), loaded with `zsh/net/tcp` first because
+`zsh/zftp` needs its symbols; `zsh/deltochar` does not load on this Mac, and defines no parameter),
+bash 3.2 `/bin/bash -c 'compgen -v'` (no bash 5 is installed), and a hand-written list of
+names those cannot list: the zle widget variables and the environment names of the round-1 verdict, and `POSTEDIT`, `RPROMPT` and `RPROMPT2`
+(zsh scalar specials that are unset by default, so `${(k)parameters}` never shows them). The list is checked against the shells, not derived
+from their man pages: the Opus grammar round 2 scanned 14,768 candidate names (man pages of zsh, bash, ksh and dash among them) and found none
+that drifts and is not denied. Prefixes of `_SPECIAL_PREFIX` (`BASH`, `LC_`, `LD_`, `DYLD_`, `ZSH`, `ZFTP_`, `EPOCH`, `FUNC`, `HIST`,
+`PS0` to `PS9`, ...) cover the families. The list is not only about search paths: zsh
+cuts the VALUE of
+`KEYBOARD_HACK` to its first character and of `HISTCHARS` / `histchars` to three, so `HISTCHARS=<scratch>; rm -rf "$HISTCHARS/x"` deletes `/tm/x`,
+outside scratch (Opus grammar round 1). A special added by a later shell is a documented residual; a name on the list only costs precision.
+`proven_scratch` never raises (an input it cannot read is not a proof), and its anchored regexes
+have bounded token classes and no ambiguous nesting (`(?:RC/)*` inside `( +REL)*` is unambiguous). A 64 KB command costs about 15 ms in the grammar
+on the worst MATCHING shape (`cd /tmp/w && rm -rf a a ... a`, 32 001 targets; the timing test pins that the two matching shapes do match: a shape that
+ends in a space or a bad tail never matches and times only the failing path, about 5 ms) and about 19 ms through `catalogue.evaluate` (a fresh event
+per run, best of 3, three runs on an idle machine); every 64 KB shape in the timing test stays under 20 ms. The hook budget of 200 ms stands; the test
+asserts the grammar alone at 60 ms (3 times the 20 ms allowance, so a loaded runner does not flake) and `evaluate` at 150 ms.
+
+**What v2 fires on that a resolver would not (precision residuals).** v1 flags every relative target and every variable, so a scratch delete
+that is not exactly a shape keeps v1's fire: `cd <scratch>; rm -rf ./*` (a `;`), `cd a && cd b && rm ...`, `cd <scratch> && true && rm ...`
+(or `echo`, `mkdir`), `eval "cd <scratch>" && rm ...`, `(cd <scratch> && rm ...)`, `export D=<scratch> && rm -rf $D`, `D=<scratch>; E=$D;
+rm -rf "$E"`, `cd <scratch> && rm -rf ./a 2>/dev/null`, `cd <scratch> && ls -d ./* | xargs rm -rf ./a`, a quoted `cd "<scratch>"`, a second
+command after the rm, a relative `git -C <repo> worktree add wt`, and a worktree made
+by an EARLIER tool call (the detector keeps no state; that world is a twin row, not a `residual` one); the matrix pins 39 such `residual` rows
+for the whole list. They are the price of proving
+nothing outside the shapes: a human reading the fire sees a
+scratch delete and labels it a false positive. A scratch delete v1 never read (`bash -c 'cd <scratch> && rm -rf ./*'`, `find <scratch> -delete`,
+`ls -d <scratch>/* | xargs rm -rf`) stays silent, like its outside-scratch twin (a miss, below).
+
+**v1's own residuals, which v2 keeps** (the rounds named them; v1 on main has them). S1 and S2 inherit v1's SCRATCH rule, so the grammar CARRIES
+two of them into the proven shapes: a scratch PARENT (`/tmp`, `/var/folders`, `/private/tmp`) and a path whose LAST component is a scratch name
+(`.../build`; `/srv/build/x` is not scratch, and `cd /srv/build/x && rm -rf .` fires) are proven like any scratch dir.
+`cd /tmp && rm -rf *`, `cd /tmp && rm -rf .`, `cd /var/folders && rm -rf *`, `cd /private/tmp && rm -rf *` and
+`cd <x>/build && rm -rf .` are proven and silent under v2 while v1 fires on each (`V1_RESIDUAL_TWINS` in the matrix test pins the five). The others
+are v1's own and no shape touches them: `rm -rf /tmp/*`
+and `rm -rf /tmp` are scratch by v1's literal prefix (the parent of every scratch tree); `rm -rf <scratch>/.[.]/x` is scratch by that prefix
+(`.[.]` matches `..` in bash 3.2 or without `globskipdots`, never in zsh), as are `<scratch>/\.\./...` and `<scratch>/*(P:...:)` written
+absolutely; `rm -rf /tmp/x 2>/dev/null` reads `2>/dev/null` as a target, and so v1 fires on it whatever the target; a leading `$TMPDIR` or
+`${TMPDIR}` is scratch by name although the variable is never read; a directory named `build`, `dist`, `node_modules`, `scratchpad` and
+the like is scratch wherever it is.
+
+**Misses and limits** (the matrix pins them; every one is a world v1's literal rule never read, so v2 adds no recall and loses none):
+python, node and perl one-liners, a `bash <<EOF` body, base64 pipes, `$IFS`, `$(echo rm)` and a variable (`${RM} -rf …`) as the command word,
+`bash -c`/`sh -c`
+or `eval` (quoted or not) holding the delete, `ls -d ... | xargs rm -rf`, `find -delete`, `find -exec rm -rf`, `find -f`, a script
+or Makefile written and then run, `rsync --delete`, `git clean`, `trash`, a Finder delete, `rm -- -x`. A function or alias of the user's shell
+that is not defined in the command is invisible to every shape: `cd <scratch> && rm -rf ./*` is proven by its text, and a user function named
+`cd` or `rm` could make it do anything. `noglob rm -rf ...`, `nocorrect rm -rf ...`, `- rm -rf ...` (zsh precommand modifiers) and
+`coproc rm -rf ...` are silent under v1 and v2 (the command word is not `rm`).
+The scanner reads only the first word of each segment, after what `shell.py:174` strips (a segment ends at an unquoted `;`, `&&`, `||`, `|`,
+a single `&`, a newline, `(`, `)` or a backtick; quoted prose is masked first by the scanner's own rules, `shell.py:41` `_mask`,
+which are not a shell's; a quoted single word keeps its text; any escaped separator still splits; a backslash-newline does not end a segment,
+`shell.py:112-113`). Whether a given form fires is pinned in the matrix, not stated here. These are documented MISS classes,
+silent under v1 and v2 alike; the matrix rows are examples, not an enumeration of every form:
+a delete on the same line directly after `function NAME {`, or inside an alias definition; a call of a function or alias whose name is not `rm`;
+a bare call of a function or alias named `rm` whose flags sit in the definition (the call carries no flags; the body may still be read); a variable,
+a `$(…)` or a backtick substitution as the whole command word; the zsh precommand modifiers `noglob`, `nocorrect`, `-` and the `coproc` keyword;
+a delete the scanner's masking hides although a shell would run it: after an escaped quote (`echo \"; rm -rf …`),
+after a heredoc whose delimiter is quoted mid-word (`<<E"OF"`), with a redirection glued to the command word (`rm>/dev/null -rf …`),
+or with a brace expansion on it (`rm{,} -rf …`). The matrix pins the silent forms (`V1_SILENT_DEFINITIONS`, `V1_SILENT_MODIFIERS`,
+`V1_SILENT_COMMAND_WORDS`, `V1_SILENT_MASKING`) and the firing forms (`NEAR_MISSES`).
+`CDPATH` or `cdable_vars` set in the environment, a `mv`, `ln` or `cp` that swaps a directory or a
+symlink under a proven path (names are read, never the filesystem), and a delete that follows a symlink are not seen either. Inherited-environment
+residuals the grammar cannot see (the frozen list covers shell-special NAMES, not attributes set at runtime): a value attribute the user's shell
+set on NAME before the command (`typeset -L3 D` makes `D=/tmp/w` store `/tm`), and an `IFS` set in the user's shell before the command that splits an
+unquoted `$D` under bash (an exported IFS from the environment is ignored by bash 3.2); a readonly NAME is safe, because both shells abort the `-c` script.
+
+`grammar.py` joins `events.py`, `shell.py` and `textrules.py` in the hashed text of every row (section 4): four leaf modules, so the change
+moved all nine detector hashes (the table keeps one line per detector; only the hashes move); `shell.py` is byte-identical to main.
+`tests/test_detector_v2_property.py` generates 400 worlds per property against an oracle the generator knows (a shape is proven iff every
+joined target is scratch; for S3, the path its `worktree add` created, whatever its root), holds the V1 FLOOR `v2_fires or not v1_fires or proven`
+(`proven` = the generator built a shape) with a frozen
+copy of v1's rule, checks that no character-level mutation of a proven shape (one inserted character from the forbidden set, a trailing
+newline, a tab, a leading or trailing space) and no structural one (a `..` or leading-dot component, another NAME, a `;` in S1, a flag, a wrapper, a
+relative root) is proven, checks that extra spaces between tokens change nothing, feeds 1000 garbage strings (never raises) and times the
+64 KB shapes. Twenty mutants of `grammar.py` and one of `detectors.py` must each
+fail a test: `\Z` becomes `$`; the `..` check of S3; the `//` check of S3; the relative-`-C` check of S3;
+the `SCRATCH` check of the joined target in S1 and in S2;
+S3's equality of the `rm` and the `add` path; the NAME equality; S3's repository-parent check; the dot-free component class;
+S1's own `SCRATCH` check of the `cd` path; the optional space before `&&` in S2;
+the frozen names; the prefixes (the `ZFTP_` one included); the 32-character bound of NAME; the upper-casing of NAME; the fail-closed `except` (it
+returns True, or catches only `ZeroDivisionError`, or loses the `isinstance` check as well: a scratch rule that cannot be read, and a command that
+is not a string, are not proofs); and, in `detectors.py`, the `not tu.truncated` guard (a command cut by the 64 KB cap is never proven). The
+`isinstance` check alone is an equivalent mutant: `re.match` raises on a non-string and the `except` catches it.
 
 ### 4.2 Per-session state (`state.py`)
 
@@ -372,6 +511,18 @@ This follows the report's rule of a fixed evaluator the proposer cannot edit (re
 As built, `provenance` is `{cards, lesson_evidence, source_sha256}`; `source_sha256` is the per-detector
 hash of section 4 and the proposal id includes it, so a detector edit gives the same proposal a new id.
 
+**Contract worlds (optional key `contract`).** A proposal may record `{"must_fire": [payload, ...], "must_not_fire": [payload, ...]}`, each
+payload shaped like a `regression_examples` item (`tool_name`, `tool_input`, `expect`, `source: "synthetic"`), at least 1 must-fire and 3
+must-not-fire, the whole record under `MAX_BYTES`. `validate` runs each payload through the proposal's own check, in the regressions step, at
+propose, validate and approve (and when the hook loads the file), and refuses with `contract must_fire example(s) [i] do not fire` or
+`contract must_not_fire example(s) [i] fire`; the schema step rejects a malformed contract, and any key other than `contract` stays
+unknown. `proposal_id` covers the contract, and a record without the key keeps its old id and today's behaviour. `compile propose` copies
+`contracts.CONTRACT_WORLDS[detector]` (data only; 32 must-fire and 11 must-not-fire worlds for `rm_rf_nonscratch`: the near misses of the
+three shapes and the shapes the three Opus rounds found holes in must fire; the shapes themselves must not);
+the table is not hashed with the catalogue and `contracts.py` is on the hook
+path only because `proposal.py` imports it (no imports beyond __future__, data and five small functions). The point: a later detector edit that breaks a
+world refuses the proposal at `approve`, whoever else still passes.
+
 Validation, all fail-closed, before the file is written:
 
 1. **Parse and schema**: exact key set; `id` matches `^P-[0-9a-f]{8}$`; `event` in {PreToolUse,
@@ -383,7 +534,7 @@ Validation, all fail-closed, before the file is written:
    `ACE <id>:` so a user can always trace a warning to its file. A message never interpolates
    payload fields.
 3. **Unit regressions**: at least three `no_fire` examples (catalogue fixtures plus private
-   near-misses from the same session) produce no hit.
+   near-misses from the same session) produce no hit. An OPTIONAL `contract` (below) runs in this step as well.
 4. **Replay**: the originating incident's payload, through the same detector with a fresh state,
    must fire. No replay, no proposal (TRACE acceptance, report:25; EviSkill's 20.7-42.5% rejection
    rate is the expected baseline, report:27).

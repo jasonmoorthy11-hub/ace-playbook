@@ -2,8 +2,9 @@
 
 No model writes a check, matcher or message: `build` fills a template from the catalogue row and the admitted
 cards. `validate` fails closed in this order and names the failing step: schema, message (inert_reason),
-regressions (none may fire), replay (must fire), scrub, path. New proposals are ALWAYS `observe`; a block-capable
-detector must carry `check.on_truncated: "fire"`. Stdlib-only imports on the hook path (scrub loads lazily).
+regressions (none may fire; the optional `contract` worlds run here, contracts.py), replay (must fire), scrub, path. New
+proposals are ALWAYS `observe`; a block-capable detector must carry `check.on_truncated: "fire"`. Stdlib-only imports on the
+hook path (scrub loads lazily).
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from ..atomic import write_private
 from ..canon import ID_RE, canonical, now_iso
 from ..config import Config
 from ..textrules import inert_reason
-from . import catalogue, evidence
+from . import catalogue, contracts, evidence
 from .events import event_from_hook
 
 PROPOSALS = "proposals"
@@ -67,7 +68,7 @@ class Report:
 def proposal_id(p: dict) -> str:
     body = {"lesson_id": p["lesson_id"], "event": p["event"], "matcher": p["matcher"],
             "detector": p["check"]["detector"], "params": p["check"]["params"],
-            "cards": sorted(p["provenance"]["cards"]), "source_sha256": p["provenance"]["source_sha256"]}
+            "cards": sorted(p["provenance"]["cards"]), "source_sha256": p["provenance"]["source_sha256"], **contracts.id_part(p)}
     return "P-" + hashlib.sha256(canonical(body).encode()).hexdigest()[:8]
 
 
@@ -119,6 +120,7 @@ def build(cfg: Config, lesson_id: str, detector: str, cards: list[dict], *, now:
          "replay": replay, "provenance": {"cards": [c["id"] for c in mine], "lesson_evidence": refs,
                                            "source_sha256": det.source_sha256},
          "created": now or now_iso(), "created_by": CREATED_BY, "reviewed_by": None}
+    p.update(contracts.contract_for(detector))
     p["id"] = proposal_id(p)
     p["message"] = f"ACE {p['id']}: {MESSAGES[detector]}"
     return p
@@ -145,7 +147,7 @@ def _labelled(c: dict, cfg: Config) -> bool:
 
 
 def _schema(p: object, cfg: Config, cards: dict | None) -> str | None:
-    if not isinstance(p, dict) or set(p) != KEYS:
+    if not isinstance(p, dict) or set(p) - {contracts.KEY} != KEYS:
         return "keys differ from the proposal schema"
     chk, prov = p["check"], p["provenance"]
     if not (isinstance(chk, dict) and set(chk) == CHECK_KEYS and isinstance(prov, dict) and set(prov) == PROV_KEYS):
@@ -198,7 +200,7 @@ def _schema(p: object, cfg: Config, cards: dict | None) -> str | None:
     else:
         ok = set(rp) == {"evidence_card", "payload_sha256", "expect", "source"} and rp["source"] == "private"
         err = None if ok and isinstance(rp["payload_sha256"], str) and SHA256.fullmatch(rp["payload_sha256"]) else "replay keys"
-    return err or (None if rp["expect"] == "fire" else "replay must expect fire")
+    return err or (None if rp["expect"] == "fire" else "replay must expect fire") or contracts.shape(p, _payload_err)
 
 
 def _leaves(x: object):
@@ -224,7 +226,7 @@ def _regressions(p: dict) -> str | None:
     if len(p["regression_examples"]) < MIN_REGRESSIONS:
         return f"need at least {MIN_REGRESSIONS} no_fire examples"
     bad = [i for i, x in enumerate(p["regression_examples"]) if fires(p["check"], x)]
-    return f"regression example(s) {bad} fire" if bad else None
+    return f"regression example(s) {bad} fire" if bad else contracts.run(p, lambda x: fires(p["check"], x))
 
 
 def _replay(p: dict, cfg: Config, cards: dict | None) -> str | None:

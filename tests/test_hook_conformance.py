@@ -203,7 +203,7 @@ def test_keyed_flag_without_a_key_logs_chain_key_missing_once_across_processes_a
 ALLOWED_ACE = {"ace_playbook", "ace_playbook.config", "ace_playbook.canon", "ace_playbook.textrules", "ace_playbook.atomic",
                "ace_playbook.compile", *("ace_playbook.compile." + m for m in (
                    "shadow", "state", "evidence", "proposal", "modes", "demotions", "approvals", "chains", "catalogue",
-                   "detectors", "events", "shell", "srchash",
+                   "detectors", "events", "shell", "srchash", "grammar", "contracts",
                    "shadow_guard", "shadow_arm", "phase"))}      # S-1 F1: the over-cap raw scan, the matcher test and the output decision; `re` only
 ABSENT = ("seal", "dashboard", "dashboard_html", "status", "digest", "queue", "report", "synth", "metrics", "scrub", "measure",
           "brief", "brief_render", "brief_excl", "brief_audit", "nightly_notes",

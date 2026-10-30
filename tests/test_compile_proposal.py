@@ -53,7 +53,7 @@ def mode(path):
 # ------------------------------------------------------------------ build
 def test_build_is_deterministic_spec_only_and_always_observe(ctx):
     again = prop.build(ctx.cfg, ctx.w.lesson_id, "rm_rf_nonscratch", ctx.cards, now="2026-10-20T03:12:00Z")
-    assert again == ctx.p and set(ctx.p) == SCHEMA
+    assert again == ctx.p and set(ctx.p) == SCHEMA | {"contract"}   # rm_rf_nonscratch carries its contract worlds (contracts.py)
     p = ctx.p
     assert (p["mode"], p["event"], p["matcher"], p["reviewed_by"], p["v"]) == ("observe", "PreToolUse", "Bash", None, 1)
     assert p["check"] == {"detector": "rm_rf_nonscratch", "params": {}, "on_truncated": "fire"}
@@ -66,7 +66,8 @@ def test_proposal_id_is_p_plus_sha256_8_of_the_content_not_the_message_or_clock(
     import hashlib
     p = ctx.p
     body = {"lesson_id": p["lesson_id"], "event": "PreToolUse", "matcher": "Bash", "detector": "rm_rf_nonscratch",
-            "params": {}, "cards": p["provenance"]["cards"], "source_sha256": p["provenance"]["source_sha256"]}
+            "params": {}, "cards": p["provenance"]["cards"], "source_sha256": p["provenance"]["source_sha256"],
+            "contract": p["contract"]}      # rm_rf_nonscratch carries its contract worlds: the id covers them (without the key it does not)
     want = "P-" + hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:8]
     assert p["id"] == want
 

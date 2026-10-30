@@ -46,7 +46,7 @@ def approved_record(p: dict, mode: str = "observe", now: str | None = None) -> d
 
 def pending_body(rec: object) -> tuple[dict | None, str]:
     """(the proposal as it was before approval, its approved mode), or (None, reason)."""
-    if not (isinstance(rec, dict) and set(rec) == proposal.KEYS | EXTRA_KEYS):
+    if not (isinstance(rec, dict) and set(rec) - {proposal.contracts.KEY} == proposal.KEYS | EXTRA_KEYS):   # contract: optional
         return None, "record"
     if rec["reviewed_by"] != "operator-tty" or rec["mode"] not in MODES or not (
             isinstance(rec["approved_at"], str) and proposal.STAMP.fullmatch(rec["approved_at"])):

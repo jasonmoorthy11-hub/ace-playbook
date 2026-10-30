@@ -107,6 +107,7 @@ def test_editing_one_rows_fire_body_moves_only_that_row(monkeypatch, name):
 
 EVERYONE = {
     "a helper": ("detectors.py", lambda t: put(t, "_rm_hits")),
+    "grammar.py (a leaf module, hashed whole)": ("grammar.py", lambda t: put(t, "proven_scratch")),
     "a helper's decorator": ("detectors.py", swap("def _rm_hits(", "@staticmethod\ndef _rm_hits(")),
     "another fire's decorator": ("detectors.py", swap("def user_correction(", "@_b\ndef user_correction(")),
     "another fire's default argument": ("detectors.py", swap("def user_correction(event: Event, state: dict) -> Fire | None:",
@@ -115,7 +116,7 @@ EVERYONE = {
     "blank_state": ("detectors.py", lambda t: put(t, "blank_state")),
     "a statement beside the registry": ("catalogue.py", lambda t: t + "\nCATALOGUE_X = 1; shell.git_subcommand = None\n"),
     "an import line": ("detectors.py", swap("import posixpath", "import ntpath as posixpath")),
-    "a from-import": ("detectors.py", swap("from . import shell", "from . import events as shell")),
+    "a from-import": ("detectors.py", swap("from . import grammar, shell", "from . import events as shell, grammar")),
     "a top-level statement": ("detectors.py", lambda t: t + "\nREG = []\nREG.append(1)\n"),
     "a constant's first binding": ("detectors.py", swap("MAX_PATHS = 5000", "MAX_PATHS = 1\nOLD = MAX_PATHS\nMAX_PATHS = 5000")),
     "a rebinding after the def": ("detectors.py", lambda t: t + "\n_rm_hits = _rm_hits\n"),
@@ -166,18 +167,18 @@ def test_editing_evaluate_replaces_the_old_whole_catalogue_edit_check(monkeypatc
     assert changed(before, hashes()) == set(before)
 
 
-@pytest.mark.parametrize("index", [0, 1, 2])
-def test_editing_events_shell_or_textrules_moves_every_hash(monkeypatch, index):
+@pytest.mark.parametrize("index", [0, 1, 2, 3])
+def test_editing_events_shell_textrules_or_grammar_moves_every_hash(monkeypatch, index):
     before = hashes()
     texts = cat._source_texts()
-    assert len(texts) == 3 and all(texts)
+    assert len(texts) == 4 and all(texts)
     edited = tuple(t + "# edit" if i == index else t for i, t in enumerate(texts))
     monkeypatch.setattr(cat, "_source_texts", lambda: edited)
     assert changed(before, hashes()) == set(before)
 
 
-def test_the_leaf_texts_are_the_three_modules_whole():
-    assert cat._source_texts() == tuple(Path(m.__file__).read_text() for m in (cat.events, cat.shell, cat.textrules))
+def test_the_leaf_texts_are_the_four_modules_whole():
+    assert cat._source_texts() == tuple(Path(m.__file__).read_text() for m in (cat.events, cat.shell, cat.textrules, cat.grammar))
 
 
 @pytest.mark.parametrize("field,value", [
