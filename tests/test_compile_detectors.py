@@ -469,6 +469,7 @@ def test_a_command_cut_by_the_length_cap_is_never_proven():
     assert e.tool_uses[0].truncated
     fires, _, _ = cat.evaluate(e, state_mod.new_state("s"), strict=True)
     assert "unparseable" in [f.detector for f in fires]
+    assert "rm_rf_nonscratch" in [f.detector for f in fires]       # v1's literal rule reads the cut text; the `truncated` guard in _rm_hits keeps it
 
 
 V2_PAYLOADS = FX["v2"]

@@ -5,7 +5,7 @@ shapes whose every delete target is scratch. No shell is modelled: no tokenizer,
 tokens; a tab, newline, quote, backslash, `$(`, `;` (outside S2's own), `|`, `&` (outside `&&`), parenthesis, brace, bracket,
 redirection, `#` or `!` is in no shape, so it never matches. Everything else is v1's literal rule, unchanged.
   S1  cd <SCR> && rm <FLAGS> <REL>( <REL>)*
-  S2  NAME=<SCR>(;| &&) rm <FLAGS> <VREF>( <VREF>)*    VREF: $NAME ${NAME} "$NAME" "${NAME}" + optional /<REL>, the same NAME
+  S2  NAME=<SCR>(;| &&) rm <FLAGS> <VREF>( <VREF>)*    VREF: $NAME ${NAME} "$NAME" "${NAME}" + optional /<REL>, the same NAME; NAME 1-32 chars, no shell special
   S3  git( -C <LIT>)? worktree add( -b <LIT>)? <WT>( <LIT>)? && rm <FLAGS> <WT>    (the rm path is the path the add just created)
 """
 
@@ -23,14 +23,35 @@ _LIT = r"[A-Za-z0-9_./][A-Za-z0-9_./-]*"                # a git path or ref: nev
 _REF = r"(?:\$(?P=n)|\$\{(?P=n)\})"                      # $NAME or ${NAME}
 _VAR = rf'(?:{_REF}(?:/{_REL})?|"{_REF}(?:/{_REL})?"|"{_REF}"/{_REL})'
 _S1 = re.compile(rf"\Acd +(?P<scr>{_SCR}) +&& +rm +{_FLAGS} +(?P<rel>{_REL}(?: +{_REL})*)\Z")
-_S2 = re.compile(rf"\A(?P<n>[A-Za-z_][A-Za-z0-9_]*)=(?P<scr>{_SCR})(?:;| +&&) +rm +{_FLAGS} +(?P<refs>{_VAR}(?: +{_VAR})*)\Z")
+_S2 = re.compile(rf"\A(?P<n>[A-Za-z_][A-Za-z0-9_]{{0,31}})=(?P<scr>{_SCR})(?:;| +&&) +rm +{_FLAGS} +(?P<refs>{_VAR}(?: +{_VAR})*)\Z")
 _S3 = re.compile(rf"\Agit(?: +-C +(?P<c>{_LIT}))? +worktree +add(?: +-b +{_LIT})? +(?P<wt>{_LIT})(?: +{_LIT})? +&& +rm +{_FLAGS} +(?P<rm>{_LIT})\Z")
-# names the shell or the C library reads (search paths, word splitting, startup files, specials that change on their own)
-_BAD = frozenset(("_ IFS CDPATH PATH HOME TMPDIR PWD OLDPWD ENV SHELL SHELLOPTS GLOBIGNORE FPATH MANPATH MAILPATH MODULE_PATH ZDOTDIR UID "
-                  "EUID PPID TERM USER LOGNAME LANG NULLCMD READNULLCMD POSIXLY_CORRECT RANDOM SRANDOM SECONDS LINENO OPTIND OPTARG REPLY "
-                  "SHLVL HISTCMD HISTSIZE HISTFILE COLUMNS LINES FUNCNAME EPOCHSECONDS EPOCHREALTIME STATUS ARGC ARGV PIPESTATUS GID EGID "
-                  "TTY USERNAME GROUPS DIRSTACK HOSTNAME HOSTTYPE MACHTYPE OSTYPE").split())
-_BAD_PREFIX = ("BASH", "LD_", "DYLD_", "LC_", "ZSH")
+# Names a shell treats specially, compared upper-cased: zsh `print -l ${(k)parameters}` (every loadable module) U bash `compgen -v` on one Mac
+# (zsh 5.9, bash 3.2) plus zle and env names those cannot list, generated ONCE and FROZEN here and in the test (never computed at hook time).
+# zsh cuts the value of KEYBOARD_HACK / HISTCHARS, so `NAME=<scr>; rm -rf $NAME/x` would delete outside scratch. A shell special added later
+# is a documented residual (LIMITATIONS.md); the prefixes cover the families (BASH*, LC_*, ZSH_*, HIST*, PS0-9 ...).
+_SPECIAL = tuple((
+    "ALIASES ARGC ARGV BASH BASHOPTS BASHPID BASH_ARGC BASH_ARGV BASH_COMMAND BASH_ENV BASH_EXECUTION_STRING BASH_LINENO "
+    "BASH_SOURCE BASH_SUBSHELL BASH_VERSINFO BASH_VERSION BASH_XTRACEFD BUFFER BUILTINS CDPATH CHILD_MAX COLUMNS COMMANDS "
+    "COMPPOSTFUNCS COMPPREFUNCS COMP_WORDBREAKS COPROC CPUTYPE CURSOR CUTBUFFER DIRSTACK DIS_ALIASES DIS_BUILTINS "
+    "DIS_FUNCTIONS DIS_FUNCTIONS_SOURCE DIS_GALIASES DIS_PATCHARS DIS_RESWORDS DIS_SALIASES EGID ENV EPOCHREALTIME "
+    "EPOCHSECONDS EPOCHTIME ERRNO ERRNOS EUID EXARR EXINT EXSTR FCEDIT FIGNORE FPATH FUNCFILETRACE FUNCNEST FUNCSOURCETRACE "
+    "FUNCSTACK FUNCTIONS FUNCTIONS_SOURCE FUNCTRACE GALIASES GID GLOBIGNORE GROUPS HISTCHARS HISTCMD HISTCONTROL HISTFILE "
+    "HISTFILESIZE HISTIGNORE HISTNO HISTORY HISTORYWORDS HISTSIZE HISTTIMEFORMAT HOME HOST HOSTFILE HOSTNAME HOSTTYPE IFS "
+    "IGNOREEOF INPUTRC IPREFIX ISUFFIX JOBDIRS JOBSTATES JOBTEXTS KEYBOARD_HACK KEYMAP KEYMAPS KEYS KEYS_QUEUED_COUNT "
+    "KEYTIMEOUT LANG LANGINFO LASTABORTEDSEARCH LASTSEARCH LASTWIDGET LBUFFER LESS LINENO LINES LISTMAX LOGCHECK LOGNAME "
+    "MACHTYPE MAIL MAILCHECK MAILPATH MANPATH MAPFILE MARK MATCH MBEGIN MEND MODULES MODULE_PATH NAMEDDIRS NULLCMD NUMERIC "
+    "OLDPWD OPTARG OPTERR OPTIND OPTIONS OSTYPE PARAMETERS PATCHARS PATH PENDING PIPESTATUS POSIXLY_CORRECT POSTDISPLAY "
+    "PPID PREBUFFER PREDISPLAY PREFIX PROMPT PROMPT2 PROMPT3 PROMPT4 PROMPT_COMMAND PS0 PS1 PS2 PS3 PS4 PSVAR PWD QIPREFIX "
+    "QISUFFIX RANDOM RBUFFER READNULLCMD REGION_ACTIVE REPLY RESWORDS SALIASES SAVEHIST SECONDS SHELL SHELLOPTS SHLVL "
+    "SIGNALS SPROMPT STATUS SUFFIX SYSPARAMS TERM TERMCAP TERMINFO TIMEFMT TIMEFORMAT TMOUT TMPDIR TMPPREFIX "
+    "TRY_BLOCK_ERROR TRY_BLOCK_INTERRUPT TTY TTYIDLE TZ UID USER USERDIRS USERGROUPS USERNAME VENDOR WATCH WATCHFMT WIDGETS "
+    "WORDCHARS ZCURSES_ATTRS ZCURSES_COLORS ZCURSES_COLOR_PAIRS ZCURSES_KEYCODES ZCURSES_WINDOWS ZDOTDIR "
+    "ZLE_BRACKETED_PASTE ZLE_LINE_ABORTED ZLE_REMOVE_SUFFIX_CHARS ZLE_RPROMPT_INDENT ZLE_SPACE_SUFFIX_CHARS ZLE_STATE "
+    "ZSH_ARGZERO ZSH_EVAL_CONTEXT ZSH_EXECUTION_STRING ZSH_NAME ZSH_PATCHLEVEL ZSH_SCHEDULED_EVENTS ZSH_SUBSHELL "
+    "ZSH_VERSION _ _COMPAUTOS _COMPS _COMP_DUMPFILE _COMP_OPTIONS _COMP_SETUP _LASTCOMP _PATCOMPS _POSTPATCOMPS _SERVICES").split())
+_SPECIAL_PREFIX = ("BASH", "COMP", "DIS_", "DYLD_", "HIST", "KEYBOARD", "LANG", "LC_", "LD_", "LESS", "MAIL", "MATCH", "OPT", "PROMPT",
+                   "PS0", "PS1", "PS2", "PS3", "PS4", "PS5", "PS6", "PS7", "PS8", "PS9", "REPLY", "RPS", "TERM", "UNDO_", "WATCH", "WIDGET",
+                   "WORD", "YANK", "ZLE_", "ZSH", "_COMP")
 
 
 def _dir(path: str, scratch) -> bool:
@@ -43,7 +64,7 @@ def _s1(m, scratch) -> bool:
 
 def _s2(m, scratch) -> bool:
     name = m["n"].upper()
-    if name in _BAD or name.startswith(_BAD_PREFIX) or not _dir(m["scr"], scratch):
+    if name in _SPECIAL or name.startswith(_SPECIAL_PREFIX) or not _dir(m["scr"], scratch):
         return False
     for tok in m["refs"].split():
         rest = tok.lstrip('"')[1:]                                              # drop the quote and the `$`

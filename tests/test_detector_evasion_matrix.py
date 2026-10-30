@@ -474,7 +474,12 @@ NEAR_MISSES = [
     f"export D={SCR}; rm -rf $D", "git worktree add /w/wt && rm -rf /w", "git worktree add /w/wt && rm -rf /w/wt2", "git worktree add /w/wt; rm -rf /w/wt",
     "git -C /w/repo worktree add wt && rm -rf wt", "git worktree add /w/../wt && rm -rf /w/../wt", "git worktree add /w/wt && rm -rf /w/wt /w/other",
     f"cd {SCR} && rm -rf ./a\\> {OUT}", f"cd {SCR} && rm -rf \\.\\./\\.\\.{OUT}", f': "{NL}" cd {SCR} && rm -rf ./*',
+    # fix wave 7 (Opus grammar round 1): zsh cuts the VALUE of these specials (KEYBOARD_HACK to 1 char, HISTCHARS/histchars to 3), so S2 would
+    # delete outside scratch; `cd /var && rm -rf folders/x` has a non-scratch cwd whose join looks scratch; `D=<scr>&& …` is not the spelling
+    f'KEYBOARD_HACK={SCR}; rm -rf "${{KEYBOARD_HACK}}/x"', f'HISTCHARS={SCR}; rm -rf "$HISTCHARS/x"', f"histchars={SCR} && rm -rf $histchars",
+    f'D={SCR}&& rm -rf "$D"', "cd /var && rm -rf folders/x", "cd /usr/local && rm -rf ./x", f'{"N" * 33}={SCR}; rm -rf "${"N" * 33}"',
 ]
+GRAMMAR_TWINS += [f'WORK={SCR}; rm -rf "$WORK"/x', f'{"N" * 32}={SCR}; rm -rf "${"N" * 32}"']   # ordinary names (not shell specials) stay proven
 
 
 @pytest.mark.parametrize("cmd", GRAMMAR_TWINS)

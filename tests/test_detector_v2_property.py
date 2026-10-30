@@ -6,7 +6,7 @@ shapes with a scratch or an outside root; the oracle is "proven iff every joined
 v1 fires and the shape is not proven. The V1 FLOOR: `v2_fires or not v1_fires or proven`, where `v1_fires` is a frozen copy of v1's rule kept
 below and `proven` = the generator built a grammar shape with scratch targets. Every mutation of a shape (a forbidden character, a trailing
 newline, a tab, a `..` or leading-dot component, another NAME, a `;` in S1) is NOT proven.
-Eight mutants of grammar.py (the five named in the brief and three more) must each fail a test.
+Fourteen mutants of grammar.py and one of detectors.py (the `truncated` guard) must each fail a test.
 Seeded (`random.Random(1234)`, override with PYTEST_SEED); stdlib only; the commands are DATA fed to the detector, nothing runs.
 """
 
@@ -14,6 +14,7 @@ import os
 import posixpath
 import random
 import re
+import sys
 import time
 import types
 from pathlib import Path
@@ -230,7 +231,8 @@ def structured_mutants(r: random.Random, root: str):
     yield "s2 quoted value", f'D="{root}"; rm -rf "$D"'
     yield "s2 no space after the semicolon", f'D={root};rm -rf "$D"'
     for bad in ("IFS", "PATH", "path", "Path", "HOME", "CDPATH", "TMPDIR", "PWD", "OLDPWD", "ENV", "BASH_ENV", "BASHPID", "LD_PRELOAD", "LC_ALL", "_",
-                "SHELLOPTS", "GLOBIGNORE", "RANDOM", "ZDOTDIR", "status", "ARGC", "GID", "pipestatus"):
+                "SHELLOPTS", "GLOBIGNORE", "RANDOM", "ZDOTDIR", "status", "ARGC", "GID", "pipestatus", "KEYBOARD_HACK", "HISTCHARS", "histchars",
+                "TMOUT", "psvar", "OPTIND"):
         yield f"s2 special name {bad}", f'{bad}={root}; rm -rf "${bad}"'
     wt = "/w/repo/wt"
     yield "s3 other rm path", f"git worktree add {wt} && rm -rf {wt}2"
@@ -268,12 +270,63 @@ def test_every_structured_mutation_is_not_proven_and_the_floor_holds():
     assert count >= 3000
 
 
-def test_the_denied_names_and_the_allowed_names_of_s2():
-    for name in NAMES:
+# The names a shell treats specially: zsh `print -l ${(k)parameters}` (every loadable module) U bash `compgen -v` on this Mac (zsh 5.9, bash 3.2),
+# upper-cased, plus the specials those commands cannot list (zle widget variables, env-borne names). FROZEN: a future shell adding a name is a
+# change to this tuple AND to grammar._SPECIAL, never a silent miss. zsh truncates the VALUE of KEYBOARD_HACK / HISTCHARS / histchars, so S2 proved
+# a delete outside scratch (Opus grammar round 1, blocking). The list is a deny list of NAMES inside an allow-list of SPELLINGS ([A-Za-z_]\w{0,31}).
+FROZEN_SPECIALS = tuple((
+    "ALIASES ARGC ARGV BASH BASHOPTS BASHPID BASH_ARGC BASH_ARGV BASH_COMMAND BASH_ENV BASH_EXECUTION_STRING BASH_LINENO "
+    "BASH_SOURCE BASH_SUBSHELL BASH_VERSINFO BASH_VERSION BASH_XTRACEFD BUFFER BUILTINS CDPATH CHILD_MAX COLUMNS COMMANDS "
+    "COMPPOSTFUNCS COMPPREFUNCS COMP_WORDBREAKS COPROC CPUTYPE CURSOR CUTBUFFER DIRSTACK DIS_ALIASES DIS_BUILTINS DIS_FUNCTIONS "
+    "DIS_FUNCTIONS_SOURCE DIS_GALIASES DIS_PATCHARS DIS_RESWORDS DIS_SALIASES EGID ENV EPOCHREALTIME EPOCHSECONDS EPOCHTIME ERRNO "
+    "ERRNOS EUID EXARR EXINT EXSTR FCEDIT FIGNORE FPATH FUNCFILETRACE FUNCNEST FUNCSOURCETRACE FUNCSTACK FUNCTIONS "
+    "FUNCTIONS_SOURCE FUNCTRACE GALIASES GID GLOBIGNORE GROUPS HISTCHARS HISTCMD HISTCONTROL HISTFILE HISTFILESIZE HISTIGNORE "
+    "HISTNO HISTORY HISTORYWORDS HISTSIZE HISTTIMEFORMAT HOME HOST HOSTFILE HOSTNAME HOSTTYPE IFS IGNOREEOF INPUTRC IPREFIX "
+    "ISUFFIX JOBDIRS JOBSTATES JOBTEXTS KEYBOARD_HACK KEYMAP KEYMAPS KEYS KEYS_QUEUED_COUNT KEYTIMEOUT LANG LANGINFO "
+    "LASTABORTEDSEARCH LASTSEARCH LASTWIDGET LBUFFER LESS LINENO LINES LISTMAX LOGCHECK LOGNAME MACHTYPE MAIL MAILCHECK MAILPATH "
+    "MANPATH MAPFILE MARK MATCH MBEGIN MEND MODULES MODULE_PATH NAMEDDIRS NULLCMD NUMERIC OLDPWD OPTARG OPTERR OPTIND OPTIONS "
+    "OSTYPE PARAMETERS PATCHARS PATH PENDING PIPESTATUS POSIXLY_CORRECT POSTDISPLAY PPID PREBUFFER PREDISPLAY PREFIX PROMPT "
+    "PROMPT2 PROMPT3 PROMPT4 PROMPT_COMMAND PS0 PS1 PS2 PS3 PS4 PSVAR PWD QIPREFIX QISUFFIX RANDOM RBUFFER READNULLCMD "
+    "REGION_ACTIVE REPLY RESWORDS SALIASES SAVEHIST SECONDS SHELL SHELLOPTS SHLVL SIGNALS SPROMPT STATUS SUFFIX SYSPARAMS TERM "
+    "TERMCAP TERMINFO TIMEFMT TIMEFORMAT TMOUT TMPDIR TMPPREFIX TRY_BLOCK_ERROR TRY_BLOCK_INTERRUPT TTY TTYIDLE TZ UID USER "
+    "USERDIRS USERGROUPS USERNAME VENDOR WATCH WATCHFMT WIDGETS WORDCHARS ZCURSES_ATTRS ZCURSES_COLORS ZCURSES_COLOR_PAIRS "
+    "ZCURSES_KEYCODES ZCURSES_WINDOWS ZDOTDIR ZLE_BRACKETED_PASTE ZLE_LINE_ABORTED ZLE_REMOVE_SUFFIX_CHARS ZLE_RPROMPT_INDENT "
+    "ZLE_SPACE_SUFFIX_CHARS ZLE_STATE ZSH_ARGZERO ZSH_EVAL_CONTEXT ZSH_EXECUTION_STRING ZSH_NAME ZSH_PATCHLEVEL "
+    "ZSH_SCHEDULED_EVENTS ZSH_SUBSHELL ZSH_VERSION _ _COMPAUTOS _COMPS _COMP_DUMPFILE _COMP_OPTIONS _COMP_SETUP _LASTCOMP "
+    "_PATCOMPS _POSTPATCOMPS _SERVICES"
+).split())
+
+
+def test_the_frozen_special_names_are_the_grammars_and_sorted():
+    assert grammar._SPECIAL == FROZEN_SPECIALS and list(FROZEN_SPECIALS) == sorted(set(FROZEN_SPECIALS)) and len(FROZEN_SPECIALS) >= 200
+    assert all(n == n.upper() for n in FROZEN_SPECIALS) and {"KEYBOARD_HACK", "HISTCHARS", "IFS", "PATH", "_"} <= set(FROZEN_SPECIALS)
+
+
+def test_every_special_name_is_denied():
+    """Each frozen name, as spelled, lower-cased and braced, with every VREF spelling: S2 never proves it."""
+    for name in FROZEN_SPECIALS:
+        for spelled in {name, name.lower()}:
+            for cmd in (f'{spelled}=/tmp/w; rm -rf "${spelled}"', f"{spelled}=/tmp/w && rm -rf ${{{spelled}}}/x", f'{spelled}=/tmp/w; rm -rf "${spelled}/x"'):
+                assert not proven(cmd), cmd
+                assert fires(cmd) or not v1_fires(cmd), cmd       # the floor (v1 itself reads a $TMPDIR prefix as scratch)
+
+
+def test_every_special_prefix_is_denied_and_the_prefixes_are_pinned():
+    assert grammar._SPECIAL_PREFIX == ("BASH", "COMP", "DIS_", "DYLD_", "HIST", "KEYBOARD", "LANG", "LC_", "LD_", "LESS", "MAIL", "MATCH", "OPT",
+                                       "PROMPT", "PS0", "PS1", "PS2", "PS3", "PS4", "PS5", "PS6", "PS7", "PS8", "PS9", "REPLY", "RPS", "TERM",
+                                       "UNDO_", "WATCH", "WIDGET", "WORD", "YANK", "ZLE_", "ZSH", "_COMP")
+    for pre in grammar._SPECIAL_PREFIX:
+        for name in (pre + "X", pre.lower() + "x", pre + "_1"):
+            assert not proven(f'{name}=/tmp/w; rm -rf "${name}"'), name
+
+
+def test_the_zsh_value_truncating_names_and_the_name_spelling_rule_of_s2():
+    for name in (*NAMES, "WORK", "Dir", "x1", "N" * 32, "PSEUDO", "T", "tmp_dir"):
         assert proven(f'{name}=/tmp/w; rm -rf "${name}"'), name
-    denied = ("IFS", "PATH", "path", "cdpath", "HOME", "BASH_ENV", "BASH_XYZ", "LD_LIBRARY_PATH", "DYLD_X", "LC_ALL", "ZSH_X", "_", "RANDOM")
-    for name in denied + ("status", "ARGV", "UID"):
-        assert not proven(f'{name}=/tmp/w; rm -rf "${name}"'), name
+        assert proven(f"{name}=/tmp/w && rm -rf ${{{name}}}/x"), name
+    for name in ("KEYBOARD_HACK", "HISTCHARS", "histchars", "N" * 33, "IFS", "path", "cdpath", "HOME", "BASH_XYZ", "LD_LIBRARY_PATH", "LC_ALL", "ZSH_X",
+                 "RANDOM", "status", "ARGV", "UID", "Path", "psvar", "OPTIND", "LANG", "MAIL", "TMOUT", "SAVEHIST", "PS1", "_"):
+        assert not proven(f'{name}=/tmp/w; rm -rf "${name}/x"'), name
 
 
 # ------------------------------------------------------------------ the oracle as one function: used by the real grammar and by the mutants
@@ -304,6 +357,17 @@ def check(fn) -> list:
     want("git -C /w/repo worktree add /w/repo/wt && rm -rf /w/repo/wt", True, "s3 repository child")
     want('D=/tmp/w; rm -rf "$E"', False, "s2 NAME")                                       # the NAME equality
     want('D=/tmp/w; rm -rf "${E}/x"', False, "s2 NAME braced")
+    want("cd /var && rm -rf folders/x", False, "s1 cwd")                                  # S1's OWN check of the cd path (the join alone looks scratch)
+    want("cd /usr/local && rm -rf ./x", False, "s1 cwd two")
+    want('D=/tmp/w&& rm -rf "$D"', False, "s2 spelling")                                   # one or more spaces before `&&`, never none
+    for nm in ("KEYBOARD_HACK", "HISTCHARS", "histchars"):                                # zsh cuts the value: the delete lands outside scratch
+        want(f'{nm}=/tmp/w; rm -rf "${nm}/x"', False, "s2 truncating " + nm)
+    for nm in ("LC_FOO", "ZSH_FOO", "HISTFOO", "PS7", "BASHFOO", "MAILFOO", "COMPFOO", "KEYBOARDX", "WORDX"):
+        want(f'{nm}=/tmp/w; rm -rf "${nm}"', False, "s2 prefix " + nm)
+    for nm in ("IFS", "PATH", "SHELL", "UID", "status", "path"):                         # names only the frozen tuple holds (no prefix covers them)
+        want(f'{nm}=/tmp/w; rm -rf "${nm}"', False, "s2 special " + nm)
+    want(f'{"N" * 33}=/tmp/w; rm -rf "${"N" * 33}"', False, "s2 name length")
+    want(f'{"N" * 32}=/tmp/w; rm -rf "${"N" * 32}"', True, "s2 name length ok")
     want("cd /tmp/w && rm -rf ./x", True, "s1 plain")
     want('D=/tmp/w; rm -rf "$D"', True, "s2 plain")
     want("git worktree add /w/wt && rm -rf /w/wt", True, "s3 plain")
@@ -328,7 +392,14 @@ MUTANTS = {
     "s3-repo-parent-check-removed": ('if c and (posixpath.normpath(c) + "/").startswith(wn.rstrip("/") + "/"):', "if False:"),
     "s2-name-equality-removed": ("(?P=n)", "[A-Za-z_][A-Za-z0-9_]*"),
     "dot-free-component-class-removed": ('_COMP = r"[A-Za-z0-9_-][A-Za-z0-9._-]*"', '_COMP = r"[A-Za-z0-9._-]+"'),
+    "s1-own-scratch-check-of-the-cd-path-removed": ('return _dir(m["scr"], scratch) and all(', "return all("),
+    "s2-and-spelling-space-optional": ("(?:;| +&&)", "(?:;| *&&)"),
+    "s2-special-names-removed": ("name in _SPECIAL or ", ""),
+    "s2-special-prefixes-removed": ("name.startswith(_SPECIAL_PREFIX) or ", ""),
+    "s2-name-length-unbounded": ("[A-Za-z0-9_]{{0,31}})=", "[A-Za-z0-9_]*)="),
+    "s2-name-compared-case-sensitively": ('name = m["n"].upper()', 'name = m["n"]'),
 }
+DETECTOR_MUTANTS = {"truncated-guard-removed": ("not tu.truncated and ", "")}      # detectors.py:83 (Opus grammar round 1, important)
 
 
 def test_the_real_grammar_passes_every_killer_world():
@@ -342,6 +413,33 @@ def test_each_mutant_of_the_grammar_fails_a_test(name):
 
 def test_the_mutant_loader_changes_nothing_when_the_edit_is_the_identity():
     assert check(mutant("(?P=n)", "(?P=n)")) == []
+
+
+def detector_mutant(old: str, new: str):
+    src = Path(d.__file__).read_text()
+    assert src.count(old) == 1, old
+    name = "ace_playbook.compile.detectors_mutant"
+    mod = types.ModuleType(name)
+    mod.__package__ = "ace_playbook.compile"
+    sys.modules[name] = mod                                            # @dataclass looks its module up here
+    try:
+        exec(compile(src.replace(old, new), "detectors_mutant.py", "exec"), mod.__dict__)
+    finally:
+        sys.modules.pop(name, None)
+    return mod
+
+
+def cut_s1_fires(mod) -> bool:
+    """A valid S1 shape longer than MAX_CMD: the tail was cut, so the command is never proven and v1's literal rule fires."""
+    e = event_from_hook(cs.pre_payload("cd /tmp/work && rm -rf " + " ".join(["a"] * 40000)), probe=lambda _p: False)
+    assert e.tool_uses[0].truncated
+    return mod._rm_hits(e, True)[0] > 0
+
+
+@pytest.mark.parametrize("name", sorted(DETECTOR_MUTANTS))
+def test_each_mutant_of_the_detector_fails_a_test(name):
+    assert cut_s1_fires(d) is True and cut_s1_fires(detector_mutant("not tu.truncated and ", "not tu.truncated and ")) is True
+    assert cut_s1_fires(detector_mutant(*DETECTOR_MUTANTS[name])) is False, name
 
 
 # ------------------------------------------------------------------ the V1 floor on constructs the old resolver trusted

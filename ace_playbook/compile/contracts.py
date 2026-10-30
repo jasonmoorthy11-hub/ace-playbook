@@ -22,6 +22,8 @@ def _w(command: str, expect: str) -> dict:
 # every shape the three Opus rounds found a hole in, and v1's literal reading must keep firing. Paths are invented.
 # The agent scratch tree lives under /private/tmp; its real name is left out because the proposal scrub lints a 13-character
 # token that mixes letters and digits, so the worlds use /private/tmp/agent/s/scratchpad.
+# Of the must_not_fire worlds, the grammar shapes are the ones v2 proves; `rm -rf /private/tmp/agent/s/scratchpad/out`, `rm -f ...` and
+# `echo rm -rf ...` are v1 controls (v1 is silent on them too), not grammar shapes.
 CONTRACT_WORLDS = {
     "rm_rf_nonscratch": {
         "must_fire": [_w(c, "fire") for c in (
