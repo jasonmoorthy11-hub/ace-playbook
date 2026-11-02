@@ -101,8 +101,8 @@ Why these values:
   background hooks, and SessionEnd has no decision control, so the field there is documentation
   of intent.
 
-The three session hooks set `PYTHONPATH` to the repo only and ignore any `PYTHONPATH` in the operator's environment; a relative `ACE_PLAYBOOK_HOME` is
-refused (the hook then does nothing) (see LIMITATIONS.md).
+The three session hooks set `PYTHONPATH` to the repo only and ignore any `PYTHONPATH` in the operator's environment; an `ACE_PLAYBOOK_HOME` that is not an
+absolute path to the repo (relative, holding `:` or a newline, or without the package) is refused (the hook then does nothing) (see LIMITATIONS.md).
 
 Optional but recommended: a `ConfigChange` hook of your own that logs edits to settings, hooks
 and skills, so any change to the hooks above is visible. This repo does not ship one.

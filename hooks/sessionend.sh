@@ -2,6 +2,7 @@
 # SessionEnd hook (matcher: clear). Only enqueues the transcript path: the default
 # SessionEnd budget is 1.5 s, so no cleaning, scrubbing or API work happens here.
 ACE_HOME="${ACE_PLAYBOOK_HOME:-$(cd "$(dirname "$0")/.." && pwd)}"
-case "$ACE_HOME" in /*) ;; *) exit 0 ;; esac   # a relative home would put the working directory on PYTHONPATH: refuse (fail open)
+case "$ACE_HOME" in *:*|*$'\n'*) exit 0 ;; /*) ;; *) exit 0 ;; esac   # PYTHONPATH must be this one absolute repo path: refuse anything else
+[ -f "$ACE_HOME/ace_playbook/__init__.py" ] || exit 0
 PYTHONPATH="$ACE_HOME" "${ACE_PYTHON:-python3}" -P -m ace_playbook.enqueue 2>/dev/null
 exit 0
