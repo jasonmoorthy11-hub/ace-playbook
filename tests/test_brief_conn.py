@@ -1,5 +1,6 @@
-"""The connectors check of the brief (ace_playbook/compile/brief_conn.py) and its use in hooks/brief.sh: an init whose read connectors were not
-`connected` (pending, or absent from the list), or a stage 1 with no connector call, is never an `ok` brief from an empty digest."""
+"""The connectors check of the brief (ace_playbook/compile/brief_conn.py) and its use in hooks/brief.sh: a read connector that was neither `connected`
+at init nor answered a call (pending, or absent from the list, and no successful call), or a stage 1 with no connector call, is never an `ok` brief
+from an empty digest. A connector that attaches late and then answers a call counts as ready (`late`)."""
 
 import json
 import subprocess
@@ -67,7 +68,7 @@ def test_slug_replaces_every_character_outside_letters_and_digits():
 
 
 def test_all_connected_and_one_connector_call_is_ready(tmp_path):
-    assert result(tmp_path, ALL_UP) == {"servers": 3, "pending": [], "missing": [], "calls": 1, "malformed": 0, "ready": True}
+    assert result(tmp_path, ALL_UP) == {"servers": 3, "pending": [], "missing": [], "calls": 1, "malformed": 0, "late": [], "ready": True}
 
 
 def test_one_pending_connector_is_not_ready_and_is_named_by_slug(tmp_path):
@@ -88,7 +89,7 @@ def test_one_absent_connector_is_missing(tmp_path):
 
 def test_the_real_shaped_playwright_only_init_has_three_missing(tmp_path):
     r = result(tmp_path, [PLAYWRIGHT])
-    assert r == {"servers": 1, "pending": [], "missing": SLUGS, "calls": 1, "malformed": 0, "ready": False}
+    assert r == {"servers": 1, "pending": [], "missing": SLUGS, "calls": 1, "malformed": 0, "late": [], "ready": False}
 
 
 def test_all_connected_with_zero_connector_calls_is_not_ready(tmp_path):
@@ -222,6 +223,129 @@ def test_no_server_name_from_the_stream_is_in_the_result(tmp_path, capsys):
     assert MARKER_NAME not in out.out + out.err and "plugin" not in out.out + out.err
 
 
+# ------------------------------------------------------------------ late readiness: a connector that answered a call is ready
+def used(slug, i, res=None, tool="search"):
+    """A tool_use of `slug` (id u<i>) and, when `res` is a dict, its tool_result (those extra keys, e.g. {"is_error": True}) as a user event."""
+    out = [{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": f"u{i}", "name": f"mcp__{slug}__{tool}", "input": {}}]}}]
+    if res is not None:
+        out.append({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": f"u{i}", "content": "x", **res}]}})
+    return out
+
+
+def answered(*slugs, res=None):
+    return [e for i, s in enumerate(slugs) for e in used(s, i, {} if res is None else res)]
+
+
+PENDING3 = [srv(s, "pending") for s in SLUGS]
+ERR = {"is_error": True}
+
+
+def test_pending_at_init_and_a_successful_call_of_every_slug_is_ready_and_late_lists_them(tmp_path):
+    for init in (PENDING3, [srv("claude_ai_Gmail", "pending"), srv("claude_ai_Google_Calendar", "failed")], [PLAYWRIGHT]):
+        r = result(tmp_path, init, calls=answered(*SLUGS))
+        assert (r["ready"], r["pending"], r["missing"], r["calls"], r["late"]) == (True, [], [], 3, SLUGS)
+
+
+def test_late_is_the_sorted_slugs_not_connected_at_init_that_answered(tmp_path):
+    calls = answered("claude_ai_Linear", "claude_ai_Gmail", "claude_ai_Google_Calendar")
+    r = result(tmp_path, [srv("claude_ai_Linear"), srv("claude_ai_Google_Calendar", "pending")], calls=calls)
+    assert (r["ready"], r["late"], r["pending"], r["missing"]) == (True, ["claude_ai_Gmail", "claude_ai_Google_Calendar"], [], [])
+
+
+def test_pending_and_one_slugs_only_call_errored_is_not_ready_and_that_slug_stays_pending(tmp_path):
+    calls = answered("claude_ai_Gmail", "claude_ai_Linear") + used("claude_ai_Google_Calendar", 9, ERR)
+    r = result(tmp_path, PENDING3, calls=calls)
+    assert (r["ready"], r["pending"], r["missing"], r["late"]) == (False, ["claude_ai_Google_Calendar"], [], ["claude_ai_Gmail", "claude_ai_Linear"])
+
+
+def test_an_errored_call_does_not_hide_a_successful_call_of_the_same_slug(tmp_path):
+    calls = used("claude_ai_Gmail", 8, ERR) + used("claude_ai_Gmail", 9, {}) + answered("claude_ai_Linear", "claude_ai_Google_Calendar")
+    r = result(tmp_path, PENDING3, calls=calls)
+    assert (r["ready"], r["late"]) == (True, SLUGS)
+
+
+def test_missing_at_init_and_a_successful_call_is_ready(tmp_path):
+    r = result(tmp_path, [srv("claude_ai_Gmail"), srv("claude_ai_Linear")], calls=used("claude_ai_Google_Calendar", 1, {}))
+    assert (r["ready"], r["late"], r["missing"], r["pending"], r["calls"]) == (True, ["claude_ai_Google_Calendar"], [], [], 1)
+
+
+def test_pending_and_no_call_at_all_is_not_ready(tmp_path):
+    r = result(tmp_path, PENDING3, calls=())
+    assert (r["ready"], r["pending"], r["late"], r["calls"]) == (False, SLUGS, [], 0)
+
+
+def test_pending_and_a_call_of_another_slug_does_not_make_this_slug_ready(tmp_path):
+    r = result(tmp_path, [srv("claude_ai_Gmail"), srv("claude_ai_Linear"), srv("claude_ai_Google_Calendar", "pending")], calls=answered("claude_ai_Gmail"))
+    assert (r["ready"], r["pending"], r["late"], r["calls"]) == (False, ["claude_ai_Google_Calendar"], [], 1)
+
+
+def test_connected_at_init_with_no_call_to_that_slug_but_one_call_overall_is_ready_as_before(tmp_path):
+    r = result(tmp_path, ALL_UP, calls=used("claude_ai_Linear", 1))
+    assert (r["ready"], r["late"], r["calls"]) == (True, [], 1)
+
+
+def test_connected_at_init_and_only_an_errored_call_is_still_ready_as_before(tmp_path):
+    assert result(tmp_path, ALL_UP, calls=used("claude_ai_Gmail", 1, ERR))["ready"] is True
+
+
+def test_a_tool_use_with_no_tool_result_is_not_counted_for_late_readiness(tmp_path):
+    r = result(tmp_path, PENDING3, calls=[e for i, s in enumerate(SLUGS) for e in used(s, i)])
+    assert (r["ready"], r["pending"], r["late"], r["calls"]) == (False, SLUGS, [], 3)
+
+
+def test_a_tool_result_must_match_by_tool_use_id_and_belong_to_a_call_of_that_slug(tmp_path):
+    stray = {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "nope", "content": "x"}]}}
+    calls = used("claude_ai_Gmail", 1) + [stray] + used("claude_ai_Linear", 7, {})
+    r = result(tmp_path, PENDING3, calls=calls)
+    assert (r["late"], r["pending"], r["ready"]) == (["claude_ai_Linear"], ["claude_ai_Gmail", "claude_ai_Google_Calendar"], False)
+
+
+def test_a_call_with_no_id_a_bare_server_prefix_or_a_nonstring_id_never_makes_a_slug_ready(tmp_path):
+    noid = {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "mcp__claude_ai_Gmail__search"}]}}
+    bare = {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "z", "name": "mcp__claude_ai_Gmail__"}]}}
+    listid = {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": ["u"], "name": "mcp__claude_ai_Gmail__search"}]}}
+    res = {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": i, "content": "x"} for i in ("z", ["u"], None)]}}
+    r = result(tmp_path, PENDING3, calls=[noid, bare, listid, res])
+    assert (r["late"], r["ready"]) == ([], False)
+
+
+@pytest.mark.parametrize("flag", [True, "true", 1, "yes", [1], {"e": 1}])
+def test_a_tool_result_whose_is_error_is_anything_but_absent_null_or_false_is_an_error(tmp_path, flag):
+    r = result(tmp_path, PENDING3, calls=answered(*SLUGS[:2]) + used(SLUGS[2], 5, {"is_error": flag}))
+    assert (r["ready"], r["pending"], r["late"]) == (False, SLUGS[2:], SLUGS[:2])
+
+
+@pytest.mark.parametrize("res", [{}, {"is_error": None}, {"is_error": False}])
+def test_a_tool_result_with_is_error_absent_null_or_false_is_a_success(tmp_path, res):
+    assert result(tmp_path, PENDING3, calls=answered(*SLUGS, res=res))["ready"] is True
+
+
+def test_a_result_of_the_mcp_kind_and_a_single_block_content_count(tmp_path):
+    calls = [{"type": "assistant", "message": {"content": [{"type": "mcp_tool_use", "id": "m1", "name": "mcp__claude_ai_Gmail__search"}]}},
+             {"type": "user", "message": {"content": [{"type": "mcp_tool_result", "tool_use_id": "m1", "content": "x"}]}},
+             *used("claude_ai_Google_Calendar", 2)[:1], {"type": "user", "message": {"content": {"type": "tool_result", "tool_use_id": "u2"}}},
+             *answered("claude_ai_Linear")]
+    assert result(tmp_path, PENDING3, calls=calls)["late"] == SLUGS
+
+
+def test_a_tool_result_in_an_assistant_event_or_a_non_list_content_is_ignored(tmp_path):
+    fake = {"type": "assistant", "message": {"content": [{"type": "tool_result", "tool_use_id": "u0", "content": "x"}]}}
+    r = result(tmp_path, PENDING3, calls=[*used("claude_ai_Gmail", 0), fake, {"type": "user", "message": "x"}, {"type": "user"}])
+    assert (r["late"], r["ready"]) == ([], False)
+
+
+def test_the_first_init_still_decides_what_late_means(tmp_path):
+    second = {"type": "system", "subtype": "init", "mcp_servers": ALL_UP}
+    r = bc.check(write(tmp_path, {"mcp_servers": PENDING3}, calls=(second, *answered(*SLUGS))), ALLOW)
+    assert (r["ready"], r["late"]) == (True, SLUGS)
+
+
+def test_main_prints_late_and_exits_0_for_a_late_ready_stream(tmp_path, capsys):
+    path = write(tmp_path, {"mcp_servers": PENDING3}, calls=answered(*SLUGS))
+    assert bc.main([str(path), "--allow", str(ALLOW)]) == 0
+    assert json.loads(capsys.readouterr().out) == {"servers": 3, "pending": [], "missing": [], "calls": 3, "malformed": 0, "late": SLUGS, "ready": True}
+
+
 # ------------------------------------------------------------------ the command line
 def test_main_exits_0_when_ready_with_one_json_line(tmp_path, capsys):
     path = write(tmp_path, {"mcp_servers": ALL_UP})
@@ -234,7 +358,8 @@ def test_main_exits_2_when_not_ready_with_the_json_line(tmp_path, capsys):
     path = write(tmp_path, {"mcp_servers": [srv("claude_ai_Gmail", "pending"), *ALL_UP[1:]]})
     assert bc.main([str(path), "--allow", str(ALLOW)]) == 2
     out = capsys.readouterr()
-    assert out.err == "" and json.loads(out.out) == {"servers": 3, "pending": ["claude_ai_Gmail"], "missing": [], "calls": 1, "malformed": 0, "ready": False}
+    assert out.err == "" and json.loads(out.out) == {"servers": 3, "pending": ["claude_ai_Gmail"], "missing": [], "calls": 1, "malformed": 0, "late": [],
+                                                                  "ready": False}
 
 
 def test_main_exits_1_with_one_stderr_line_on_a_value_or_os_error(tmp_path, capsys):
@@ -317,9 +442,28 @@ def test_the_refusal_prints_only_slugs_never_a_server_name_from_the_stream(w):
 
 
 def test_pending_then_connected_retries_once_and_the_brief_is_ok(w):
-    p = w.run("--force", **BOTH, ACE_FAKE_MCP_FIRST=pending("claude_ai_Gmail"))
+    p = w.run("--force", **BOTH, ACE_FAKE_MCP_FIRST=pending("claude_ai_Gmail"), ACE_FAKE_DEFAULT_ERROR="1")
     assert (p.returncode, p.stdout, p.stderr) == (0, "digest: calendar 1, mail 2 of 4, issues 1\nbrief: ok, 1 need you\n", "")
     assert calls_of(w) == 2 and [r["stage"] for r in w.ledger()] == ["stage1", "stage1", "stage2"] and (w.dir / "brief.html").exists()
+
+
+ALL_PENDING = json.dumps([srv(s, "pending") for s in SLUGS])
+LATE = {**BOTH, "ACE_FAKE_MCP": ALL_PENDING, "ACE_FAKE_CALLS_RESULT": "ok",
+        "ACE_FAKE_CALLS": json.dumps(["mcp__claude_ai_Google_Calendar__list_events", "mcp__claude_ai_Linear__list_issues"])}
+
+
+def test_init_pending_but_every_connector_answered_proceeds_to_stage_2_and_ends_ok_without_a_retry(w):
+    p = w.run("--force", **LATE)
+    assert (p.returncode, p.stdout, p.stderr) == (0, "digest: calendar 1, mail 2 of 4, issues 1\nbrief: ok, 1 need you\n", "")
+    assert calls_of(w) == 1 and [r["stage"] for r in w.ledger()] == ["stage1", "stage2"] and (w.dir / "brief.html").exists()
+
+
+def test_init_pending_and_the_other_connectors_only_errored_is_refused_after_one_retry(w):
+    assert_refused(w, w.run("--force", **{**LATE, "ACE_FAKE_CALLS_RESULT": "error"}))
+
+
+def test_init_pending_and_the_default_call_errored_is_refused_after_one_retry(w):
+    assert_refused(w, w.run("--force", **LATE, ACE_FAKE_DEFAULT_ERROR="1"))
 
 
 def test_the_default_world_makes_one_attempt_and_the_exact_stdout(w):
@@ -352,8 +496,8 @@ def test_a_timed_out_retry_takes_the_same_path_as_a_timed_out_first_attempt(w):
     wrapper.write_text(f'#!/bin/bash\n[ -e "$ACE_FAKE_DIR/stage1_calls" ] && exec sleep 30\nexec "{FAKE}" "$@"\n')
     wrapper.chmod(0o755)
     began = time.monotonic()
-    p = w.run("--force", **BOTH, ACE_BRIEF_CLAUDE=str(wrapper), ACE_FAKE_MCP_FIRST=pending("claude_ai_Gmail"), ACE_BRIEF_STAGE_TIMEOUT="2",
-              ACE_BRIEF_KILL_GRACE="1")
+    p = w.run("--force", **BOTH, ACE_BRIEF_CLAUDE=str(wrapper), ACE_FAKE_MCP_FIRST=pending("claude_ai_Gmail"), ACE_FAKE_DEFAULT_ERROR="1",
+              ACE_BRIEF_STAGE_TIMEOUT="2", ACE_BRIEF_KILL_GRACE="1")
     assert (p.returncode, p.stdout, p.stderr) == (1, "", "brief: stage 1 timed out\n") and time.monotonic() - began < 30
     assert calls_of(w) == 1 and not (w.fake / "argv_stage2.json").exists()      # the first attempt only: the wrapper never reached the fake again
     assert [(r.get("stage"), r.get("timeout")) for r in w.ledger()] == [("stage1", None), ("stage1", "stage1")]
@@ -370,7 +514,7 @@ def test_a_check_that_cannot_run_is_connectors_check_failed_and_not_a_pass(w):
 
 
 def test_the_retry_sleeps_the_configured_seconds_and_a_signal_during_it_stops_the_run_and_purges(w):
-    proc = start(w, ACE_FAKE_MCP_FIRST=pending("claude_ai_Gmail"), ACE_BRIEF_RETRY_SLEEP="30")
+    proc = start(w, ACE_FAKE_MCP_FIRST=pending("claude_ai_Gmail"), ACE_FAKE_DEFAULT_ERROR="1", ACE_BRIEF_RETRY_SLEEP="30")
     wait_for(w.dir / "run" / "res_conn.json")          # the first attempt is over (its check wrote this), the run is in the sleep
     time.sleep(0.5)
     assert proc.poll() is None and not free(w) and calls_of(w) == 1
@@ -381,7 +525,7 @@ def test_the_retry_sleeps_the_configured_seconds_and_a_signal_during_it_stops_th
 
 def test_a_short_sleep_value_is_honoured(w):
     t0 = time.time()
-    p = w.run("--force", ACE_FAKE_MCP_FIRST=pending("claude_ai_Gmail"), ACE_BRIEF_RETRY_SLEEP="2")
+    p = w.run("--force", ACE_FAKE_MCP_FIRST=pending("claude_ai_Gmail"), ACE_FAKE_DEFAULT_ERROR="1", ACE_BRIEF_RETRY_SLEEP="2")
     assert p.returncode == 0 and time.time() - t0 >= 2
 
 

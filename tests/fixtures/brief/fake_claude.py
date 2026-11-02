@@ -8,7 +8,9 @@ result; $ACE_FAKE_SLEEP sleeps first (and pid_<stage> records the pid; $ACE_FAKE
 $ACE_FAKE_IGNORE_TERM ignores SIGTERM; $ACE_FAKE_FENCE wraps the answer in a ```json fence. The stage 1 init event lists the three read
 connectors as connected; $ACE_FAKE_MCP (a JSON list) replaces that `mcp_servers` list on every stage 1 call and $ACE_FAKE_MCP_FIRST on the FIRST
 stage 1 call only; $ACE_FAKE_NO_CALLS drops the default Gmail tool_use block (on every stage 1 call; $ACE_FAKE_NO_CALLS_FIRST on the first
-only); $ACE_FAKE_FAIL_SECOND = stage1 makes the second stage 1 call fail. `stage1_calls` in $ACE_FAKE_DIR counts the stage 1 calls. Synthetic data only.
+only); $ACE_FAKE_FAIL_SECOND = stage1 makes the second stage 1 call fail. `stage1_calls` in $ACE_FAKE_DIR counts the stage 1 calls.
+$ACE_FAKE_CALLS_RESULT = ok | error adds, after each $ACE_FAKE_CALLS block (ids c0, c1, ...), a tool_result event for it (`is_error` true for error; without
+the knob a $ACE_FAKE_CALLS block has no result); $ACE_FAKE_DEFAULT_ERROR makes the result of the default Gmail call `is_error: true`. Synthetic data only.
 """
 
 import json
@@ -52,9 +54,14 @@ if stage == "stage1":
     if not (os.environ.get("ACE_FAKE_NO_CALLS") or (nth == 1 and os.environ.get("ACE_FAKE_NO_CALLS_FIRST"))):
         events += [{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "mcp__claude_ai_Gmail__search_threads",
                                                                   "input": {}}]}},
-                   {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": "FAKE-MAIL-BODY-IN-THE-STREAM"}]}}]
-    events += [{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "c", "name": n, "input": {}}]}}
-               for n in json.loads(os.environ.get("ACE_FAKE_CALLS", "[]"))]
+                   {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": "FAKE-MAIL-BODY-IN-THE-STREAM",
+                                                                   **({"is_error": True} if os.environ.get("ACE_FAKE_DEFAULT_ERROR") else {})}]}}]
+    verdict = os.environ.get("ACE_FAKE_CALLS_RESULT")
+    for i, n in enumerate(json.loads(os.environ.get("ACE_FAKE_CALLS", "[]"))):
+        events.append({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": f"c{i}", "name": n, "input": {}}]}})
+        if verdict:
+            events.append({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": f"c{i}", "content": "FAKE-BODY",
+                                                                    "is_error": verdict == "error"}]}})
 events += [{"type": "rate_limit_event", "rate_limit_info": window},
            {"type": "result", "subtype": "error_during_execution" if failing else "success", "is_error": failing, "result": "" if failing else answer,
             "total_cost_usd": 0.2424 if stage == "stage1" else 0.012, "duration_ms": 1000, "num_turns": 3 if stage == "stage1" else 1,

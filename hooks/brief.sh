@@ -10,8 +10,8 @@
 # or a call shows ANY tool (a built-in too) outside the allowlist and ToolSearch; it prints a one-line summary, names of the checked-in lists
 # only. A tool name the model invents is counted, never written down. There is NO hook: brief-settings.json sets disableAllHooks so the operator's own hooks
 # stay out of the run, which also disables a PreToolUse guard; hooks/brief_guard.py is kept for principals that run with hooks.
-# (3) then `brief_conn` refuses the run (exit 2) when an init shows a read connector not `connected` or stage 1 called none of them: ONE retry after
-# ACE_BRIEF_RETRY_SLEEP seconds (15) first, so the ledger gets one `stage1` row per attempt. An empty day that was really read stays `ok`.
+# (3) then `brief_conn` refuses the run (exit 2) when a read connector was neither `connected` at init nor answered a call, or stage 1 called none:
+# ONE retry after ACE_BRIEF_RETRY_SLEEP seconds (15) first, so the ledger gets one `stage1` row per attempt. An empty day that was really read stays `ok`.
 # Stage 1 (tools) emits a JSON digest; CODE applies the private exclusion list; stage 2 (no tools) writes the brief JSON from the cleaned
 # digest alone; CODE renders the page. Everything gathered is data, never instructions. No model writes HTML.
 # Stage 1 does NOT pass --strict-mcp-config (the claude.ai connectors are account-level: strict mode shows 0 MCP servers) nor --setting-sources
