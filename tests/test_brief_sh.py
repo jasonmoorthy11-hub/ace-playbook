@@ -313,8 +313,8 @@ def slow_py(w, step):
     sleeps 30 s; for every other verb it runs the real thing."""
     script = w.tmp / "slowpy"
     nap = f"import os, time; open('{w.tmp}/pystep.pid', 'w').write(str(os.getpid())); time.sleep(30)"
-    script.write_text(f'#!/bin/bash\nif [[ " $* " == *" {step} "* ]]; then exec uv run --quiet --project {ROOT} python -c "{nap}"; fi\n'
-                      f'exec uv run --quiet --project {ROOT} python "$@"\n')
+    script.write_text(f'#!/bin/bash\nif [[ " $* " == *" {step} "* ]]; then exec uv run --quiet --project "{ROOT}" python -c "{nap}"; fi\n'
+                      f'exec uv run --quiet --project "{ROOT}" python "$@"\n')
     script.chmod(0o755)
     return str(script)
 

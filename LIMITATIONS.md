@@ -598,6 +598,15 @@ own row); a run
 whose config or brief directory cannot be read has no ledger to write to, so its refusal stays on stderr only, and a quiet exit (another run holding the
 lock, not due) is not a refusal.
 
+The claude.ai connectors attach asynchronously on Claude Code 2.1.309: at stage 1's init a connector may be `pending` or absent from `mcp_servers`.
+The model then sees none of its tools and answers an empty digest. `brief_conn` refuses an init without Gmail, Google Calendar and Linear all
+`connected`, or a stage 1 with zero connector calls (one retry first, so a second stage-1 call is paid for). Servers are matched by slug (every
+character outside `[A-Za-z0-9]` becomes `_`), so a second server whose name slugs the same way (`claude_ai_Gmail`, `claude.ai-Gmail`) counts for that
+connector. The only read test is `calls >= 1` across the three connectors together: a run that called only Linear can still report `calendar 0, mail 0
+of 0` as `ok`, and a connector call that returned an error still counts as a call. A genuinely empty day with at least one call stays `ok`.
+With `T` = `ACE_BRIEF_STAGE_TIMEOUT` + `ACE_BRIEF_KILL_GRACE`, stage 1 with its retry can last up to 2 x `T` + `ACE_BRIEF_RETRY_SLEEP`
+seconds, and the whole run up to 3 x `T` + `ACE_BRIEF_RETRY_SLEEP` plus the code steps (stage 2 has its own limit).
+
 ## Nightly check notes
 
 The three optional config keys `backup_check`, `brain_check` and `acewatch_check` name local scripts that the nightly runs as
