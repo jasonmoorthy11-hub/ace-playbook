@@ -309,7 +309,7 @@ def test_a_call_with_no_id_a_bare_server_prefix_or_a_nonstring_id_never_makes_a_
     assert (r["late"], r["ready"]) == ([], False)
 
 
-@pytest.mark.parametrize("flag", [True, "true", 1, "yes", [1], {"e": 1}])
+@pytest.mark.parametrize("flag", [True, "true", 1, "yes", [1], {"e": 1}, 0, 0.0, "", []])
 def test_a_tool_result_whose_is_error_is_anything_but_absent_null_or_false_is_an_error(tmp_path, flag):
     r = result(tmp_path, PENDING3, calls=answered(*SLUGS[:2]) + used(SLUGS[2], 5, {"is_error": flag}))
     assert (r["ready"], r["pending"], r["late"]) == (False, SLUGS[2:], SLUGS[:2])

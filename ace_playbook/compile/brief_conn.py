@@ -1,7 +1,8 @@
 """The brief's connectors check (docs/design/compiler.md 8.x "Brief (as built)"). Not on the hook path; stdlib only.
 
 The claude.ai connectors attach to `claude -p` ASYNCHRONOUSLY: at the stream's first `system/init` event a connector may be `pending` or not in
-`mcp_servers` at all, the model then sees none of its tools, calls nothing and answers an empty digest. `check` reads that init event and the
+`mcp_servers` at all; the model may then see none of its tools and answer an empty digest,
+or load them itself (ToolSearch). `check` reads that init event and the
 tool calls of the stage 1 stream and says whether every server the read allowlist names was ready and at least one of its tools was called. A
 server is ready when it was `connected` in that init event OR a tool of it was called and the result of that call came back without an error (it
 attached late: `late`). Only a slug of the checked-in allowlist is ever printed: a server name from the stream is never written down. No model call, no network.

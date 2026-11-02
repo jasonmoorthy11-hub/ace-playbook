@@ -9,7 +9,8 @@ $ACE_FAKE_IGNORE_TERM ignores SIGTERM; $ACE_FAKE_FENCE wraps the answer in a ```
 connectors as connected; $ACE_FAKE_MCP (a JSON list) replaces that `mcp_servers` list on every stage 1 call and $ACE_FAKE_MCP_FIRST on the FIRST
 stage 1 call only; $ACE_FAKE_NO_CALLS drops the default Gmail tool_use block (on every stage 1 call; $ACE_FAKE_NO_CALLS_FIRST on the first
 only); $ACE_FAKE_FAIL_SECOND = stage1 makes the second stage 1 call fail. `stage1_calls` in $ACE_FAKE_DIR counts the stage 1 calls.
-$ACE_FAKE_CALLS_RESULT = ok | error adds, after each $ACE_FAKE_CALLS block (ids c0, c1, ...), a tool_result event for it (`is_error` true for error; without
+$ACE_FAKE_CALLS_RESULT = error (any other value: ok) adds, after each $ACE_FAKE_CALLS block (ids c0, c1, ...),
+a tool_result event for it (`is_error` true for error; without
 the knob a $ACE_FAKE_CALLS block has no result); $ACE_FAKE_DEFAULT_ERROR makes the result of the default Gmail call `is_error: true`. Synthetic data only.
 """
 

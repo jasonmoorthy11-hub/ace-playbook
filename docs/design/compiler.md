@@ -1767,7 +1767,7 @@ Order W3 of the watcher and cockpit design (section 7, "The brief"). Not on the 
   `state-mark` (writes `brief_state.json`: `last_brief`, `needs_you_count`), `tools-audit <stream> --allow <file>` (exit 2 on drift),
   `brief_conn <stream> --allow <file>` (its own module; exit 2 when not ready: a read connector that was neither `connected` in the first init
   event nor answered a call -- a tool_use of it whose tool_result, matched by `tool_use_id`, is not an error (`is_error` absent, null or
-  false); such a connector is listed in `late` -- or no connector call), `timeout-mark
+  false); one not `connected` at init and ready by such a call is listed in `late` -- or no connector call), `timeout-mark
   <stage>` (a ledger row `{ts, stage, timeout}`), `refusal <reason>` (a ledger row `{ts, stage: "run", refused: <reason>}`; the reason is checked against the
   FIXED set `brief_audit.REASONS`, the `fail` literals of `brief.sh` and `brief_lib.sh` without the `(exit N)` tail, and anything else is written as
   `other`, never

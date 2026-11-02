@@ -602,8 +602,9 @@ The claude.ai connectors attach asynchronously on Claude Code 2.1.309: at stage 
 The model may then see none of its tools and answer an empty digest, or load them itself (ToolSearch) and read all three. `brief_conn` refuses a stage 1
 in which Gmail, Google Calendar or Linear is not ready, or with zero connector calls (one retry first, so a second stage-1 call is paid for). A
 connector is ready when its entry was `connected` in the first init event, or when a tool of it was called and the result of that call (matched by
-`tool_use_id`) is not an error (`is_error` absent, null or false); such a connector attached late and its slug is in `late` in the check's JSON line.
-`pending` and `missing` list only the connectors that are not ready.
+`tool_use_id`) is not an error (`is_error` absent, null or false); one that was not `connected` at init and is ready by such a call is in `late`.
+`pending` and `missing` list only the connectors that are not ready. Only `is_error` is read, never the result's content: a failure that comes
+back as a non-error result (text saying the server is not connected) counts as a successful call, as it already did on the init path.
 Servers are matched by slug (every character outside `[A-Za-z0-9]` becomes `_`), so a second server whose name slugs the same way (`claude_ai_Gmail`,
 `claude.ai-Gmail`) counts for that connector. The only read test beyond that is `calls >= 1` across the three connectors together: a run that called
 only Linear (the others `connected` at init) can still report `calendar 0, mail 0 of 0` as `ok`, and a connector call that returned an error still
