@@ -22,7 +22,8 @@ def slug(name: str) -> str:
 
 
 def required_slugs(allow_path) -> set:
-    """The server slugs of the read allowlist: `mcp__<slug>__<tool>` gives `<slug>`; `ToolSearch` and other names give nothing."""
+    """The server slugs of the read allowlist: `mcp__<slug>__<tool>` gives `<slug>`; `ToolSearch` and other names give nothing. The slug ends at the
+    FIRST `__` after `mcp__`, so a name whose server slug itself held `__` would be cut there (none does)."""
     out = set()
     for name in ba.allowed_names(allow_path):
         m = re.fullmatch(r"mcp__(.+?)__.+", name)
@@ -52,7 +53,8 @@ def check(stream_path, allow_path) -> dict:
         else:
             bad += 1
     prefixes = tuple(f"mcp__{s}__" for s in need)
-    calls = sum(isinstance(b.get("name"), str) and b["name"].startswith(prefixes) for b in ba.call_blocks(evs))
+    names = [b["name"] for b in ba.call_blocks(evs) if isinstance(b.get("name"), str)]
+    calls = sum(any(n.startswith(p) and len(n) > len(p) for p in prefixes) for n in names)      # a bare `mcp__<slug>__` names no tool
     pending = sorted(s for s in need if s in state and not state[s])
     missing = sorted(s for s in need if s not in state)
     return {"servers": len(entries), "pending": pending, "missing": missing, "calls": calls, "malformed": bad,

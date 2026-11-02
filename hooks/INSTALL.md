@@ -729,7 +729,8 @@ SIGHUP (exit 143, 130 and 129), which also stop the running `claude` or python s
 waited for, so the signal is not deferred). The handler ignores further signals first, so a burst of them cannot skip the purge, and it
 waits at most `ACE_BRIEF_KILL_GRACE` seconds for the children before it SIGKILLs them (a stage that ignores TERM cannot hold it). A SIGKILL
 cannot be caught: it leaves the raw files, and the next run deletes them first thing
-(`ACE_BRIEF_KEEP=1` keeps them, 0600, under `brief_dir/run`; the session transcript is
+(`ACE_BRIEF_KEEP=1` keeps them, 0600, under `brief_dir/run`, only the LAST attempt's streams, because the purge before the retry removes the first
+attempt's; the session transcript is
 never written, see Sessions above). `digest_clean.json` (summaries after the exclusions) stays there until the next run.
 
 **One run at a time.** `brief.sh` takes a kernel `flock` (python's `fcntl` on the inherited fd 9; the interpreter is `ACE_PYTHON`,

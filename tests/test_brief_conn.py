@@ -102,6 +102,11 @@ def test_a_non_connector_call_does_not_count(tmp_path):
         assert (r["calls"], r["ready"]) == (0, False), name
 
 
+def test_a_name_that_is_only_a_server_prefix_is_not_a_call(tmp_path):
+    r = result(tmp_path, ALL_UP, calls=(call("mcp__claude_ai_Gmail__"),))
+    assert (r["calls"], r["ready"]) == (0, False)
+
+
 def test_calls_counts_blocks_of_every_tool_use_kind_and_ignores_a_nonstring_name(tmp_path):
     blocks = [{"type": "mcp_tool_use", "name": "mcp__claude_ai_Linear__list_issues"}, {"type": "server_tool_use", "name": ["mcp__claude_ai_Linear__x"]},
               {"type": "tool_use", "name": 7}, {"type": "text", "text": "mcp__claude_ai_Gmail__x"}]
@@ -336,10 +341,23 @@ def test_tool_drift_still_wins_over_pending_servers_and_is_not_retried(w):
     assert [r["stage"] for r in w.ledger()] == ["stage1", "stage1"] and "drift" in w.ledger()[1]
 
 
-def test_a_failing_or_timed_out_retry_takes_the_same_paths_as_a_first_attempt(w):
+def test_a_failing_retry_takes_the_same_path_as_a_failing_first_attempt(w):
     p = w.run("--force", **PENDING_ALL, ACE_FAKE_FAIL_SECOND="stage1")
     assert p.returncode == 1 and p.stderr.strip().splitlines()[-1] == "brief: stage 1 failed (exit 1)" and calls_of(w) == 2
     assert [r["stage"] for r in w.ledger()] == ["stage1", "stage1", "run"] and w.ledger()[-1]["refused"] == "stage 1 failed" and raw_left(w) == []
+
+
+def test_a_timed_out_retry_takes_the_same_path_as_a_timed_out_first_attempt(w):
+    wrapper = w.tmp / "hang_on_retry"      # the first stage-1 call is the real fake; once its counter file exists the wrapper sleeps instead
+    wrapper.write_text(f'#!/bin/bash\n[ -e "$ACE_FAKE_DIR/stage1_calls" ] && exec sleep 30\nexec {FAKE} "$@"\n')
+    wrapper.chmod(0o755)
+    began = time.monotonic()
+    p = w.run("--force", **BOTH, ACE_BRIEF_CLAUDE=str(wrapper), ACE_FAKE_MCP_FIRST=pending("claude_ai_Gmail"), ACE_BRIEF_STAGE_TIMEOUT="2",
+              ACE_BRIEF_KILL_GRACE="1")
+    assert (p.returncode, p.stdout, p.stderr) == (1, "", "brief: stage 1 timed out\n") and time.monotonic() - began < 30
+    assert calls_of(w) == 1 and not (w.fake / "argv_stage2.json").exists()      # the first attempt only: the wrapper never reached the fake again
+    assert [(r.get("stage"), r.get("timeout")) for r in w.ledger()] == [("stage1", None), ("stage1", "stage1")]
+    assert raw_left(w) == [] and sorted(c.name for c in (w.dir / "run").iterdir()) == ["cwd"] and free(w)
 
 
 def test_a_check_that_cannot_run_is_connectors_check_failed_and_not_a_pass(w):

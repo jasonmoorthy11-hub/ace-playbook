@@ -600,8 +600,11 @@ lock, not due) is not a refusal.
 
 The claude.ai connectors attach asynchronously on Claude Code 2.1.309: at stage 1's init a connector may be `pending` or absent from `mcp_servers`.
 The model then sees none of its tools and answers an empty digest. `brief_conn` refuses an init without Gmail, Google Calendar and Linear all
-`connected`, or a stage 1 with zero connector calls (one retry first, so a second stage-1 call is paid for). It cannot tell a genuinely empty day
-from a model that read and found nothing: that path stays `ok`.
+`connected`, or a stage 1 with zero connector calls (one retry first, so a second stage-1 call is paid for). Servers are matched by slug (every
+character outside `[A-Za-z0-9]` becomes `_`), so a second server whose name slugs the same way (`claude_ai_Gmail`, `claude.ai-Gmail`) counts for that
+connector. The only read test is `calls >= 1` across the three connectors together: a run that called only Linear can still report `calendar 0, mail 0
+of 0` as `ok`, and a connector call that returned an error still counts as a call. A genuinely empty day with at least one call stays `ok`.
+A retried run can last up to 2 x (`ACE_BRIEF_STAGE_TIMEOUT` + `ACE_BRIEF_KILL_GRACE`) + `ACE_BRIEF_RETRY_SLEEP` seconds.
 
 ## Nightly check notes
 
