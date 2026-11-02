@@ -54,7 +54,7 @@ def test_build_writes_files_and_commits_with_a_fixed_author(tmp_path):
     t = by_lesson("preclaim")[0]
     work = tasks.build(t, tmp_path / "run")
     assert all((work / n).read_text() == c for n, c in t.files.items())
-    assert git(work, "log", "--format=%an <%ae>").splitlines() == ["lab <lab@example.invalid>"]
+    assert git(work, "log", "--format=%an <%ae>").splitlines() == ["lab <lab@example.com>"]
     assert git(work, "status", "--short") == ""
 
 

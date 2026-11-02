@@ -13,8 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 LESSON_IDS = {"preclaim": "L-cbfb7a57", "edit_unread": "L-f8a355f9"}   # store ids; the text is read from the operator's store at run time
-AUTHOR = {"GIT_AUTHOR_NAME": "lab", "GIT_AUTHOR_EMAIL": "lab@example.invalid", "GIT_COMMITTER_NAME": "lab",
-          "GIT_COMMITTER_EMAIL": "lab@example.invalid", "GIT_AUTHOR_DATE": "2026-01-01T00:00:00Z", "GIT_COMMITTER_DATE": "2026-01-01T00:00:00Z"}
+AUTHOR = {"GIT_AUTHOR_NAME": "lab", "GIT_AUTHOR_EMAIL": "lab@example.com", "GIT_COMMITTER_NAME": "lab",
+          "GIT_COMMITTER_EMAIL": "lab@example.com", "GIT_AUTHOR_DATE": "2026-01-01T00:00:00Z", "GIT_COMMITTER_DATE": "2026-01-01T00:00:00Z"}
 
 
 @dataclass(frozen=True)
