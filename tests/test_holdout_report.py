@@ -19,9 +19,9 @@ INSIDE = "2026-11-10T00:00:00Z"
 HEADING = "descriptive, not the pre-registered test"
 
 
-def inj(sid, shown=(), hidden=(), rate=0.5, source="startup", refused="", ts=INSIDE):
+def inj(sid, shown=(), hidden=(), rate=0.5, source="startup", refused="", ts=INSIDE, dropped=(), fp="00000000"):
     return {"ts": ts, "session_id": sid, "source": source, "shown_ids": list(shown), "holdout_ids": list(hidden), "holdout_rate": rate,
-            "seed_fp": "00000000", "refused": refused}
+            "seed_fp": fp, "refused": refused, "dropped_cap": list(dropped)}
 
 
 def srow(sid, start=INSIDE, prompts=2):
@@ -29,15 +29,16 @@ def srow(sid, start=INSIDE, prompts=2):
             "start": start, "eligible": []}
 
 
-def frow(sid, lid, count, rid):
-    return {"detector": DET[lid], "tier": "offline", "session": st.session_hash(sid), "count": count, "id": rid, "key": "", "ts": INSIDE}
+def frow(sid, lid, count, rid, tier="offline"):
+    return {"detector": DET[lid], "tier": tier, "session": st.session_hash(sid), "count": count, "id": rid, "key": "", "ts": INSIDE}
 
 
 class World:
     def __init__(self, tmp_path, seed=SEED):
         self.dir, self.inj, self.ev = tmp_path, tmp_path / "injections.jsonl", tmp_path / "detector_events.jsonl"
         self.conf = tmp_path / "config.json"
-        self.conf.write_text(json.dumps({"data_dir": str(tmp_path), **({"holdout_permutation_seed": seed} if seed else {})}))
+        self.conf.write_text(json.dumps({"data_dir": str(tmp_path), "holdout_start": START, "holdout_end": END,
+                                         **({"holdout_permutation_seed": seed} if seed else {})}))
         self.irows, self.erows = [], []
 
     def write(self):
@@ -45,8 +46,10 @@ class World:
         self.ev.write_text("".join(json.dumps(r) + "\n" for r in self.erows))
 
     def run(self, capsys, *extra, now=NOW, start=START, end=END):
+        """The inferential run reads the registered window from the config; only the interim mode is given a --start/--end."""
         self.write()
-        rc = hr.main(["--config", str(self.conf), "--start", start, "--end", end, "--json", *extra], now=now)
+        window = ["--start", start, "--end", end] if "--interim-descriptive" in extra else []
+        rc = hr.main(["--config", str(self.conf), *window, "--json", *extra], now=now)
         cap = capsys.readouterr()
         return rc, cap.out, cap.err
 
@@ -143,8 +146,7 @@ def test_each_exclusion_has_its_own_counter(w, capsys):
         "unmatched_session": 1, "analysed_sessions": 2, "lesson_not_assigned": 1}
     assert lesson(res, B)["n"] == {"shown": 0, "hidden": 1} and lesson(res, B)["not_assigned"] == 1
     assert lesson(res, A)["n"] == {"shown": 2, "hidden": 0}
-    assert res["config"]["min_prompts"] == 1 and hr.main(["--config", str(w.conf), "--start", START, "--end", END, "--min-prompts", "0", "--json"],
-                                                           now=NOW) == 0
+    assert res["config"]["min_prompts"] == 1 and hr.main(["--config", str(w.conf), "--min-prompts", "0", "--json"], now=NOW) == 0
     assert json.loads(capsys.readouterr().out)["counts"]["below_min_prompts"] == 0
 
 
@@ -163,10 +165,11 @@ def test_an_unset_seed_refuses_with_exit_2_even_in_the_interim_mode(tmp_path, ca
         assert rc == 2 and out == "" and "holdout_permutation_seed" in err
 
 
-@pytest.mark.parametrize("args", [["--start", "yesterday", "--end", END], ["--start", END, "--end", START], ["--start", START]])
+@pytest.mark.parametrize("args", [["--start", "yesterday", "--end", END], ["--start", END, "--end", START],
+                                  ["--start", START, "--end", "2026-13-40T00:00:00Z"]])
 def test_bad_dates_are_a_usage_error(w, capsys, args):
     with pytest.raises(SystemExit) as e:
-        hr.main(["--config", str(w.conf), *args], now=NOW)
+        hr.main(["--config", str(w.conf), "--interim-descriptive", *args], now=NOW)
     assert e.value.code == 2
     capsys.readouterr()
 
@@ -178,8 +181,8 @@ def test_the_interim_mode_prints_per_arm_counts_and_means_but_no_test(w, capsys)
     res = json.loads(out)
     assert rc == 0 and res["heading"] == HEADING and err == ""
     assert lesson(res, A)["n"] == {"shown": 3, "hidden": 3} and set(lesson(res, A)) == {"lesson", "detector", "n", "not_assigned", "any_rate", "mean"}
-    assert not {"p", "ci95", "wilson95", "holm_p", "reject", "D", "rate_ratio", "primary", "secondary"} & keys(res)
-    assert hr.main(["--config", str(w.conf), "--start", START, "--end", END, "--interim-descriptive"], now="2026-11-15T00:00:00Z") == 0
+    assert not {"p", "ci95", "shift_ci95_null_redraws", "wilson95", "holm_p", "reject", "D", "rate_ratio", "primary", "secondary"} & keys(res)
+    assert hr.main(["--config", str(w.conf), "--interim-descriptive"], now="2026-11-15T00:00:00Z") == 0
     text = capsys.readouterr().out
     assert HEADING in text and SEED not in text
     assert not [word for word in ("p =", "p-value", "ci95", "wilson", "holm", "reject") if word in text.lower()]
@@ -220,6 +223,172 @@ def test_the_same_seed_gives_the_same_report_and_another_seed_another_p(tmp_path
 def test_the_text_report_prints_counts_ids_and_the_tests(w, capsys):
     planted(w, 30)
     w.write()
-    assert hr.main(["--config", str(w.conf), "--start", START, "--end", END], now=NOW) == 0
+    assert hr.main(["--config", str(w.conf)], now=NOW) == 0
     text = capsys.readouterr().out
     assert A in text and "primary" in text.lower() and "holm" in text.lower() and HEADING not in text and SEED not in text
+
+
+# ------------------------------------------------------------------------------------------------ wave 2 (Opus round 1)
+FULL = {A: "shown", B: "hidden", C: "shown"}
+
+
+def test_the_registered_window_keys_are_optional_whole_second_utc_stamps_in_order():
+    ok = cfgmod.from_dict({"holdout_start": START, "holdout_end": END})
+    assert (ok.holdout_start, ok.holdout_end) == (START, END) and cfgmod.from_dict({}).holdout_start is None
+    assert cfgmod.from_dict({"holdout_start": START}).holdout_end is None
+    for key, bad in (("holdout_start", "yesterday"), ("holdout_end", "2026-11-30"), ("holdout_start", 7), ("holdout_end", "2026-13-01T00:00:00Z"),
+                     ("holdout_start", "2026-11-01T00:00:00+00:00"), ("holdout_start", "")):
+        with pytest.raises(ValueError) as err:
+            cfgmod.from_dict({key: bad})
+        assert key in str(err.value) and (not isinstance(bad, str) or not bad or bad not in str(err.value))
+    for pair in ((END, START), (START, START)):
+        with pytest.raises(ValueError) as err:
+            cfgmod.from_dict({"holdout_start": pair[0], "holdout_end": pair[1]})
+        assert "holdout_start" in str(err.value) and "holdout_end" in str(err.value)
+
+
+def test_real_start_stamps_carry_milliseconds_and_the_window_takes_both_forms(w, capsys):
+    w.session("ms", FULL, start="2026-11-10T08:30:00.123Z")
+    w.session("whole", FULL, start="2026-11-11T08:30:00Z")
+    w.session("last-ms", FULL, start="2026-11-29T23:59:59.999Z")
+    w.session("end-ms", FULL, start="2026-11-30T00:00:00.000Z")                           # the end itself: out
+    w.session("long-frac", FULL, start="2026-11-12T00:00:00.123456Z")
+    w.session("junk", FULL, start="2026-11-12 00:00:00")                                    # not a UTC stamp: no start
+    c = w.result(capsys)["counts"]
+    assert (c["analysed_sessions"], c["no_start"], c["outside_window"]) == (4, 1, 1)
+
+
+def test_an_interim_window_may_carry_milliseconds_and_injection_stamps_too(w, capsys):
+    w.session("a", FULL, start="2026-11-10T00:00:00.500Z")
+    w.irows.append(inj("lonely", [A], [B, C], ts="2026-11-10T00:00:00.250Z"))
+    res = json.loads(w.run(capsys, "--interim-descriptive", start="2026-11-10T00:00:00.100Z", end="2026-11-10T00:00:01.000Z", now=START)[1])
+    assert res["counts"]["analysed_sessions"] == 1 and res["counts"]["unmatched_injection"] == 1
+
+
+def test_an_empty_arm_has_no_test_and_holm_treats_it_as_one(w, capsys):
+    for i in range(6):
+        w.session(f"e{i}", {A: "shown", B: "shown" if i % 2 else "hidden", C: "hidden" if i % 2 else "shown"}, fires={B: i % 3})
+    la = lesson(w.result(capsys), A)
+    for part in ("primary", "secondary"):
+        assert la[part]["D"] is None and la[part]["p"] is None and la[part]["holm_p"] == 1.0 and la[part]["reject"] is False
+        assert la[part]["rate_ratio"] == metrics.DASH
+    assert la["n"] == {"shown": 6, "hidden": 0}
+
+
+def test_a_zero_hidden_mean_has_no_rate_ratio_but_a_difference(w, capsys):
+    for i in range(6):
+        w.session(f"z{i}", {A: "shown" if i % 2 else "hidden", B: "hidden", C: "shown"}, fires={A: 2 if i % 2 else 0})
+    la = lesson(w.result(capsys), A)
+    assert la["secondary"]["mean"]["hidden"] == 0.0 and la["secondary"]["rate_ratio"] == metrics.DASH and la["secondary"]["D"] == 2.0
+    assert la["primary"]["rate_ratio"] == metrics.DASH and la["primary"]["D"] == 1.0
+
+
+def test_a_lesson_in_both_lists_of_one_row_is_an_assignment_conflict(w, capsys):
+    w.irows.append(inj("both", [A, B, C], [A]))
+    w.erows.append(srow("both"))
+    w.session("fine", FULL)
+    c = w.result(capsys)["counts"]
+    assert c["assignment_conflict"] == 1 and c["analysed_sessions"] == 1
+
+
+def test_a_session_with_a_rate_zero_row_and_a_live_row_is_excluded_whatever_its_arms(w, capsys):
+    w.session("same-arms", FULL)
+    w.irows.append(inj("same-arms", [A, B, C], [], rate=0.0, source="resume"))             # holdout off for one start: B is shown there
+    w.session("other-arms", FULL)
+    w.irows.append(inj("other-arms", [A, C], [B], rate=0.0, source="resume"))              # the arms agree, the rate does not
+    w.session("only-live", FULL)
+    c = w.result(capsys)["counts"]
+    assert (c["mixed_rate"], c["analysed_sessions"], c["assignment_conflict"], c["holdout_off"]) == (2, 1, 0, 0)
+
+
+def test_a_lesson_dropped_by_the_cap_counts_as_shown_and_is_counted(w, capsys):
+    w.session("d1", {A: "shown", B: "hidden", C: None}, fires={C: 1})
+    w.irows[-1]["dropped_cap"] = [C]                                                      # the coin said shown; the cap dropped the line
+    w.session("d2", {A: "hidden", B: "shown", C: "hidden"})
+    w.session("d3", {A: "shown", B: "hidden", C: None})                                   # in neither list and not dropped: not assigned
+    res = w.result(capsys)
+    assert res["counts"]["dropped_cap"] == 1 and res["counts"]["lesson_not_assigned"] == 1
+    assert lesson(res, C)["n"] == {"shown": 1, "hidden": 1} and lesson(res, C)["not_assigned"] == 1
+
+
+def test_a_dropped_lesson_never_overrides_a_hidden_one(w, capsys):
+    w.session("h", {A: "shown", B: "hidden", C: "hidden"})
+    w.irows[-1]["dropped_cap"] = [C]
+    res = w.result(capsys)
+    assert res["counts"]["dropped_cap"] == 0 and lesson(res, C)["n"] == {"shown": 0, "hidden": 1}
+
+
+def test_only_offline_tier_fire_rows_are_outcomes(w, capsys):
+    w.session("t1", {A: "shown", B: "shown", C: "shown"}, fires={A: 2})
+    w.session("t2", {A: "hidden", B: "hidden", C: "hidden"})
+    w.erows += [frow("t1", A, 5, "live-1", tier="live"), frow("t2", A, 7, "live-2", tier="live"), frow("t2", A, 1, "no-tier", tier=None)]
+    assert lesson(w.result(capsys), A)["secondary"]["mean"] == {"shown": 2.0, "hidden": 0.0}
+
+
+def test_live_rows_that_carry_different_seed_fingerprints_exclude_the_session(w, capsys):
+    w.session("fp", FULL)
+    w.irows.append(inj("fp", [A, C], [B], source="resume", fp="11111111"))
+    w.session("fp-off-row", FULL)
+    w.irows.append(inj("fp-off-row", [A, B, C], [], rate=0.0, source="resume", fp="22222222"))   # a rate-0 row: a mixed rate, not a seed finding
+    w.session("fp-same", FULL)
+    w.irows.append(inj("fp-same", [A, C], [B], source="resume"))
+    c = w.result(capsys)["counts"]
+    assert (c["seed_fp_mismatch"], c["mixed_rate"], c["analysed_sessions"]) == (1, 1, 1)
+
+
+def test_rows_without_a_usable_session_id_are_counted(w, capsys):
+    w.session("ok", FULL)
+    w.irows += [inj(None, [A], [B, C]), inj("", [A], [B, C]), inj(7, [A], [B, C]), {"ts": INSIDE, "shown_ids": [A]}]
+    c = w.result(capsys)["counts"]
+    assert c["null_session_id"] == 4 and c["analysed_sessions"] == 1 and c["injection_sessions"] == 1
+
+
+def test_the_primary_has_no_interval_of_its_own_and_the_secondary_names_what_it_is(w, capsys):
+    planted(w, 30)
+    la = lesson(w.result(capsys), A)
+    assert "ci95" not in la["primary"] and "shift_ci95_null_redraws" not in la["primary"]
+    assert "ci95" not in la["secondary"] and len(la["secondary"]["shift_ci95_null_redraws"]) == 2
+
+
+@pytest.mark.parametrize("extra,why", [(("--start", START, "--end", END), "inferential"), (("--start", START), "half"),
+                                       (("--interim-descriptive", "--start", START), "half-interim")])
+def test_only_the_registered_window_can_be_tested_and_a_cli_window_only_describes(w, capsys, extra, why):
+    w.session("s1", FULL)
+    w.write()
+    rc = hr.main(["--config", str(w.conf), *extra], now=NOW)
+    cap = capsys.readouterr()
+    assert rc == 2 and cap.out == "" and len(cap.err.strip().splitlines()) == 1, why
+
+
+def test_an_unset_window_refuses_the_inferential_mode_and_the_interim_mode_without_a_cli_window(tmp_path, capsys):
+    w = World(tmp_path)
+    w.conf.write_text(json.dumps({"data_dir": str(tmp_path), "holdout_permutation_seed": SEED}))
+    w.session("s1", FULL)
+    w.write()
+    for argv in ([], ["--interim-descriptive"]):
+        rc = hr.main(["--config", str(w.conf), *argv], now=NOW)
+        cap = capsys.readouterr()
+        assert rc == 2 and cap.out == "" and len(cap.err.strip().splitlines()) == 1 and "holdout_start" in cap.err
+    assert hr.main(["--config", str(w.conf), "--interim-descriptive", "--start", START, "--end", END], now=NOW) == 0
+    capsys.readouterr()
+
+
+def test_the_interim_mode_without_a_cli_window_describes_the_registered_one(w, capsys):
+    w.session("s1", FULL)
+    res = json.loads(w.run(capsys, "--interim-descriptive", now="2026-11-15T00:00:00Z", start=START, end=END)[1])
+    assert res["config"]["start"] == START and res["heading"] == HEADING
+    w.write()
+    assert hr.main(["--config", str(w.conf), "--interim-descriptive", "--json"], now="2026-11-15T00:00:00Z") == 0
+    assert json.loads(capsys.readouterr().out)["config"] == res["config"]
+
+
+def test_the_inferential_mode_uses_the_registered_window_and_waits_for_its_end(w, capsys):
+    w.session("s1", FULL, start="2026-11-05T00:00:00Z")
+    w.conf.write_text(json.dumps({"data_dir": str(w.dir), "holdout_permutation_seed": SEED, "holdout_start": "2026-11-08T00:00:00Z",
+                                  "holdout_end": "2026-11-09T00:00:00Z"}))
+    w.write()
+    assert hr.main(["--config", str(w.conf), "--json"], now="2026-11-08T12:00:00Z") == 2
+    assert "has not passed" in capsys.readouterr().err
+    assert hr.main(["--config", str(w.conf), "--json"], now="2026-11-09T00:00:00Z") == 0
+    res = json.loads(capsys.readouterr().out)
+    assert res["config"]["start"] == "2026-11-08T00:00:00Z" and res["counts"]["outside_window"] == 1

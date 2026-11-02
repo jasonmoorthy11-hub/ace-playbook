@@ -22,6 +22,8 @@ MAX_INJECT_CHARS = 7000
 CHECK_FIELDS = ("backup_check", "brain_check", "acewatch_check", "watch_claude")   # optional scripts and binaries, type-checked only
 READER_MODEL = re.compile(r"claude-[A-Za-z0-9][A-Za-z0-9._-]*")
 SEED_HEX = re.compile(r"[0-9a-f]{64}")
+# whole-second UTC stamps, checked by pattern (no datetime import on the hook path)
+UTC_STAMP = re.compile(r"\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\dZ")
 
 
 def check_value(key: str, value: Any) -> None:
@@ -88,6 +90,9 @@ class Config:
     permutation_seed: str | None = field(default=None, repr=False)
     # the holdout field analysis (compile/holdout_report.py): its own private permutation seed, same shape; None refuses the report
     holdout_permutation_seed: str | None = field(default=None, repr=False)
+    # the one registered window of that analysis (whole-second UTC `Z` stamps, start < end); None means unset and the test refuses
+    holdout_start: str | None = None
+    holdout_end: str | None = None
     arm_rate: float | None = None
     source: ClassVar[Path | None] = None  # not a config key: the file `load` read (or would have read), set on the instance by `load`
 
@@ -112,6 +117,12 @@ class Config:
             value = getattr(self, key)
             if value is not None and not (isinstance(value, str) and SEED_HEX.fullmatch(value)):
                 raise ValueError(f"{key} must be 64 lowercase hex characters (or absent)")
+        for key in ("holdout_start", "holdout_end"):
+            value = getattr(self, key)
+            if value is not None and not (isinstance(value, str) and UTC_STAMP.fullmatch(value)):
+                raise ValueError(f"{key} must be a UTC stamp like 2026-11-01T00:00:00Z (or absent)")
+        if self.holdout_start is not None and self.holdout_end is not None and not self.holdout_start < self.holdout_end:
+            raise ValueError("holdout_start must be before holdout_end")
         rate = self.arm_rate
         if rate is not None and not (isinstance(rate, (int, float)) and not isinstance(rate, bool) and 0.0 < rate < 1.0):
             raise ValueError("arm_rate must be a number strictly between 0 and 1 (or absent)")

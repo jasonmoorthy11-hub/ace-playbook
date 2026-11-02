@@ -1692,15 +1692,21 @@ marker, exits 1, and a rerun is clean.
 #### Holdout analysis (field experiment on the injected lessons)
 
 - `python -m ace_playbook.store exempt|unexempt <lesson_id>` set `holdout_exempt` (a PATCH delta, then the view rebuild, as `pin`/`unpin`); `list` marks it.
-- `python -m ace_playbook.compile.holdout_power [--events PATH] [--rates] [--weeks] [--rr] [--method normal|perm] [--json]`: Monte Carlo power of the
-  per-session, per-lesson holdout (`LESSONS`: three lessons, each with its detector; binary and count outcomes; `fit` by moments, NB or Poisson).
-- `python -m ace_playbook.compile.holdout_report --start ISO --end ISO [--min-prompts 1] [--interim-descriptive] [--json]` reads `injections.jsonl`
-  and `detector_events.jsonl`: raw session ids join detector rows by `session_hash`; the newest `_session` row must have `prompts` >= N and `start` in
-  [start, end). Excluded and counted: refused rows, holdout off, a rate other than 0.5, rows that disagree, lessons in neither list, unmatched sessions.
+- `python -m ace_playbook.compile.holdout_power [--events PATH] [--since ISO] [--rates] [--weeks] [--rr] [--method normal|perm] [--json]`: Monte Carlo
+  power of the per-session, per-lesson holdout (`LESSONS`; binary and count outcomes; `fit` by moments, NB or Poisson, over sessions that started
+  at or after `--since`, default the earliest start with a detector fire row, printed). A `normal` cell under 60 sessions per arm runs as `perm`
+  and is labelled `small-n`. `holdout_io` holds what both modules share (UTC stamps with or without milliseconds).
+- `python -m ace_playbook.compile.holdout_report [--min-prompts 1] [--json]` is the single confirmatory read: it tests the window registered in the
+  config (`holdout_start`, `holdout_end`: whole-second UTC stamps, start < end), and only once `holdout_end` has passed. `--interim-descriptive
+  [--start ISO --end ISO]` describes any window; `--start/--end` with anything else, or a half window, refuses. Raw session ids join the offline-tier
+  detector rows by `session_hash`; the newest `_session` row needs `prompts` >= N and `start` (ms allowed) in [start, end). Excluded and counted:
+  `refused`, `holdout_off`, `mixed_rate` (a rate-0 and a live row in one session), `rate_not_half`, `seed_fp_mismatch`, `assignment_conflict`,
+  lessons in no list, unmatched sessions, `null_session_id` rows; a lesson in `dropped_cap` counts as shown (`dropped_cap`).
 - Per lesson: PRIMARY the difference in the share of sessions with the mistake (Wilson interval per arm), SECONDARY the difference in mean counts;
-  `permutation_test` (0.5, 10,000 draws, config `holdout_permutation_seed`) and `holm` over the three lessons, the two families apart.
-- Refuses (exit 2): the seed unset; before `--end` unless `--interim-descriptive` (per-arm n and means, no p-value, no interval, headed
-  `descriptive, not the pre-registered test`). Neither module is on the hook path; neither prints text or the seed.
+  `permutation_test` (0.5, 10,000 draws, config `holdout_permutation_seed`) and `holm` over the three lessons, the two families apart. The
+  secondary's `shift_ci95_null_redraws` is D minus the null re-draws' quantiles, not a confidence interval; the primary has none.
+- Refuses (exit 2): the seed or the window unset; before `holdout_end` unless `--interim-descriptive` (per-arm n and means, no p-value, no interval,
+  headed `descriptive, not the pre-registered test`). Neither module is on the hook path; neither prints text or the seed.
 
 ### 8.x Brief (as built)
 
