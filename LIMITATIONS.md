@@ -490,7 +490,9 @@ synthetic corpus is generated to match its own patterns, so detection on it is c
 Paraphrase leakage (a lesson that restates a token's prefix or last characters) is a hypothesis
 the long-token lint partly covers and nothing measures.
 
-Fixed 2026-11-02: the session hooks once appended an inherited `PYTHONPATH`; an empty or relative element (`.`, `sub`, or the cwd's absolute path) put the cwd or a cwd subdirectory before the stdlib (a planted `json.py`). The hooks now set `PYTHONPATH` to the repo only, and a relative `ACE_PLAYBOOK_HOME` is made absolute first (an unusable one makes the hook exit 0 quietly).
+Fixed 2026-11-02: the session hooks once appended an inherited `PYTHONPATH`; an empty or relative element (`.`, `sub`, or the cwd's absolute path) put the
+cwd or a cwd subdirectory before the stdlib (a planted `json.py`). The hooks now set `PYTHONPATH` to the repo only, and a relative `ACE_PLAYBOOK_HOME` is
+refused (the hook then does nothing).
 
 ## Provenance origins
 
