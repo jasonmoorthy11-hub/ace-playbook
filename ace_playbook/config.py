@@ -86,6 +86,8 @@ class Config:
     # and the arm rate; None means not set yet, and `compile seal` refuses until all three are
     shadow_seed: str | None = field(default=None, repr=False)
     permutation_seed: str | None = field(default=None, repr=False)
+    # the holdout field analysis (compile/holdout_report.py): its own private permutation seed, same shape; None refuses the report
+    holdout_permutation_seed: str | None = field(default=None, repr=False)
     arm_rate: float | None = None
     source: ClassVar[Path | None] = None  # not a config key: the file `load` read (or would have read), set on the instance by `load`
 
@@ -106,7 +108,7 @@ class Config:
 
     def check_arms(self) -> None:
         """Raise ValueError when a set arm field is unusable; the message names the key and never the value."""
-        for key in ("shadow_seed", "permutation_seed"):
+        for key in ("shadow_seed", "permutation_seed", "holdout_permutation_seed"):
             value = getattr(self, key)
             if value is not None and not (isinstance(value, str) and SEED_HEX.fullmatch(value)):
                 raise ValueError(f"{key} must be 64 lowercase hex characters (or absent)")

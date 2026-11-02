@@ -1689,6 +1689,19 @@ marker, exits 1, and a rerun is clean.
 
 *Still open.* The spillover comparison, and the operator's tag and OpenTimestamps proof at the arm start.
 
+#### Holdout analysis (field experiment on the injected lessons)
+
+- `python -m ace_playbook.store exempt|unexempt <lesson_id>` set `holdout_exempt` (a PATCH delta, then the view rebuild, as `pin`/`unpin`); `list` marks it.
+- `python -m ace_playbook.compile.holdout_power [--events PATH] [--rates] [--weeks] [--rr] [--method normal|perm] [--json]`: Monte Carlo power of the
+  per-session, per-lesson holdout (`LESSONS`: three lessons, each with its detector; binary and count outcomes; `fit` by moments, NB or Poisson).
+- `python -m ace_playbook.compile.holdout_report --start ISO --end ISO [--min-prompts 1] [--interim-descriptive] [--json]` reads `injections.jsonl`
+  and `detector_events.jsonl`: raw session ids join detector rows by `session_hash`; the newest `_session` row must have `prompts` >= N and `start` in
+  [start, end). Excluded and counted: refused rows, holdout off, a rate other than 0.5, rows that disagree, lessons in neither list, unmatched sessions.
+- Per lesson: PRIMARY the difference in the share of sessions with the mistake (Wilson interval per arm), SECONDARY the difference in mean counts;
+  `permutation_test` (0.5, 10,000 draws, config `holdout_permutation_seed`) and `holm` over the three lessons, the two families apart.
+- Refuses (exit 2): the seed unset; before `--end` unless `--interim-descriptive` (per-arm n and means, no p-value, no interval, headed
+  `descriptive, not the pre-registered test`). Neither module is on the hook path; neither prints text or the seed.
+
 ### 8.x Brief (as built)
 
 Order W3 of the watcher and cockpit design (section 7, "The brief"). Not on the hook path: `brief`, `brief_render`, `brief_excl` and
