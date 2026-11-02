@@ -627,6 +627,8 @@ session are not surfaced to the running session, and the SessionEnd hook only en
 design never relies on a detached child surviving an interactive exit. Stage 1 depends on
 neither; the nightly sweep runs under launchd instead.
 
+Fixed 2026-11-02: the session hooks once appended an inherited `PYTHONPATH`; an empty or `.` element put the cwd before the stdlib (a planted `json.py`).
+
 ## Provisional promotion
 
 A `PATCH` that sets a live status (`active` or `provisional`) is refused unless the lesson holds
