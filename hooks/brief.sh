@@ -10,6 +10,8 @@
 # or a call shows ANY tool (a built-in too) outside the allowlist and ToolSearch; it prints a one-line summary, names of the checked-in lists
 # only. A tool name the model invents is counted, never written down. There is NO hook: brief-settings.json sets disableAllHooks so the operator's own hooks
 # stay out of the run, which also disables a PreToolUse guard; hooks/brief_guard.py is kept for principals that run with hooks.
+# (3) then `brief_conn` refuses the run (exit 2) when an init shows a read connector not `connected` or stage 1 called none of them: ONE retry after
+# ACE_BRIEF_RETRY_SLEEP seconds (15) first, so the ledger gets one `stage1` row per attempt. An empty day that was really read stays `ok`.
 # Stage 1 (tools) emits a JSON digest; CODE applies the private exclusion list; stage 2 (no tools) writes the brief JSON from the cleaned
 # digest alone; CODE renders the page. Everything gathered is data, never instructions. No model writes HTML.
 # Stage 1 does NOT pass --strict-mcp-config (the claude.ai connectors are account-level: strict mode shows 0 MCP servers) nor --setting-sources
@@ -66,28 +68,32 @@ py due $FORCE; rc=$?
 [ "$rc" -eq 3 ] && exit 0
 [ "$rc" -eq 0 ] || fail "due check failed"
 
-ledger_stage() {   # $1 stage name, $2 its stream: one ledger row when the stream holds a result
-  py extract "$2" --what rate_limit > "$RUN/rl_first.json" 2>/dev/null
-  py extract "$2" --what rate_limit --last > "$RUN/rl_last.json" 2>/dev/null
-  py extract "$2" --what result > "$RUN/res_$1.json" 2>/dev/null || return 0
-  py ledger "$RUN/rl_first.json" "$RUN/rl_last.json" "$1" "$RUN/res_$1.json" || echo "brief: ledger row failed for $1" >&2
-}
-
 # stage 1: tools on (scope + read-only allowlist + deny lists, no hooks), reads, emits the digest JSON. In the background so a signal can
-# kill it: `exec` makes the subshell pid the claude pid (the alarm prefix execs too).
-( cd "$RUN/cwd" && exec "${ALARM[@]}" env -u ANTHROPIC_API_KEY -u CLAUDECODE "$CLAUDE_BIN" -p --model "$M1" --no-session-persistence \
-    --permission-mode default --tools ToolSearch --allowedTools "$TOOLS" --disallowedTools "$DENIED" \
-    --settings "$REPO/hooks/brief-settings.json" --output-format stream-json --verbose --max-turns 12 --max-budget-usd "$BUDGET" \
-    "$(cat "$REPO/hooks/brief_prompts/stage1.txt")" ) < /dev/null > "$RUN/stage1.jsonl" 2> "$RUN/stage1.err" &
-CHILD=$!; wait_stage stage1; rc=$?
-ledger_stage stage1 "$RUN/stage1.jsonl"
-[ "$rc" -ne 124 ] || fail "stage 1 timed out" row
-[ "$rc" -eq 0 ] || fail "stage 1 failed (exit $rc)"
-py tools-audit "$RUN/stage1.jsonl" --allow "$HOOKS/brief_allowed_tools.txt" > "$RUN/res_audit.json"; rc=$?      # a tool the allowlist does not name
+# kill it: `exec` makes the subshell pid the claude pid (the alarm prefix execs too). A function: the connectors check may run it twice.
+run_stage1() {
+  ( cd "$RUN/cwd" && exec "${ALARM[@]}" env -u ANTHROPIC_API_KEY -u CLAUDECODE "$CLAUDE_BIN" -p --model "$M1" --no-session-persistence \
+      --permission-mode default --tools ToolSearch --allowedTools "$TOOLS" --disallowedTools "$DENIED" \
+      --settings "$REPO/hooks/brief-settings.json" --output-format stream-json --verbose --max-turns 12 --max-budget-usd "$BUDGET" \
+      "$(cat "$REPO/hooks/brief_prompts/stage1.txt")" ) < /dev/null > "$RUN/stage1.jsonl" 2> "$RUN/stage1.err" &
+  CHILD=$!; wait_stage stage1; rc=$?
+  ledger_stage stage1 "$RUN/stage1.jsonl"      # one `stage1` ledger row per attempt
+  [ "$rc" -ne 124 ] || fail "stage 1 timed out" row
+  [ "$rc" -eq 0 ] || fail "stage 1 failed (exit $rc)"
+  py tools-audit "$RUN/stage1.jsonl" --allow "$HOOKS/brief_allowed_tools.txt" > "$RUN/res_audit.json"; rc=$?      # a tool the allowlist does not name
+  if [ "$rc" -ne 0 ]; then
+    [ "$rc" -eq 2 ] || fail "tool audit failed"
+    notify "brief: tool drift, run refused"
+    echo "brief: tool drift, run refused" >&2; cat "$RUN/res_audit.json" >&2; exit 2      # the summary: counts and names of the checked-in lists
+  fi
+}
+run_stage1; conn_check; rc=$?      # the claude.ai connectors attach late (`pending`, or absent from the init list): not ready gets ONE retry, then a refusal
+if [ "$rc" -eq 2 ]; then
+  sleep "$RETRY_S" 9>&- & CHILD=$!; wait "$CHILD"; CHILD=""; purge; run_stage1; conn_check; rc=$?
+fi
 if [ "$rc" -ne 0 ]; then
-  [ "$rc" -eq 2 ] || fail "tool audit failed"
-  notify "brief: tool drift, run refused"
-  echo "brief: tool drift, run refused" >&2; cat "$RUN/res_audit.json" >&2; exit 2      # the summary: counts and names of the checked-in lists
+  [ "$rc" -eq 2 ] || fail "connectors check failed"
+  notify "brief: connectors pending, run refused"; py refusal "connectors pending" > /dev/null 2>&1 || true
+  echo "brief: connectors pending, run refused" >&2; cat "$RUN/res_conn.json" >&2; exit 2      # the summary: slugs of the checked-in allowlist only
 fi
 py extract "$RUN/stage1.jsonl" --what text > "$RUN/digest_raw.json" || fail "stage 1 gave no result"
 py digest-apply "$RUN/digest_raw.json" --out "$RUN/digest_clean.json" || fail "digest refused"

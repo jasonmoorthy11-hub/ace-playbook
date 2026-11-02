@@ -154,7 +154,8 @@ def append_row(path, row: dict) -> None:
 # text `brief refusal` writes, anything else is "other". `stage N failed (exit R)` is read without its exit code.
 REASONS = ("config", "lock", "no /usr/bin/perl", "cannot create the brief directory", "cannot open the lock file", "cannot create the run directory",
            "empty or malformed tool allowlist or deny list", "due check failed", "stage 1 failed", "stage 2 failed", "tool audit failed",
-           "stage 1 gave no result", "digest refused", "stage 2 gave no result", "brief refused", "state file")
+           "stage 1 gave no result", "digest refused", "stage 2 gave no result", "brief refused", "state file", "connectors pending",
+           "connectors check failed")
 
 
 def as_dict(x) -> dict:

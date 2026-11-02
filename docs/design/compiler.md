@@ -1691,8 +1691,8 @@ marker, exits 1, and a rerun is clean.
 
 ### 8.x Brief (as built)
 
-Order W3 of the watcher and cockpit design (section 7, "The brief"). Not on the hook path: `brief`, `brief_render`, `brief_excl` and
-`brief_audit` are on the conformance ABSENT tuple, `__main__.py` is untouched (the brief has its own entry point,
+Order W3 of the watcher and cockpit design (section 7, "The brief"). Not on the hook path: `brief`, `brief_render`, `brief_excl`,
+`brief_audit` and `brief_conn` are on the conformance ABSENT tuple, `__main__.py` is untouched (the brief has its own entry point,
 `python -m ace_playbook.compile.brief <verb>`), and nothing in metrics, report, status, seal or the detectors changed.
 
 - **Principals and controls.** A read-only principal (it reads calendar, mail and Linear; it has no write tool and no outbound channel).
@@ -1764,7 +1764,9 @@ Order W3 of the watcher and cockpit design (section 7, "The brief"). Not on the 
   (exit 2 on a schema or exclusions failure), `render <brief>` (writes `brief.html` and the validated `brief.json`, prints the path),
   `extract <stream> --what rate_limit|result|text [--last]` (the result object gains `_tools_called`, the names that may be written, and
   `_unknown_tools`, the count of the others), `ledger <before> <after> <stage> <result>`,
-  `state-mark` (writes `brief_state.json`: `last_brief`, `needs_you_count`), `tools-audit <stream> --allow <file>` (exit 2 on drift), `timeout-mark
+  `state-mark` (writes `brief_state.json`: `last_brief`, `needs_you_count`), `tools-audit <stream> --allow <file>` (exit 2 on drift),
+  `brief_conn <stream> --allow <file>` (its own module; exit 2 when not ready: a read
+  connector not `connected` in the first init event, or no connector call), `timeout-mark
   <stage>` (a ledger row `{ts, stage, timeout}`), `refusal <reason>` (a ledger row `{ts, stage: "run", refused: <reason>}`; the reason is checked against the
   FIXED set `brief_audit.REASONS`, the `fail` literals of `brief.sh` and `brief_lib.sh` without the `(exit N)` tail, and anything else is written as
   `other`, never

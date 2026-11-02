@@ -206,7 +206,7 @@ ALLOWED_ACE = {"ace_playbook", "ace_playbook.config", "ace_playbook.canon", "ace
                    "detectors", "events", "shell", "srchash", "grammar", "contracts",
                    "shadow_guard", "shadow_arm", "phase"))}      # S-1 F1: the over-cap raw scan, the matcher test and the output decision; `re` only
 ABSENT = ("seal", "dashboard", "dashboard_html", "status", "digest", "queue", "report", "synth", "metrics", "scrub", "measure",
-          "brief", "brief_render", "brief_excl", "brief_audit", "nightly_notes",
+          "brief", "brief_render", "brief_excl", "brief_audit", "brief_conn", "nightly_notes",
           "watch", "fetch", "inventory", "match", "store", "summary", "chars", "fsio", "cssstyle", "records", "pin",
           "reconcile", "htmlrules", "mdrules", "stylepass", "cssscan", "treebuild", "treemodes", "treestyle", "treewalk",
           "reader", "readerloop", "validate", "compose", "canary", "model",

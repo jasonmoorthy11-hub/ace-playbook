@@ -696,6 +696,11 @@ only as text inside a parsed line (an allowed tool's input, a mail body) is data
 tools the audit refuses every run; the first real `brief.sh --force` is the acceptance test. Read the summary line (it shows the size of
 the init list and which tools drifted) and the `drift` row of `brief_ledger.jsonl`, then decide whether to tighten the scope or to
 widen the audit. That detects drift, it cannot undo a call that already ran.
+Right after the audit, `python -m ace_playbook.compile.brief_conn <stream> --allow hooks/brief_allowed_tools.txt` checks the connectors: the claude.ai
+connectors attach late and can be `pending` or absent at init. The first init event must list every server of the allowlist (Gmail, Google Calendar,
+Linear) as `connected`, and stage 1 must have called at least one of their tools. Not ready (exit 2) means ONE retry after `ACE_BRIEF_RETRY_SLEEP`
+seconds (default 15; digits only, 0 allowed, else the default); still not ready ends the run with `brief: connectors pending, run refused` on stderr and
+in the notification, then the check's JSON line (slugs only), a `refused` ledger row and no stage 2. A retry means two `stage1` ledger rows.
 It cannot use `--strict-mcp-config`, because the claude.ai connectors are account-level and cannot be named in an mcp-config file.
 The prompt is always the last argument, after a single-value flag, because `--tools`, `--allowedTools` and `--disallowedTools` take
 a variadic list that would swallow a positional prompt.

@@ -598,6 +598,11 @@ own row); a run
 whose config or brief directory cannot be read has no ledger to write to, so its refusal stays on stderr only, and a quiet exit (another run holding the
 lock, not due) is not a refusal.
 
+The claude.ai connectors attach asynchronously on Claude Code 2.1.309: at stage 1's init a connector may be `pending` or absent from `mcp_servers`.
+The model then sees none of its tools and answers an empty digest. `brief_conn` refuses an init without Gmail, Google Calendar and Linear all
+`connected`, or a stage 1 with zero connector calls (one retry first, so a second stage-1 call is paid for). It cannot tell a genuinely empty day
+from a model that read and found nothing: that path stays `ok`.
+
 ## Nightly check notes
 
 The three optional config keys `backup_check`, `brain_check` and `acewatch_check` name local scripts that the nightly runs as
