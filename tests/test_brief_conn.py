@@ -362,7 +362,7 @@ def test_a_timed_out_retry_takes_the_same_path_as_a_timed_out_first_attempt(w):
 
 def test_a_check_that_cannot_run_is_connectors_check_failed_and_not_a_pass(w):
     shim = w.tmp / "py-shim"
-    shim.write_text(f'#!/bin/bash\n[[ "$*" == *brief_conn* ]] && exit 1\nexec uv run --quiet --project {ROOT} python "$@"\n')
+    shim.write_text(f'#!/bin/bash\n[[ "$*" == *brief_conn* ]] && exit 1\nexec uv run --quiet --project "{ROOT}" python "$@"\n')
     shim.chmod(0o755)
     p = w.run("--force", ACE_BRIEF_PY=str(shim))
     assert p.returncode == 1 and p.stderr.strip().splitlines()[-1] == "brief: connectors check failed" and p.stdout == ""
