@@ -120,3 +120,58 @@ def test_cli_prints_the_fit_and_a_table_and_json(tmp_path):
     d = json.loads(js.stdout)
     assert d["fit"][DET]["n"] == 10 and len(d["grid"]) == 3 * 2 * 1 * 2 * 1
     assert js.stdout == subprocess.run([*base, "--json"], capture_output=True, text=True, cwd=ROOT, timeout=60).stdout
+
+
+# ------------------------------------------------------------------------------------------------ wave 2 (Opus round 1)
+def test_fit_counts_only_offline_tier_rows():
+    ses, fires = rows_for([0, 2, 4])
+    fires += [dict(fire("s0", 9, "live-1"), tier="live"), {k: v for k, v in fire("s1", 9, "no-tier").items() if k != "tier"}]
+    f = hp.fit(ses, fires, 1)[DET]
+    assert f["mean"] == 2.0 and f["var"] == 4.0
+
+
+def test_fit_since_leaves_out_sessions_that_started_before_and_takes_millisecond_stamps():
+    ses = [dict(sess(f"s{i}"), start=st) for i, st in enumerate(["2026-10-01T00:00:00Z", "2026-10-20T00:00:00.123Z", "2026-10-21T00:00:00Z", ""])]
+    fires = [fire("s0", 5, "a"), fire("s1", 2, "b"), fire("s2", 0, "c")]
+    assert hp.fit(ses, fires, 1)[DET]["n"] == 4 and hp.fit(ses, fires, 1)[DET]["mean"] == 1.75
+    f = hp.fit(ses, fires, 1, since="2026-10-20T00:00:00Z")[DET]
+    assert f["n"] == 2 and f["mean"] == 1.0                                      # the session of 10-01 and the one with no start are out
+    assert hp.fit(ses, fires, 1, since="2026-10-20T00:00:00.124Z")[DET]["n"] == 1
+
+
+def test_the_default_since_is_the_earliest_start_with_a_fire_row_of_a_lessons_detector():
+    ses = [dict(sess(f"s{i}"), start=st) for i, st in enumerate(["2026-10-01T00:00:00Z", "2026-10-05T00:00:00.500Z", "2026-10-09T00:00:00Z"])]
+    fires = [fire("s2", 1, "x"), fire("s1", 0, "y", "preclaim_audit_block"), fire("s0", 3, "z", "some_other_detector")]
+    assert hp.default_since(ses, fires) == "2026-10-05T00:00:00.500Z"            # a zero-count row is still a fire row; another detector's is not
+    assert hp.default_since(ses, []) is None and hp.default_since([], fires) is None
+    assert hp.default_since(ses, [dict(fire("s0", 1, "q"), tier="live")]) is None
+
+
+def test_small_cells_are_labelled_and_use_the_permutation_method():
+    cells = hp.grid(params(), [1.0, 4.0], [4, 16], [0.5], "normal", 20, 49, "g")
+    by = {(c["rate"], c["weeks"]): c for c in cells if c["outcome"] == "binary" and c["lesson"] == hp.LESSONS[0][0]}
+    assert [by[k]["sessions"] for k in sorted(by)] == [28, 112, 112, 448]
+    assert {k: by[k]["method"] for k in by} == {(1.0, 4): "small-n", (1.0, 16): "small-n", (4.0, 4): "small-n", (4.0, 16): "normal"}
+    assert all(c["method"] == "normal" for c in cells if c["sessions"] >= 120) and all(c["method"] == "small-n" for c in cells if c["sessions"] < 120)
+    assert hp.grid(params(), [1.0], [4], [0.5], "perm", 20, 49, "g")[0]["method"] == "perm"
+
+
+def test_the_permutation_method_holds_its_size_at_twenty_sessions():
+    p = hp.simulate(params(p=0.3), 1.0, 20, "binary", 300, 99, "size", "perm")
+    assert max(p.values()) <= 0.06
+
+
+def test_cli_prints_the_chosen_since_and_takes_a_since_option(tmp_path):
+    ses = [dict(sess(f"s{i}"), start=f"2026-10-{10 + i:02d}T00:00:00.250Z") for i in range(6)]
+    fires = [fire("s2", 1, "a"), fire("s4", 2, "b")]
+    ev = tmp_path / "detector_events.jsonl"
+    ev.write_text("".join(json.dumps(r) + "\n" for r in [*ses, *fires]))
+    base = [sys.executable, "-m", "ace_playbook.compile.holdout_power", "--events", str(ev), "--rates", "2.0", "--weeks", "16", "--rr", "0.5",
+            "--sims", "5", "--seed", "s"]
+    out = subprocess.run(base, capture_output=True, text=True, cwd=ROOT, timeout=60)
+    assert out.returncode == 0 and "since 2026-10-12T00:00:00.250Z (default" in out.stdout, out.stderr
+    assert json.loads(subprocess.run([*base, "--json"], capture_output=True, text=True, cwd=ROOT, timeout=60).stdout)["since"] == "2026-10-12T00:00:00.250Z"
+    js = json.loads(subprocess.run([*base, "--since", "2026-10-14T00:00:00Z", "--json"], capture_output=True, text=True, cwd=ROOT, timeout=60).stdout)
+    assert js["since"] == "2026-10-14T00:00:00Z" and js["fit"][DET]["n"] == 2
+    bad = subprocess.run([*base, "--since", "yesterday"], capture_output=True, text=True, cwd=ROOT, timeout=60)
+    assert bad.returncode == 2

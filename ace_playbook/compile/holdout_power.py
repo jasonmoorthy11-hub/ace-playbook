@@ -7,7 +7,9 @@ fire counts of the eligible sessions (mean, sample variance, the negative-binomi
 var <= mean, and the share of sessions with a fire); `simulate` draws sessions (the hidden arm from the fitted law, the shown arm with its mean or
 probability times the rate ratio `rr`) and tests each lesson with `arms_stats.permutation_test` (or, in the fast `normal` method, a Welch z), then
 `arms_stats.holm` over the three lessons: the power of a lesson is the share of simulations in which it is rejected at 0.05 after Holm.
-The data of a simulation come from their own random stream, so the two methods see the same sessions.
+The data of a simulation come from their own random stream, so the two methods see the same sessions. The Welch z is only trusted from
+`SMALL_N` sessions per arm: a smaller `normal` cell is run with the permutation method and labelled `small-n`. `fit(.., since)` leaves out the
+sessions that started before the detectors existed (default `default_since`: the earliest start with a fire row of a lesson's detector).
 """
 
 from __future__ import annotations
@@ -17,34 +19,37 @@ import json
 import math
 import random
 import sys
+from datetime import datetime
 from math import inf
 from pathlib import Path
 
 from .. import config as cfgmod
 from . import labels, metrics, report
 from .arms_stats import ALPHA, holm, permutation_test
+from .holdout_io import ARM_RATE, LESSONS, fire_counts, nat, parse_ts
 
-LESSONS = (("L-cbfb7a57", "preclaim_audit_block"), ("L-f8a355f9", "edit_unread_turn"), ("L-93544dae", "exitplan_question_block"))
 OUTCOMES = ("binary", "count")
-ARM_RATE = 0.5
+SMALL_N = 60                       # sessions per arm below which the normal approximation is not trusted: such cells use `perm` ("small-n")
 
 
-def _nat(value: object) -> int:
-    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+def default_since(session_rows: list[dict], fire_rows: list[dict]) -> str | None:
+    """The earliest `_session` start (as written) among the sessions with ANY offline fire row of a lesson's detector, else None: before it
+    the detectors did not exist, so those sessions cannot fire."""
+    dets = {d for _, d in LESSONS}
+    fired = {r.get("session") for r in fire_rows if r.get("tier") == "offline" and r.get("detector") in dets}
+    starts = [(parse_ts(r.get("start")), r["start"]) for s, r in metrics.latest_sessions(session_rows).items() if s in fired and parse_ts(r.get("start"))]
+    return min(starts)[1] if starts else None
 
 
-def fit(session_rows: list[dict], fire_rows: list[dict], min_prompts: int) -> dict[str, dict]:
+def fit(session_rows: list[dict], fire_rows: list[dict], min_prompts: int, since: str | None = None) -> dict[str, dict]:
     """{detector: {"mean", "var", "k", "p_any", "n"}} over the eligible sessions (the newest `_session` row of a session with `prompts` >=
-    `min_prompts`), counting `count` of the detector's rows deduplicated by `id`; a session with no fire row has count 0."""
-    elig = {s for s, r in metrics.latest_sessions(session_rows).items() if _nat(r.get("prompts")) >= min_prompts}
-    seen: set = set()
-    per: dict[str, dict[str, int]] = {d: dict.fromkeys(sorted(elig), 0) for _, d in LESSONS}
-    for r in fire_rows:
-        d, s = r.get("detector"), r.get("session")
-        if d not in per or s not in elig or (r.get("id") is not None and r["id"] in seen):
-            continue
-        seen.add(r.get("id"))
-        per[d][s] += _nat(r.get("count"))
+    `min_prompts` and, with `since`, a `start` at or after it), counting `count` of the offline-tier rows of the detector deduplicated by
+    `id`; a session with no fire row has count 0."""
+    t0 = parse_ts(since) if since else None
+    elig = {s for s, r in metrics.latest_sessions(session_rows).items()
+            if nat(r.get("prompts")) >= min_prompts and (t0 is None or (parse_ts(r.get("start")) or datetime.min) >= t0)}
+    counts = fire_counts(fire_rows)
+    per: dict[str, dict[str, int]] = {d: {s: counts.get((s, d), 0) for s in sorted(elig)} for _, d in LESSONS}
     out = {}
     for d, by in per.items():
         xs, n = list(by.values()), len(by)
@@ -118,15 +123,18 @@ def simulate(params: dict, rr: float, n_sessions: int, outcome: str, sims: int, 
     return {lid: n / sims for lid, n in hits.items()}
 
 
-def grid(params: dict, rates: list[float], weeks: list[int], rrs: list[float], method: str, sims: int, perms: int, seed: str) -> list[dict]:
-    """One row per (lesson, outcome, sessions per day, weeks) with `power` = {rr: power}."""
+def grid(params: dict, rates: list[float], weeks: list[int], rrs: list[float], method: str, sims: int | None, perms: int, seed: str) -> list[dict]:
+    """One row per (lesson, outcome, sessions per day, weeks) with `power` = {rr: power} and the `method` used: a `normal` cell with fewer
+    than `SMALL_N` sessions per arm is run with `perm` and labelled `small-n`. `sims` None: 400 for `normal`, 60 for `perm` cells."""
     out = []
     for outcome in OUTCOMES:
         for rate in rates:
             for w in weeks:
                 n = round(rate * 7 * w)
-                by_rr = {rr: simulate(params, rr, n, outcome, sims, perms, seed, method) for rr in rrs}
-                out += [{"lesson": lid, "outcome": outcome, "rate": rate, "weeks": w, "sessions": n,
+                label = "small-n" if method == "normal" and n < 2 * SMALL_N else method
+                use = "perm" if label == "small-n" else method
+                by_rr = {rr: simulate(params, rr, n, outcome, sims or (400 if use == "normal" else 60), perms, seed, use) for rr in rrs}
+                out += [{"lesson": lid, "outcome": outcome, "rate": rate, "weeks": w, "sessions": n, "method": label,
                          "power": {str(rr): by_rr[rr][lid] for rr in rrs}} for lid, _ in LESSONS]
     return sorted(out, key=lambda r: ([lid for lid, _ in LESSONS].index(r["lesson"]), OUTCOMES.index(r["outcome"]), r["rate"], r["weeks"]))
 
@@ -140,6 +148,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--config")
     ap.add_argument("--events", help="detector_events.jsonl (default: the configured data dir's)")
     ap.add_argument("--min-prompts", type=int, default=1)
+    ap.add_argument("--since", help="leave out sessions that started before this UTC stamp (default: the earliest start with a detector fire row)")
     ap.add_argument("--rates", default="1.1,2.0,4.0", help="eligible sessions per day")
     ap.add_argument("--weeks", default="4,8,12,16")
     ap.add_argument("--rr", default="0.5,0.67,0.8", help="rate ratios, shown versus hidden")
@@ -149,28 +158,31 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--seed", default="holdout-power")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
+    if args.since is not None and parse_ts(args.since) is None:
+        ap.error("--since must be a UTC stamp like 2026-11-01T00:00:00Z")
     try:
         path = args.events or cfgmod.load(args.config).path(report.EVENTS)
         rows = report._read(Path(path))
     except labels.Refusal as exc:
         print(f"error: {exc}", file=sys.stderr)
         return exc.code
-    par, rrs = fit(rows, rows, args.min_prompts), _floats(args.rr)
-    cells = grid(par, _floats(args.rates), [int(w) for w in _floats(args.weeks)], rrs, args.method,
-                 args.sims or (400 if args.method == "normal" else 60), args.perms, args.seed)
+    since = args.since or default_since(rows, rows)
+    par, rrs = fit(rows, rows, args.min_prompts, since), _floats(args.rr)
+    cells = grid(par, _floats(args.rates), [int(w) for w in _floats(args.weeks)], rrs, args.method, args.sims, args.perms, args.seed)
     shown = {d: {k: ("inf" if v == inf else v) for k, v in f.items()} for d, f in par.items()}
     if args.json:
-        print(json.dumps({"fit": shown, "grid": cells}, indent=1, sort_keys=True))
+        print(json.dumps({"since": since, "fit": shown, "grid": cells}, indent=1, sort_keys=True))
         return 0
-    print(f"fit over eligible sessions (prompts >= {args.min_prompts}): n, mean, var, k (inf: Poisson), share with a fire")
+    print(f"fit over eligible sessions (prompts >= {args.min_prompts}, since {since} ({'--since' if args.since else 'default: first fire row'})): "
+          "n, mean, var, k (inf: Poisson), share with a fire")
     for lid, d in LESSONS:
         f = shown[d]
         print(f"  {lid} {d}: n {f['n']}  mean {f['mean']:.3f}  var {f['var']:.3f}  k {f['k'] if f['k'] == 'inf' else round(f['k'], 3)}  p_any {f['p_any']:.3f}")
     print(f"power ({args.method}, alpha {ALPHA} after Holm over 3 lessons, shown arm rate x rr; columns are rr)")
-    print("lesson      outcome  /day weeks  n  " + "  ".join(f"rr{rr:g}".rjust(6) for rr in rrs))
+    print("lesson      outcome  /day weeks  n  " + "  ".join(f"rr{rr:g}".rjust(6) for rr in rrs) + "  method (small-n: under 60 per arm, run as perm)")
     for c in cells:
         print(f"{c['lesson']}  {c['outcome']:6}  {c['rate']:4g} {c['weeks']:4}  {c['sessions']:4}  "
-              + "  ".join(f"{c['power'][str(rr)]:6.2f}" for rr in rrs))
+              + "  ".join(f"{c['power'][str(rr)]:6.2f}" for rr in rrs) + f"  {c['method']}")
     return 0
 
 
