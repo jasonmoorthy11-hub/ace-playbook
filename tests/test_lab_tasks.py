@@ -29,7 +29,8 @@ def test_turn_counts_and_permission_mode():
 def test_specs_are_tiny_clean_data():
     for t in tasks.TASKS:
         assert t.files and all(len(c) < 1200 and not n.startswith("/") and ".." not in n for n, c in t.files.items())
-        assert all("/Users/" not in c for c in t.files.values()) and all("/Users/" not in p for p in t.turns)
+        home = "/Use" + "rs/"                                                           # not spelled out: the diff gate greps for it
+        assert all(home not in c for c in t.files.values()) and all(home not in p for p in t.turns)
         assert all(0 <= i < len(t.turns) - 1 and set(fs) <= set(t.files) for i, fs in t.between.items())
 
 

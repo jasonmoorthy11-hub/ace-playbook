@@ -1,4 +1,4 @@
-"""CLI of the lab: `python -m ace_playbook.lab run|tasks` (docs/lab.md). Data dir: $ACE_LAB_DATA, else ~/.local/share/ace-playbook/lab.
+"""CLI of the lab: `python -m ace_playbook.lab run|report|tasks` (docs/lab.md). Data dir: $ACE_LAB_DATA, else ~/.local/share/ace-playbook/lab.
 Exit codes: 0 ok (or stopped by the STOP file), 2 usage or unreadable store. No lesson text is ever printed.
 """
 
@@ -12,7 +12,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from . import run, score, tasks
+from . import run, score, stats, tasks
 
 
 def data_dir() -> Path:
@@ -99,6 +99,13 @@ def cmd_tasks(args) -> int:
     return 0
 
 
+def cmd_report(args) -> int:
+    rows, excluded = stats.load_rows(data_dir() / "trials.jsonl", args.exclude_pilot)
+    groups = stats.summarize(rows)
+    print(json.dumps({"groups": groups, "excluded": excluded}, indent=1, sort_keys=True) if args.json else stats.render(groups, excluded))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m ace_playbook.lab")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -114,6 +121,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--dry-run", action="store_true", help="print the plan only")
     p.set_defaults(func=cmd_run)
     sub.add_parser("tasks", help="list task ids and lessons").set_defaults(func=cmd_tasks)
+    p = sub.add_parser("report", help="score every recorded stream and print the per-model, per-lesson statistics")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--exclude-pilot", action="store_true")
+    p.set_defaults(func=cmd_report)
     args = ap.parse_args(argv)
     return args.func(args)
 
