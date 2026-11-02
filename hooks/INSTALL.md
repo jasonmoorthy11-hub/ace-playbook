@@ -699,7 +699,7 @@ widen the audit. That detects drift, it cannot undo a call that already ran.
 Right after the audit, `python -m ace_playbook.compile.brief_conn <stream> --allow hooks/brief_allowed_tools.txt` checks the connectors: the claude.ai
 connectors attach late and can be `pending` or absent at init. The first init event must list every server of the allowlist (Gmail, Google Calendar,
 Linear) as `connected`, and stage 1 must have called at least one of their tools. Not ready (exit 2) means ONE retry after `ACE_BRIEF_RETRY_SLEEP`
-seconds (default 15; digits only, 0 allowed, else the default); still not ready ends the run with `brief: connectors pending, run refused` on stderr and
+seconds (default 15; 1 to 6 digits, 0 allowed, else the default); still not ready ends the run with `brief: connectors pending, run refused` on stderr and
 in the notification, then the check's JSON line (slugs only), a `refused` ledger row and no stage 2. A retry means two `stage1` ledger rows.
 It cannot use `--strict-mcp-config`, because the claude.ai connectors are account-level and cannot be named in an mcp-config file.
 The prompt is always the last argument, after a single-value flag, because `--tools`, `--allowedTools` and `--disallowedTools` take

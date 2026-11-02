@@ -604,7 +604,8 @@ The model then sees none of its tools and answers an empty digest. `brief_conn` 
 character outside `[A-Za-z0-9]` becomes `_`), so a second server whose name slugs the same way (`claude_ai_Gmail`, `claude.ai-Gmail`) counts for that
 connector. The only read test is `calls >= 1` across the three connectors together: a run that called only Linear can still report `calendar 0, mail 0
 of 0` as `ok`, and a connector call that returned an error still counts as a call. A genuinely empty day with at least one call stays `ok`.
-A retried run can last up to 2 x (`ACE_BRIEF_STAGE_TIMEOUT` + `ACE_BRIEF_KILL_GRACE`) + `ACE_BRIEF_RETRY_SLEEP` seconds.
+With `T` = `ACE_BRIEF_STAGE_TIMEOUT` + `ACE_BRIEF_KILL_GRACE`, stage 1 with its retry can last up to 2 x `T` + `ACE_BRIEF_RETRY_SLEEP`
+seconds, and the whole run up to 3 x `T` + `ACE_BRIEF_RETRY_SLEEP` plus the code steps (stage 2 has its own limit).
 
 ## Nightly check notes
 

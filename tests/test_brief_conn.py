@@ -349,7 +349,7 @@ def test_a_failing_retry_takes_the_same_path_as_a_failing_first_attempt(w):
 
 def test_a_timed_out_retry_takes_the_same_path_as_a_timed_out_first_attempt(w):
     wrapper = w.tmp / "hang_on_retry"      # the first stage-1 call is the real fake; once its counter file exists the wrapper sleeps instead
-    wrapper.write_text(f'#!/bin/bash\n[ -e "$ACE_FAKE_DIR/stage1_calls" ] && exec sleep 30\nexec {FAKE} "$@"\n')
+    wrapper.write_text(f'#!/bin/bash\n[ -e "$ACE_FAKE_DIR/stage1_calls" ] && exec sleep 30\nexec "{FAKE}" "$@"\n')
     wrapper.chmod(0o755)
     began = time.monotonic()
     p = w.run("--force", **BOTH, ACE_BRIEF_CLAUDE=str(wrapper), ACE_FAKE_MCP_FIRST=pending("claude_ai_Gmail"), ACE_BRIEF_STAGE_TIMEOUT="2",
