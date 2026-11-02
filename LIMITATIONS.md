@@ -490,6 +490,8 @@ synthetic corpus is generated to match its own patterns, so detection on it is c
 Paraphrase leakage (a lesson that restates a token's prefix or last characters) is a hypothesis
 the long-token lint partly covers and nothing measures.
 
+Fixed 2026-11-02: the session hooks once appended an inherited `PYTHONPATH`; an empty or relative element (`.`, `sub`, or the cwd's absolute path) put the cwd or a cwd subdirectory before the stdlib (a planted `json.py`). The hooks now set `PYTHONPATH` to the repo only, and a relative `ACE_PLAYBOOK_HOME` is made absolute first (an unusable one makes the hook exit 0 quietly).
+
 ## Provenance origins
 
 - A pre-existing third-party file under the session's working directory that matches none of the untrusted markers (a cloned repo's
@@ -626,8 +628,6 @@ on 2026-10-19 (Claude Code 2.1.302, macOS): files written to the memory director
 session are not surfaced to the running session, and the SessionEnd hook only enqueues, so the
 design never relies on a detached child surviving an interactive exit. Stage 1 depends on
 neither; the nightly sweep runs under launchd instead.
-
-Fixed 2026-11-02: the session hooks once appended an inherited `PYTHONPATH`; an empty or `.` element put the cwd before the stdlib (a planted `json.py`).
 
 ## Provisional promotion
 
