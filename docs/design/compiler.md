@@ -1704,7 +1704,11 @@ marker, exits 1, and a rerun is clean.
   `assignment_conflict`, lessons in no list, unmatched sessions, `null_session_id` rows; a lesson in `dropped_cap` counts as shown (`dropped_cap`).
 - Eligible sessions are interactive (D-239): `entrypoint == "cli"` on every injection row of the session. The injector records the field from
   `CLAUDE_CODE_ENTRYPOINT` (`sdk-py`, `sdk-cli`, ... for automation); rows without it (legacy) or with any other value are excluded as
-  `not_interactive`, decided before the coin and before the other session reasons. `holdout_power --rates` must be the interactive rate.
+  `not_interactive`. EVERY injection row of the session, live or rate-0, must be `cli` (deliberately stricter than "every live row"): a session
+  failing it is counted `not_interactive` even if it would also be `holdout_off` or `mixed_rate` (excluded either way). The session-side reasons
+  (`no_start`, `below_min_prompts`, `outside_window`) take precedence over all assignment reasons, and `not_interactive` is the first of the
+  assignment reasons, decided without the coin (the order of the counters in the report is not the decision order). `holdout_power --rates` must be
+  the interactive rate.
 - Per lesson: PRIMARY the difference in the share of sessions with the mistake (Wilson interval per arm), SECONDARY the difference in mean counts;
   `permutation_test` (0.5, 10,000 draws, config `holdout_permutation_seed`) and `holm` over the three lessons, the two families apart. The
   secondary's `shift_ci95_null_redraws` is D minus the null re-draws' quantiles, not a confidence interval; the primary has none.

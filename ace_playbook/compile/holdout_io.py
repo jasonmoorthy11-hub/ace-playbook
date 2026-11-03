@@ -35,7 +35,8 @@ def nat(value: object) -> int:
 def exempt_lessons(cfg, end: str) -> list[str] | None:
     """The sorted ids of `LESSONS` that some record of the delta LOG sets `holdout_exempt` true with a `ts` before `end` (an unparseable `ts`
     counts as before), even if a later record unexempts it: the injector always shows an exempt lesson, so its row would look coin-shown. A
-    record from `end` on does not count; the SQLite view is not read (it keeps no history). No log: []. A log that cannot be read: None."""
+    record from `end` on does not count; the SQLite view is not read (it keeps no history). No log: []. A log that cannot be read, or a record
+    that is not an object or has a `lesson_id` that is not a string: None."""
     from ..store import DeltaLog, SchemaError                 # lazy: the store pulls in sqlite3, which compile/ never imports itself
     ids, hit, t1 = {lid for lid, _ in LESSONS}, set(), parse_ts(end)
     try:
@@ -43,7 +44,7 @@ def exempt_lessons(cfg, end: str) -> list[str] | None:
     except (SchemaError, OSError):
         return None
     for r in records:
-        if not isinstance(r, dict):
+        if not isinstance(r, dict) or ("lesson_id" in r and not isinstance(r["lesson_id"], str)):
             return None
         f = r.get("fields") if isinstance(r.get("fields"), dict) else {}
         t = parse_ts(r.get("ts"))

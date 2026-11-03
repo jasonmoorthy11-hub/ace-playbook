@@ -5,8 +5,9 @@ hook path. Prints counts and lesson ids, never text, and never the seed.
 
 Assignment (`holdout_io.assignments`): the injector's `injections.jsonl` rows of one RAW session id, joined to the detector rows by
 `state.session_hash`. Only interactive sessions count (D-239): every row has `entrypoint` "cli", as the injector records it from
-`CLAUDE_CODE_ENTRYPOINT`; any other value, null or a missing field (legacy rows) is `not_interactive`, decided before everything else about the
-assignment. A session counts when every row has `holdout_rate` 0.5 (a session with a rate-0 row and a live row is `mixed_rate`,
+`CLAUDE_CODE_ENTRYPOINT`; any other value, null or a missing field (legacy rows) is `not_interactive`. The session-side reasons (`no_start`,
+`below_min_prompts`, `outside_window`) take precedence; `not_interactive` is the first of the assignment reasons (COUNTERS is the report order,
+not the decision order). A session counts when every row has `holdout_rate` 0.5 (a session with a rate-0 row and a live row is `mixed_rate`,
 whatever its arms; live rows with different `seed_fp` are `seed_fp_mismatch`), none was `refused`, and every row (startup, clear, resume,
 compact) says the same for the three lessons of `LESSONS`: in `holdout_ids` (hidden) or `shown_ids` (shown). A lesson in `dropped_cap` is
 shown (the coin said so; `dropped_cap` counts them); a lesson in none of the lists is not assigned: that (session, lesson) pair is left out
