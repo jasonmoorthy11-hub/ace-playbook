@@ -4,7 +4,8 @@ as a secondary, descriptive number. A trial with a recorded error or a missing s
 Two kinds of row are kept apart as descriptive secondaries (no Holm, never a rejection): cued edit_unread tasks, and single-claim preclaim
 tasks (the lab hook needs two claim phrases, so the PRIMARY preclaim row is the multi_claim tasks only). The report also counts the exitplan
 trials whose driver count and rule recomputation differ (`mismatches`), and counts the tool inputs outside the run dir (`outside`: every saved
-stream, pilot and errored trials too; an unreadable or empty stream, a stream with a bad line, or an unparseable trials.jsonl line is counted apart).
+stream of every attempt, pilot and errored trials too; an unreadable or empty stream, a stream with a bad line, or an unparseable trials.jsonl
+line is counted apart).
 Each group also carries the Newcombe 95% interval of the difference and, for the primary rows, a per-task table (describe.py).
 """
 
@@ -66,11 +67,11 @@ def summarize(rows: list[dict], cued: bool = False, single: bool = False) -> lis
     return groups
 
 
-def _scan(trials: Path, exclude_pilot: bool = False) -> tuple[list[dict], int, bool]:
-    """(the last record of each trial id in file order, pilot records dropped when `exclude_pilot`; the count of unparseable lines; whether the
-    file has any non-blank line)."""
+def _scan(trials: Path, exclude_pilot: bool = False, every: bool = False) -> tuple[list[dict], int, bool]:
+    """(the last record of each trial id in file order, or with `every` every record in file order, pilot records dropped when `exclude_pilot`;
+    the count of unparseable lines; whether the file has any non-blank line)."""
     last: dict[str, dict] = {}
-    bad, lines = 0, 0
+    bad, lines, allrecs = 0, 0, []
     for line in (Path(trials).read_text(encoding="utf-8", errors="replace").splitlines() if Path(trials).exists() else []):
         if not line.strip():
             continue
@@ -78,13 +79,20 @@ def _scan(trials: Path, exclude_pilot: bool = False) -> tuple[list[dict], int, b
         try:
             rec = json.loads(line)
             last[rec["trial_id"]] = rec
+            allrecs.append(rec)
         except (ValueError, KeyError, TypeError):
             bad += 1
-    return [rec for rec in last.values() if not (exclude_pilot and rec.get("pilot"))], bad, bool(lines)
+    return [rec for rec in (allrecs if every else last.values()) if not (exclude_pilot and rec.get("pilot"))], bad, bool(lines)
 
 
-def _records(trials: Path, exclude_pilot: bool = False) -> list[dict]:
-    return _scan(trials, exclude_pilot)[0]
+def _records(trials: Path, exclude_pilot: bool = False, every: bool = False) -> list[dict]:
+    return _scan(trials, exclude_pilot, every)[0]
+
+
+def _distinct(recs: list[dict]) -> list[dict]:
+    """`recs` with a stream path named by several records (the old layout reused `<tid>.jsonl` for a retry) kept once, as its LAST record."""
+    last = {r["stream"]: i for i, r in enumerate(recs) if isinstance(r.get("stream"), str) and r["stream"]}
+    return [r for i, r in enumerate(recs) if not (isinstance(r.get("stream"), str) and r["stream"] and last[r["stream"]] != i)]
 
 
 def load_rows(trials: Path, exclude_pilot: bool = False) -> tuple[list[dict], dict]:
@@ -135,17 +143,18 @@ def mismatches(rows: list[dict]) -> int | None:
 
 def outside(trials: Path) -> dict | None:
     """{total, unreadable, bad_streams, trials}: the tool inputs (file_path, path, notebook_path, a Glob pattern or Grep glob) outside the run dir,
-    summed over EVERY saved stream, pilot and errored trials included; `trials` lists the sorted ids with a count above 0. FAIL CLOSED:
+    summed over EVERY saved stream (one per attempt: a retry never hides an earlier attempt), pilot and errored trials included; `trials` lists
+    the sorted ids with a count above 0. FAIL CLOSED:
     `unreadable` counts each record whose stream is missing, unreadable, wholly unparseable or not a usable path (a `build failed` record ran no
     agent, so it has no stream to read), each stream that is empty or has no init event (unless its record's error starts `spawn failed` and the
     stream has no event at all, blank lines aside: run.py opens the stream before the spawn), and each unparseable line of trials.jsonl;
     `bad_streams` counts the streams with an unparseable line.
     None when trials.jsonl has no line."""
-    recs, bad, any_line = _scan(trials)
+    recs, bad, any_line = _scan(trials, every=True)
     if not any_line:
         return None
     total, unreadable, bad_streams, hit = 0, bad, 0, []
-    for rec in recs:
+    for rec in _distinct(recs):
         stream, err = rec.get("stream"), str(rec.get("error") or "")
         try:
             if not isinstance(stream, str) or not stream:
@@ -158,7 +167,7 @@ def outside(trials: Path) -> dict | None:
         bad_streams += bad_lines > 0
         total += n
         hit += [str(rec["trial_id"])] if n else []
-    return {"total": total, "unreadable": unreadable, "bad_streams": bad_streams, "trials": sorted(hit)}
+    return {"total": total, "unreadable": unreadable, "bad_streams": bad_streams, "trials": sorted(set(hit))}
 
 
 def render(groups: list[dict], excluded: dict, cued: list[dict] = (), single: list[dict] = (), mismatched: int | None = None,
@@ -170,9 +179,10 @@ def render(groups: list[dict], excluded: dict, cued: list[dict] = (), single: li
     out += [] if mismatched is None else [f"exitplan rule/driver mismatches: {mismatched}"]
     bad = f", streams with bad lines: {bad_streams}" if bad_streams else ""
     out += [] if outside_n is None else [f"outside-run-dir tool inputs: {outside_n} (unreadable streams: {unreadable}{bad})"]
+    out = out or ([] if excluded else ["no scored trials"])
     out += [] if checks is None else [checks_mod.line(checks)]
     out += [f"excluded (error or missing stream) {k}: {v}" for k, v in sorted(excluded.items())]
-    return "\n".join(out) if out else "no scored trials"
+    return "\n".join(out)
 
 
 def _render(groups: list[dict], title: str) -> list[str]:

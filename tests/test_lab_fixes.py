@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import time
 
@@ -164,3 +165,75 @@ def test_such_a_trial_is_excluded_by_report_and_retried_by_the_next_run(capsys, 
     assert out.count("\n") == 1 and " error=" not in out and [r["error"] is None for r in rows] == [False, True]
     assert cmd.recorded(cli_env / "trials.jsonl") == {rows[0]["trial_id"]} and len(stats.load_rows(cli_env / "trials.jsonl")[0]) == 1
     assert cli(capsys, *base)[1] == "" and len(trials_of(cli_env)) == 2
+
+
+# ------------------------------------------------------------------ wave 9, C-B: one stream per attempt; the safety count reads every attempt
+ESC = {"events": [{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "e1", "name": "Read", "input": {"file_path": "/etc/hosts"}}]}}],
+       "result": {"is_error": True, "subtype": "error_max_turns"}}
+
+
+def attempt(lab, turns, task="pc-port", **kw):
+    """One trial against the fake, its record appended to trials.jsonl the way `run` does."""
+    lab.scenario(turns=turns)
+    shutil.rmtree(lab.runs, ignore_errors=True)                                                         # as `run` clears the run dir
+    rec = lab.go(task, "told", **kw)
+    with run.open_private(lab.data / "trials.jsonl", append=True) as fh:
+        fh.write(json.dumps(rec, sort_keys=True) + "\n")
+    return rec
+
+
+def test_an_errored_attempt_with_an_escape_then_a_clean_retry_keeps_both_streams_and_the_safety_count(lab):
+    bad = attempt(lab, [ESC])
+    assert bad["error"] == "result error: error_max_turns" and stats.outside(lab.data / "trials.jsonl")["total"] == 1
+    good = attempt(lab, [{}])
+    assert good["error"] is None and bad["stream"] != good["stream"]
+    assert bad["stream"].endswith(".a1.jsonl") and good["stream"].endswith(".a2.jsonl")
+    assert "/etc/hosts" in open(bad["stream"]).read() and "/etc/hosts" not in open(good["stream"]).read()
+    found = stats.outside(lab.data / "trials.jsonl")
+    assert found["total"] >= 1 and found["trials"] == [bad["trial_id"]] and found["unreadable"] == 0
+    assert len(stats.load_rows(lab.data / "trials.jsonl")[0]) == 1                                      # scoring: the last record per id
+
+
+def test_a_clean_first_attempt_has_one_stream_and_the_same_numbers(lab):
+    rec = attempt(lab, [READ_X])
+    assert rec["stream"].endswith(".a1.jsonl")
+    assert stats.outside(lab.data / "trials.jsonl") == {"total": 1, "unreadable": 0, "bad_streams": 0, "trials": [rec["trial_id"]]}
+    assert [p.name for p in (lab.data / "streams").iterdir()] == [rec["trial_id"] + ".a1.jsonl"]
+
+
+def test_an_existing_stream_is_never_opened_for_writing_so_a_collision_bumps_the_attempt_number(lab):
+    streams = lab.data / "streams"
+    streams.mkdir(parents=True)
+    taken = streams / "claude-test-1.pc-port.told.r0.a1.jsonl"
+    taken.write_text("KEEP\n")
+    lab.scenario(turns=[{}])
+    rec = lab.go("pc-port", "told")
+    assert taken.read_text() == "KEEP\n" and rec["stream"].endswith(".a2.jsonl") and rec["error"] is None
+
+
+def test_an_old_layout_stream_still_reports(tmp_path):
+    old = tmp_path / "m.t.told.r0.jsonl"
+    old.write_text(json.dumps({"type": "system", "subtype": "init", "cwd": "/r/work"}) + "\n" + json.dumps(
+        {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "a", "name": "Read", "input": {"file_path": "/etc/x"}}]}}) + "\n")
+    base = {"trial_id": "m.t.told.r0", "stream": str(old), "task": "pc-port", "lesson": "preclaim", "arm": "told", "model": "m", "pilot": False}
+    (tmp_path / "trials.jsonl").write_text("\n".join(json.dumps(r) for r in [{**base, "error": "timeout"}, {**base, "error": None}]) + "\n")
+    assert stats.outside(tmp_path / "trials.jsonl") == {"total": 1, "unreadable": 0, "bad_streams": 0, "trials": ["m.t.told.r0"]}   # one stream, once
+
+
+# ------------------------------------------------------------------ wave 9, m1: the retry cap
+def test_a_trial_with_max_attempts_errored_records_is_not_retried_and_stays_excluded(capsys, cli_env):
+    base = ("run", "--model", "m1", "--lesson", "preclaim", "--seed", "1", "--tasks", "pc-port", "--arms", "told")
+    for _ in range(3):
+        cli(capsys, *base, "--claude", str(cli_env / "nope"))
+    assert len(trials_of(cli_env)) == 3
+    out = cli(capsys, *base, "--claude", str(FAKE))[1]
+    assert len(trials_of(cli_env)) == 3 and "cap" in out and stats.load_rows(cli_env / "trials.jsonl") == ([], {"m1/preclaim/told": 1})
+    out = cli(capsys, *base, "--claude", str(FAKE), "--max-attempts", "4")[1]
+    rows = trials_of(cli_env)
+    assert len(rows) == 4 and rows[-1]["error"] is None and rows[-1]["stream"].endswith(".a4.jsonl") and "cap" not in out
+
+
+def test_max_attempts_defaults_to_three_and_must_be_at_least_one(capsys, cli_env):
+    assert "--max-attempts" in run_help() and "(default: 3)" in run_help()
+    base = ("run", "--model", "m1", "--lesson", "preclaim", "--seed", "1", "--tasks", "pc-port", "--arms", "told", "--claude", str(FAKE))
+    assert cli(capsys, *base, "--max-attempts", "0")[0] == 2 and not (cli_env / "trials.jsonl").exists()

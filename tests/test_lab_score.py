@@ -485,3 +485,22 @@ def test_a_64_alternative_pattern_under_4096_characters_is_expanded_in_bounded_t
     assert len(val) < 4096
     assert timed(lambda: out.inputs("/r/work", "Glob", {"pattern": val})) == want
     assert timed(lambda: out.inputs("/r/work", "Grep", {"glob": val, "pattern": "x", "path": "src"})) == want
+
+
+# ------------------------------------------------------------------ wave 9, C-A: braces expand BEFORE the path join
+@pytest.mark.parametrize("path,val,want", [("src", "{/etc/hosts,x}", 1), ("/r/work", "{/etc/hosts,x}", 1), ("src", "{,}/etc/*", 1), ("src", "{~/x,y}", 1),
+                                           ("src", "{a,b}/*.py", 0), ("src", "*.{py,md}", 0), ("/r/work/src", "{/r/work/a,b}", 0),
+                                           ("src", "{x,/r/work/a}", 0), ("src", "{x,/r/workshop/a}", 1), ("src", "{x,../../y}", 1),
+                                           ("src", "{x,y}/../z", 0), ("{a,b}", "{c,/etc/*}", 1), ("{a,b}", "{c,d}/*.py", 0)])
+def test_an_absolute_alternative_of_a_brace_group_is_tested_as_a_path_and_never_joined_to_the_tools_path(tmp_path, path, val, want):
+    for name, key in (("Glob", "pattern"), ("Grep", "glob")):
+        extra = {} if name == "Glob" else {"pattern": "x"}
+        assert outside(tmp_path, [init("/r/work"), use_in(name, **{key: val}, **extra, path=path), result()]) == want, (name, path, val)
+
+
+def test_a_brace_alternative_outside_is_outside_without_a_path_too_and_the_cap_covers_the_path_times_the_pattern():
+    from ace_playbook.lab import outside as out
+    assert out.inputs("/r/work", "Glob", {"pattern": "{/etc/hosts,x}"}) == 1 and out.inputs("/r/work", "Glob", {"pattern": "{x,y}"}) == 0
+    wide = "{" + ",".join(f"d{i}" for i in range(33)) + "}/*"
+    assert out.inputs("/r/work", "Glob", {"pattern": wide, "path": "{a,b}"}) == 1                    # 33 x 2 alternatives: over the cap, fail closed
+    assert out.inputs("/r/work", "Glob", {"pattern": wide, "path": "src"}) == 0

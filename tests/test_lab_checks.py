@@ -35,7 +35,8 @@ def test_the_three_counters_over_every_trial(tmp_path):
     out = checks.checks(write(tmp_path, recs))
     assert out == {"lesson_sha16": {"edit_unread/bbbb": 1, "preclaim/aaaa": 2},
                    "binary": {"2.1.309/m": 2, "2.1.317/m2": 1},
-                   "model_usage": {"haiku": 2, "m": 2, "m2": 2}}                 # counted per result event
+                   "model_usage": {"haiku": 2, "m": 2, "m2": 2},                 # counted per result event
+                   "attempt_errors": {"told/timeout": 1}, "first_attempt_errors": {"told/timeout": 1}}
 
 
 def test_the_lesson_counter_takes_the_last_record_of_a_trial_id_and_the_binary_every_stream_of_a_last_record(tmp_path):
@@ -54,11 +55,12 @@ def test_exclude_pilot_drops_the_pilot_records_from_every_counter(tmp_path):
     path = write(tmp_path, [rec(tmp_path, 0), rec(tmp_path, 1, pilot=True, sha="pil", version="1.0.0")])
     assert checks.checks(path)["binary"] == {"1.0.0/m": 1, "2.1.309/m": 1}
     out = checks.checks(path, exclude_pilot=True)
-    assert out == {"lesson_sha16": {"preclaim/aaaa": 1}, "binary": {"2.1.309/m": 1}, "model_usage": {"m": 1}}
+    assert out == {"lesson_sha16": {"preclaim/aaaa": 1}, "binary": {"2.1.309/m": 1}, "model_usage": {"m": 1}, "attempt_errors": {},
+                   "first_attempt_errors": {}}
 
 
 def test_a_missing_or_blank_trials_file_gives_empty_counters(tmp_path):
-    empty = {"lesson_sha16": {}, "binary": {}, "model_usage": {}}
+    empty = {"lesson_sha16": {}, "binary": {}, "model_usage": {}, "attempt_errors": {}, "first_attempt_errors": {}}
     assert checks.checks(tmp_path / "none.jsonl") == empty
     assert checks.checks(write(tmp_path, [])) == empty
 
@@ -74,18 +76,22 @@ def test_report_json_carries_checks_and_the_text_form_prints_one_checks_line(cap
     write(tmp_path, [rec(tmp_path, 0), rec(tmp_path, 1, arm="not_told")])
     assert cmd.main(["report", "--json"]) == 0
     got = json.loads(capsys.readouterr().out)["checks"]
-    assert got == {"lesson_sha16": {"preclaim/aaaa": 2}, "binary": {"2.1.309/m": 2}, "model_usage": {"m": 2}}
+    assert got == {"lesson_sha16": {"preclaim/aaaa": 2}, "binary": {"2.1.309/m": 2}, "model_usage": {"m": 2}, "attempt_errors": {},
+                   "first_attempt_errors": {}}
     assert cmd.main(["report"]) == 0
     lines = [x for x in capsys.readouterr().out.splitlines() if x.startswith("checks:")]
     assert len(lines) == 1 and all(s in lines[0] for s in ("preclaim/aaaa", "2.1.309/m", "model_usage"))
     assert "outcome" not in lines[0] and "violations" not in lines[0]
 
 
-def test_report_json_checks_is_empty_without_data_and_the_text_stays_no_scored_trials(capsys, tmp_path, monkeypatch):
+def test_report_json_checks_is_empty_without_data_and_the_text_says_no_scored_trials_then_prints_the_empty_checks_line(capsys, tmp_path, monkeypatch):
     monkeypatch.setenv("ACE_LAB_DATA", str(tmp_path / "none"))
     assert cmd.main(["report", "--json"]) == 0
-    assert json.loads(capsys.readouterr().out)["checks"] == {"lesson_sha16": {}, "binary": {}, "model_usage": {}}
-    assert cmd.main(["report"]) == 0 and capsys.readouterr().out.strip() == "no scored trials"
+    assert json.loads(capsys.readouterr().out)["checks"] == {k: {} for k in ("lesson_sha16", "binary", "model_usage", "attempt_errors",
+                                                                             "first_attempt_errors")}
+    assert cmd.main(["report"]) == 0
+    first, second = capsys.readouterr().out.strip().splitlines()
+    assert first == "no scored trials" and second.startswith("checks: lesson_sha16={}")
 
 
 # ------------------------------------------------------------------ Newcombe hybrid score interval (method 10, Newcombe 1998)
@@ -150,3 +156,57 @@ def test_the_report_json_carries_the_interval_and_the_table_per_group(capsys, tm
     assert g["diff_newcombe95"] == describe.newcombe(1, 2, 0, 2)
     assert g["per_task"]["pc-port"] == {"told": {"any": 1, "n": 1}, "not_told": {"any": 0, "n": 1}}
     assert g["per_task"]["pc-ini"] == {"told": {"any": 0, "n": 1}, "not_told": {"any": 0, "n": 1}}
+
+
+# ------------------------------------------------------------------ wave 9: every attempt counts (C-B), attempt errors (m1), the line always prints (m2)
+def attempts(tmp_path):
+    """t0: three attempts (two errored, then clean); t1: an errored first attempt (not_told), then clean; every attempt has its own stream."""
+    def one(tid, n, arm, err, **kw):
+        return {**rec(tmp_path, f"{tid}a{n}", **kw), "trial_id": tid, "arm": arm, "error": err}
+    return [one("t0", 1, "told", "result error: error_max_turns", version="1.0.0"), one("t0", 2, "told", "exit 2", version="1.0.1", usage=(("h", 1),)),
+            one("t0", 3, "told", None), one("t1", 1, "not_told", "timeout"), one("t1", 2, "not_told", None)]
+
+
+def test_binary_and_model_usage_read_the_stream_of_every_attempt_and_the_lesson_counter_the_last_record(tmp_path):
+    out = checks.checks(write(tmp_path, attempts(tmp_path)))
+    assert out["binary"] == {"1.0.0/m": 1, "1.0.1/m": 1, "2.1.309/m": 3} and out["model_usage"] == {"h": 1, "m": 4}
+    assert out["lesson_sha16"] == {"preclaim/aaaa": 2}
+
+
+def test_attempt_errors_count_every_errored_record_by_arm_and_first_attempt_errors_only_attempt_one(tmp_path):
+    out = checks.checks(write(tmp_path, attempts(tmp_path)))
+    assert out["attempt_errors"] == {"not_told/timeout": 1, "told/exit 2": 1, "told/result error": 1}
+    assert out["first_attempt_errors"] == {"not_told/timeout": 1, "told/result error": 1}
+
+
+def test_an_error_is_cut_at_its_first_colon_and_a_clean_trial_adds_nothing(tmp_path):
+    recs = [{**rec(tmp_path, 0), "error": "spawn failed: FileNotFoundError"}, {**rec(tmp_path, 1), "error": "build failed: OSError", "arm": "not_told"},
+            rec(tmp_path, 2)]
+    out = checks.checks(write(tmp_path, recs))
+    assert out["attempt_errors"] == {"not_told/build failed": 1, "told/spawn failed": 1} and out["first_attempt_errors"] == out["attempt_errors"]
+
+
+def test_exclude_pilot_keeps_the_attempt_counters_main_only(tmp_path):
+    path = write(tmp_path, attempts(tmp_path))
+    out = checks.checks(path, exclude_pilot=True)
+    assert out["attempt_errors"] == {"not_told/timeout": 1, "told/exit 2": 1, "told/result error": 1}
+    pilot = [{**r, "pilot": True, "trial_id": "p" + r["trial_id"]} for r in attempts(tmp_path)]
+    out = checks.checks(write(tmp_path, attempts(tmp_path) + pilot), exclude_pilot=True)
+    assert out["attempt_errors"] == {"not_told/timeout": 1, "told/exit 2": 1, "told/result error": 1}
+    assert checks.checks(write(tmp_path, pilot), exclude_pilot=True) == {k: {} for k in out}
+
+
+def test_the_text_checks_line_always_prints_with_empty_counters_and_exclude_pilot_keeps_it_main_only(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("ACE_LAB_DATA", str(tmp_path / "none"))
+    assert cmd.main(["report"]) == 0
+    text = capsys.readouterr().out
+    assert [x for x in text.splitlines() if x.startswith("checks:")] == [
+        "checks: lesson_sha16={}  binary={}  model_usage={}  attempt_errors={}  first_attempt_errors={}"]
+    monkeypatch.setenv("ACE_LAB_DATA", str(tmp_path))
+    write(tmp_path, [rec(tmp_path, 0, pilot=True, sha="pil"), rec(tmp_path, 1, sha="main")])
+    assert cmd.main(["report", "--exclude-pilot"]) == 0
+    [line] = [x for x in capsys.readouterr().out.splitlines() if x.startswith("checks:")]
+    assert "preclaim/main" in line and "pil" not in line
+    write(tmp_path, [rec(tmp_path, 0, pilot=True, sha="pil")])
+    assert cmd.main(["report", "--exclude-pilot"]) == 0
+    assert "checks: lesson_sha16={}  binary={}" in capsys.readouterr().out

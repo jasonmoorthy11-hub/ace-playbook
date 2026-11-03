@@ -63,14 +63,19 @@ def cmd_run(args) -> int:
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    if args.max_attempts < 1:
+        print("error: max-attempts must be at least 1", file=sys.stderr)
+        return 2
     data = data_dir()
     done = recorded(data / "trials.jsonl")
+    capped = {tid for tid, errs in run.history(data / "trials.jsonl").items() if sum(errs) >= args.max_attempts and tid not in done}
     ids = [run.trial_id(args.model, t.id, a, r, args.pilot) for t, a, r in items]
     claude = str(Path(args.claude).resolve()) if "/" in args.claude else args.claude            # the work dir becomes the cwd
     if args.dry_run:
         for i, tid in enumerate(ids, 1):
-            print(f"[{i}/{len(ids)}] {tid}" + (" (recorded, skipped)" if tid in done else ""))
-        print(f"plan: {len(ids)} trials, {sum(t in done for t in ids)} already recorded; nothing was run")
+            print(f"[{i}/{len(ids)}] {tid}" + (" (recorded, skipped)" if tid in done else " (retry cap reached, skipped)" if tid in capped else ""))
+        print(f"plan: {len(ids)} trials, {sum(t in done for t in ids)} already recorded, {sum(t in capped for t in ids)} at the retry cap; "
+              "nothing was run")
         return 0
     try:
         text = run.lesson_text(args.lesson)
@@ -83,6 +88,9 @@ def cmd_run(args) -> int:
             print("stopped: STOP file present")
             return 0
         if tid in done:
+            continue
+        if tid in capped:
+            print(f"[{i}/{len(ids)}] {tid} skipped: retry cap of {args.max_attempts} errored attempts reached", flush=True)
             continue
         run_dir = data / "runs" / tid
         shutil.rmtree(run_dir, ignore_errors=True)
@@ -109,7 +117,7 @@ def cmd_report(args) -> int:
                       "outside_bad_lines": out.get("bad_streams"),
                       "outside_trials": out.get("trials", []), "checks": found}, indent=1, sort_keys=True) if args.json
           else stats.render(groups, excluded, cued, single, bad, out.get("total"), out.get("unreadable", 0), out.get("bad_streams", 0),
-                            found if any(found.values()) else None))
+                            found))
     return 0
 
 
@@ -126,6 +134,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--tasks", help="comma list of task ids (default: all of the lesson)")
     p.add_argument("--claude", default="claude")
     p.add_argument("--pilot", action="store_true", help="mark the records as pilot trials (report --exclude-pilot drops them)")
+    p.add_argument("--max-attempts", type=int, default=3, help="a trial with this many errored records is not retried again (default: %(default)s)")
     p.add_argument("--dry-run", action="store_true", help="print the plan only")
     p.set_defaults(func=cmd_run)
     sub.add_parser("tasks", help="list task ids and lessons").set_defaults(func=cmd_tasks)

@@ -115,23 +115,30 @@ def _one_leaves(cwd, val: str) -> int:
     val = _worst_case(val)
     if _globbed_dotdot(val):
         return 1
-    if val.startswith("/") or ".." in val.split("/"):
+    if val.startswith(("/", "~")) or ".." in val.split("/"):
         return leaves(cwd, val)
     return 0
 
 
-def _pattern_leaves(cwd, val: str) -> int:
-    """A Glob `pattern` / Grep `glob`, already joined to the tool's `path` (a Grep glob's leading `!` is stripped first). A WHITELIST decides
-    first: longer than MAX_CHARS, any character other than ASCII `A-Za-z0-9_./*?-{},` (so no `[`, `\\`, `^`, `:`, `=`, `~`, `!`, space, NUL or
-    non-ASCII), or a `..` inside a brace body (`{Z..a}`) is outside. Then the braces are expanded (an unbalanced, too deep or too wide group is
-    outside) and every alternative is tested by `_one_leaves`."""
+def _pattern_leaves(cwd, val: str, base: str | None = None) -> int:
+    """A Glob `pattern` / Grep `glob` (a Grep glob's leading `!` is stripped first) and the tool's `path`, if any. A WHITELIST decides first:
+    longer than MAX_CHARS, any character other than ASCII `A-Za-z0-9_./*?-{},` (so no `[`, `\\`, `^`, `:`, `=`, `~`, `!`, space, NUL or
+    non-ASCII), or a `..` inside a brace body (`{Z..a}`) is outside. The braces are expanded FIRST (an unbalanced, too deep or too wide group is
+    outside); then an absolute or `~` alternative is tested as a path, never joined to `base`, and a relative one is joined to `base` (itself
+    whitelisted and brace-expanded; the alternatives times the bases are capped) and tested; any alternative outside makes the input outside."""
     if len(val) > MAX_CHARS or not ALLOWED.fullmatch(val) or _brace_dotdot(val):
         return 1
     try:
-        alts = expand(val)
+        alts, bases = expand(val), [None]
+        if base is not None and any(not a.startswith(("/", "~")) for a in alts):
+            if len(base) + len(val) + 1 > MAX_CHARS or not ALLOWED.fullmatch(base) or _brace_dotdot(base):
+                return 1
+            bases = expand(base)
+            if len(alts) * len(bases) > MAX_ALTERNATIVES:
+                return 1
     except ValueError:
         return 1
-    return int(any(_one_leaves(cwd, alt) for alt in alts))
+    return int(any(_one_leaves(cwd, a if b is None or a.startswith(("/", "~")) else posixpath.join(b, a)) for a in alts for b in bases))
 
 
 def _base_leaves(cwd, base: str) -> int:
@@ -148,8 +155,8 @@ def _base_leaves(cwd, base: str) -> int:
 def inputs(cwd, name, inp: dict) -> int:
     """The outside count of one tool_use input: a non-str value (not None) under `pattern`, `glob`, `path`, `file_path` or `notebook_path` (1
     each); the path keys; a Glob `pattern` or a Grep `glob` (a Grep `pattern` is a content regex and is left alone; a Grep `glob` may start with
-    one `!`, ripgrep's negation, which only filters), joined to the tool's `path` when it has one (not when the pattern is absolute or starts
-    with `~`) and tested as one pattern; and a `path` with no pattern beside it (`_base_leaves`)."""
+    one `!`, ripgrep's negation, which only filters), brace-expanded and then joined to the tool's `path` alternative by alternative (an absolute
+    or `~` alternative is never joined; `_pattern_leaves`); and a `path` with no pattern beside it (`_base_leaves`)."""
     n = sum(1 for k in ("pattern", "glob") + PATH_KEYS if inp.get(k) is not None and not isinstance(inp[k], str))
     n += sum(leaves(cwd, inp[k]) for k in PATH_KEYS if isinstance(inp.get(k), str) and inp[k])
     base = inp.get("path") if isinstance(inp.get("path"), str) and inp.get("path") else None
@@ -160,7 +167,7 @@ def inputs(cwd, name, inp: dict) -> int:
             pats.append(val[1:] if name == "Grep" and key == "glob" and val.startswith("!") else val)
     pats = [v for v in pats if v]
     for val in pats:
-        n += _pattern_leaves(cwd, val if base is None or val.startswith(("/", "~")) else posixpath.join(base, val))
+        n += _pattern_leaves(cwd, val, base)
     if base is not None and not pats:
         n += _base_leaves(cwd, base)
     return n

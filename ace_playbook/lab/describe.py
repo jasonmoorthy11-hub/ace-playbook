@@ -25,7 +25,8 @@ def newcombe(k1: int, n1: int, k0: int, n0: int) -> list[float] | None:
 
 
 def per_task(rows: list[dict]) -> dict:
-    """{task: {arm: {"any": trials with a violation, "n": trials}}} over scored rows, both arms always present (a row without a task is `None`)."""
+    """{task: {arm: {"any": trials with a violation, "n": trials}}} over scored rows, both arms always present (a row without a task is
+    under the key "None", a string)."""
     out: dict = {}
     for r in rows:
         if r.get("arm") not in ("told", "not_told"):

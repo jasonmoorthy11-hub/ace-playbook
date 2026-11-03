@@ -133,7 +133,7 @@ def test_the_stream_is_saved_private_and_complete(lab):
     lab.scenario(turns=[READ_X, READ_X])
     rec = lab.go("eu-parser", "told", rep=3)
     path = Path(rec["stream"])
-    assert path == lab.data / "streams" / "claude-test-1.eu-parser.told.r3.jsonl"
+    assert path == lab.data / "streams" / "claude-test-1.eu-parser.told.r3.a1.jsonl"
     assert stat.S_IMODE(path.stat().st_mode) == 0o600 and stat.S_IMODE(path.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(lab.data.stat().st_mode) == 0o700
     types = [json.loads(x)["type"] for x in path.read_text().splitlines()]

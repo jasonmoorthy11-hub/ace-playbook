@@ -74,10 +74,34 @@ def private_dir(path: Path) -> Path:
     return path
 
 
-def open_private(path: Path, append: bool = False):
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | (os.O_APPEND if append else os.O_TRUNC) | os.O_NOFOLLOW, 0o600)
+def open_private(path: Path, append: bool = False, exclusive: bool = False):
+    """Open a 0600 file: appending, truncating, or (`exclusive`) creating it new (FileExistsError when it exists, never written over)."""
+    mode = os.O_APPEND if append else os.O_EXCL if exclusive else os.O_TRUNC
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | mode | os.O_NOFOLLOW, 0o600)
     os.fchmod(fd, 0o600)
     return os.fdopen(fd, "a" if append else "w", encoding="utf-8")
+
+
+def history(trials: Path) -> dict[str, list[bool]]:
+    """{trial id: [errored?, ...]} in file order over the parseable records of trials.jsonl (a bad line has no id and is skipped)."""
+    out: dict[str, list[bool]] = {}
+    for line in (trials.read_text(encoding="utf-8", errors="replace").splitlines() if trials.exists() else []):
+        try:
+            rec = json.loads(line)
+            out.setdefault(rec["trial_id"], []).append(bool(rec.get("error")))
+        except (ValueError, KeyError, TypeError, AttributeError):
+            continue
+    return out
+
+
+def attempt_stream(streams: Path, tid: str, n: int):
+    """(path, file) of the first free `<tid>.a<n>.jsonl` from `n` up, created new: an existing stream is never opened for writing."""
+    while True:
+        path = streams / f"{tid}.a{n}.jsonl"
+        try:
+            return path, open_private(path, exclusive=True)
+        except FileExistsError:
+            n += 1
 
 
 def trial(task: tasks.Task, arm: str, model: str, lesson_text: str, run_dir: Path, data_dir: Path, claude: str = "claude",
@@ -87,7 +111,8 @@ def trial(task: tasks.Task, arm: str, model: str, lesson_text: str, run_dir: Pat
         raise ValueError(f"unknown arm: {arm}")
     tid, run_dir, data_dir = trial_id(model, task.id, arm, rep, pilot), Path(run_dir), Path(data_dir)
     streams = private_dir(private_dir(data_dir) / "streams")
-    stream = streams / f"{tid}.jsonl"
+    n = 1 + len(history(data_dir / "trials.jsonl").get(tid, []))                    # this attempt's number: one stream per attempt
+    stream = streams / f"{tid}.a{n}.jsonl"
     rec = {"trial_id": tid, "task": task.id, "lesson": task.lesson, "arm": arm, "model": model, "rep": rep, "pilot": pilot, "cue": task.cue,
            "multi_claim": task.multi_claim,
            "lesson_sha16": hashlib.sha256(lesson_text.encode()).hexdigest()[:16], "started": now_iso(), "exit_code": None, "results": [],
@@ -104,7 +129,9 @@ def trial(task: tasks.Task, arm: str, model: str, lesson_text: str, run_dir: Pat
     argv = command(claude, model, task, run_dir / "settings.json", arm, lesson_text)
     env = {k: v for k, v in os.environ.items() if k not in DROP_ENV}
     lines: queue.Queue = queue.Queue()
-    with open_private(stream) as fh, open_private(run_dir / "stderr.log") as err:
+    stream, stream_fh = attempt_stream(streams, tid, n)
+    rec["stream"] = str(stream)
+    with stream_fh as fh, open_private(run_dir / "stderr.log") as err:
         sink = drive.Sink(fh)
         try:
             proc = subprocess.Popen(argv, cwd=work, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err, text=True,

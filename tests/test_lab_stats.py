@@ -114,7 +114,9 @@ def test_report_exclude_pilot_and_the_text_form(capsys, data):
 
 def test_report_with_no_data(capsys, tmp_path, monkeypatch):
     monkeypatch.setenv("ACE_LAB_DATA", str(tmp_path / "none"))
-    assert cmd.main(["report"]) == 0 and capsys.readouterr().out.strip() == "no scored trials"
+    assert cmd.main(["report"]) == 0
+    first, second = capsys.readouterr().out.strip().splitlines()                                        # m2: the checks line always prints
+    assert first == "no scored trials" and second.startswith("checks: lesson_sha16={}")
 
 
 def test_holm_takes_the_raw_fisher_p_and_only_the_display_is_rounded():
@@ -281,7 +283,7 @@ def test_the_outside_count_covers_errored_trials_while_every_other_statistic_kee
     assert data["excluded"] == {"m/preclaim/told": 3}
 
 
-def test_the_outside_count_of_errored_trials_ignores_exclude_pilot_and_the_last_record_wins(capsys, tmp_path, monkeypatch):
+def test_the_outside_count_ignores_exclude_pilot_and_counts_the_stream_of_every_attempt_not_only_the_last(capsys, tmp_path, monkeypatch):
     monkeypatch.setenv("ACE_LAB_DATA", str(tmp_path))
     base = {"task": "pc-port", "lesson": "preclaim", "arm": "told", "model": "m"}
     recs = [{**base, "trial_id": "a", "error": "boom", "pilot": True, "stream": outside_stream(tmp_path / "a.jsonl", "/h/1", "/h/2")},
@@ -289,9 +291,9 @@ def test_the_outside_count_of_errored_trials_ignores_exclude_pilot_and_the_last_
             {**base, "trial_id": "b", "error": None, "stream": outside_stream(tmp_path / "b2.jsonl", "/r/work/ok")}]
     (tmp_path / "trials.jsonl").write_text("\n".join(json.dumps(r) for r in recs) + "\n")
     assert cmd.main(["report", "--json"]) == 0
-    assert json.loads(capsys.readouterr().out)["outside_run_dir_tool_inputs"] == 2
+    assert json.loads(capsys.readouterr().out)["outside_run_dir_tool_inputs"] == 3                      # a: 2, b's errored attempt: 1, b's retry: 0
     assert cmd.main(["report", "--json", "--exclude-pilot"]) == 0
-    assert json.loads(capsys.readouterr().out)["outside_run_dir_tool_inputs"] == 2                      # m2: pilot streams stay in the safety count
+    assert json.loads(capsys.readouterr().out)["outside_run_dir_tool_inputs"] == 3                      # m2: pilot streams stay in the safety count
 
 
 def rec_of(tid, stream, error=None):
