@@ -136,6 +136,19 @@ def test_the_primary_summary_is_uncued_only_and_the_cued_rows_are_reported_apart
     assert "cued tasks (secondary, descriptive)" in text and text.index("model m  lesson edit_unread") < text.index("cued tasks")
 
 
+def test_holm_runs_across_all_three_lessons_of_a_model():
+    data = (rows("a", "preclaim", [1] * 9 + [0], [0] * 10) + rows("a", "edit_unread", [1] * 5 + [0] * 5, [1] * 2 + [0] * 8)
+            + rows("a", "exitplan", [1] * 8 + [0] * 2, [0] * 8 + [1] * 2) + rows("b", "exitplan", [1] * 8 + [0] * 2, [0] * 10))
+    g = {(x["model"], x["lesson"]): x for x in stats.summarize(data)}
+    ps = sorted((g["a", lesson]["fisher_p"], lesson) for lesson in ("preclaim", "edit_unread", "exitplan"))
+    adj, prev = {}, 0.0
+    for i, (p, lesson) in enumerate(ps):
+        prev = adj[lesson] = max(prev, min(1.0, (3 - i) * p))
+    for lesson in adj:
+        assert g["a", lesson]["p_holm"] == pytest.approx(adj[lesson], rel=1e-4)
+    assert g["b", "exitplan"]["p_holm"] == g["b", "exitplan"]["fisher_p"]                                  # one lesson: unadjusted
+
+
 def test_report_splits_cued_from_uncued_by_the_record_or_the_task_spec(capsys, tmp_path, monkeypatch):
     monkeypatch.setenv("ACE_LAB_DATA", str(tmp_path))
     recs = []

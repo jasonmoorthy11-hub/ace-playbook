@@ -21,7 +21,7 @@ from pathlib import Path
 from .. import config as cfgmod
 from ..canon import now_iso
 from ..store import view
-from . import drive, tasks
+from . import drive, exitplan, tasks
 
 ARMS = ("told", "not_told")
 HOOK = Path(__file__).resolve().parent / "hooks" / "stop-mid-task-audit.sh"
@@ -60,6 +60,8 @@ def command(claude: str, model: str, task: tasks.Task, settings_path: Path, arm:
     argv = [claude, "-p", "--model", model, "--no-session-persistence", "--setting-sources", "", "--settings", str(settings_path),
             "--permission-mode", task.permission_mode, "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
             "--max-turns", "20", "--max-budget-usd", "0.50"]
+    if task.lesson == "exitplan":                                            # ExitPlanMode exists headless only over the stdio protocol
+        argv += ["--permission-prompt-tool", "stdio"]
     return argv + (["--append-system-prompt", text] if arm == "told" else [])
 
 
@@ -109,8 +111,11 @@ def trial(task: tasks.Task, arm: str, model: str, lesson_text: str, run_dir: Pat
         pump = threading.Thread(target=drive.pump, args=(proc.stdout, sink, lines), daemon=True)
         pump.start()
         deadline = time.monotonic() + timeout_s
+        ctl = exitplan.Control(proc, sink) if task.lesson == "exitplan" else None
         try:
-            rec["error"] = drive.drive(proc, task, work, lines, deadline, rec)
+            rec["error"] = drive.drive(proc, task, work, lines, deadline, rec, ctl)
+            if ctl is not None:
+                rec["exitplan_violations"], rec["unsupported_control"] = ctl.violations, ctl.unsupported
             if rec["error"] is None:
                 try:
                     proc.stdin.close()

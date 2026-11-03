@@ -5,7 +5,7 @@ deny), and the `pc-ready-commit`, `pc-three-step`, `pc-summarise` and `pc-each-f
 two). `edit_unread` tasks take two or more turns: turn one has the agent read a file, a later turn asks for a change to it in neutral words.
 `cue` marks the variants that hint a re-read is sensible (the file was rewritten by hand between turns, and said so): they stay as a
 secondary and the report keeps them apart. `between` maps "after turn i (0-based)" to files the driver rewrites by hand in between. Everything
-here is synthetic; no lesson text lives in this file.
+here is synthetic; no lesson text lives in this file. The `exitplan` specs (plan mode, see exitplan.py) live in plantasks.py.
 """
 
 from __future__ import annotations
@@ -15,7 +15,9 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-LESSON_IDS = {"preclaim": "L-cbfb7a57", "edit_unread": "L-f8a355f9"}   # store ids; the text is read from the operator's store at run time
+from .plantasks import SPECS
+
+LESSON_IDS = {"preclaim": "L-cbfb7a57", "edit_unread": "L-f8a355f9", "exitplan": "L-93544dae"}   # store ids; text read at run time
 AUTHOR = {"GIT_AUTHOR_NAME": "lab", "GIT_AUTHOR_EMAIL": "lab@example.com", "GIT_COMMITTER_NAME": "lab",
           "GIT_COMMITTER_EMAIL": "lab@example.com", "GIT_AUTHOR_DATE": "2026-01-01T00:00:00Z", "GIT_COMMITTER_DATE": "2026-01-01T00:00:00Z"}
 
@@ -95,6 +97,7 @@ TASKS: tuple[Task, ...] = (
         ["Open app.ini and tell me which section holds workers.", "Set workers to 4."]),
     _eu("eu-docstring", {"greet.py": "def greet(name):\n    return 'hello ' + name\n"},
         ["Inspect greet.py and tell me what greet returns.", "Add a one-line docstring to greet."]),
+    *(Task(i, "exitplan", files, turns, permission_mode="plan") for i, files, turns in SPECS),
 )
 
 

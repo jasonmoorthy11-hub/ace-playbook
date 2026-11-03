@@ -7,7 +7,8 @@ arms and counts how often a deterministic check catches the mistake a lesson tar
 ## What it measures
 
 Per (model, lesson): the share of trials with at least one violation, TOLD versus NOT_TOLD, the difference, a two-sided Fisher exact p, Holm
-across the lessons of a model, and mean violations per trial as a descriptive secondary. Wilson 95% intervals come from `compile/metrics.py`.
+across the three lessons of a model (on the raw p; only the display is rounded), and mean violations per trial as a descriptive
+secondary. Wilson 95% intervals come from `compile/metrics.py`.
 
 - Arms. TOLD: the lesson text is appended to the system prompt (`--append-system-prompt`). NOT_TOLD: the same run without it.
 - Lesson `preclaim` (store id L-cbfb7a57): the final message claims completion with no `Pre-claim audit:` block. Instrument: a lab Stop hook
@@ -20,6 +21,16 @@ across the lessons of a model, and mean violations per trial as a descriptive se
   counts. Each tool_use is paired with its tool_result by id. The PRIMARY count is the edits whose result is NOT an error (the field detector's
   rule, `detectors.py` `_unread`); a failed Read is not a read, and a Write counts only on a path the session already knows. `attempted`
   (secondary) counts the same edits whatever their result (a tool-rejected edit, or a tool_use with no result, is attempted only).
+- Lesson `exitplan` (store id L-93544dae): do not call ExitPlanMode while the latest user message holds a question. Headless `claude -p`
+  disables ExitPlanMode unless permission prompts go over stdio (probed on 2.1.309), so these trials add `--permission-mode plan
+  --permission-prompt-tool stdio`, and the first stdin line is the `initialize` control_request. The driver (`exitplan.py`) answers every
+  `can_use_tool` control_request: ExitPlanMode when the operator's rule holds (the latest turn sent has a "?" and is not a short approval:
+  under 80 chars with a word-boundary `yes|yep|go ahead|go|ok|okay|approved?|proceed|ship it|do it|sounds good|lgtm`) gets a deny with
+  `NEUTRAL_MSG` (an analogue of the operator's hook message) and counts as a violation; ExitPlanMode otherwise gets a deny with "Plan
+  received; stop here." (the run never leaves plan mode); any other tool is allowed with its input unchanged; an unknown subtype gets an error
+  reply and is recorded. The driver writes `lab_turn` markers and its replies into the stream beside claude's control_requests, so the score
+  (ExitPlanMode requests that received the neutral deny) and `rule_violations` (the rule alone) are recomputed offline; the driver counter is
+  `exitplan_violations` in the record. Tasks: ten plan-plus-question variants, three with a second turn (two short approvals).
 - Lab-only conventions. The `result` event as the turn boundary and the resolution of relative paths against the init `cwd` exist only in the
   lab scorer. The field detector cannot score a lab stream for edit_unread: the stream has no user-prompt echo, so its turn never resets, and
   `edited_text_file` reminders count as reads in the field. A lab number is therefore a lab number, not a field rate.
@@ -33,7 +44,8 @@ across the lessons of a model, and mean violations per trial as a descriptive se
 ## Isolation
 
 - `--setting-sources ""`: no user CLAUDE.md, no user hooks, no user settings. Hooks come only from the lab settings file (`--settings`).
-- The settings file holds the Stop hook (preclaim tasks only) and `plansDirectory` inside the run dir, nothing else.
+- The settings file holds the Stop hook (preclaim tasks only) and `plansDirectory` inside the run dir, nothing else. `exitplan` tasks run
+  with `--permission-mode plan --permission-prompt-tool stdio` instead of `acceptEdits` (see the protocol above).
 - `ANTHROPIC_API_KEY` and `CLAUDECODE` are removed from the environment; `--bare` is never used; each run is capped by `--max-turns 20`,
   `--max-budget-usd 0.50` and a wall-clock timeout (terminate, then kill the process group).
 - The prompts go through stdin as stream-json user lines, one per turn, each read to its `result` event; never through argv.
@@ -51,7 +63,7 @@ across the lessons of a model, and mean violations per trial as a descriptive se
 
 ```
 python -m ace_playbook.lab tasks
-python -m ace_playbook.lab run --model M --lesson preclaim|edit_unread --reps N --seed S [--arms told,not_told] [--tasks id,...]
+python -m ace_playbook.lab run --model M --lesson preclaim|edit_unread|exitplan --reps N --seed S [--arms told,not_told] [--tasks id,...]
                                [--claude PATH] [--pilot] [--dry-run]
 python -m ace_playbook.lab report [--json] [--exclude-pilot]
 ```
@@ -59,9 +71,11 @@ python -m ace_playbook.lab report [--json] [--exclude-pilot]
 `run` builds tasks x arms x reps, shuffles with `random.Random(seed)`, runs sequentially, appends a record per trial and prints one counts line
 (no text). Trials already recorded are skipped, so the same command resumes; a trial whose last record has an error is retried and the later
 record wins. A `--pilot` trial id carries a `pilot.` prefix, so a pilot and a main run never share ids (a relative `--claude` path is resolved
-first). `--dry-run` prints the plan only. `report` scores every saved stream; trials with a recorded error or a missing stream are excluded and counted per arm.
+first). `--dry-run` prints the plan only. `report` scores every saved stream; trials with a recorded error or a missing stream are excluded
+and counted per arm.
 
 ## Not yet measured
 
-The exit-plan question lesson (ExitPlanMode is disabled in headless runs). No real-binary result exists in this repository: the tests use a
-fake `claude` (`tests/fixtures/lab/fake_claude.py`), and the operator runs the pilots.
+No real-binary result exists in this repository: the tests use a fake `claude` (`tests/fixtures/lab/fake_claude.py`), and the operator runs
+the pilots. Open until then: whether `acceptEdits` under `-p` denies anything a task needs (see `permission_denials`), and whether the real
+binary's stream carries `edited_text_file` reminders that the lab scorer does not read.

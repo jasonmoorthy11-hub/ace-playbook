@@ -8,8 +8,13 @@ last one, and no file means one empty successful turn. "grandchild" starts a chi
 pid in $ACE_FAKE_DIR/grandchild_pid.
 Before it prints each `result` it checks, with a zero-timeout select, that no further stdin line is already waiting (the driver must write
 turn k+1 only after turn k's result); if one is, it exits 97 with a message on stderr.
+Control protocol (exitplan): a stdin line of type control_request (the initialize handshake) is answered with a success control_response and is
+not a turn. A turn may carry "control": [{"tool_name": ..., "input": {...}} or {"subtype": ...}]; each entry is printed as a control_request
+(ids req-1, req-2, ...) and the fake blocks for the control_response (exit 96 if the next line is anything else) before it prints the turn's
+events and result. "control_nowait" prints the requests and exits 3 without reading.
 Records into $ACE_FAKE_DIR: argv.json, env.json (flags of interest only), settings.json (a copy of the --settings file), stdin_lines.json
-(every line received), pid, and cwd.txt. It exits with the scenario's code once stdin closes.
+(the user lines), stdin_all.json (every line, in order), control_responses.json, pid, and cwd.txt. It exits with the scenario's code once
+stdin closes.
 """
 
 import json
@@ -77,6 +82,37 @@ def check_nothing_waiting():
         os._exit(97)
 
 
+everything, answers, requests = [], [], [0]
+
+
+def record_all(line):
+    everything.append(line)
+    (root / "stdin_all.json").write_text(json.dumps(everything))
+
+
+def control_exchange(turn):
+    """Print each scripted control_request ({"tool_name", "input"} -> can_use_tool; {"subtype"} -> any other) and, unless the turn says
+    "control_nowait", block until the control_response arrives (recorded in control_responses.json)."""
+    for entry in turn.get("control", []):
+        requests[0] += 1
+        rid = f"req-{requests[0]}"
+        req = {"subtype": entry["subtype"]} if "subtype" in entry else {"subtype": "can_use_tool", "tool_name": entry["tool_name"],
+                                                                         "input": entry.get("input", {}), "tool_use_id": f"tu-{rid}"}
+        emit([{"type": "control_request", "request_id": rid, "request": req}])
+        if turn.get("control_nowait"):
+            continue
+        got = next_line()
+        record_all(got)
+        msg = json.loads(got) if got else {}
+        if msg.get("type") != "control_response":
+            sys.stderr.write("fake claude: expected a control_response\n")
+            sys.exit(96)
+        answers.append(msg)
+        (root / "control_responses.json").write_text(json.dumps(answers))
+    if turn.get("control_nowait") and turn.get("control"):
+        sys.exit(3)
+
+
 emit([{"type": "system", "subtype": "init", "cwd": os.getcwd(), "session_id": "fake", "model": argv[argv.index("--model") + 1]}])
 while True:
     line = next_line()
@@ -84,9 +120,18 @@ while True:
         break
     if not line.strip():
         continue
+    record_all(line)
+    try:
+        msg = json.loads(line)
+    except ValueError:
+        msg = None
+    if isinstance(msg, dict) and msg.get("type") == "control_request":                    # the initialize handshake
+        emit([{"type": "control_response", "response": {"subtype": "success", "request_id": msg.get("request_id"), "response": {}}}])
+        continue
     received.append(line)
     (root / "stdin_lines.json").write_text(json.dumps(received))
     turn = turns[min(len(received) - 1, len(turns) - 1)]
+    control_exchange(turn)
     emit(turn.get("events", []))
     if turn.get("hang"):
         time.sleep(600)

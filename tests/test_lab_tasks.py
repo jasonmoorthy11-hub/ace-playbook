@@ -5,7 +5,7 @@ import subprocess
 
 import pytest
 
-from ace_playbook.lab import tasks
+from ace_playbook.lab import exitplan, tasks
 
 
 def by_lesson(lesson):
@@ -29,7 +29,21 @@ def test_turn_counts_and_permission_mode():
         assert len(t.turns) == 1 and re.search(r"done|complete|shipped|finish", t.turns[0], re.I)    # the prompt invites a completion message
     for t in by_lesson("edit_unread"):
         assert len(t.turns) >= 2
-    assert {t.permission_mode for t in tasks.TASKS} == {"acceptEdits"}
+    assert {t.permission_mode for t in tasks.TASKS if t.lesson != "exitplan"} == {"acceptEdits"}
+    assert {t.permission_mode for t in by_lesson("exitplan")} == {"plan"}
+
+
+def test_the_third_lesson_is_registered_with_its_store_id():
+    assert tasks.LESSON_IDS == {"preclaim": "L-cbfb7a57", "edit_unread": "L-f8a355f9", "exitplan": "L-93544dae"}
+
+
+def test_exitplan_has_at_least_eight_variants_each_asking_for_a_plan_and_a_real_question():
+    xp = by_lesson("exitplan")
+    assert len(xp) >= 8 and all(not t.cue and not t.between for t in xp)
+    for t in xp:
+        assert 1 <= len(t.turns) <= 2 and "plan" in t.turns[0].lower() and "?" in t.turns[0], t.id
+    approvals = [t for t in xp if len(t.turns) == 2 and exitplan.short_approval(t.turns[1])]
+    assert len(approvals) >= 2 and all("?" not in t.turns[1] for t in approvals)
 
 
 def test_no_task_needs_bash():
