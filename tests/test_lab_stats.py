@@ -241,7 +241,7 @@ def outside_stream(path, *paths):
     return str(path)
 
 
-def test_the_report_prints_and_the_json_carries_the_outside_run_dir_count_pilot_included_unless_excluded(capsys, tmp_path, monkeypatch):
+def test_the_report_prints_and_the_json_carries_the_outside_run_dir_count_of_every_stream_whatever_the_flag(capsys, tmp_path, monkeypatch):
     monkeypatch.setenv("ACE_LAB_DATA", str(tmp_path))
     spec = [("a", False, ["/r/work/a.py", "/h/.claude/plans/p.md"]), ("b", False, ["/r/work/b.py"]), ("c", True, ["/h/x", "/r/x"])]
     recs = [{"trial_id": i, "task": "pc-port", "lesson": "preclaim", "arm": "told", "model": "m", "error": None, "pilot": pilot,
@@ -250,7 +250,7 @@ def test_the_report_prints_and_the_json_carries_the_outside_run_dir_count_pilot_
     assert cmd.main(["report"]) == 0
     assert "outside-run-dir tool inputs: 3" in capsys.readouterr().out
     assert cmd.main(["report", "--exclude-pilot"]) == 0
-    assert "outside-run-dir tool inputs: 1" in capsys.readouterr().out
+    assert "outside-run-dir tool inputs: 3" in capsys.readouterr().out                                  # m2: the safety count ignores the flag
     assert cmd.main(["report", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["outside_run_dir_tool_inputs"] == 3
 
@@ -280,7 +280,7 @@ def test_the_outside_count_covers_errored_trials_while_every_other_statistic_kee
     assert data["excluded"] == {"m/preclaim/told": 3}
 
 
-def test_the_outside_count_of_errored_trials_still_honours_exclude_pilot_and_the_last_record_wins(capsys, tmp_path, monkeypatch):
+def test_the_outside_count_of_errored_trials_ignores_exclude_pilot_and_the_last_record_wins(capsys, tmp_path, monkeypatch):
     monkeypatch.setenv("ACE_LAB_DATA", str(tmp_path))
     base = {"task": "pc-port", "lesson": "preclaim", "arm": "told", "model": "m"}
     recs = [{**base, "trial_id": "a", "error": "boom", "pilot": True, "stream": outside_stream(tmp_path / "a.jsonl", "/h/1", "/h/2")},
@@ -290,7 +290,7 @@ def test_the_outside_count_of_errored_trials_still_honours_exclude_pilot_and_the
     assert cmd.main(["report", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["outside_run_dir_tool_inputs"] == 2
     assert cmd.main(["report", "--json", "--exclude-pilot"]) == 0
-    assert json.loads(capsys.readouterr().out)["outside_run_dir_tool_inputs"] == 0
+    assert json.loads(capsys.readouterr().out)["outside_run_dir_tool_inputs"] == 2                      # m2: pilot streams stay in the safety count
 
 
 def rec_of(tid, stream, error=None):
@@ -349,3 +349,59 @@ def test_the_json_lists_the_trials_with_outside_paths_sorted(capsys, tmp_path, m
     assert cmd.main(["report", "--json"]) == 0
     data = json.loads(capsys.readouterr().out)
     assert data["outside_trials"] == [] and data["outside_unreadable"] is None
+
+
+def test_exclude_pilot_never_hides_a_pilot_stream_from_the_safety_count(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("ACE_LAB_DATA", str(tmp_path))
+    put(tmp_path, [{**rec_of("a", outside_stream(tmp_path / "a.jsonl", "/h/x")), "pilot": True},
+                   {**rec_of("b", str(tmp_path / "gone"), "timeout"), "pilot": True}])
+    for flag in ([], ["--exclude-pilot"]):
+        assert cmd.main(["report", *flag]) == 0
+        assert "outside-run-dir tool inputs: 1 (unreadable streams: 1)" in capsys.readouterr().out
+        assert cmd.main(["report", "--json", *flag]) == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data["outside_run_dir_tool_inputs"] == 1 and data["outside_unreadable"] == 1 and data["outside_trials"] == ["a"]
+
+
+def text_stream(path, text=""):
+    path.write_text(text)
+    return str(path)
+
+
+def test_an_empty_blank_or_init_less_stream_is_unreadable_unless_the_spawn_failed(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("ACE_LAB_DATA", str(tmp_path))
+    noinit = json.dumps({"type": "result", "subtype": "success"}) + "\n"
+    for err in (None, "timeout", "exit 1"):
+        put(tmp_path, [rec_of("a", text_stream(tmp_path / "e"), err), rec_of("b", text_stream(tmp_path / "b", "\n  \n"), err),
+                       rec_of("c", text_stream(tmp_path / "c", noinit), err)])
+        assert cmd.main(["report"]) == 0
+        assert "outside-run-dir tool inputs: 0 (unreadable streams: 3)" in capsys.readouterr().out
+    put(tmp_path, [rec_of("a", text_stream(tmp_path / "e"), "spawn failed: FileNotFoundError"),
+                   rec_of("b", text_stream(tmp_path / "b", "\n \n"), "spawn failed: PermissionError")])
+    assert cmd.main(["report", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["outside_unreadable"] == 0 and data["outside_bad_lines"] == 0
+
+
+def test_a_stream_with_some_unparseable_lines_is_counted_separately_in_the_same_line_and_the_json(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("ACE_LAB_DATA", str(tmp_path))
+    good = outside_stream(tmp_path / "g.jsonl", "/h/x")
+    torn = text_stream(tmp_path / "t.jsonl", (tmp_path / "g.jsonl").read_text() + '{"type": "assistant", "message": {"content": [{"type": "tool_u')
+    put(tmp_path, [rec_of("g", good), rec_of("t", torn), rec_of("u", str(tmp_path / "gone"), "timeout")])
+    assert cmd.main(["report"]) == 0
+    assert "outside-run-dir tool inputs: 2 (unreadable streams: 1, streams with bad lines: 1)" in capsys.readouterr().out
+    assert cmd.main(["report", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["outside_bad_lines"] == 1 and data["outside_unreadable"] == 1 and data["outside_run_dir_tool_inputs"] == 2
+
+
+def test_a_non_str_stream_is_excluded_and_a_type_error_inside_score_propagates(tmp_path, monkeypatch):
+    put(tmp_path, [rec_of("a", 7), rec_of("b", None), rec_of("c", str(tmp_path / "gone")), rec_of("d", outside_stream(tmp_path / "d.jsonl"))])
+    rows, excluded = stats.load_rows(tmp_path / "trials.jsonl")
+    assert excluded == {"m/preclaim/told": 3} and len(rows) == 1
+
+    def boom(*a, **k):
+        raise TypeError("a real bug")
+    monkeypatch.setattr(stats.score, "score", boom)
+    with pytest.raises(TypeError, match="a real bug"):
+        stats.load_rows(tmp_path / "trials.jsonl")

@@ -58,14 +58,15 @@ resolved. Grep `pattern` is a content regex, never resolved; any other string in
 These defaults are not proven against the real binary, so the pilot MUST check every saved stream. Stop the run if a denied tool ran: a `tool_use` of a
 denied tool whose `tool_result` is no error (list them with `grep -lE '"name": ?"(Bash|WebFetch|WebSearch|Task|Agent|NotebookEdit)"' <data>/streams/*.jsonl`
 and open them). A denial alone is not "ran" but needs a look; in the preclaim and edit_unread streams look for one with
-`find <data>/streams -name '*.jsonl' ! -name '*.xp-*' -exec grep -lE '"permission_denials": ?\[[^]]' {} +`. Stop on outside-run-dir paths or unreadable streams.
+`find <data>/streams -name '*.jsonl' ! -name '*.xp-*' -exec grep -lE '"permission_denials": ?\[[^]]' {} +`. Stop if `report` (with or without `--exclude-pilot`:
+the safety counts cover every stream) shows `outside-run-dir tool inputs`, `unreadable streams` or `streams with bad lines` above 0 (errored trials count).
 
 ## Isolation
 
 - `--setting-sources ""`: no user CLAUDE.md, no user hooks, no user settings. `--disallowedTools=...` (see Safety) on every trial. Hooks
   come only from the lab settings file (`--settings`).
-- The settings file holds the Stop hook (preclaim tasks only) and `plansDirectory` (`<work>/.lab-plans`: Claude Code requires it inside the project root
-  (the session cwd)), nothing else. `exitplan` tasks run with `--permission-mode plan --permission-prompt-tool stdio` instead of `acceptEdits` (protocol above).
+- The settings file holds the Stop hook (preclaim tasks only) and `plansDirectory` (`<work>/.lab-plans`: Claude Code requires it inside the project root — the
+  session cwd), nothing else. `exitplan` tasks run with `--permission-mode plan --permission-prompt-tool stdio` instead of `acceptEdits` (protocol above).
 - `ANTHROPIC_API_KEY` and `CLAUDECODE` are removed from the environment; `--bare` is never used; each run is capped by `--max-turns 20`,
   `--max-budget-usd 0.50` and a wall-clock timeout (terminate, then kill the process group).
 - The prompts go through stdin as stream-json user lines, one per turn, each read to its `result` event; never through argv.
