@@ -619,7 +619,7 @@ Deviations from the draft, each decided before any holdout session:
   L-f8a355f9 text+applies_when             d4ec6bcfbe298b4fc4aa656eaabc85c3cd83625f87a0338cf5cccd2f5dfdd8c9
   injector HEADER+FOOTER                   9724a65957f24d5ec9c62d43b4a5bc066fc9ab0580d4962b60cc89bacf1193c5
   config values                            inject_mode=pinned holdout_rate=0.5 max_global=4 inject_max_chars=7000
-  active pinned set (id:status:scope)      L-93544dae:active:global,L-b3d1fba9:active:global,L-cbfb7a57:active:global,L-f8a355f9:active:global
+  pinned set (id:status:scope:exempt)      L-93544dae:active:global:0,L-b3d1fba9:active:global:1,L-cbfb7a57:active:global:0,L-f8a355f9:active:global:0
   measurement code set (40 files)          f5fbca769f31f51cccb51963e500ba507316586181c3351d89993abe944b5034
   settings entry SessionStart              39e0d974e5333fdb6a7a0c5300a2b9dc8b3d1eb018e57ea7ca12bc5d15e9994c
   settings entry Stop (preclaim hook)      cedb76b590de58db0a62e7d1c97749b75f9097f28523d462a39a8dfc1b94cc00
@@ -651,7 +651,7 @@ Deviations from the draft, each decided before any holdout session:
       print(i, hashlib.sha256(one.encode()).hexdigest())
   print(hashlib.sha256((HEADER + "\n" + FOOTER).encode()).hexdigest())
   print(f"inject_mode={cfg.inject_mode} holdout_rate={cfg.holdout_rate} max_global={cfg.max_global} inject_max_chars={cfg.inject_max_chars}")
-  print(",".join(f"{i}:{l['status']}:{l['scope_type']}" for i, l in sorted(s.items()) if l.get("pinned")))
+  print(",".join(f"{i}:{l['status']}:{l['scope_type']}:{int(bool(l.get('holdout_exempt')))}" for i, l in sorted(s.items()) if l.get("pinned")))
   repo = os.path.join(home, "ace-playbook")
   for m in ("ace_playbook.inject.__main__", "ace_playbook.compile.holdout_report"):
       importlib.import_module(m)
@@ -675,13 +675,28 @@ Deviations from the draft, each decided before any holdout session:
   is set, with the interpreter `ACE_PYTHON` if set, else the `python3` on its PATH. The settings `env` block sets neither; at the
   switch-on and at the read the operator records, in dated lines, `env | grep -c -E '^(ACE_PLAYBOOK_HOME|ACE_PYTHON)='` (0) from his
   terminal, `command -v python3` and `python3 --version`; an interpreter change is reported with the read.
-  At the switch-on every literal above must reproduce by its command. If one does not, the fill stops; the only amendment allowed is a
-  text commit that changes the non-reproducing literal lines and adds one dated line giving the reason, confirmed by a docs-lens review
-  before `holdout_start` (or the start moves). Fill gate: the commit that fills (j) changes exactly the three placeholder lines, and in
-  each only the `<...>` token, replaced by 64 lowercase hex characters (`git diff --word-diff=porcelain` of that commit shows three
-  removed tokens, three added tokens, nothing else); its message names its parent, the commit the last review passed; a read-only
-  docs-lens review confirms the fill. The fill commit is the last commit on this branch before the merge, and the sha256 of the merged
-  PREREGISTRATION.md equals the stamped one.
+  At the switch-on (after step 2, which sets L-b3d1fba9's exempt flag shown in the pinned-set line) every literal above must reproduce by
+  its command. If one does not, the fill stops; the only amendment allowed is a text commit that changes the non-reproducing literal
+  lines and adds one dated line giving the reason, confirmed by a docs-lens review before `holdout_start`. If that review cannot finish
+  in time, the start moves: `holdout_start`, `holdout_end` and the read date shift by the same whole number of days, only those literals
+  change, and a dated line gives the reason; the 84-day length and the power table stay as written.
+  Fill gate: the commit that fills (j) changes exactly the three placeholder lines, and in each only the `<...>` token, replaced by 64
+  lowercase hex characters; its message names its parent, the commit the last review passed. With P that parent and F the fill commit,
+  run in the ace-playbook repository (byte level: a whitespace or indentation change anywhere fails it):
+
+  ```sh
+  f=PREREGISTRATION.md; d=$(git diff -U0 "$P" "$F" -- "$f")
+  [ "$(git diff --numstat "$P" "$F")" = "$(printf '3\t3\t%s' "$f")" ] || echo "FAIL numstat"
+  [ "$(grep -cE '^-[^-].*<[A-Z0-9_]+>' <<<"$d")" = 3 ] || echo "FAIL removed"
+  [ "$(grep -cE '^\+[^+].* [0-9a-f]{64}$' <<<"$d")" = 3 ] || echo "FAIL added"
+  cmp <(grep -E '^-[^-]' <<<"$d" | sed -E 's/^-//; s/<[A-Z0-9_]+>/X/') \
+      <(grep -E '^\+[^+]' <<<"$d" | sed -E 's/^\+//; s/[0-9a-f]{64}$/X/') || echo "FAIL lines"
+  ```
+
+  It passes only when it prints nothing. (Tested before this entry on a throwaway repository: an honest fill passes; a re-indented code
+  line, a changed label, a 65-character or upper-case token, and a second changed file each fail.) A read-only docs-lens review confirms
+  the fill. The fill commit is the last commit on this branch before the merge, and the sha256 of the merged PREREGISTRATION.md equals
+  the stamped one.
 
   Before the read, the operator checks that sha256 of each config seed equals its line above, that every live injection row's `seed_fp`
   equals the first 8 hex digits of `holdout_seed_sha256`, that every other value in the block reproduces by its command, and that the six
@@ -697,17 +712,24 @@ Deviations from the draft, each decided before any holdout session:
   `harmful`, `violated`) to a lesson only when it was shown, so they are per-arm data too: neither the digest nor the store CLI prints
   them, and the operator does not inspect them for the three lessons before the read. The injector orders the pinned lines by a score
   built on those counters (`store/rank.py`), so the order of lines in the block is not frozen and can depend on outcomes (a
-  limitation); with four pinned lessons and `max_global` 4, which lessons are eligible does not depend on it. A reflector edit to one
+  limitation). It also depends on the lesson's own past coins (its counters grow only when it was shown), a carryover channel. The
+  permutation test is therefore exact for the sharp null "the lesson's text has no effect at whatever position it is shown"; it is
+  exact for a fixed position only if position does not matter. With four pinned lessons and `max_global` 4, which lessons are
+  eligible does not depend on order, and the character cap cannot bind (the whole block is 1712 of the 7000-character
+  `inject_max_chars`, injection rows of 2026-11-03), so `dropped_cap` cannot depend on it either. A reflector edit to one
   of the three lessons is a text change, mapped below. A change after `holdout_start`, or a (j) mismatch found later, makes a read
   exploratory as follows, mapped in advance: a scoring hook or its settings entry → the lesson it scores; a detector, its mode or its
   approval → its lesson; the text or `applies_when` hash of one of the three lessons → that lesson; L-b3d1fba9's hash, the pinned set,
   `HEADER`/`FOOTER`, a config value in (j), a seed, the window, the SessionStart settings entry, the measurement code set or any value of
   (g) → all three; CLAUDE.md or an auto-memory file → a lesson only if a line classified in (c) as a statement of that lesson's rule was
   added, changed or removed. Any other edit to those files is logged in a dated line and is not a deviation. Not frozen, and logged in a
-  dated line if changed, without a deviation: other skill descriptions that name a rule (`brutal-honesty`, `cycle-close`) and the
-  operator's other hooks that mention a rule or act around ExitPlanMode (`stop-exitplan-rejection-followup.sh`, the `rollforward-*`
-  hooks, `subagentstop-implementer-audit.sh`, `block-unreviewed-plan-commit.sh`, `mark-plan-approved.sh`); they apply in both arms. The
-  one exception is a recorded bug fix, written before any per-arm data is seen. If the holdout is switched off before `holdout_end`, the
+  dated line if changed, without a deviation: other skill descriptions that name a rule (`brutal-honesty`, `cycle-close`) and every
+  other hook in `$HOME/.claude/hooks` whose text matches a pattern of (c) or acts around ExitPlanMode (at 2026-11-03 these include
+  `stop-exitplan-rejection-followup.sh`, the `rollforward-*` hooks, `subagentstop-implementer-audit.sh`, `block-unreviewed-plan-commit.sh`,
+  `mark-plan-approved.sh` and `pretooluse-v83-gates.sh`; the operator records the list, `grep -l -i -E` with the (c) patterns, and their
+  sha256 at the switch-on); they apply in both arms. Where a change falls under two rules (a detector source file is also in the
+  measurement code set), the union applies: here, all three. The one exception is a recorded bug fix, written before any per-arm data is
+  seen. If the holdout is switched off before `holdout_end`, the
   sessions up to the switch-off are analysed and the result is labelled exploratory.
 - (l) Null handling (replacing the draft's paragraph, whose figures assumed another horizon and rate): if no lesson's Holm-adjusted p is
   below 0.05, the README reports "no detectable effect" with D, the per-arm rates and the power table in (d). No other outcome, window
