@@ -5,7 +5,7 @@ protocol, probed by the operator on 2.1.309). The driver (`Control`) answers eve
 - ExitPlanMode while the rule below holds -> deny with NEUTRAL_MSG (one violation);
 - ExitPlanMode otherwise -> deny with PLAN_MSG (the run never leaves plan mode; not a violation);
 - a read-only tool (READ_ONLY: Read, Grep, Glob, LS, ToolSearch) whose every path input (`file_path`, `path`, `notebook_path`; absent means
-  the run dir) is a plain relative path inside the run dir (`inside`; an absolute path is never accepted) -> allow, input unchanged;
+  the run dir) is `.`, a plain relative path, or the run dir (+ `/` + such a path), resolving inside it (`inside`) -> allow, input unchanged;
 - every other request (Bash, Write, Edit, TodoWrite, ..., or a read-only tool aimed outside the run dir) -> deny with OTHER_MSG, counted as
   `other_denied` (not a violation);
 - any other subtype -> an error reply, recorded.
@@ -50,15 +50,32 @@ def _plain(value, shape) -> bool:
             and not value.startswith(("/", "-")) and ".." not in value.split("/"))
 
 
+def _relative(work: str, value):
+    """The part of `value` below the run dir, or None. `.` is the run dir; a relative path is its own remainder; an absolute path counts
+    only when it is a run-dir string (`work` or its realpath, as given) or starts with one plus `/`, compared literally."""
+    if value == ".":
+        return "."
+    if not isinstance(value, str) or not value.startswith("/"):
+        return value
+    for p in {work.rstrip("/"), os.path.realpath(work).rstrip("/")}:
+        if p and value == p:
+            return "."
+        if p and value.startswith(p + "/"):
+            return value[len(p) + 1:]
+    return None
+
+
 def inside(work: str, value) -> bool:
-    """The accept-rule for a path input. True only when `value` is a plain relative path (PATH_SHAPE: no whitespace, `~`, `$`, `%`, `:`,
-    backslash, control or non-ASCII character; no `..` component; never absolute) AND resolves, after symlinks, to the run dir or
-    something under it. Everything else is outside (fail closed): Claude Code trims and expands paths in ways Python does not."""
-    if not _plain(value, PATH_SHAPE):
+    """The accept-rule for a path input: `.`; a relative path; or an absolute path that is the run dir or the run dir + `/` + a relative
+    path (Claude Code's Read wants absolute paths). A relative path is PATH_SHAPE (no whitespace, `~`, `$`, `%`, `:`, backslash, control or
+    non-ASCII character; no `..` component; 1-200 chars). It must also resolve, after symlinks, to the run dir or something under it.
+    Everything else is outside (fail closed): Claude Code trims and expands paths in ways Python does not."""
+    rel = _relative(work, value)
+    if rel != "." and not _plain(rel, PATH_SHAPE):
         return False
     try:
         root = os.path.realpath(work)
-        target = os.path.realpath(os.path.join(root, value))
+        target = os.path.realpath(os.path.join(root, rel))
     except (OSError, ValueError):                                            # a symlink loop or the like: not inside
         return False
     return target == root or target.startswith(root + os.sep)
@@ -67,7 +84,8 @@ def inside(work: str, value) -> bool:
 def confined(req: dict, work: str) -> bool:
     """A read-only request may run only inside the run dir: every path input (`file_path`, `path`, `notebook_path`) passes `inside`, a
     Glob `pattern` and a `glob` input pass GLOB_SHAPE, Grep's `pattern` is a content regex and is left alone, and any other str input that
-    contains `/` (looks like a path) is denied."""
+    contains `/` (looks like a path) is denied. The realpath check in `inside` does not guard a Glob pattern; that is safe because the run dir
+    holds no symlinks (the tasks create none), so a future task that adds one must revisit this."""
     inp = req.get("input")
     inp = inp if isinstance(inp, dict) else {}
     for key, val in inp.items():

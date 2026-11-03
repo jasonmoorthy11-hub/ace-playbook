@@ -83,8 +83,7 @@ def test_read_only_tools_are_allowed_only_when_every_path_input_resolves_inside_
                       ("Glob", {"pattern": "*.py"}), ("Grep", {"pattern": "x", "path": "sub"}), ("Glob", {"pattern": "*", "path": "ok"}),
                       ("ToolSearch", {"query": "x"}), ("Grep", {"pattern": "a/b ~ \\s"})]:
         assert can_use(tool, inp, work)[1] == "allow", (tool, inp)
-    for tool, inp in [("Read", {"file_path": str(work / "a.py")}), ("LS", {"path": str(work)}), ("Read", {"file_path": str(work)}),
-                      ("Read", {"file_path": str(work / "sub" / ".." / "a.py")}), ("Read", {"file_path": "sub/../a.py"}),
+    for tool, inp in [("Read", {"file_path": str(work / "sub" / ".." / "a.py")}), ("Read", {"file_path": "sub/../a.py"}),
                       ("Read", {"file_path": "/etc/passwd"}), ("Read", {"file_path": "../outside/secret.txt"}),
                       ("Read", {"file_path": str(work / ".." / "outside" / "secret.txt")}), ("Read", {"file_path": "link/secret.txt"}),
                       ("Read", {"file_path": "flink.txt"}), ("Grep", {"pattern": "x", "path": str(outside)}),
@@ -110,19 +109,60 @@ def test_a_tilde_path_is_outside_the_run_dir_because_the_file_tools_expand_it_to
 
 PATH_TOOLS = [("Read", "file_path"), ("Read", "notebook_path"), ("Grep", "path"), ("Glob", "path"), ("LS", "path")]
 BAD_PATHS = [" /etc/passwd", "\t/etc/passwd", "\n/etc/hosts", " ~/.ssh/id_rsa", " ~", ".. ", " ..", " /etc", "a.py ", "a.py\n", "\ufeffa.py",
-             "caf\u00e9.py", "$HOME/x", "a:b", "a\\b", "a" * 201, "", "-rf", ".", "./a.py", "sub//..", "sub/../a.py", "%USERPROFILE%/x"]
-GOOD_PATHS = ["a.py", "src/a.py", "docs/READ-ME.md", "a" * 200]
+             "caf\u00e9.py", "$HOME/x", "a:b", "a\\b", "a" * 201, "", "-rf", "./a.py", "sub//..", "sub/../a.py", "%USERPROFILE%/x"]
+GOOD_PATHS = [".", "a.py", "src/a.py", "docs/READ-ME.md", "a" * 200]
 
 
 @pytest.mark.parametrize("tool,key", PATH_TOOLS)
-def test_the_accept_rule_denies_every_unusual_path_shape_and_an_absolute_path_inside_the_run_dir(tmp_path, tool, key):
+def test_the_accept_rule_denies_every_unusual_path_shape(tmp_path, tool, key):
     work = tmp_path / "work"
     (work / "src").mkdir(parents=True)
     (work / "a.py").write_text("x")
-    for val in BAD_PATHS + [str(work / "a.py"), str(work)]:
+    for val in BAD_PATHS:
         assert can_use(tool, {key: val}, work) == (deny("rp", exitplan.OTHER_MSG), "other_denied"), (tool, key, val)
     for val in GOOD_PATHS:
         assert can_use(tool, {key: val}, work)[1] == "allow", (tool, key, val)
+
+
+def run_dirs(tmp_path):
+    """(work as given, realpath(work)) for a run dir reached through a symlinked parent, so the two prefixes differ."""
+    (tmp_path / "real" / "work" / "src").mkdir(parents=True)
+    (tmp_path / "real" / "work" / "a.py").write_text("x")
+    (tmp_path / "real" / "worker").mkdir()
+    (tmp_path / "alias").symlink_to(tmp_path / "real")
+    given = tmp_path / "alias" / "work"
+    assert str(given) != str(given.resolve())
+    return str(given), str(given.resolve())
+
+
+@pytest.mark.parametrize("tool,key", PATH_TOOLS)
+def test_an_absolute_path_that_is_the_run_dir_or_below_it_is_accepted_under_either_prefix(tmp_path, tool, key):
+    given, real = run_dirs(tmp_path)
+    for p in (given, real):
+        for suffix in ("", "/calc.py", "/src/a.py", "/src/new.py"):
+            assert can_use(tool, {key: p + suffix}, given)[1] == "allow", (tool, key, p + suffix)
+    assert can_use(tool, {key: real + "/a.py"}, real)[1] == "allow"
+    assert can_use(tool, {key: "."}, given)[1] == "allow"
+
+
+@pytest.mark.parametrize("tool,key", PATH_TOOLS)
+def test_an_absolute_path_not_exactly_under_the_run_dir_is_denied(tmp_path, tool, key):
+    given, real = run_dirs(tmp_path)
+    parent = str(Path(given).parent)
+    bad = [given + "/../x", given + "x/a.py", given + "/ a.py", given + "/~x", given + "/a.py ", given + "//a.py", given + "/", real + "//a.py",
+           given + "/src/../a.py", given + "/a\nb", given + "/-x", given + "/" + "a" * 201, "/etc/passwd", parent + "/a.py", parent,
+           str(Path(given).parent / "worker" / "a.py"), real + "/./a.py", given + "/./a.py", "/", " " + given + "/a.py", given + "\n"]
+    for val in bad:
+        assert can_use(tool, {key: val}, given) == (deny("rp", exitplan.OTHER_MSG), "other_denied"), (tool, key, val)
+    assert can_use(tool, {key: given + "/a.py"}, real)[1] == "other_denied"                     # only work and realpath(work) are prefixes
+
+
+def test_an_absolute_path_through_a_symlink_that_leaves_the_run_dir_is_still_denied(tmp_path):
+    given, _ = run_dirs(tmp_path)
+    (tmp_path / "outside").mkdir()
+    (Path(given) / "link").symlink_to(tmp_path / "outside")
+    assert can_use("Read", {"file_path": given + "/link/secret.txt"}, given)[1] == "other_denied"
+    assert can_use("LS", {"path": given + "/link"}, given)[1] == "other_denied"
 
 
 @pytest.mark.parametrize("pattern", [" /etc/*", " ~/*", "~/*", "/etc/*", "../*", "src/../*", "*.py ", "\t*.py", "\ufeff*.py", "[ab].py",
