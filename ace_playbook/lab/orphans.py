@@ -1,7 +1,8 @@
 """Orphan streams (docs/lab.md): a `<data>/streams/*.jsonl` that no record of trials.jsonl names, left by an attempt that never wrote its record
 (Ctrl-C, an exception, SIGKILL, power loss; the next attempt of that trial takes the next free n). The outside count is a safety STOP, so such a
 stream is read like any other and counted apart in `orphan_streams`. A stream is named only when some record's `stream` resolves (realpath) to
-that very file: a record naming another directory's file of the same name hides nothing, and a `build failed` record names no stream."""
+that very file: a record naming another directory's file of the same name hides nothing, and a `build failed` record (even an old one
+that carries a path) names no stream."""
 
 from __future__ import annotations
 
@@ -21,6 +22,8 @@ def scan(trials: Path, recs: list[dict]) -> dict:
     """{total, unreadable, bad_streams, trials, orphan_streams} over the streams next to `trials` that no record in `recs` names (any attempt)."""
     named = set()
     for r in recs:
+        if isinstance(r.get("error"), str) and r["error"].startswith("build failed"):
+            continue                                                                   # ran nothing: names no stream, whatever `stream` says
         if isinstance(r.get("stream"), str) and r["stream"]:
             try:
                 named.add(os.path.realpath(r["stream"]))

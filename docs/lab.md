@@ -63,8 +63,8 @@ and open them). A denial alone is not "ran" but needs a look; in the preclaim an
 `find <data>/streams -name '*.jsonl' ! -name '*.xp-*' -exec grep -lE '"permission_denials": ?\[[^]]' {} +`. Stop if `report` (with or without `--exclude-pilot`:
 the safety counts cover every stream of every attempt, errored and retried trials too) shows `outside-run-dir tool inputs`, `unreadable streams` or
 `streams with bad lines` above 0, or shows `orphan streams` (a stream no record names, left by an interrupted attempt: it is read, counted apart and is a
-STOP; a record names a stream only when its `stream` path resolves to that very file, a `build failed` record names none, and a streams dir that cannot be
-listed counts as an unreadable stream).
+STOP; a record names a stream only when its `stream` path resolves to that very file, a `build failed` record names none (also an older record that
+still carries a stream path), and a streams dir that cannot be listed counts as an unreadable stream).
 The outside count is a whitelist: a Glob `pattern`, a Grep `glob` (one leading `!` allowed) or a `path` may hold only ASCII
 `A-Za-z0-9_./*?-` and `{ } ,`, with no `..` inside a brace body; any other character, or a `..` that may leave the run dir, counts as outside (fail closed).
 The braces are expanded FIRST: an absolute alternative (`{/etc/hosts,x}`) is tested as a path and never joined to the tool's `path`; a relative one is

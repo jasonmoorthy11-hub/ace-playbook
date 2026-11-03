@@ -530,3 +530,4 @@ def test_a_grep_path_that_leaves_is_counted_once_beside_a_glob_that_stays_or_als
     for path in ("~", "~/x", "/etc/.*"):
         assert out.inputs("/r/work", "Grep", {"pattern": "x", "path": path, "glob": "/r/work/a"}) == 1, path
     assert out.inputs("/r/work", "Grep", {"pattern": "x", "path": "/etc", "glob": "*.py"}) == 1
+    assert out.inputs("/r/work", "Glob", {"pattern": "*.py", "path": "/etc"}) == 1                    # the Glob twin: a pin, one count, not two
