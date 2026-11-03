@@ -120,8 +120,9 @@ def _write(work: Path, files: dict[str, str]) -> None:
 
 
 def build(task: Task, run_dir: Path) -> Path:
-    """Write the task's files into `run_dir/work` and commit them in a fresh git repo (fixed author and dates); returns that directory."""
-    work = Path(run_dir) / "work"
+    """Write the task's files into `run_dir/work` and commit them in a fresh git repo (fixed author and dates); returns that
+    directory, resolved once (no symlink or `..` in it): the cwd, the driver and the exit-plan accept-rule all use this path."""
+    work = (Path(run_dir) / "work").resolve()
     work.mkdir(parents=True, exist_ok=True)
     _write(work, task.files)
     env = {**os.environ, **AUTHOR, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}

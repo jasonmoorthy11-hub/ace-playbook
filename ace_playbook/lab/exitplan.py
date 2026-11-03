@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import posixpath
 import re
 
 from .drive import send
@@ -51,34 +52,38 @@ def _plain(value, shape) -> bool:
 
 
 def _relative(work: str, value):
-    """The part of `value` below the run dir, or None. `.` is the run dir; a relative path is its own remainder; an absolute path counts
-    only when it is a run-dir string (`work` or its realpath, as given) or starts with one plus `/`, compared literally."""
+    """(remainder, is_run_dir): the part of `value` below the run dir, or (None, False). `.` is the run dir; a relative path is its own
+    remainder; an absolute path counts only when it is a run-dir string (`work` or its realpath, as given) or starts with one plus `/`,
+    compared literally. A remainder of `.` (from `<work>/.`) is an ordinary remainder: only `.` and the run dir itself are the run dir."""
     if value == ".":
-        return "."
+        return ".", True
     if not isinstance(value, str) or not value.startswith("/"):
-        return value
+        return value, False
     for p in {work.rstrip("/"), os.path.realpath(work).rstrip("/")}:
         if p and value == p:
-            return "."
+            return ".", True
         if p and value.startswith(p + "/"):
-            return value[len(p) + 1:]
-    return None
+            return value[len(p) + 1:], False
+    return None, False
 
 
 def inside(work: str, value) -> bool:
     """The accept-rule for a path input: `.`; a relative path; or an absolute path that is the run dir or the run dir + `/` + a relative
     path (Claude Code's Read wants absolute paths). A relative path is PATH_SHAPE (no whitespace, `~`, `$`, `%`, `:`, backslash, control or
-    non-ASCII character; no `..` component; 1-200 chars). It must also resolve, after symlinks, to the run dir or something under it.
+    non-ASCII character; no `..` component; 1-200 chars). It must also resolve, after symlinks, to the run dir or something under it. An
+    absolute path must also do so after Claude Code's own textual normalisation (`posixpath.normpath`: `..` pops the previous segment).
     Everything else is outside (fail closed): Claude Code trims and expands paths in ways Python does not."""
-    rel = _relative(work, value)
-    if rel != "." and not _plain(rel, PATH_SHAPE):
+    rel, is_root = _relative(work, value)
+    if not is_root and not _plain(rel, PATH_SHAPE):
         return False
     try:
         root = os.path.realpath(work)
-        target = os.path.realpath(os.path.join(root, rel))
+        targets = [os.path.realpath(os.path.join(root, rel))]
+        if isinstance(value, str) and value.startswith("/"):
+            targets.append(os.path.realpath(posixpath.normpath(value)))
     except (OSError, ValueError):                                            # a symlink loop or the like: not inside
         return False
-    return target == root or target.startswith(root + os.sep)
+    return all(t == root or t.startswith(root + os.sep) for t in targets)
 
 
 def confined(req: dict, work: str) -> bool:

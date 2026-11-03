@@ -281,3 +281,33 @@ def test_cli_an_unreadable_store_exits_2_and_names_no_text(capsys, cli_env, monk
     monkeypatch.setattr(run, "lesson_text", boom)
     code, out, err = cli(capsys, "run", "--model", "m1", "--lesson", "preclaim", "--seed", "1", "--claude", str(FAKE))
     assert code == 2 and "LookupError" in err and not (cli_env / "trials.jsonl").exists()
+
+
+def test_the_run_dir_is_resolved_once_and_the_resolved_path_is_the_cwd_the_drive_and_the_control_work(lab, monkeypatch):
+    """Opus round 6: the cwd, `drive` and `exitplan.Control` all get the same symlink-free absolute string."""
+    (lab.runs / "real").mkdir(parents=True)
+    (lab.runs / "alias").symlink_to(lab.runs / "real")
+    seen = {}
+    real_popen, real_drive, real_control = run.subprocess.Popen, run.drive.drive, run.exitplan.Control
+
+    def popen(argv, **kw):
+        seen["cwd"] = kw.get("cwd")
+        return real_popen(argv, **kw)
+
+    def drive(proc, task, work, *a, **kw):
+        seen["drive"] = work
+        return real_drive(proc, task, work, *a, **kw)
+
+    class Control(real_control):
+        def __init__(self, proc, sink, work):
+            seen["control"] = work
+            super().__init__(proc, sink, work)
+
+    monkeypatch.setattr(run.subprocess, "Popen", popen)
+    monkeypatch.setattr(run.drive, "drive", drive)
+    monkeypatch.setattr(run.exitplan, "Control", Control)
+    lab.scenario(turns=[{}, {}])
+    rec = run.trial(tasks.get("xp-greet"), "not_told", "claude-test-1", LESSON, lab.runs / "alias" / "r1", lab.data, claude=str(FAKE))
+    want = str((lab.runs / "real" / "r1" / "work").resolve())
+    assert rec["error"] is None and want != str(lab.runs / "alias" / "r1" / "work")
+    assert str(seen["cwd"]) == str(seen["drive"]) == str(seen["control"]) == want

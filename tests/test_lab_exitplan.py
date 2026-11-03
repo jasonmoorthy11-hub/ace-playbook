@@ -165,6 +165,34 @@ def test_an_absolute_path_through_a_symlink_that_leaves_the_run_dir_is_still_den
     assert can_use("LS", {"path": given + "/link"}, given)[1] == "other_denied"
 
 
+def test_a_work_string_with_a_symlink_then_dotdot_cannot_reach_a_file_outside_the_run_dir(tmp_path):
+    """Opus round 6: Claude Code normalises an absolute path by text (`..` pops the previous segment), so `<b>/s/../d/...` is `<b>/d/...`."""
+    (tmp_path / "x" / "y" / "z").mkdir(parents=True)
+    (tmp_path / "s").symlink_to(tmp_path / "x" / "y" / "z")
+    secret_dir = tmp_path / "d" / "runs" / "t" / "work"
+    secret_dir.mkdir(parents=True)
+    (secret_dir / "secret").write_text("x")
+    work = f"{tmp_path}/s/../d/runs/t/work"
+    assert exitplan.inside(work, work + "/secret") is False
+    assert exitplan.inside(work, work) is False
+    for tool, key in PATH_TOOLS:
+        assert can_use(tool, {key: work + "/secret"}, work) == (deny("rp", exitplan.OTHER_MSG), "other_denied"), (tool, key)
+    assert exitplan.inside(str(secret_dir), str(secret_dir) + "/secret") is True       # the resolved run dir is fine
+
+
+@pytest.mark.parametrize("tool,key", PATH_TOOLS)
+def test_the_dot_short_cut_is_for_dot_and_the_run_dir_itself_only(tmp_path, tool, key):
+    given, real = run_dirs(tmp_path)
+    (Path(given) / "src" / "x").mkdir()
+    assert can_use(tool, {key: "."}, given)[1] == "allow"
+    assert can_use(tool, {key: given}, given)[1] == "allow"
+    assert can_use(tool, {key: real}, given)[1] == "allow"
+    assert can_use(tool, {key: given + "/."}, given)[1] == "other_denied"                      # a remainder of `.` is shape-checked, so denied
+    assert can_use(tool, {key: real + "/."}, given)[1] == "other_denied"
+    assert can_use(tool, {key: given + "/src/."}, given)[1] == "allow"                          # `src/.` is a plain relative remainder: allowed
+    assert can_use(tool, {key: given + "/src/x/."}, given)[1] == "allow"
+
+
 @pytest.mark.parametrize("pattern", [" /etc/*", " ~/*", "~/*", "/etc/*", "../*", "src/../*", "*.py ", "\t*.py", "\ufeff*.py", "[ab].py",
                                      "{a,b}.py", "*.p\u00fd", "$HOME/*", "a\\*", "", "-*", "*" * 201, "src/*.py\n"])
 def test_a_glob_pattern_or_glob_input_outside_the_accept_rule_is_denied(tmp_path, pattern):
