@@ -492,3 +492,130 @@ line, because an approved proposal may now carry the optional `contract` key (`p
 decision moved). Its sha256 was 6f2355d8a788b99e424cf821939d11efd282bb93a743f8f0d3b34f033ed95c54 and is
 97a4014fc383d73722f656880f75563ef37059d6b47fd5fb7145302d2dc67370; the `arm_start` amendment records the hashes in force when it is written,
 as before.
+
+### 2026-11-03 - lesson-text holdout (field): the draft RER activated for three lessons
+
+This entry activates the draft sections "Question" to "Null handling" above (the injection RER experiment) for three lessons, with the
+deviations listed below. Where this entry and the draft disagree, this entry governs. The sealed block and the shadow-mode analysis are
+not edited. Arms stay NO-GO, and a holdout phase excludes an arm phase (sealed text, lines 8-10).
+
+Lessons, each scored by one detector (the hashes are those of the 2026-10-29 detector v2 entry above, unchanged at commit 2c88d58):
+
+```text
+L-cbfb7a57 (pre-claim audit)              preclaim_audit_block strong 9c51713970ced98bb4e72550cae93cc10b7e84b3a0a9df9924ce81ffe16d77ea
+L-f8a355f9 (read in the turn before edit) edit_unread_turn weak 48e43655450c841631c47cb54bbe363089882004b8ce8cbca200fd717eced69f
+L-93544dae (answer before ExitPlanMode)   exitplan_question_block strong 315f40a2239247383d8e39f82412a23ade493291a37e1d57b449bfa5bcb32281
+```
+
+`preclaim_audit_block` and `exitplan_question_block` count the block events of two operator hooks (`stop-mid-task-audit.sh`,
+`pretooluse-exitplan-question-check.sh`), matched by hook name. `edit_unread_turn` is an offline detector over the transcript; no hook
+blocks an edit of a file not read in the same turn (Claude Code itself only requires a read earlier in the session).
+
+The injector runs in `pinned` mode, which shows the pinned lessons. The pinned set is frozen for the horizon as exactly these three and
+L-b3d1fba9, all global. L-b3d1fba9 is set `holdout_exempt` for the horizon, so it is always shown.
+
+Deviations from the draft, each decided before any holdout session:
+
+- (a) Timing: one confirmatory read (decision D-235), replacing the looks at 8, 16 and 24 weeks. There is no harm-only interim. For the
+  two hook-scored lessons, the hooks keep blocking in both arms, so hiding a lesson's text opens no harm path the hooks do not stop. For
+  L-f8a355f9 no hook stops the mistake; the risk (an edit against stale content) is judged small for the horizon and is accepted.
+- (b) Outcome: the primary outcome is binary: at least one violation per (session, lesson), as the draft's "whether the specific mistake
+  recurs". The secondary outcome is the violation count per (session, lesson).
+- (c) Content eligibility (draft line 42): for the horizon, the three rules are removed from the operator's global CLAUDE.md (Discipline
+  rules 6, 8 and 9) by a dated edit (decision D-232) and restored at the end. Residual exposure remains. The memory indexes of two
+  project directories (SymbolicSystems, SymbolicSystems-ThinkHospitality) state the ExitPlanMode rule, and the description of the
+  `brutal-honesty` skill, listed in every session, names the audit format. Both are present in either arm. For the two hook-scored
+  lessons, a hook's block message restates the rule, but only after a violation, so this exposure depends on the outcome. It does not
+  affect the binary primary, because the first block is itself the outcome event. It can affect the count secondary. Auto-memory files
+  may also gain rule text during the horizon. The operator records the number of lines matching each rule in every auto-loaded file
+  (global and project CLAUDE.md, `rules/`, auto-memory indexes) at the switch-on and at `holdout_end`, and the read reports any drift.
+  The estimate is therefore the incremental effect of the injected text over this residual exposure. The draft rule is amended to say so.
+- (d) Step-0 gate (draft: "about six lessons at 2 % or more"): replaced by measured rates and a power table, stated before data. Counts
+  were read on 2026-11-03 from `detector_events.jsonl`, offline tier, without the interactive filter (the injection rows written before
+  this entry carry no entrypoint). The share of sessions with at least one violation, for preclaim / edit_unread_turn / exitplan, is
+  34 % / 18 % / 14 % of the 50 sessions with prompts >= 1, and 57 % / 32 % / 25 % of the 28 with prompts >= 3. `holdout_power` at commit
+  2c88d58 can fit only the 9 sessions whose row carries a `start` (rows written before 2026-10-29 lack the field). Its fit
+  (22 % / 22 % / 11 %) gives the power below: 2 eligible sessions/day, binary primary, Holm over 3, normal method, 400 simulations, seed 1.
+
+  | lesson | 12 weeks, RR 0.5 | 12 weeks, RR 0.67 | 24 weeks, RR 0.5 | 24 weeks, RR 0.67 |
+  |---|---|---|---|---|
+  | preclaim | 0.34 | 0.14 | 0.68 | 0.30 |
+  | edit_unread_turn | 0.40 | 0.14 | 0.69 | 0.27 |
+  | exitplan | 0.15 | 0.07 | 0.42 | 0.14 |
+
+  The rate of 2 is conservative. From 2026-10-19 to 2026-11-03, 39 transcripts started with `entrypoint` `cli` and carried the injected
+  block, which is 2.6 per calendar day (counted from the transcripts' own first records). The expected n is about 168 eligible sessions in
+  84 days. No minimum n is set: the read happens at the registered time whatever n is. The field read is expected to be inconclusive for
+  the registered effect of 0.67. A controlled lab (`ace_playbook/lab`, its own pre-registration) carries the causal question.
+- (e) Assignment and estimand: the injector's coin (`ace_playbook/inject/injector.py`, `coin` and `is_holdout`) is the first 8 hex
+  digits of sha256 of `seed|session id|lesson id`, read as a fraction of 2**32. The lesson is hidden when that fraction is below
+  `holdout_rate` 0.5. Draws are independent per (session, lesson). Each `/clear` starts a new session id and so re-draws. The estimand for
+  each lesson is marginal over the other two lessons' coins (the block shows a varying subset).
+- (f) Eligible sessions: a `_session` row with a `start` inside the registered window and prompts >= 1, and the session must be
+  interactive (decision D-239): every injection row of the session carries `entrypoint` `cli`, which the injector records from
+  `CLAUDE_CODE_ENTRYPOINT`. Automated sessions (SDK reviews, `claude -p` probes, the brief) are excluded as `not_interactive`. Subagent
+  transcripts are never scanned.
+- (g) Analysis: the code at commit 2c88d58. The sha256 values are:
+
+  ```text
+  ace_playbook/compile/holdout_report.py c05de1c362c2397c75e484ccefc99bb5f90a5c433d72cd4d7b3c65274ca9048f
+  ace_playbook/compile/holdout_io.py     d542ddc6a285ced9dc96ad6c9f4f05a3dcd7d209184e0cd19d85f4888829970d
+  ace_playbook/compile/holdout_power.py  6705752c5a81b49951583071fea2ce93239fa89a687e0f0b5e3a8c9ee5fcd9f2
+  ace_playbook/inject/injector.py        d193e5e214425282510674b003c1cc57bf4e45c22ecbb3bc6e0ffc97e21a8268
+  ```
+
+  For each lesson the report gives the risk difference D (shown minus hidden) in the any-violation rate, a Wilson interval per arm, and
+  the rate ratio as a point estimate. The test is two-sided: |D| is compared against 10,000 re-draws of the coin (`arms_stats.permutation
+  _test`, arm rate 0.5), seeded by the config key `holdout_permutation_seed`. That is an exact test of the sharp null of no effect for any
+  session; no clustering is used. The Wilson intervals treat sessions as independent and are descriptive. Holm runs over the three
+  lessons at alpha 0.05, and the count secondary is a separate family with its own Holm. No interval is reported for D or for the rate
+  ratio. The draft's clustered Poisson cross-check is dropped.
+- (h) The registered window is 2026-11-10T00:00:00Z to 2027-02-02T00:00:00Z (84 days). The report reads it from the config keys
+  `holdout_start` and `holdout_end`, which it does not compare with these literals. The read counts as confirmatory only if the window
+  line it prints equals them. The read runs on 2027-02-05, after that night's sweep has completed; its output is committed as it is.
+  It runs with the default `--min-prompts 1` (the report refuses another value outside the descriptive mode).
+- (i) Exclusions, each counted and reported. In the order the code applies them: null_session_id (an injection row without a session
+  id); unmatched_session (an eligible session with no injection row); then, per session, no_start, below_min_prompts, outside_window,
+  not_interactive, refused, holdout_off, mixed_rate, rate_not_half, seed_fp_mismatch and assignment_conflict; unmatched_injection (an
+  injection session in the window with no `_session` row); and, per lesson, lesson_not_assigned. Every one of these is decided without
+  the coin, so they cannot differ by arm through the analysis. Per-arm exclusion counts are not computed. A lesson in `dropped_cap` is
+  analysed as assigned SHOWN (intention to treat). The read refuses if any of the three lessons was `holdout_exempt` at any time before
+  `holdout_end` (read from the delta log).
+- (j) Frozen at the switch-on and re-checked by sha256 before the read: the seeds (below), the two hooks named above, the text and
+  `applies_when` of the four pinned lessons, `HEADER` and `FOOTER` of the injected block, the config values `inject_mode`, `holdout_rate`,
+  `max_global` and `inject_max_chars`, and the edited CLAUDE.md:
+
+  ```text
+  holdout_seed_sha256                      <HOLDOUT_SEED_SHA256>
+  sha256(holdout_permutation_seed)         <PERMUTATION_SEED_SHA256>
+  stop-mid-task-audit.sh                   <HOOK_PRECLAIM_SHA256>
+  pretooluse-exitplan-question-check.sh    <HOOK_EXITPLAN_SHA256>
+  L-cbfb7a57 / L-f8a355f9 / L-93544dae / L-b3d1fba9 text+applies_when  <LESSONS_SHA256>
+  injector HEADER+FOOTER                   <BLOCK_SHA256>
+  inject_mode / holdout_rate / max_global / inject_max_chars  <CONFIG_VALUES>
+  CLAUDE.md (global, after the D-232 edit) <CLAUDE_MD_SHA256>
+  ```
+
+  Before the read, the operator checks that sha256 of each config seed equals its line above, and that every live injection row's
+  `seed_fp` equals the first 8 hex digits of `holdout_seed_sha256`. The result is recorded in a dated line before the read is run.
+- (k) Changes and looks during the horizon. No per-arm view of window data is taken before the read: `--interim-descriptive` is run on
+  the window only for the day-1 check below, and only its `counts` object is read (`--json`). Any change after `holdout_start` to an item in (j), to a detector,
+  its mode or approval, or to the window makes the affected lessons' read exploratory. The one exception is a recorded bug fix, written
+  before any per-arm data is seen. If the holdout is switched off before `holdout_end`, the sessions up to the switch-off are analysed and
+  the result is labelled exploratory.
+- (l) Null handling (replacing the draft's paragraph, whose figures assumed another horizon and rate): if no lesson's Holm-adjusted p is
+  below 0.05, the README reports "no detectable effect" with D, the per-arm rates and the power table in (d). No other outcome, window
+  or subset is searched for an effect. A significant D in the harmful direction (more violations when shown) is reported as harm.
+- (m) At the horizon, the three rules return to CLAUDE.md and `holdout_enabled` returns to false.
+
+Switch-on order, all before `holdout_start` (a switch-on after it is a deviation):
+
+1. The operator removes rules 6, 8 and 9 from the global CLAUDE.md (D-232) and records the rule-line counts of (c).
+2. `store exempt L-b3d1fba9` (the delta log has no exempt record yet).
+3. The operator generates `holdout_seed` and `holdout_permutation_seed` in his terminal. He sets them, together with
+   `holdout_seed_sha256` (required, non-empty), `holdout_rate` 0.5, `holdout_start` and `holdout_end`, in the private config.
+4. A commit on this entry, before its merge, replaces every placeholder in (j). The sha256 of PREREGISTRATION.md at that commit is
+   OpenTimestamps-stamped.
+5. `holdout_enabled` is set to true.
+6. Day-1 check: `holdout_report --interim-descriptive --json` over the first day; only its `counts` object is read (it must show
+   injection rows, `holdout_off` 0, and `not_interactive` only for automated sessions). The per-lesson part of the output is not read.
