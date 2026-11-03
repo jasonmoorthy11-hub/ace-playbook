@@ -1,9 +1,11 @@
 """Orphan streams (docs/lab.md): a `<data>/streams/*.jsonl` that no record of trials.jsonl names, left by an attempt that never wrote its record
 (Ctrl-C, an exception, SIGKILL, power loss; the next attempt of that trial takes the next free n). The outside count is a safety STOP, so such a
-stream is read like any other and counted apart in `orphan_streams`; matching is by file name, so a data dir that was moved still matches."""
+stream is read like any other and counted apart in `orphan_streams`. A stream is named only when some record's `stream` resolves (realpath) to
+that very file: a record naming another directory's file of the same name hides nothing, and a `build failed` record names no stream."""
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -17,10 +19,20 @@ def _trial_id(name: str) -> str:
 
 def scan(trials: Path, recs: list[dict]) -> dict:
     """{total, unreadable, bad_streams, trials, orphan_streams} over the streams next to `trials` that no record in `recs` names (any attempt)."""
-    named = {Path(r["stream"]).name for r in recs if isinstance(r.get("stream"), str) and r["stream"]}
+    named = set()
+    for r in recs:
+        if isinstance(r.get("stream"), str) and r["stream"]:
+            try:
+                named.add(os.path.realpath(r["stream"]))
+            except (OSError, ValueError):
+                continue                                                               # not a usable path: it names nothing
     found = {"total": 0, "unreadable": 0, "bad_streams": 0, "trials": [], "orphan_streams": 0}
-    try:
-        files = sorted(p for p in (Path(trials).parent / "streams").glob("*.jsonl") if p.name not in named)
+    streams = Path(trials).parent / "streams"
+    try:                                                                               # not Path.glob: on 3.12 it swallows PermissionError
+        with os.scandir(streams) as it:
+            files = sorted(streams / e.name for e in it if e.name.endswith(".jsonl") and os.path.realpath(streams / e.name) not in named)
+    except FileNotFoundError:
+        return found                                                                   # no streams dir at all: nothing to read
     except OSError:
         found["unreadable"] += 1                                                       # a streams dir that cannot be listed: fail closed
         return found

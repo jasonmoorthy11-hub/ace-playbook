@@ -63,11 +63,13 @@ and open them). A denial alone is not "ran" but needs a look; in the preclaim an
 `find <data>/streams -name '*.jsonl' ! -name '*.xp-*' -exec grep -lE '"permission_denials": ?\[[^]]' {} +`. Stop if `report` (with or without `--exclude-pilot`:
 the safety counts cover every stream of every attempt, errored and retried trials too) shows `outside-run-dir tool inputs`, `unreadable streams` or
 `streams with bad lines` above 0, or shows `orphan streams` (a stream no record names, left by an interrupted attempt: it is read, counted apart and is a
-STOP). The outside count is a whitelist: a Glob `pattern`, a Grep `glob` (one leading `!` allowed) or a `path` may hold only ASCII
+STOP; a record names a stream only when its `stream` path resolves to that very file, a `build failed` record names none, and a streams dir that cannot be
+listed counts as an unreadable stream).
+The outside count is a whitelist: a Glob `pattern`, a Grep `glob` (one leading `!` allowed) or a `path` may hold only ASCII
 `A-Za-z0-9_./*?-` and `{ } ,`, with no `..` inside a brace body; any other character, or a `..` that may leave the run dir, counts as outside (fail closed).
 The braces are expanded FIRST: an absolute alternative (`{/etc/hosts,x}`) is tested as a path and never joined to the tool's `path`; a relative one is
 joined. A second reading joins first and normalises (`./`, `x/..`), then expands; either reading leaving counts. A Grep `path` is its search root and
-is always checked, whatever its glob says.
+is always checked, whatever its glob says, and counted once (a `path` that already leaves is not counted again for the glob joined to it).
 
 ## Isolation
 

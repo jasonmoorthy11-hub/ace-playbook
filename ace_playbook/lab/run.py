@@ -112,11 +112,10 @@ def trial(task: tasks.Task, arm: str, model: str, lesson_text: str, run_dir: Pat
     tid, run_dir, data_dir = trial_id(model, task.id, arm, rep, pilot), Path(run_dir), Path(data_dir)
     streams = private_dir(private_dir(data_dir) / "streams")
     n = 1 + len(history(data_dir / "trials.jsonl").get(tid, []))                    # this attempt's number: one stream per attempt
-    stream = streams / f"{tid}.a{n}.jsonl"
     rec = {"trial_id": tid, "task": task.id, "lesson": task.lesson, "arm": arm, "model": model, "rep": rep, "pilot": pilot, "cue": task.cue,
            "multi_claim": task.multi_claim,
            "lesson_sha16": hashlib.sha256(lesson_text.encode()).hexdigest()[:16], "started": now_iso(), "exit_code": None, "results": [],
-           "num_turns": [], "costs": [], "permission_denials": 0, "is_error": False, "stream": str(stream), "error": None}
+           "num_turns": [], "costs": [], "permission_denials": 0, "is_error": False, "stream": None, "error": None}
     private_dir(run_dir)
     try:
         work = tasks.build(task, run_dir)
@@ -130,7 +129,7 @@ def trial(task: tasks.Task, arm: str, model: str, lesson_text: str, run_dir: Pat
     env = {k: v for k, v in os.environ.items() if k not in DROP_ENV}
     lines: queue.Queue = queue.Queue()
     stream, stream_fh = attempt_stream(streams, tid, n)
-    rec["stream"] = str(stream)
+    rec["stream"] = str(stream)                                                      # set only once the file exists: a failed build names none
     with stream_fh as fh, open_private(run_dir / "stderr.log") as err:
         sink = drive.Sink(fh)
         try:

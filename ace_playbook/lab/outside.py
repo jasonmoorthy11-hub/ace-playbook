@@ -176,7 +176,7 @@ def inputs(cwd, name, inp: dict) -> int:
     each); the path keys; a Glob `pattern` or a Grep `glob` (a Grep `pattern` is a content regex and is left alone; a Grep `glob` may start with
     one `!`, ripgrep's negation, which only filters), brace-expanded and then joined to the tool's `path` alternative by alternative (an absolute
     or `~` alternative is never joined; `_pattern_leaves`, two readings of the join); a `path` with no pattern beside it (`_base_leaves`); and a
-    Grep `path` beside a glob (its search root, `_root_leaves`)."""
+    Grep `path` beside a glob (its search root, `_root_leaves`). A `path` that leaves is counted once: the pattern is then tested alone."""
     n = sum(1 for k in ("pattern", "glob") + PATH_KEYS if inp.get(k) is not None and not isinstance(inp[k], str))
     n += sum(leaves(cwd, inp[k]) for k in PATH_KEYS if isinstance(inp.get(k), str) and inp[k])
     base = inp.get("path") if isinstance(inp.get("path"), str) and inp.get("path") else None
@@ -186,9 +186,10 @@ def inputs(cwd, name, inp: dict) -> int:
         if isinstance(val, str):
             pats.append(val[1:] if name == "Grep" and key == "glob" and val.startswith("!") else val)
     pats = [v for v in pats if v]
-    hit = sum(_pattern_leaves(cwd, val, base) for val in pats)
+    root_out = base is not None and bool(leaves(cwd, base))                    # the `path` already counted above: a join to it adds nothing
+    hit = sum(_pattern_leaves(cwd, val, None if root_out else base) for val in pats)
     if base is not None and not pats:
         hit += _base_leaves(cwd, base)
-    elif base is not None and name == "Grep" and not hit:                      # a Grep `path` is its search root, whatever the glob says
+    elif base is not None and name == "Grep" and not hit and not root_out:   # a Grep `path` is its search root, counted once
         hit += _root_leaves(cwd, base)
     return n + hit

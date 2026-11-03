@@ -522,3 +522,11 @@ def test_a_grep_path_is_checked_whatever_its_glob_alternatives_are(tmp_path):
     assert out.inputs("/r/work", "Grep", {"pattern": "x", "path": "x/**/../..", "glob": "/r/work/a"}) == 1
     assert out.inputs("/r/work", "Grep", {"pattern": "x", "path": "src", "glob": "/r/work/a"}) == 0
     assert out.inputs("/r/work", "Glob", {"pattern": "/r/work/a", "path": "src"}) == 0
+
+
+# ------------------------------------------------------------------ wave 11, m3: a Grep path that already leaves is counted once
+def test_a_grep_path_that_leaves_is_counted_once_beside_a_glob_that_stays_or_also_leaves():
+    from ace_playbook.lab import outside as out
+    for path in ("~", "~/x", "/etc/.*"):
+        assert out.inputs("/r/work", "Grep", {"pattern": "x", "path": path, "glob": "/r/work/a"}) == 1, path
+    assert out.inputs("/r/work", "Grep", {"pattern": "x", "path": "/etc", "glob": "*.py"}) == 1

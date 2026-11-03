@@ -271,3 +271,49 @@ def test_the_report_prints_and_exports_the_orphan_count(capsys, cli_env):
     (cli_env / "streams" / "z.a1.jsonl").write_text(json.dumps({"type": "system", "subtype": "init", "cwd": "/r/work"}) + "\n")
     assert ", orphan streams: 1)" in cli(capsys, "report")[1]
     assert json.loads(cli(capsys, "report", "--json")[1])["outside_orphan_streams"] == 1
+
+
+# ------------------------------------------------------------------ wave 11: the orphan scan fails closed, names resolve by path
+def test_a_streams_dir_that_cannot_be_listed_is_unreadable_not_empty(lab):
+    lab.scenario(turns=[ESC])
+    lab.go("pc-port", "told")                                                         # an escaping orphan, no record
+    streams = lab.data / "streams"
+    streams.chmod(0o300)
+    try:
+        found = stats.outside(lab.data / "trials.jsonl")
+    finally:
+        streams.chmod(0o700)
+    assert found is not None and found["unreadable"] >= 1
+
+
+def test_a_build_failed_record_names_no_stream_so_it_cannot_hide_an_orphan(lab, monkeypatch):
+    lab.scenario(turns=[ESC])
+    shutil.rmtree(lab.runs, ignore_errors=True)
+    lost = lab.go("pc-port", "told")                                                  # the interrupted attempt: T.a1.jsonl, no record
+    monkeypatch.setattr(tasks, "build", lambda task, run_dir: (_ for _ in ()).throw(OSError("disk")))
+    rec = lab.go("pc-port", "told")
+    assert rec["error"] == "build failed: OSError" and rec["stream"] is None
+    with run.open_private(lab.data / "trials.jsonl", append=True) as fh:
+        fh.write(json.dumps(rec, sort_keys=True) + "\n")
+    found = stats.outside(lab.data / "trials.jsonl")
+    assert found["orphan_streams"] == 1 and found["total"] >= 1 and found["trials"] == [lost["trial_id"]]
+
+
+def test_a_record_naming_another_dirs_stream_does_not_hide_a_local_stream_of_the_same_name(lab):
+    lab.scenario(turns=[ESC])
+    shutil.rmtree(lab.runs, ignore_errors=True)
+    lost = lab.go("pc-port", "told")
+    other = {**lost, "stream": "/other/streams/" + os.path.basename(lost["stream"]), "error": None}
+    with run.open_private(lab.data / "trials.jsonl", append=True) as fh:
+        fh.write(json.dumps(other, sort_keys=True) + "\n")
+    found = stats.outside(lab.data / "trials.jsonl")
+    assert found["total"] >= 1 and found["orphan_streams"] == 1
+
+
+def test_a_record_naming_the_local_stream_through_a_symlinked_path_still_names_it(lab, tmp_path):
+    rec = attempt(lab, [ESC])
+    link = tmp_path / "link"
+    link.symlink_to(lab.data)
+    with run.open_private(lab.data / "trials.jsonl", append=True) as fh:
+        fh.write(json.dumps({**rec, "stream": str(link / "streams" / os.path.basename(rec["stream"]))}, sort_keys=True) + "\n")
+    assert stats.outside(lab.data / "trials.jsonl")["orphan_streams"] == 0
