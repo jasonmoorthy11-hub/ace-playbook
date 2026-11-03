@@ -95,6 +95,19 @@ def test_read_only_tools_are_allowed_only_when_every_path_input_resolves_inside_
         assert can_use(tool, inp, work) == (deny("rp", exitplan.OTHER_MSG), "other_denied"), (tool, inp)
 
 
+def test_a_tilde_path_is_outside_the_run_dir_because_the_file_tools_expand_it_to_home(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "notes~backup.txt").write_text("x")
+    for tool, key in [("Read", "file_path"), ("Grep", "path"), ("LS", "path"), ("Glob", "path"), ("Read", "notebook_path")]:
+        for val in ("~", "~/.ssh/id_rsa", "~/x", "~user/x", "~root"):
+            assert can_use(tool, {key: val}, work) == (deny("rp", exitplan.OTHER_MSG), "other_denied"), (tool, key, val)
+    assert can_use("Glob", {"pattern": "~/*"}, work) == (deny("rp", exitplan.OTHER_MSG), "other_denied")
+    for tool, key in [("Read", "file_path"), ("Grep", "path")]:                              # a later `~` is just a name
+        assert can_use(tool, {key: "notes~backup.txt"}, work)[1] == "allow"
+    assert can_use("Read", {"file_path": "sub/~x"}, work)[1] == "allow"
+
+
 def test_a_denied_read_is_counted_as_other_denied_by_the_driver_and_by_the_scorer(lab):
     outside = {"tool_name": "Read", "input": {"file_path": "/etc/passwd"}}
     inside = {"tool_name": "Read", "input": {"file_path": "plan.md"}}

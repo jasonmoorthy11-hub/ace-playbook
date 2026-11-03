@@ -106,7 +106,7 @@ def cmd_report(args) -> int:
     rows, excluded = stats.load_rows(data_dir() / "trials.jsonl", args.exclude_pilot)
     groups, cued, single = stats.summarize(rows), stats.summarize(rows, cued=True), stats.summarize(rows, single=True)
     bad = stats.mismatches(rows)
-    print(json.dumps({"groups": groups, "cued": cued, "single": single, "excluded": excluded, "exitplan_mismatches": bad or 0},
+    print(json.dumps({"groups": groups, "cued": cued, "single": single, "excluded": excluded, "exitplan_mismatches": bad},
                      indent=1, sort_keys=True) if args.json else stats.render(groups, excluded, cued, single, bad))
     return 0
 

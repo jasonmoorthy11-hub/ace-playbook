@@ -52,10 +52,12 @@ secondary. Wilson 95% intervals come from `compile/metrics.py`.
 
 The lab model gets file tools in its run dir only. Every trial (all three lessons) passes the single argument
 `--disallowedTools=Bash,WebFetch,WebSearch,NotebookEdit,Task,Agent` (one argument: the tool flags are variadic, so a separate value would
-swallow the next flag). The exit-plan driver allows read-only tools inside the run dir only, and denies the rest. These defaults are not
-proven against the real binary, so the pilot MUST check every saved stream, and stop if any of these ran:
-`grep -lE '"name": ?"(Bash|WebFetch|WebSearch|Task|Agent|NotebookEdit)"' <data>/streams/*.jsonl` (a `tool_use` of a denied tool) and
-`grep -hE '"permission_denials": ?\[[^]]' <data>/streams/*.jsonl` (a non-empty `result.permission_denials`; the records count them too).
+swallow the next flag). The exit-plan driver allows read-only tools inside the run dir only (a `~` path is outside), and denies the rest.
+These defaults are not proven against the real binary, so the pilot MUST check every saved stream. Stop the run if a denied tool ran: a
+`tool_use` of Bash, WebFetch, WebSearch, Task, Agent or NotebookEdit whose `tool_result` is not an error (list the streams with
+`grep -lE '"name": ?"(Bash|WebFetch|WebSearch|Task|Agent|NotebookEdit)"' <data>/streams/*.jsonl`, then open them). A denial alone is not
+"ran" but is to be investigated; in the preclaim and edit_unread streams (the exitplan ExitPlanMode denies are by design) look for one with
+`grep -hE '"permission_denials": ?\[[^]]' $(find <data>/streams -name '*.jsonl' ! -name '*.xp-*')`.
 
 ## Isolation
 

@@ -43,8 +43,9 @@ def blocked(text: str) -> bool:
 
 
 def inside(work: str, value) -> bool:
-    """True when `value` (relative to `work`) resolves, after symlinks, to the run dir or something under it."""
-    if not isinstance(value, str):
+    """True when `value` (relative to `work`) resolves, after symlinks, to the run dir or something under it. A value starting with `~`
+    is never inside: Claude Code's file tools expand it to the home directory (fail closed)."""
+    if not isinstance(value, str) or value.startswith("~"):
         return False
     try:
         root = os.path.realpath(work)

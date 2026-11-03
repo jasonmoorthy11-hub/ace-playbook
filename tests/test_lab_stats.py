@@ -217,8 +217,17 @@ def test_the_report_counts_exitplan_trials_where_the_rule_and_the_driver_differ(
     assert "exitplan rule/driver mismatches: 2" in capsys.readouterr().out
 
 
-def test_the_mismatch_line_is_absent_without_exitplan_trials_and_the_json_carries_zero(capsys, data):
+def test_the_mismatch_line_is_absent_without_exitplan_trials_and_the_json_carries_null(capsys, data):
     assert cmd.main(["report"]) == 0
     assert "mismatches" not in capsys.readouterr().out
+    assert cmd.main(["report", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["exitplan_mismatches"] is None
+
+
+def test_the_json_carries_zero_when_exitplan_trials_were_scored_and_none_differ(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("ACE_LAB_DATA", str(tmp_path))
+    recs = [{"trial_id": "a", "task": "xp-typehints", "lesson": "exitplan", "arm": "told", "model": "m", "error": None,
+             "stream": exitplan_stream(tmp_path / "a.jsonl", 1, 1)}]
+    (tmp_path / "trials.jsonl").write_text("\n".join(json.dumps(r) for r in recs) + "\n")
     assert cmd.main(["report", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["exitplan_mismatches"] == 0
