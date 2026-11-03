@@ -27,7 +27,8 @@ def _stream(stream) -> tuple[str, list[str]]:
 
 
 def _error_keys(rec: dict) -> list[str]:
-    """[`<arm>/<error>`] of an errored record, else [] (every recorded error string is bounded: a subtype, an exception class name or an exit code)."""
+    """[`<arm>/<error>`] of an errored record, else [] (the error is a fixed text: `timeout`, `stdin closed`, `exited before the result`;
+    `exit <code>`; `<kind> failed: <exception class>`; or `result error: <subtype as the binary wrote it>`, which is not bounded)."""
     return [f"{rec.get('arm')}/{rec['error']}"] if rec.get("error") else []
 
 

@@ -125,7 +125,9 @@ def _pattern_leaves(cwd, val: str, base: str | None = None) -> int:
     longer than MAX_CHARS, any character other than ASCII `A-Za-z0-9_./*?-{},` (so no `[`, `\\`, `^`, `:`, `=`, `~`, `!`, space, NUL or
     non-ASCII), or a `..` inside a brace body (`{Z..a}`) is outside. The braces are expanded FIRST (an unbalanced, too deep or too wide group is
     outside); then an absolute or `~` alternative is tested as a path, never joined to `base`, and a relative one is joined to `base` (itself
-    whitelisted and brace-expanded; the alternatives times the bases are capped) and tested; any alternative outside makes the input outside."""
+    whitelisted and brace-expanded; the alternatives times the bases are capped) and tested; any alternative outside makes the input outside.
+    A SECOND reading follows (a normalising join such as node's `path.posix.join` folds `./` and `x/..` before the braces): `normpath` of
+    `join(base, val)` (of `val` alone without a base) is expanded and tested the same way; the input is outside if either reading leaves."""
     if len(val) > MAX_CHARS or not ALLOWED.fullmatch(val) or _brace_dotdot(val):
         return 1
     try:
@@ -138,7 +140,24 @@ def _pattern_leaves(cwd, val: str, base: str | None = None) -> int:
                 return 1
     except ValueError:
         return 1
-    return int(any(_one_leaves(cwd, a if b is None or a.startswith(("/", "~")) else posixpath.join(b, a)) for a in alts for b in bases))
+    if any(_one_leaves(cwd, a if b is None or a.startswith(("/", "~")) else posixpath.join(b, a)) for a in alts for b in bases):
+        return 1
+    try:                                                                     # reading (b): a normalising join folds `./` and `x/..` BEFORE the braces
+        flat = [alt for b in bases for alt in expand(posixpath.normpath(posixpath.join(b, val) if b is not None else val))]
+    except ValueError:
+        return 1
+    return int(len(flat) > MAX_ALTERNATIVES or any(_one_leaves(cwd, alt) for alt in flat))
+
+
+def _root_leaves(cwd, base: str) -> int:
+    """A Grep `path` beside a glob is still its search root: brace-expanded (a `path` is a literal, so a brace there only widens the test), each
+    alternative goes through `_base_leaves`; over MAX_CHARS, outside the whitelist or an unbalanced or too wide group is outside."""
+    if len(base) > MAX_CHARS or not ALLOWED.fullmatch(base) or _brace_dotdot(base):
+        return 1
+    try:
+        return int(any(_base_leaves(cwd, alt) for alt in expand(base)))
+    except ValueError:
+        return 1
 
 
 def _base_leaves(cwd, base: str) -> int:
@@ -156,7 +175,8 @@ def inputs(cwd, name, inp: dict) -> int:
     """The outside count of one tool_use input: a non-str value (not None) under `pattern`, `glob`, `path`, `file_path` or `notebook_path` (1
     each); the path keys; a Glob `pattern` or a Grep `glob` (a Grep `pattern` is a content regex and is left alone; a Grep `glob` may start with
     one `!`, ripgrep's negation, which only filters), brace-expanded and then joined to the tool's `path` alternative by alternative (an absolute
-    or `~` alternative is never joined; `_pattern_leaves`); and a `path` with no pattern beside it (`_base_leaves`)."""
+    or `~` alternative is never joined; `_pattern_leaves`, two readings of the join); a `path` with no pattern beside it (`_base_leaves`); and a
+    Grep `path` beside a glob (its search root, `_root_leaves`)."""
     n = sum(1 for k in ("pattern", "glob") + PATH_KEYS if inp.get(k) is not None and not isinstance(inp[k], str))
     n += sum(leaves(cwd, inp[k]) for k in PATH_KEYS if isinstance(inp.get(k), str) and inp[k])
     base = inp.get("path") if isinstance(inp.get("path"), str) and inp.get("path") else None
@@ -166,8 +186,9 @@ def inputs(cwd, name, inp: dict) -> int:
         if isinstance(val, str):
             pats.append(val[1:] if name == "Grep" and key == "glob" and val.startswith("!") else val)
     pats = [v for v in pats if v]
-    for val in pats:
-        n += _pattern_leaves(cwd, val, base)
+    hit = sum(_pattern_leaves(cwd, val, base) for val in pats)
     if base is not None and not pats:
-        n += _base_leaves(cwd, base)
-    return n
+        hit += _base_leaves(cwd, base)
+    elif base is not None and name == "Grep" and not hit:                      # a Grep `path` is its search root, whatever the glob says
+        hit += _root_leaves(cwd, base)
+    return n + hit

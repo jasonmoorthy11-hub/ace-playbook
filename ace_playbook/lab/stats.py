@@ -18,7 +18,7 @@ from pathlib import Path
 from ..compile.arms_stats import ALPHA, holm
 from ..compile.metrics import wilson
 from . import checks as checks_mod
-from . import describe, score, tasks
+from . import describe, orphans, score, tasks
 
 ARMS = ("told", "not_told")
 
@@ -142,17 +142,16 @@ def mismatches(rows: list[dict]) -> int | None:
 
 
 def outside(trials: Path) -> dict | None:
-    """{total, unreadable, bad_streams, trials}: the tool inputs (file_path, path, notebook_path, a Glob pattern or Grep glob) outside the run dir,
-    summed over EVERY saved stream (one per attempt: a retry never hides an earlier attempt), pilot and errored trials included; `trials` lists
-    the sorted ids with a count above 0. FAIL CLOSED:
+    """{total, unreadable, bad_streams, trials, orphan_streams}: the tool inputs (file_path, path, notebook_path, a Glob pattern or Grep glob)
+    outside the run dir, summed over EVERY saved stream (one per attempt: a retry never hides an earlier attempt), pilot and errored trials
+    included, plus every `<data>/streams/*.jsonl` no record names (orphans.py: counted in `orphan_streams`); `trials` lists the sorted ids with
+    a count above 0. FAIL CLOSED:
     `unreadable` counts each record whose stream is missing, unreadable, wholly unparseable or not a usable path (a `build failed` record ran no
     agent, so it has no stream to read), each stream that is empty or has no init event (unless its record's error starts `spawn failed` and the
     stream has no event at all, blank lines aside: run.py opens the stream before the spawn), and each unparseable line of trials.jsonl;
     `bad_streams` counts the streams with an unparseable line.
-    None when trials.jsonl has no line."""
+    None when trials.jsonl has no line and there is no orphan stream."""
     recs, bad, any_line = _scan(trials, every=True)
-    if not any_line:
-        return None
     total, unreadable, bad_streams, hit = 0, bad, 0, []
     for rec in _distinct(recs):
         stream, err = rec.get("stream"), str(rec.get("error") or "")
@@ -167,17 +166,18 @@ def outside(trials: Path) -> dict | None:
         bad_streams += bad_lines > 0
         total += n
         hit += [str(rec["trial_id"])] if n else []
-    return {"total": total, "unreadable": unreadable, "bad_streams": bad_streams, "trials": sorted(set(hit))}
+    return orphans.merge(trials, recs, {"total": total, "unreadable": unreadable, "bad_streams": bad_streams, "trials": hit}, any_line)
 
 
 def render(groups: list[dict], excluded: dict, cued: list[dict] = (), single: list[dict] = (), mismatched: int | None = None,
-           outside_n: int | None = None, unreadable: int = 0, bad_streams: int = 0, checks: dict | None = None) -> str:
+           outside_n: int | None = None, unreadable: int = 0, bad_streams: int = 0, checks: dict | None = None,
+           orphan_streams: int = 0) -> str:
     out = []
     for title, part in (("", groups), ("cued tasks (secondary, descriptive)", cued),
                         ("single-claim preclaim tasks (secondary, descriptive)", single)):
         out += _render(part, title)
     out += [] if mismatched is None else [f"exitplan rule/driver mismatches: {mismatched}"]
-    bad = f", streams with bad lines: {bad_streams}" if bad_streams else ""
+    bad = (f", streams with bad lines: {bad_streams}" if bad_streams else "") + (f", orphan streams: {orphan_streams}" if orphan_streams else "")
     out += [] if outside_n is None else [f"outside-run-dir tool inputs: {outside_n} (unreadable streams: {unreadable}{bad})"]
     out = out or ([] if excluded else ["no scored trials"])
     out += [] if checks is None else [checks_mod.line(checks)]

@@ -197,7 +197,7 @@ def test_an_errored_attempt_with_an_escape_then_a_clean_retry_keeps_both_streams
 def test_a_clean_first_attempt_has_one_stream_and_the_same_numbers(lab):
     rec = attempt(lab, [READ_X])
     assert rec["stream"].endswith(".a1.jsonl")
-    assert stats.outside(lab.data / "trials.jsonl") == {"total": 1, "unreadable": 0, "bad_streams": 0, "trials": [rec["trial_id"]]}
+    assert stats.outside(lab.data / "trials.jsonl") == {"total": 1, "unreadable": 0, "bad_streams": 0, "trials": [rec["trial_id"]], "orphan_streams": 0}
     assert [p.name for p in (lab.data / "streams").iterdir()] == [rec["trial_id"] + ".a1.jsonl"]
 
 
@@ -217,7 +217,8 @@ def test_an_old_layout_stream_still_reports(tmp_path):
         {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "a", "name": "Read", "input": {"file_path": "/etc/x"}}]}}) + "\n")
     base = {"trial_id": "m.t.told.r0", "stream": str(old), "task": "pc-port", "lesson": "preclaim", "arm": "told", "model": "m", "pilot": False}
     (tmp_path / "trials.jsonl").write_text("\n".join(json.dumps(r) for r in [{**base, "error": "timeout"}, {**base, "error": None}]) + "\n")
-    assert stats.outside(tmp_path / "trials.jsonl") == {"total": 1, "unreadable": 0, "bad_streams": 0, "trials": ["m.t.told.r0"]}   # one stream, once
+    want = {"total": 1, "unreadable": 0, "bad_streams": 0, "trials": ["m.t.told.r0"], "orphan_streams": 0}
+    assert stats.outside(tmp_path / "trials.jsonl") == want                                             # one stream, once
 
 
 # ------------------------------------------------------------------ wave 9, m1: the retry cap
@@ -237,3 +238,36 @@ def test_max_attempts_defaults_to_three_and_must_be_at_least_one(capsys, cli_env
     assert "--max-attempts" in run_help() and "(default: 3)" in run_help()
     base = ("run", "--model", "m1", "--lesson", "preclaim", "--seed", "1", "--tasks", "pc-port", "--arms", "told", "--claude", str(FAKE))
     assert cli(capsys, *base, "--max-attempts", "0")[0] == 2 and not (cli_env / "trials.jsonl").exists()
+
+
+# ------------------------------------------------------------------ wave 10, I2: a stream no record names is still read (an interrupted attempt)
+def test_an_escaping_stream_with_no_record_is_counted_as_an_orphan_and_a_resume_does_not_lose_it(lab):
+    lab.scenario(turns=[ESC])
+    shutil.rmtree(lab.runs, ignore_errors=True)
+    lost = lab.go("pc-port", "told")                                                  # the attempt ran, its record was never written
+    assert lost["stream"].endswith(".a1.jsonl")
+    good = attempt(lab, [{}])
+    assert good["stream"].endswith(".a2.jsonl")
+    found = stats.outside(lab.data / "trials.jsonl")
+    assert found["total"] >= 1 and found["orphan_streams"] == 1 and found["trials"] == [lost["trial_id"]] and found["unreadable"] == 0
+
+
+def test_a_data_dir_whose_streams_are_all_named_has_no_orphans(lab):
+    attempt(lab, [ESC])
+    attempt(lab, [{}])
+    assert stats.outside(lab.data / "trials.jsonl")["orphan_streams"] == 0
+
+
+def test_an_orphan_stream_that_cannot_be_read_is_unreadable(lab):
+    attempt(lab, [{}])
+    (lab.data / "streams" / "x.a1.jsonl").write_text("not json at all\n")
+    found = stats.outside(lab.data / "trials.jsonl")
+    assert found["orphan_streams"] == 1 and found["unreadable"] == 1
+
+
+def test_the_report_prints_and_exports_the_orphan_count(capsys, cli_env):
+    cli(capsys, "run", "--model", "m1", "--lesson", "preclaim", "--seed", "1", "--tasks", "pc-port", "--arms", "told", "--claude", str(FAKE))
+    assert "orphan" not in cli(capsys, "report")[1] and json.loads(cli(capsys, "report", "--json")[1])["outside_orphan_streams"] == 0
+    (cli_env / "streams" / "z.a1.jsonl").write_text(json.dumps({"type": "system", "subtype": "init", "cwd": "/r/work"}) + "\n")
+    assert ", orphan streams: 1)" in cli(capsys, "report")[1]
+    assert json.loads(cli(capsys, "report", "--json")[1])["outside_orphan_streams"] == 1

@@ -114,10 +114,10 @@ def cmd_report(args) -> int:
     found = checks.checks(data_dir() / "trials.jsonl", args.exclude_pilot)
     print(json.dumps({"groups": groups, "cued": cued, "single": single, "excluded": excluded, "exitplan_mismatches": bad,
                       "outside_run_dir_tool_inputs": out.get("total"), "outside_unreadable": out.get("unreadable"),
-                      "outside_bad_lines": out.get("bad_streams"),
+                      "outside_bad_lines": out.get("bad_streams"), "outside_orphan_streams": out.get("orphan_streams"),
                       "outside_trials": out.get("trials", []), "checks": found}, indent=1, sort_keys=True) if args.json
           else stats.render(groups, excluded, cued, single, bad, out.get("total"), out.get("unreadable", 0), out.get("bad_streams", 0),
-                            found))
+                            found, out.get("orphan_streams", 0)))
     return 0
 
 

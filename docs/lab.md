@@ -62,9 +62,12 @@ denied tool whose `tool_result` is no error (list them with `grep -lE '"name": ?
 and open them). A denial alone is not "ran" but needs a look; in the preclaim and edit_unread streams look for one with
 `find <data>/streams -name '*.jsonl' ! -name '*.xp-*' -exec grep -lE '"permission_denials": ?\[[^]]' {} +`. Stop if `report` (with or without `--exclude-pilot`:
 the safety counts cover every stream of every attempt, errored and retried trials too) shows `outside-run-dir tool inputs`, `unreadable streams` or
-`streams with bad lines` above 0. The outside count is a whitelist: a Glob `pattern`, a Grep `glob` (one leading `!` allowed) or a `path` may hold only ASCII
+`streams with bad lines` above 0, or shows `orphan streams` (a stream no record names, left by an interrupted attempt: it is read, counted apart and is a
+STOP). The outside count is a whitelist: a Glob `pattern`, a Grep `glob` (one leading `!` allowed) or a `path` may hold only ASCII
 `A-Za-z0-9_./*?-` and `{ } ,`, with no `..` inside a brace body; any other character, or a `..` that may leave the run dir, counts as outside (fail closed).
-The braces are expanded FIRST: an absolute alternative (`{/etc/hosts,x}`) is tested as a path and never joined to the tool's `path`; a relative one is joined.
+The braces are expanded FIRST: an absolute alternative (`{/etc/hosts,x}`) is tested as a path and never joined to the tool's `path`; a relative one is
+joined. A second reading joins first and normalises (`./`, `x/..`), then expands; either reading leaving counts. A Grep `path` is its search root and
+is always checked, whatever its glob says.
 
 ## Isolation
 
@@ -79,9 +82,10 @@ The braces are expanded FIRST: an absolute alternative (`{/etc/hosts,x}`) is tes
 
 ## Data handling
 
-- The raw stream of each ATTEMPT is saved to `<data>/streams/<trial id>.a<n>.jsonl` (n = 1 + the earlier records of that trial id; created new, an
-  existing stream is never opened for writing; old data dirs hold `<trial id>.jsonl`). Files 0600, directories 0700; streams are private and never
-  committed. `trials.jsonl` (0600) holds one record per attempt: ids, arm, model, exit code, per-turn result subtypes, costs, stream path, error.
+- The raw stream of each ATTEMPT is saved to `<data>/streams/<trial id>.a<n>.jsonl` (n = 1 + the earlier records of that trial id, or the next free n;
+  created new, an existing stream is never opened for writing; old data dirs hold `<trial id>.jsonl`). Files 0600, directories 0700;
+  streams are private and never committed. `trials.jsonl` (0600) holds one record per attempt: ids, arm, model, exit code, per-turn result subtypes,
+  costs, stream path, error.
 - The lesson text is read at run time from the operator's store (read-only view, by lesson id). It is never stored in this repository and never
   logged or printed; a record keeps only `sha256(text)[:16]`.
 - The data dir is `$ACE_LAB_DATA`, else `~/.local/share/ace-playbook/lab`. A `STOP` file in it halts a run before the next trial.

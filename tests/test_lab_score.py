@@ -504,3 +504,21 @@ def test_a_brace_alternative_outside_is_outside_without_a_path_too_and_the_cap_c
     wide = "{" + ",".join(f"d{i}" for i in range(33)) + "}/*"
     assert out.inputs("/r/work", "Glob", {"pattern": wide, "path": "{a,b}"}) == 1                    # 33 x 2 alternatives: over the cap, fail closed
     assert out.inputs("/r/work", "Glob", {"pattern": wide, "path": "src"}) == 0
+
+
+# ------------------------------------------------------------------ wave 10, I1/m1: the normalised-join reading; a Grep path is always checked
+@pytest.mark.parametrize("path,val,want", [(".", "./{/etc/hosts,x}", 1), ("x", "../{x,/etc/hosts}", 1), ("x/y", "../../{/etc/hosts,a}", 1),
+                                           ("src", "*.{py,md}", 0), ("src", "{a,b}/*.py", 0), (None, "./*.py", 0), ("src", "./*.py", 0),
+                                           (None, "./{/etc/hosts,x}", 1)])
+def test_a_normalising_join_that_folds_dot_segments_before_the_braces_is_a_second_reading(tmp_path, path, val, want):
+    for name, key in (("Glob", "pattern"), ("Grep", "glob")):
+        extra = {} if name == "Glob" else {"pattern": "x"}
+        extra = extra if path is None else {**extra, "path": path}
+        assert outside(tmp_path, [init("/r/work"), use_in(name, **{key: val}, **extra), result()]) == want, (name, path, val)
+
+
+def test_a_grep_path_is_checked_whatever_its_glob_alternatives_are(tmp_path):
+    from ace_playbook.lab import outside as out
+    assert out.inputs("/r/work", "Grep", {"pattern": "x", "path": "x/**/../..", "glob": "/r/work/a"}) == 1
+    assert out.inputs("/r/work", "Grep", {"pattern": "x", "path": "src", "glob": "/r/work/a"}) == 0
+    assert out.inputs("/r/work", "Glob", {"pattern": "/r/work/a", "path": "src"}) == 0
