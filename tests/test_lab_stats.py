@@ -3,6 +3,7 @@
 import json
 import math
 import random
+from pathlib import Path
 
 import pytest
 
@@ -427,3 +428,20 @@ def test_a_non_str_stream_is_excluded_and_a_type_error_inside_score_propagates(t
     monkeypatch.setattr(stats.score, "score", boom)
     with pytest.raises(TypeError, match="a real bug"):
         stats.load_rows(tmp_path / "trials.jsonl")
+
+
+def test_a_stream_that_vanishes_after_the_one_read_cannot_crash_the_report(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("ACE_LAB_DATA", str(tmp_path))
+    orig = stats.score._events
+
+    def read_then_remove(path):
+        out = orig(path)
+        Path(path).unlink()
+        return out
+    monkeypatch.setattr(stats.score, "_events", read_then_remove)
+    put(tmp_path, [rec_of("a", text_stream(tmp_path / "a", "\n  \n"), "spawn failed: OSError")])
+    assert cmd.main(["report", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["outside_unreadable"] == 0
+    put(tmp_path, [rec_of("b", text_stream(tmp_path / "b", json.dumps({"type": "result", "subtype": "success"}) + "\n"), "spawn failed: OSError")])
+    assert cmd.main(["report", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["outside_unreadable"] == 1

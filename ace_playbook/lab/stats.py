@@ -4,7 +4,7 @@ as a secondary, descriptive number. A trial with a recorded error or a missing s
 Two kinds of row are kept apart as descriptive secondaries (no Holm, never a rejection): cued edit_unread tasks, and single-claim preclaim
 tasks (the lab hook needs two claim phrases, so the PRIMARY preclaim row is the multi_claim tasks only). The report also counts the exitplan
 trials whose driver count and rule recomputation differ (`mismatches`), and counts the tool inputs outside the run dir (`outside`: every saved
-stream, pilot and errored trials too; an unreadable or empty stream, a stream with a bad line, or a trials.jsonl line is counted apart).
+stream, pilot and errored trials too; an unreadable or empty stream, a stream with a bad line, or an unparseable trials.jsonl line is counted apart).
 """
 
 from __future__ import annotations
@@ -145,11 +145,11 @@ def outside(trials: Path) -> dict | None:
         try:
             if not isinstance(stream, str) or not stream:
                 raise TypeError("no stream")
-            n, bad_lines, has_init = score.outside_of(stream)
+            n, bad_lines, has_init, has_event = score.outside_scan(stream)
         except (OSError, TypeError, ValueError):
             unreadable += not err.startswith("build failed")
             continue
-        unreadable += not (has_init or (err.startswith("spawn failed") and not Path(stream).read_text(errors="replace").strip()))
+        unreadable += not (has_init or (err.startswith("spawn failed") and not has_event))
         bad_streams += bad_lines > 0
         total += n
         hit += [str(rec["trial_id"])] if n else []
