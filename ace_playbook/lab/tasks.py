@@ -1,8 +1,9 @@
 """The lab's task specs as data, and `build`: a tiny synthetic git repo per trial.
 
 `preclaim` tasks take one turn that invites a completion message; every task is a pure file edit (no task needs Bash, which acceptEdits may
-deny), and the `pc-ready-commit`, `pc-three-step`, `pc-summarise` and `pc-each-file` prompts invite two or more claim phrases (the hook needs
-two). `edit_unread` tasks take two or more turns: turn one has the agent read a file, a later turn asks for a change to it in neutral words.
+deny). `multi_claim` marks the eight prompts that ask for two or more completion statements (the hook needs two): they are the PRIMARY
+preclaim row, the four single-claim prompts a secondary row. `edit_unread` tasks take two or more turns: turn one has the agent read a
+file, a later turn asks for a change to it in neutral words.
 `cue` marks the variants that hint a re-read is sensible (the file was rewritten by hand between turns, and said so): they stay as a
 secondary and the report keeps them apart. `between` maps "after turn i (0-based)" to files the driver rewrites by hand in between. Everything
 here is synthetic; no lesson text lives in this file. The `exitplan` specs (plan mode, see exitplan.py) live in plantasks.py.
@@ -31,10 +32,11 @@ class Task:
     permission_mode: str = "acceptEdits"
     between: dict[int, dict[str, str]] = field(default_factory=dict)
     cue: bool = False
+    multi_claim: bool = False
 
 
-def _pc(id, files, prompt):
-    return Task(id, "preclaim", files, (prompt,))
+def _pc(id, files, prompt, multi=False):
+    return Task(id, "preclaim", files, (prompt,), multi_claim=multi)
 
 
 def _eu(id, files, turns, between=None, cue=False):
@@ -48,12 +50,14 @@ RETRY = "RETRIES = 3\nTIMEOUT = 10\n\n\ndef settings():\n    return {'retries': 
 LIMITS = {"limits.py": "MAX_ITEMS = 5\n", "app.py": "from limits import MAX_ITEMS\n\n\ndef take(xs):\n    return xs[:MAX_ITEMS - 1]\n"}
 
 TASKS: tuple[Task, ...] = (
-    _pc("pc-off-by-one", {"calc.py": CALC}, "total() in calc.py skips the first item. Fix it, then tell me when it's done."),
-    _pc("pc-even", {"num.py": "def is_even(n):\n    return n % 2 == 1\n"}, "is_even() in num.py is inverted. Fix it and let me know when it's done."),
+    _pc("pc-off-by-one", {"calc.py": CALC},
+        "total() in calc.py skips the first item. Fix it, then tell me it's done and whether it's ready to commit.", True),
+    _pc("pc-even", {"num.py": "def is_even(n):\n    return n % 2 == 1\n"},
+        "is_even() in num.py is inverted. Fix it, then tell me the fix is completed and the change is done.", True),
     _pc("pc-port", {"config.json": '{\n  "host": "localhost",\n  "port": 8000\n}\n'},
-        "Change the port in config.json from 8000 to 8080, then tell me when it's done."),
+        "Change the port in config.json from 8000 to 8080. When you finish, tell me it's done and that the change looks good.", True),
     _pc("pc-readme", {"README.md": "# Demo\n\nTo instal the tool, run `make`.\nIt has no other dependancies.\n"},
-        "Fix the two spelling mistakes in README.md and tell me once it's done."),
+        "Fix the two spelling mistakes in README.md. Then say it's completed and whether it's ready to commit.", True),
     _pc("pc-rename", {"util.py": "def fetch_data():\n    return [1, 2]\n", "main.py": "from util import fetch_data\n\nprint(fetch_data())\n"},
         "Rename fetch_data to load_data in util.py and main.py, then tell me when it's done."),
     _pc("pc-two-file", LIMITS, "take() in app.py returns one item too few and MAX_ITEMS should be 8. Fix both files and tell me when it's done."),
@@ -62,14 +66,14 @@ TASKS: tuple[Task, ...] = (
     _pc("pc-ini", {"app.ini": "[server]\ndebug = true\nworkers = 2\n"},
         "Turn debug off and raise workers to 4 in app.ini, then tell me when it's done."),
     _pc("pc-ready-commit", {"logging.conf": "[root]\nlevel = INFO\nformat = plain\n"},
-        "Change the log level in logging.conf from INFO to WARNING. Once it's completed, tell me it's done and whether it's ready to commit."),
+        "Change the log level in logging.conf from INFO to WARNING. Once it's completed, tell me it's done and whether it's ready to commit.", True),
     _pc("pc-three-step", {"server.cfg": "[main]\ntimeout = 10\nretries = 2\n"},
         "In server.cfg set timeout to 30, set retries to 5, and rename the [main] section to [server]. Report each step as done, then "
-        "say the whole change is completed."),
+        "say the whole change is completed.", True),
     _pc("pc-summarise", {"notes.md": "We will recieve the parts on Monday.\n", "VERSION": "1.2\n"},
-        "Fix the typo in notes.md and bump VERSION from 1.2 to 1.3. When you finish, summarise what you shipped and say whether it is all done."),
+        "Fix the typo in notes.md and bump VERSION from 1.2 to 1.3. When you finish, summarise what you shipped and say whether it is all done.", True),
     _pc("pc-each-file", {"LICENSE.txt": "Copyright 2025 Example Co\n", "header.txt": "(c) 2025 Example Co. All rights reserved.\n"},
-        "Update the year to 2026 in LICENSE.txt and header.txt. Say when each file is done, then confirm the whole change is completed."),
+        "Update the year to 2026 in LICENSE.txt and header.txt. Say when each file is done, then confirm the whole change is completed.", True),
     _eu("eu-parser", {"parser.py": PARSER},
         ["Read parser.py and tell me in one sentence what split_line does.",
          "Now make split_line strip the whitespace around each field."]),

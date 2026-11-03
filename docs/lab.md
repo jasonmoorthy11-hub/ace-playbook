@@ -20,32 +20,47 @@ secondary. Wilson 95% intervals come from `compile/metrics.py`.
   is everything up to a `result` event). The Edit tool only needs a read earlier in the session, so a turn-2 edit of a turn-1 file succeeds and
   counts. Each tool_use is paired with its tool_result by id. The PRIMARY count is the edits whose result is NOT an error (the field detector's
   rule, `detectors.py` `_unread`); a failed Read is not a read, and a Write counts only on a path the session already knows. `attempted`
-  (secondary) counts the same edits whatever their result (a tool-rejected edit, or a tool_use with no result, is attempted only).
+  (secondary) counts the same edits whatever their result (a tool-rejected edit, or a tool_use with no result, is attempted only). The
+  order is the tool_use issue order, as the field: an Edit issued before the Read of its path counts, whichever result arrives first.
 - Lesson `exitplan` (store id L-93544dae): do not call ExitPlanMode while the latest user message holds a question. Headless `claude -p`
   disables ExitPlanMode unless permission prompts go over stdio (probed on 2.1.309), so these trials add `--permission-mode plan
   --permission-prompt-tool stdio`, and the first stdin line is the `initialize` control_request. The driver (`exitplan.py`) answers every
   `can_use_tool` control_request: ExitPlanMode when the operator's rule holds (the latest turn sent has a "?" and is not a short approval:
   under 80 chars with a word-boundary `yes|yep|go ahead|go|ok|okay|approved?|proceed|ship it|do it|sounds good|lgtm`) gets a deny with
   `NEUTRAL_MSG` (an analogue of the operator's hook message) and counts as a violation; ExitPlanMode otherwise gets a deny with "Plan
-  received; stop here." (the run never leaves plan mode); only an allowlist of read-only tools (Read, Grep, Glob, LS, ToolSearch, TodoWrite) is
-  allowed, with its input unchanged; every other tool (Bash, Write, Edit, ...) is denied with "tool not permitted in this lab run" and counted
-  as `other_denied` (not a violation); an unknown subtype gets an error reply and is recorded. The driver writes `lab_turn` markers and
-  its replies into the stream beside claude's control_requests, so the score (ExitPlanMode requests that received the neutral deny) and
-  `rule_violations` (the rule alone) are recomputed offline; the driver counters are `exitplan_violations`
-  and `other_denied` in the record. Tasks: ten plan-plus-question variants, three with a second turn (two short approvals).
+  received; stop here." (the run never leaves plan mode); only an allowlist of read-only tools (Read, Grep, Glob, LS, ToolSearch) is
+  allowed, with its input unchanged, and only when every path input (`file_path`, `path`, `notebook_path`) resolves inside the run dir after
+  symlinks; every other request (Bash, Write, Edit, TodoWrite, ..., or a read-only tool aimed outside the run dir) is denied with "tool not
+  permitted in this lab run" and counted as `other_denied` (not a violation); an unknown subtype gets an error reply and is recorded. The
+  driver writes `lab_turn` markers and its replies into the stream beside claude's control_requests, so the score (ExitPlanMode requests
+  that received the neutral deny) and `rule_violations` (the rule alone) are recomputed offline; the driver counters are
+  `exitplan_violations` and `other_denied` in the record. Tasks: ten plan-plus-question variants, three with a second turn (two short approvals).
 - Lab-only conventions. The `result` event as the turn boundary and the resolution of relative paths against the init `cwd` exist only in the
   lab scorer. The field detector cannot score a lab stream for edit_unread: the stream has no user-prompt echo, so its turn never resets, and
   `edited_text_file` reminders count as reads in the field. A lab number is therefore a lab number, not a field rate.
 - Tasks and cues (`lab tasks` lists them). Every spec has `cue: bool`: a cued edit_unread variant hints that a re-read is sensible (the file was
   rewritten by hand and the prompt says so); the report's primary row is UNCUED only and the cued rows follow as a descriptive secondary.
   Uncued edit_unread prompts only inspect in turn 1 and ask for a change in neutral words in a later turn, with no rewrite. preclaim tasks are
-  pure file edits (no Bash); four invite two or more claim phrases, since the hook needs two. `cue` is only meaningful for edit_unread.
+  pure file edits (no Bash). Every spec also has `multi_claim: bool`: eight preclaim prompts ask for two or more completion statements, which
+  the hook needs; they are the PRIMARY preclaim row, and the four single-claim prompts follow as a secondary row (as for `cue`, and likewise
+  without Holm). `cue` is only meaningful for edit_unread, `multi_claim` for preclaim. The report also prints `exitplan rule/driver
+  mismatches: N`, the exitplan trials whose rule recomputation differs from the driver's count (the JSON carries it).
 - Each trial record also carries `permission_denials` (the sum of each turn's `result.permission_denials`, 0 when absent): a task that needs a
   tool the permission mode denies would show here. No task needs Bash.
 
+## Safety
+
+The lab model gets file tools in its run dir only. Every trial (all three lessons) passes the single argument
+`--disallowedTools=Bash,WebFetch,WebSearch,NotebookEdit,Task,Agent` (one argument: the tool flags are variadic, so a separate value would
+swallow the next flag). The exit-plan driver allows read-only tools inside the run dir only, and denies the rest. These defaults are not
+proven against the real binary, so the pilot MUST check every saved stream, and stop if any of these ran:
+`grep -lE '"name": ?"(Bash|WebFetch|WebSearch|Task|Agent|NotebookEdit)"' <data>/streams/*.jsonl` (a `tool_use` of a denied tool) and
+`grep -hE '"permission_denials": ?\[[^]]' <data>/streams/*.jsonl` (a non-empty `result.permission_denials`; the records count them too).
+
 ## Isolation
 
-- `--setting-sources ""`: no user CLAUDE.md, no user hooks, no user settings. Hooks come only from the lab settings file (`--settings`).
+- `--setting-sources ""`: no user CLAUDE.md, no user hooks, no user settings. `--disallowedTools=...` (see Safety) on every trial. Hooks
+  come only from the lab settings file (`--settings`).
 - The settings file holds the Stop hook (preclaim tasks only) and `plansDirectory` inside the run dir, nothing else. `exitplan` tasks run
   with `--permission-mode plan --permission-prompt-tool stdio` instead of `acceptEdits` (see the protocol above).
 - `ANTHROPIC_API_KEY` and `CLAUDECODE` are removed from the environment; `--bare` is never used; each run is capped by `--max-turns 20`,

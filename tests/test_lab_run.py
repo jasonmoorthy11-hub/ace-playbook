@@ -60,6 +60,20 @@ def test_the_exact_flags_in_the_told_arm(lab):
     assert argv[argv.index("--append-system-prompt") + 1] == LESSON
 
 
+DENY = "--disallowedTools=Bash,WebFetch,WebSearch,NotebookEdit,Task,Agent"
+
+
+@pytest.mark.parametrize("task_id,arm", [("pc-port", "told"), ("pc-port", "not_told"), ("eu-parser", "told"), ("eu-parser", "not_told"),
+                                         ("xp-greet", "told"), ("xp-greet", "not_told")])
+def test_every_trial_of_every_lesson_passes_one_single_argument_deny_list(lab, task_id, arm):
+    lab.scenario(turns=[{}, {}])
+    lab.go(task_id, arm)
+    argv = lab.read("argv.json")
+    assert argv.count(DENY) == 1 and not any(a in ("--disallowedTools", "--disallowed-tools", "--allowedTools") for a in argv)
+    i = argv.index(DENY)
+    assert argv[i + 1].startswith("--")                                      # the variadic flag swallows nothing: a flag follows it
+
+
 def test_not_told_has_no_append_system_prompt_and_no_lesson_anywhere_in_argv(lab):
     lab.scenario(turns=[READ_X])
     lab.go("pc-port", "not_told")

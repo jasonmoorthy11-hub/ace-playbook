@@ -1,6 +1,9 @@
 """Lab statistics, descriptive-first: per (model, lesson) the any-violation rate in each arm (Wilson 95%), their difference, a two-sided
 Fisher exact p (stdlib hypergeometric, exact integer arithmetic), Holm across the lessons within a model, and mean violations per trial
 as a secondary, descriptive number. A trial with a recorded error or a missing stream is excluded and counted, per arm, never scored.
+Two kinds of row are kept apart as descriptive secondaries (no Holm, never a rejection): cued edit_unread tasks, and single-claim preclaim
+tasks (the lab hook needs two claim phrases, so the PRIMARY preclaim row is the multi_claim tasks only). The report also counts the exitplan
+trials whose driver count and rule recomputation differ (`mismatches`).
 """
 
 from __future__ import annotations
@@ -36,10 +39,11 @@ def _arm(rows: list[dict]) -> dict:
             "mean_violations": round(sum(r["violations"] for r in rows) / n, 4) if n else None}
 
 
-def summarize(rows: list[dict], cued: bool = False) -> list[dict]:
-    """rows: {model, lesson, arm, violations, any, cue?}. One group per (model, lesson), Holm-adjusted across the lessons of a model.
-    The primary summary takes the uncued rows only; `cued=True` summarises the cued rows apart (descriptive: no Holm, never a rejection)."""
-    rows = [r for r in rows if bool(r.get("cue")) == cued]
+def summarize(rows: list[dict], cued: bool = False, single: bool = False) -> list[dict]:
+    """rows: {model, lesson, arm, violations, any, cue?, single?}. One group per (model, lesson), Holm-adjusted across the lessons of a model.
+    The primary summary takes the uncued, multi-claim rows only; `cued=True` or `single=True` summarises those rows apart (descriptive)."""
+    want = "cued" if cued else "single" if single else "primary"
+    rows = [r for r in rows if ("cued" if r.get("cue") else "single" if r.get("single") else "primary") == want]
     keys = sorted({(r["model"], r["lesson"]) for r in rows})
     groups, raw = [], {}
     for model, lesson in keys:
@@ -50,7 +54,7 @@ def summarize(rows: list[dict], cued: bool = False) -> list[dict]:
         raw[model, lesson] = p                                                  # Holm runs on the raw p; only the display is rounded
         groups.append({"model": model, "lesson": lesson, "told": told, "not_told": not_told, "diff": diff,
                        "fisher_p": None if p is None else _show(p), "p_holm": None, "reject": False})
-    for model in sorted({g["model"] for g in groups} if not cued else ()):
+    for model in sorted({g["model"] for g in groups} if want == "primary" else ()):
         same = [g for g in groups if g["model"] == model]
         for g, (adj, rej) in zip(same, holm([raw[model, g["lesson"]] for g in same])):
             g["p_holm"], g["reject"] = _show(adj), rej and raw[model, g["lesson"]] is not None
@@ -78,7 +82,7 @@ def load_rows(trials: Path, exclude_pilot: bool = False) -> tuple[list[dict], di
             key = f"{rec.get('model')}/{rec.get('lesson')}/{rec.get('arm')}"
             excluded[key] = excluded.get(key, 0) + 1
             continue
-        rows.append({"model": rec["model"], "lesson": rec["lesson"], "arm": rec["arm"], "cue": _cued(rec), **sc})
+        rows.append({"model": rec["model"], "lesson": rec["lesson"], "arm": rec["arm"], "cue": _cued(rec), "single": _single(rec), **sc})
     return rows, excluded
 
 
@@ -92,10 +96,30 @@ def _cued(rec: dict) -> bool:
         return False
 
 
-def render(groups: list[dict], excluded: dict, cued: list[dict] = ()) -> str:
+def _single(rec: dict) -> bool:
+    """A preclaim record from a single-claim task: the record's own `multi_claim`, else the task spec's; an unknown task is not single."""
+    if rec.get("lesson") != "preclaim":
+        return False
+    if "multi_claim" in rec:
+        return not rec["multi_claim"]
+    try:
+        return not tasks.get(rec["task"]).multi_claim
+    except KeyError:
+        return False
+
+
+def mismatches(rows: list[dict]) -> int | None:
+    """The exitplan trials whose rule recomputation differs from the driver's count; None when no exitplan trial was scored."""
+    mine = [r for r in rows if r["lesson"] == "exitplan"]
+    return sum(r.get("rule_violations") != r["violations"] for r in mine) if mine else None
+
+
+def render(groups: list[dict], excluded: dict, cued: list[dict] = (), single: list[dict] = (), mismatched: int | None = None) -> str:
     out = []
-    for title, part in (("", groups), ("cued tasks (secondary, descriptive)", cued)):
+    for title, part in (("", groups), ("cued tasks (secondary, descriptive)", cued),
+                        ("single-claim preclaim tasks (secondary, descriptive)", single)):
         out += _render(part, title)
+    out += [] if mismatched is None else [f"exitplan rule/driver mismatches: {mismatched}"]
     out += [f"excluded (error or missing stream) {k}: {v}" for k, v in sorted(excluded.items())]
     return "\n".join(out) if out else "no scored trials"
 

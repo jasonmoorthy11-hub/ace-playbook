@@ -163,3 +163,62 @@ def test_report_splits_cued_from_uncued_by_the_record_or_the_task_spec(capsys, t
     out = json.loads(capsys.readouterr().out)
     [g], [c] = out["groups"], out["cued"]
     assert (g["told"]["n"], g["not_told"]["n"]) == (1, 2) and (c["told"]["n"], c["not_told"]["n"]) == (2, 1)      # hand-notes: cued by spec
+
+
+def test_the_primary_preclaim_row_is_multi_claim_only_and_single_claim_tasks_are_a_secondary_row():
+    base = rows("m", "preclaim", [1, 1, 0], [0, 0, 0]) + rows("m", "edit_unread", [1, 0], [0, 0])
+    data = base + [dict(r, single=True) for r in rows("m", "preclaim", [1, 0], [1, 0, 0])]
+    groups = {g["lesson"]: g for g in stats.summarize(data)}
+    assert (groups["preclaim"]["told"]["n"], groups["preclaim"]["not_told"]["n"]) == (3, 3) and "edit_unread" in groups
+    [s1] = stats.summarize(data, single=True)
+    assert (s1["lesson"], s1["told"]["n"], s1["not_told"]["n"], s1["p_holm"], s1["reject"]) == ("preclaim", 2, 3, None, False)
+    assert stats.summarize(data, cued=True) == []
+    text = stats.render(list(groups.values()), {}, [], [s1])
+    assert "single-claim preclaim tasks (secondary, descriptive)" in text and text.index("model m  lesson preclaim") < text.index("single-claim")
+
+
+def test_report_splits_single_claim_preclaim_by_the_record_or_the_task_spec(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("ACE_LAB_DATA", str(tmp_path))
+    recs = []
+    for i, (task, arm, multi) in enumerate([("pc-rename", "told", None), ("pc-rename", "not_told", None), ("pc-summarise", "told", None),
+                                            ("pc-summarise", "not_told", None), ("pc-ini", "told", True), ("pc-ini", "not_told", False)]):
+        path = tmp_path / f"s{i}.jsonl"
+        path.write_text(json.dumps({"type": "result", "subtype": "success"}) + "\n")
+        rec = {"trial_id": f"t{i}", "task": task, "lesson": "preclaim", "arm": arm, "model": "m", "error": None, "stream": str(path)}
+        recs.append(rec if multi is None else {**rec, "multi_claim": multi})
+    (tmp_path / "trials.jsonl").write_text("\n".join(json.dumps(r) for r in recs) + "\n")
+    assert cmd.main(["report", "--json"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    [g], [s1] = out["groups"], out["single"]
+    assert (g["told"]["n"], g["not_told"]["n"]) == (2, 1) and (s1["told"]["n"], s1["not_told"]["n"]) == (1, 2)      # pc-rename: single by spec
+
+
+def exitplan_stream(path, rule, driver):
+    """A stream whose rule recomputation says `rule` and whose driver neutral denies say `driver` (0 or 1 ExitPlanMode request)."""
+    ev = [{"type": "lab_turn", "text": "Which one?" if rule else "ok go ahead"},
+          {"type": "control_request", "request_id": "r1", "request": {"subtype": "can_use_tool", "tool_name": "ExitPlanMode", "input": {}}}]
+    if driver:
+        from ace_playbook.lab import exitplan
+        ev.append({"type": "control_response", "response": {"subtype": "success", "request_id": "r1",
+                                                            "response": {"behavior": "deny", "message": exitplan.NEUTRAL_MSG}}})
+    path.write_text("\n".join(json.dumps(e) for e in ev + [{"type": "result", "subtype": "success"}]) + "\n")
+    return str(path)
+
+
+def test_the_report_counts_exitplan_trials_where_the_rule_and_the_driver_differ(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("ACE_LAB_DATA", str(tmp_path))
+    spec = [("a", "told", 1, 1), ("b", "told", 1, 0), ("c", "not_told", 0, 0), ("d", "not_told", 0, 1)]         # (id, arm, rule, driver)
+    recs = [{"trial_id": i, "task": "xp-typehints", "lesson": "exitplan", "arm": arm, "model": "m", "error": None,
+             "stream": exitplan_stream(tmp_path / f"{i}.jsonl", rule, drv)} for i, arm, rule, drv in spec]
+    (tmp_path / "trials.jsonl").write_text("\n".join(json.dumps(r) for r in recs) + "\n")
+    assert cmd.main(["report", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["exitplan_mismatches"] == 2
+    assert cmd.main(["report"]) == 0
+    assert "exitplan rule/driver mismatches: 2" in capsys.readouterr().out
+
+
+def test_the_mismatch_line_is_absent_without_exitplan_trials_and_the_json_carries_zero(capsys, data):
+    assert cmd.main(["report"]) == 0
+    assert "mismatches" not in capsys.readouterr().out
+    assert cmd.main(["report", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["exitplan_mismatches"] == 0

@@ -98,15 +98,16 @@ def cmd_run(args) -> int:
 
 def cmd_tasks(args) -> int:
     for t in tasks.TASKS:
-        print(f"{t.id:<16} {t.lesson:<12} turns={len(t.turns)} files={len(t.files)}" + (" cue" if t.cue else ""))
+        print(f"{t.id:<16} {t.lesson:<12} turns={len(t.turns)} files={len(t.files)}" + (" cue" if t.cue else "") + (" multi_claim" if t.multi_claim else ""))
     return 0
 
 
 def cmd_report(args) -> int:
     rows, excluded = stats.load_rows(data_dir() / "trials.jsonl", args.exclude_pilot)
-    groups, cued = stats.summarize(rows), stats.summarize(rows, cued=True)
-    print(json.dumps({"groups": groups, "cued": cued, "excluded": excluded}, indent=1, sort_keys=True) if args.json
-          else stats.render(groups, excluded, cued))
+    groups, cued, single = stats.summarize(rows), stats.summarize(rows, cued=True), stats.summarize(rows, single=True)
+    bad = stats.mismatches(rows)
+    print(json.dumps({"groups": groups, "cued": cued, "single": single, "excluded": excluded, "exitplan_mismatches": bad or 0},
+                     indent=1, sort_keys=True) if args.json else stats.render(groups, excluded, cued, single, bad))
     return 0
 
 

@@ -1,8 +1,9 @@
 """One lab trial: build the run dir, launch `claude -p` in stream-json mode, drive the turns, save the raw stream (docs/lab.md).
 
-Isolation: `--setting-sources ""` (no user CLAUDE.md, hooks or settings), the hooks and `plansDirectory` come only from the lab settings
-file, the prompts go through stdin (never argv), and ANTHROPIC_API_KEY and CLAUDECODE are removed from the environment. The lesson text is
-read from the operator's store by id at run time; the record keeps only `sha256(text)[:16]`. The only run-time reader of the store here.
+Isolation: `--setting-sources ""` (no user CLAUDE.md, hooks or settings), `--disallowedTools=...` on every trial (Bash, web and agent
+tools), the hooks and `plansDirectory` come only from the lab settings file, the prompts go through stdin (never argv), and
+ANTHROPIC_API_KEY and CLAUDECODE are removed from the environment. The lesson text is read from the operator's store by id at run time; the
+record keeps only `sha256(text)[:16]`. The only run-time reader of the store here.
 The process plumbing (pump, turn loop, group stop) is in drive.py.
 """
 
@@ -26,6 +27,8 @@ from . import drive, exitplan, tasks
 ARMS = ("told", "not_told")
 HOOK = Path(__file__).resolve().parent / "hooks" / "stop-mid-task-audit.sh"
 DROP_ENV = ("ANTHROPIC_API_KEY", "CLAUDECODE")
+DENY = "--disallowedTools=Bash,WebFetch,WebSearch,NotebookEdit,Task,Agent"       # ONE argument: the tool flags are variadic, a separate
+#                                                                                  value would swallow the next flag
 
 
 def lesson_text(lesson: str) -> str:
@@ -59,7 +62,7 @@ def settings(task: tasks.Task, run_dir: Path) -> dict:
 def command(claude: str, model: str, task: tasks.Task, settings_path: Path, arm: str, text: str) -> list[str]:
     argv = [claude, "-p", "--model", model, "--no-session-persistence", "--setting-sources", "", "--settings", str(settings_path),
             "--permission-mode", task.permission_mode, "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-            "--max-turns", "20", "--max-budget-usd", "0.50"]
+            DENY, "--max-turns", "20", "--max-budget-usd", "0.50"]
     if task.lesson == "exitplan":                                            # ExitPlanMode exists headless only over the stdio protocol
         argv += ["--permission-prompt-tool", "stdio"]
     return argv + (["--append-system-prompt", text] if arm == "told" else [])
@@ -86,6 +89,7 @@ def trial(task: tasks.Task, arm: str, model: str, lesson_text: str, run_dir: Pat
     streams = private_dir(private_dir(data_dir) / "streams")
     stream = streams / f"{tid}.jsonl"
     rec = {"trial_id": tid, "task": task.id, "lesson": task.lesson, "arm": arm, "model": model, "rep": rep, "pilot": pilot, "cue": task.cue,
+           "multi_claim": task.multi_claim,
            "lesson_sha16": hashlib.sha256(lesson_text.encode()).hexdigest()[:16], "started": now_iso(), "exit_code": None, "results": [],
            "num_turns": [], "costs": [], "permission_denials": 0, "is_error": False, "stream": str(stream), "error": None}
     private_dir(run_dir)
@@ -111,7 +115,7 @@ def trial(task: tasks.Task, arm: str, model: str, lesson_text: str, run_dir: Pat
         pump = threading.Thread(target=drive.pump, args=(proc.stdout, sink, lines), daemon=True)
         pump.start()
         deadline = time.monotonic() + timeout_s
-        ctl = exitplan.Control(proc, sink) if task.lesson == "exitplan" else None
+        ctl = exitplan.Control(proc, sink, work) if task.lesson == "exitplan" else None
         try:
             rec["error"] = drive.drive(proc, task, work, lines, deadline, rec, ctl)
             if ctl is not None:

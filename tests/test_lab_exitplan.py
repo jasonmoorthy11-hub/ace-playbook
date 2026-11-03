@@ -11,6 +11,7 @@ from ace_playbook.lab import exitplan, score, tasks
 
 from .test_lab_run import FAKE, cli, cli_env, lab, trials_of  # noqa: F401  (fixtures and helpers)
 
+W = "/lab/run/work"                                                         # the run dir of the pure respond() tests
 EPM = {"tool_name": "ExitPlanMode", "input": {"plan": "step one"}}
 INIT = {"type": "control_request", "request_id": "init-1", "request": {"subtype": "initialize", "hooks": None}}
 
@@ -46,21 +47,64 @@ def test_the_neutral_message_is_the_documented_constant():
 
 def test_respond_covers_exitplan_other_tools_and_unknown_requests():
     req = {"type": "control_request", "request_id": "r1", "request": {"subtype": "can_use_tool", "tool_name": "ExitPlanMode", "input": {}}}
-    assert exitplan.respond(req, "Which one, and why?") == (deny("r1", exitplan.NEUTRAL_MSG), "neutral")
-    assert exitplan.respond(req, "ok go ahead") == (deny("r1", exitplan.PLAN_MSG), "plan")
+    assert exitplan.respond(req, "Which one, and why?", W) == (deny("r1", exitplan.NEUTRAL_MSG), "neutral")
+    assert exitplan.respond(req, "ok go ahead", W) == (deny("r1", exitplan.PLAN_MSG), "plan")
     read = {"type": "control_request", "request_id": "r2", "request": {"subtype": "can_use_tool", "tool_name": "Read", "input": {"a": 1}}}
-    assert exitplan.respond(read, "Which one, and why?") == (reply("r2", {"behavior": "allow", "updatedInput": {"a": 1}}), "allow")
+    assert exitplan.respond(read, "Which one, and why?", W) == (reply("r2", {"behavior": "allow", "updatedInput": {"a": 1}}), "allow")
     for tool in ("Bash", "Write", "Edit", "MultiEdit", "NotebookEdit", "WebFetch", "Task", "mcp__x__y", None):
         bad = {"type": "control_request", "request_id": "rb", "request": {"subtype": "can_use_tool", "tool_name": tool, "input": {"a": 1}}}
-        assert exitplan.respond(bad, "") == (deny("rb", exitplan.OTHER_MSG), "other_denied")
+        assert exitplan.respond(bad, "", W) == (deny("rb", exitplan.OTHER_MSG), "other_denied")
     assert exitplan.OTHER_MSG == "tool not permitted in this lab run"
-    assert exitplan.READ_ONLY == {"Read", "Grep", "Glob", "LS", "ToolSearch", "TodoWrite"}
+    assert exitplan.READ_ONLY == {"Read", "Grep", "Glob", "LS", "ToolSearch"}
     odd = {"type": "control_request", "request_id": "r3", "request": {"subtype": "weird"}}
     err = {"type": "control_response", "response": {"subtype": "error", "request_id": "r3", "error": "unsupported"}}
-    assert exitplan.respond(odd, "") == (err, "unsupported")
-    assert exitplan.respond({"type": "control_request", "request_id": "r4", "request": 5}, "")[1] == "unsupported"
+    assert exitplan.respond(odd, "", W) == (err, "unsupported")
+    assert exitplan.respond({"type": "control_request", "request_id": "r4", "request": 5}, "", W)[1] == "unsupported"
     assert exitplan.respond({"type": "control_request", "request_id": "r5", "request": {"subtype": "can_use_tool", "tool_name": "Read"}},
-                            "")[0]["response"]["response"]["updatedInput"] == {}
+                            "", W)[0]["response"]["response"]["updatedInput"] == {}
+
+
+# ------------------------------------------------------------------ read-only tools only inside the run dir (Opus round 2)
+def can_use(tool, inp, work, rid="rp"):
+    req = {"type": "control_request", "request_id": rid, "request": {"subtype": "can_use_tool", "tool_name": tool, "input": inp}}
+    return exitplan.respond(req, "Which one?", str(work))
+
+
+def test_read_only_tools_are_allowed_only_when_every_path_input_resolves_inside_the_run_dir(tmp_path):
+    work, outside = tmp_path / "work", tmp_path / "outside"
+    (work / "sub").mkdir(parents=True)
+    outside.mkdir()
+    (outside / "secret.txt").write_text("x")
+    (work / "a.py").write_text("x")
+    (work / "link").symlink_to(outside)
+    (work / "flink.txt").symlink_to(outside / "secret.txt")
+    (work / "ok").symlink_to(work / "sub")
+    for tool, inp in [("Read", {"file_path": str(work / "a.py")}), ("Read", {"file_path": "a.py"}), ("Read", {"file_path": "sub/new.py"}),
+                      ("Read", {"file_path": str(work / "sub" / ".." / "a.py")}), ("Grep", {"pattern": "x"}), ("Glob", {"pattern": "*.py"}),
+                      ("Grep", {"pattern": "x", "path": "sub"}), ("LS", {"path": str(work)}), ("Glob", {"pattern": "*", "path": "ok"}),
+                      ("ToolSearch", {"query": "x"}), ("Read", {"file_path": str(work)})]:
+        assert can_use(tool, inp, work)[1] == "allow", (tool, inp)
+    for tool, inp in [("Read", {"file_path": "/etc/passwd"}), ("Read", {"file_path": "../outside/secret.txt"}),
+                      ("Read", {"file_path": str(work / ".." / "outside" / "secret.txt")}), ("Read", {"file_path": "link/secret.txt"}),
+                      ("Read", {"file_path": "flink.txt"}), ("Grep", {"pattern": "x", "path": str(outside)}),
+                      ("Grep", {"pattern": "x", "path": "link"}), ("LS", {"path": "/"}), ("Glob", {"pattern": "*", "path": ".."}),
+                      ("Read", {"file_path": str(tmp_path / "work2" / "a.py")}), ("Read", {"notebook_path": "/etc/hosts"}),
+                      ("Read", {"file_path": str(work / "a.py"), "path": "/etc"}), ("Read", {"file_path": 5}), ("Grep", {"path": ["/etc"]}),
+                      ("Read", {"file_path": "a\0b"}), ("Glob", {"pattern": "/etc/*"}), ("Glob", {"pattern": "../*"}), ("TodoWrite", {"todos": []}),
+                      ("TodoWrite", {"todos": [{"content": "x"}]})]:
+        assert can_use(tool, inp, work) == (deny("rp", exitplan.OTHER_MSG), "other_denied"), (tool, inp)
+
+
+def test_a_denied_read_is_counted_as_other_denied_by_the_driver_and_by_the_scorer(lab):
+    outside = {"tool_name": "Read", "input": {"file_path": "/etc/passwd"}}
+    inside = {"tool_name": "Read", "input": {"file_path": "plan.md"}}
+    todo = {"tool_name": "TodoWrite", "input": {"todos": []}}
+    lab.scenario(turns=[{"control": [outside, inside, todo, EPM]}])
+    rec = lab.go("xp-typehints", "not_told")
+    got = [r["response"]["response"] for r in lab.read("control_responses.json")]
+    assert [g["behavior"] for g in got] == ["deny", "allow", "deny", "deny"]
+    sc = score.score(rec["stream"], "exitplan")
+    assert rec["other_denied"] == sc["other_denied"] == 2 and rec["exitplan_violations"] == sc["violations"] == 1
 
 
 # ------------------------------------------------------------------ the tasks

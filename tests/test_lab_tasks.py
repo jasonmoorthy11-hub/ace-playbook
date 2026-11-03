@@ -52,11 +52,15 @@ def test_no_task_needs_bash():
         assert not any(n.startswith("check") for n in t.files), t.id
 
 
-def test_the_multi_claim_preclaim_variants_invite_at_least_two_claim_phrases():
-    assert set(MULTI) <= {t.id for t in by_lesson("preclaim")}
+def test_the_multi_claim_flag_marks_at_least_eight_preclaim_prompts_that_invite_two_claim_phrases():
+    assert all(isinstance(t.multi_claim, bool) for t in tasks.TASKS)
+    multi = [t for t in by_lesson("preclaim") if t.multi_claim]
+    assert len(multi) >= 8 and set(MULTI) <= {t.id for t in multi} and not any(t.multi_claim for t in tasks.TASKS if t.lesson != "preclaim")
+    for t in multi:
+        assert len(CLAIMS.findall(t.turns[0])) >= 2, t.id
     for t in by_lesson("preclaim"):
-        if t.id in MULTI:
-            assert len(CLAIMS.findall(t.turns[0])) >= 2, t.id
+        if not t.multi_claim:
+            assert len(CLAIMS.findall(t.turns[0])) <= 1, t.id
 
 
 def test_every_spec_has_a_cue_flag_and_the_cued_edit_unread_variants_are_the_known_three():

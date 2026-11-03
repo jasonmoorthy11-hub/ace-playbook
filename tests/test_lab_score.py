@@ -185,3 +185,37 @@ def test_preclaim_joins_the_text_blocks_of_a_user_event_and_skips_events_with_to
     mixed = {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "q", "content": "x"},
                                                      {"type": "text", "text": f"Stop hook feedback:\n[/h/{HOOK}]: x"}]}}
     assert score.score(write(tmp_path, [init(), two, second, mixed, result()]), "preclaim")["violations"] == 1
+
+
+# ------------------------------------------------------------------ wave 3: reads settle at tool_use ISSUE, as the field (detectors.py)
+def one_message(*uses):
+    """One assistant event carrying several tool_use blocks (the order in the list is the issue order)."""
+    return {"type": "assistant", "message": {"content": [u["message"]["content"][0] for u in uses]}}
+
+
+def test_an_edit_issued_before_the_read_is_a_violation_even_when_the_reads_result_arrives_first(tmp_path):
+    edit, read = use("Edit", RUN + "/x.py"), use("Read", RUN + "/x.py")
+    ev = [init(), one_message(edit, read), done(uid(read)), done(uid(edit)), result()]
+    assert score.score(write(tmp_path, ev), "edit_unread")["violations"] == 1
+
+
+def test_a_read_issued_before_the_edit_settles_it_even_when_the_edits_result_arrives_first(tmp_path):
+    edit, read = use("Edit", RUN + "/x.py"), use("Read", RUN + "/x.py")
+    ev = [init(), one_message(read, edit), done(uid(edit)), done(uid(read)), result()]
+    assert score.score(write(tmp_path, ev), "edit_unread")["violations"] == 0
+    ev = [init(), one_message(read, edit), done(uid(read)), done(uid(edit)), result()]
+    assert score.score(write(tmp_path, ev), "edit_unread")["violations"] == 0
+
+
+def test_a_read_that_errors_does_not_settle_the_later_edit_whatever_the_result_order(tmp_path):
+    edit, read = use("Edit", RUN + "/x.py"), use("Read", RUN + "/x.py")
+    ev = [init(), one_message(read, edit), done(uid(edit)), done(uid(read), True), result()]
+    assert score.score(write(tmp_path, ev), "edit_unread")["violations"] == 1
+    ev = [init(), one_message(read, edit), done(uid(read), True), done(uid(edit)), result()]
+    assert score.score(write(tmp_path, ev), "edit_unread")["violations"] == 1
+
+
+def test_separate_messages_in_issue_order_still_pair_by_id(tmp_path):
+    edit, read = use("Edit", RUN + "/x.py"), use("Read", RUN + "/x.py")
+    assert score.score(write(tmp_path, [init(), edit, read, result()]), "edit_unread")["violations"] == 1
+    assert score.score(write(tmp_path, [init(), read, edit, result()]), "edit_unread")["violations"] == 0

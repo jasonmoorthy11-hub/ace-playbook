@@ -4,8 +4,10 @@ preclaim: the number of `type:"user"` events whose text starts `Stop hook feedba
 `stop-mid-task-audit.sh` (the field detector's own `STOP_FB` and `SH_NAME`, last match in the bracket as `detectors._hook_name`). As in the
 field (events.py), the text blocks of one user event are joined with a newline and an event that carries a tool_result is skipped.
 edit_unread: a turn is everything up to the next `result` event. Every Edit, MultiEdit or Write tool_use is paired with its tool_result by
-id. The PRIMARY count (`violations`) is the edits whose result is NOT an error (as the field detector, detectors.py `_unread`) that touch
-a file not Read, Edited or Written (successfully) earlier in the SAME turn; a Write counts only on a path the session already knows. The
+id, but the read state settles in the tool_use ISSUE order (the field's convention): an edit counts unless a Read of its path was issued
+before it in the turn and that Read's result was not an error, whenever the results arrive. The PRIMARY count (`violations`) is the edits
+whose result is NOT an error (as the field detector, detectors.py `_unread`) that touch a file not Read, Edited or Written (successfully)
+earlier in the SAME turn; a Write counts only on a path the session already knows. The
 secondary count `attempted` is the same test ignoring the result status (a tool-rejected edit, or a tool_use with no result, counts). A
 failed Read is not a read. Paths are resolved against the init event's `cwd`; several edits of one file in a turn count once.
 exitplan: the ExitPlanMode control_requests that received the neutral deny (exitplan.py `count`, from the driver's own lines in the stream);
@@ -72,10 +74,12 @@ def _preclaim(events) -> int:
 
 
 class _Walk:
-    """The edit_unread state machine: tool_uses wait in `pending` until their tool_result settles them."""
+    """The edit_unread state machine. The order is the tool_use ISSUE order, as the field (detectors.py `_walk`): a turn's tool_uses wait in
+    `ops` until the turn closes, each result only fills in its own status (error or not) whenever it arrives, then `close` settles them in
+    the order they were issued."""
 
     def __init__(self) -> None:
-        self.cwd, self.known, self.seen, self.pending, self.violations, self.attempted = "/", set(), set(), {}, 0, 0
+        self.cwd, self.known, self.seen, self.ops, self.violations, self.attempted = "/", set(), set(), {}, 0, 0
 
     def settle(self, name: str, path: str, error: bool, answered: bool = True) -> None:
         ok = answered and not error
@@ -91,30 +95,31 @@ class _Walk:
             self.seen.add(path)
             self.known.add(path)
 
-    def flush(self) -> None:
-        """Settle the tool_uses that never got a result (a cut stream): attempted only, no state change."""
-        for name, path in self.pending.values():
-            self.settle(name, path, True, answered=False)
-        self.pending = {}
+    def close(self) -> None:
+        """Settle the turn's tool_uses in issue order; one that never got a result (a cut stream) is attempted only, no state change."""
+        for name, path, error in self.ops.values():
+            self.settle(name, path, error is not False, answered=error is not None)
+        self.ops = {}
 
     def feed(self, ev) -> None:
         kind = ev.get("type")
         if kind == "system" and ev.get("subtype") == "init" and isinstance(ev.get("cwd"), str):
             self.cwd = ev["cwd"]
         elif kind == "result":
-            self.flush()
+            self.close()
             self.seen = set()
         elif kind == "assistant":
             for block in _content(ev):
                 inp = block.get("input")
                 path = inp.get("file_path") if isinstance(inp, dict) else None
                 if block.get("type") == "tool_use" and isinstance(path, str) and path and block.get("name") in ("Read", *EDITS):
-                    key = block["id"] if isinstance(block.get("id"), str) else f"anon{len(self.pending)}"
-                    self.pending[key] = (block["name"], _resolve(self.cwd, path))
+                    key = block["id"] if isinstance(block.get("id"), str) else f"anon{len(self.ops)}"
+                    self.ops[key] = (block["name"], _resolve(self.cwd, path), None)
         elif kind == "user":
             for block in _content(ev):
-                if block.get("type") == "tool_result" and block.get("tool_use_id") in self.pending:
-                    self.settle(*self.pending.pop(block["tool_use_id"]), bool(block.get("is_error")))
+                if block.get("type") == "tool_result" and block.get("tool_use_id") in self.ops:
+                    name, path, _ = self.ops[block["tool_use_id"]]
+                    self.ops[block["tool_use_id"]] = (name, path, bool(block.get("is_error")))
 
 
 def _edit_unread(events) -> tuple[int, int]:
@@ -122,7 +127,7 @@ def _edit_unread(events) -> tuple[int, int]:
     walk = _Walk()
     for ev in events:
         walk.feed(ev)
-    walk.flush()
+    walk.close()
     return walk.violations, walk.attempted
 
 
