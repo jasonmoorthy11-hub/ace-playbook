@@ -120,6 +120,8 @@ def test_cli_prints_the_fit_and_a_table_and_json(tmp_path):
     d = json.loads(js.stdout)
     assert d["fit"][DET]["n"] == 10 and len(d["grid"]) == 3 * 2 * 1 * 2 * 1
     assert js.stdout == subprocess.run([*base, "--json"], capture_output=True, text=True, cwd=ROOT, timeout=60).stdout
+    assert "--rates must be the INTERACTIVE rate" in out.stdout and "note" not in d                    # D-239: the fit reads no injection rows
+    assert "INTERACTIVE" in subprocess.run([*base[:3], "--help"], capture_output=True, text=True, cwd=ROOT, timeout=60).stdout
 
 
 # ------------------------------------------------------------------------------------------------ wave 2 (Opus round 1)

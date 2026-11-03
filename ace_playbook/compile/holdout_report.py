@@ -4,7 +4,9 @@ the single confirmatory read of the window registered in the config (`holdout_st
 hook path. Prints counts and lesson ids, never text, and never the seed.
 
 Assignment (`holdout_io.assignments`): the injector's `injections.jsonl` rows of one RAW session id, joined to the detector rows by
-`state.session_hash`. A session counts when every row has `holdout_rate` 0.5 (a session with a rate-0 row and a live row is `mixed_rate`,
+`state.session_hash`. Only interactive sessions count (D-239): every row has `entrypoint` "cli", as the injector records it from
+`CLAUDE_CODE_ENTRYPOINT`; any other value, null or a missing field (legacy rows) is `not_interactive`, decided before everything else about the
+assignment. A session counts when every row has `holdout_rate` 0.5 (a session with a rate-0 row and a live row is `mixed_rate`,
 whatever its arms; live rows with different `seed_fp` are `seed_fp_mismatch`), none was `refused`, and every row (startup, clear, resume,
 compact) says the same for the three lessons of `LESSONS`: in `holdout_ids` (hidden) or `shown_ids` (shown). A lesson in `dropped_cap` is
 shown (the coin said so; `dropped_cap` counts them); a lesson in none of the lists is not assigned: that (session, lesson) pair is left out
@@ -30,9 +32,9 @@ from .arms_stats import ALPHA, RUNS, holm, permutation_test
 from .holdout_io import ARM_RATE, LESSONS, assignments, exempt_lessons, fire_counts, parse_ts
 
 HEADING = "descriptive, not the pre-registered test"
-COUNTERS = ("injection_sessions", "null_session_id", "session_rows", "below_min_prompts", "outside_window", "no_start", "unmatched_injection",
-            "unmatched_session", "refused", "holdout_off", "mixed_rate", "rate_not_half", "seed_fp_mismatch", "assignment_conflict",
-            "analysed_sessions", "lesson_not_assigned", "dropped_cap")
+COUNTERS = ("injection_sessions", "null_session_id", "not_interactive", "session_rows", "below_min_prompts", "outside_window", "no_start",
+            "unmatched_injection", "unmatched_session", "refused", "holdout_off", "mixed_rate", "rate_not_half", "seed_fp_mismatch",
+            "assignment_conflict", "analysed_sessions", "lesson_not_assigned", "dropped_cap")
 
 
 def _mean(xs: list[float]) -> float | None:
@@ -48,9 +50,10 @@ def _test(shown: list[float], hidden: list[float], seed: str) -> dict:
 
 
 def _classify(a: dict) -> str | None:
-    """The first reason an assigned session is left out, else None (the order is the order of the counters)."""
-    return next((k for k, bad in (("refused", a["refused"]), ("holdout_off", a["off"]), ("mixed_rate", a["mixed"]), ("rate_not_half", a["odd_rate"]),
-                                  ("seed_fp_mismatch", a["seed_fp_mismatch"]), ("assignment_conflict", a["conflict"])) if bad), None)
+    """The first reason an assigned session is left out, else None (`not_interactive` first: it is decided without the coin)."""
+    return next((k for k, bad in (("not_interactive", not a["interactive"]), ("refused", a["refused"]), ("holdout_off", a["off"]),
+                                  ("mixed_rate", a["mixed"]), ("rate_not_half", a["odd_rate"]), ("seed_fp_mismatch", a["seed_fp_mismatch"]),
+                                  ("assignment_conflict", a["conflict"])) if bad), None)
 
 
 def analyse(cfg, start: str, end: str, min_prompts: int, inj_rows: list[dict], ev_rows: list[dict], descriptive: bool) -> dict:

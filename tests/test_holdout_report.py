@@ -19,9 +19,10 @@ INSIDE = "2026-11-10T00:00:00Z"
 HEADING = "descriptive, not the pre-registered test"
 
 
-def inj(sid, shown=(), hidden=(), rate=0.5, source="startup", refused="", ts=INSIDE, dropped=(), fp="00000000"):
-    return {"ts": ts, "session_id": sid, "source": source, "shown_ids": list(shown), "holdout_ids": list(hidden), "holdout_rate": rate,
-            "seed_fp": fp, "refused": refused, "dropped_cap": list(dropped)}
+def inj(sid, shown=(), hidden=(), rate=0.5, source="startup", refused="", ts=INSIDE, dropped=(), fp="00000000", entry="cli"):
+    row = {"ts": ts, "session_id": sid, "source": source, "shown_ids": list(shown), "holdout_ids": list(hidden), "holdout_rate": rate,
+           "seed_fp": fp, "refused": refused, "dropped_cap": list(dropped)}
+    return row if entry == "missing" else {**row, "entrypoint": entry}                      # "missing": a legacy row without the field
 
 
 def srow(sid, start=INSIDE, prompts=2):
@@ -148,6 +149,37 @@ def test_each_exclusion_has_its_own_counter(w, capsys):
     assert lesson(res, A)["n"] == {"shown": 2, "hidden": 0}
     assert res["config"]["min_prompts"] == 1 and hr.main(["--config", str(w.conf), "--interim-descriptive", "--min-prompts", "0", "--json"], now=NOW) == 0
     assert json.loads(capsys.readouterr().out)["counts"]["below_min_prompts"] == 0
+
+
+def test_only_interactive_sessions_are_analysed_and_the_rest_is_counted_not_interactive(w, capsys):
+    w.session("cli-1", FULL, fires={A: 2})
+    w.session("sdk", FULL)
+    w.irows[-1]["entrypoint"] = "sdk-py"
+    w.session("mix", FULL)
+    w.irows.append(inj("mix", [A, C], [B], entry="sdk-py"))                                 # one cli row, one sdk-py row: out
+    w.session("legacy", FULL)
+    del w.irows[-1]["entrypoint"]
+    w.session("null-entry", FULL)
+    w.irows[-1]["entrypoint"] = None
+    w.session("bad-entry", FULL)
+    w.irows[-1]["entrypoint"] = "invalid"
+    w.session("late-sdk", FULL, start="2026-10-01T00:00:00Z")                               # decided after the earlier reasons
+    w.irows[-1]["entrypoint"] = "sdk-py"
+    for extra in ((), ("--interim-descriptive",)):
+        c = w.result(capsys, *extra)["counts"]
+        assert c["not_interactive"] == 5 and c["analysed_sessions"] == 1 and c["outside_window"] == 1 and c["injection_sessions"] == 7
+        assert hr.COUNTERS[:3] == ("injection_sessions", "null_session_id", "not_interactive")
+    assert lesson(w.result(capsys), A)["n"] == {"shown": 1, "hidden": 0}
+
+
+def test_not_interactive_is_decided_before_the_coin_and_the_other_session_reasons(w, capsys):
+    w.session("off-sdk", FULL, rate=0.0)
+    w.irows[-1]["entrypoint"] = "sdk-py"
+    w.session("odd-sdk", FULL, rate=0.3)
+    w.irows[-1]["entrypoint"] = "sdk-py"
+    w.session("off-cli", FULL, rate=0.0)
+    c = w.result(capsys)["counts"]
+    assert (c["not_interactive"], c["holdout_off"], c["rate_not_half"], c["analysed_sessions"]) == (2, 1, 0, 0)
 
 
 # ------------------------------------------------------------------------------------------------ refusals and the interim mode

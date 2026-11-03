@@ -149,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--events", help="detector_events.jsonl (default: the configured data dir's)")
     ap.add_argument("--min-prompts", type=int, default=1)
     ap.add_argument("--since", help="leave out sessions that started before this UTC stamp (default: the earliest start with a detector fire row)")
-    ap.add_argument("--rates", default="1.1,2.0,4.0", help="eligible sessions per day")
+    ap.add_argument("--rates", default="1.1,2.0,4.0", help="eligible sessions per day: the INTERACTIVE rate (D-239)")
     ap.add_argument("--weeks", default="4,8,12,16")
     ap.add_argument("--rr", default="0.5,0.67,0.8", help="rate ratios, shown versus hidden")
     ap.add_argument("--method", choices=("normal", "perm"), default="normal")
@@ -179,6 +179,7 @@ def main(argv: list[str] | None = None) -> int:
         f = shown[d]
         print(f"  {lid} {d}: n {f['n']}  mean {f['mean']:.3f}  var {f['var']:.3f}  k {f['k'] if f['k'] == 'inf' else round(f['k'], 3)}  p_any {f['p_any']:.3f}")
     print(f"power ({args.method}, alpha {ALPHA} after Holm over 3 lessons, shown arm rate x rr; columns are rr)")
+    print("note: --rates must be the INTERACTIVE rate (the report analyses entrypoint cli sessions only); the fit reads no injection rows")
     print("lesson      outcome  /day weeks  n  " + "  ".join(f"rr{rr:g}".rjust(6) for rr in rrs) + "  method (small-n: under 60 per arm, run as perm)")
     for c in cells:
         print(f"{c['lesson']}  {c['outcome']:6}  {c['rate']:4g} {c['weeks']:4}  {c['sessions']:4}  "

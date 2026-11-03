@@ -27,7 +27,7 @@ dated SECURITY/README/INSTALL amendments recorded under "Amendments" at the end.
 |---|---|
 | Stage-1 hooks fail open, exit 0, never block, no network; they do not `exec` Python and end in `exit 0`; they pass `-P` since `d22cc16` | SECURITY.md:36-37; inject/__main__.py:1-5, 61-64; hooks/sessionstart.sh:4-5, hooks/stop_citation_ledger.sh:4-5, hooks/sessionend.sh:5-6 |
 | Ledgers are append-only JSONL, 0600, `sort_keys` | inject/ledger.py:11-17 |
-| Exposure ledger (`injections.jsonl`) holds `shown_ids`, `holdout_ids` per session | inject/injector.py:125-134 |
+| Exposure ledger (`injections.jsonl`) holds `shown_ids`, `holdout_ids`, `entrypoint` per session | inject/injector.py:144-153 |
 | Citation ledger holds `[L-id]` strings the agent wrote (agent self-report) | inject/citations.py:11-25 |
 | Inertness check to reuse for proposal messages; **not cheaply importable today** (see 7.2), so it moves to a leaf module in step 1 | inject/sanitize.py:108-120; store/schema.py:64-78 |
 | Lesson evidence = `{quote, origin, session_id}`, live status needs user origin | store/schema.py:106-121, 143-144 |
@@ -1700,8 +1700,11 @@ marker, exits 1, and a rerun is clean.
   config (`holdout_start`, `holdout_end`: whole-second UTC stamps, start < end), and only once `holdout_end` has passed. `--interim-descriptive
   [--start ISO --end ISO]` describes any window; `--start/--end` with anything else, or a half window, refuses. Raw session ids join the offline-tier
   detector rows by `session_hash`; the newest `_session` row needs `prompts` >= N and `start` (ms allowed) in [start, end). Excluded and counted:
-  `refused`, `holdout_off`, `mixed_rate` (a rate-0 and a live row in one session), `rate_not_half`, `seed_fp_mismatch`, `assignment_conflict`,
-  lessons in no list, unmatched sessions, `null_session_id` rows; a lesson in `dropped_cap` counts as shown (`dropped_cap`).
+  `not_interactive`, `refused`, `holdout_off`, `mixed_rate` (a rate-0 and a live row in one session), `rate_not_half`, `seed_fp_mismatch`,
+  `assignment_conflict`, lessons in no list, unmatched sessions, `null_session_id` rows; a lesson in `dropped_cap` counts as shown (`dropped_cap`).
+- Eligible sessions are interactive (D-239): `entrypoint == "cli"` on every injection row of the session. The injector records the field from
+  `CLAUDE_CODE_ENTRYPOINT` (`sdk-py`, `sdk-cli`, ... for automation); rows without it (legacy) or with any other value are excluded as
+  `not_interactive`, decided before the coin and before the other session reasons. `holdout_power --rates` must be the interactive rate.
 - Per lesson: PRIMARY the difference in the share of sessions with the mistake (Wilson interval per arm), SECONDARY the difference in mean counts;
   `permutation_test` (0.5, 10,000 draws, config `holdout_permutation_seed`) and `holm` over the three lessons, the two families apart. The
   secondary's `shift_ci95_null_redraws` is D minus the null re-draws' quantiles, not a confidence interval; the primary has none.

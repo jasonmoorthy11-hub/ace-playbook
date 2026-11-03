@@ -77,7 +77,8 @@ def _arm(row: dict, lid: str) -> str:
 
 def assignments(inj_rows: list[dict]) -> tuple[dict[str, dict], int]:
     """({session hash: the facts of one session's injection rows}, the number of rows with no usable session id). A row with a rate above 0
-    is live; `mixed` is a session with live and rate-0 rows, `seed_fp_mismatch` live rows with different `seed_fp`; a lesson in neither
+    is live; `interactive` is a session whose every row has `entrypoint` "cli" (any other value, null or no field: not); `mixed` is a
+    session with live and rate-0 rows, `seed_fp_mismatch` live rows with different `seed_fp`; a lesson in neither
     list but in `dropped_cap` is SHOWN (the coin said shown, the cap dropped the line) and goes to `dropped`; `arms` is {lesson: shown |
     hidden | none} (read only when `conflict` is false)."""
     by: dict[str, list[dict]] = {}
@@ -93,6 +94,7 @@ def assignments(inj_rows: list[dict]) -> tuple[dict[str, dict], int]:
         live = [r for r in rows if _rate(r) > 0]
         firsts = [t for t in (parse_ts(r.get("ts")) for r in rows) if t]
         out[h] = {"first": min(firsts) if firsts else None, "off": not live, "mixed": bool(live) and len(live) < len(rows),
+                  "interactive": all(r.get("entrypoint") == "cli" for r in rows),
                   "refused": any(r.get("refused") for r in rows), "odd_rate": any(_rate(r) != ARM_RATE for r in live),
                   "seed_fp_mismatch": len({str(r.get("seed_fp")) for r in live}) > 1, "conflict": len(sigs) > 1 or "both" in next(iter(sigs)),
                   "dropped": {lid for lid, _ in LESSONS for r in rows if lid in _ids(r, "dropped_cap") and _arm(r, lid) == "shown"
