@@ -291,3 +291,61 @@ def test_the_outside_count_of_errored_trials_still_honours_exclude_pilot_and_the
     assert json.loads(capsys.readouterr().out)["outside_run_dir_tool_inputs"] == 2
     assert cmd.main(["report", "--json", "--exclude-pilot"]) == 0
     assert json.loads(capsys.readouterr().out)["outside_run_dir_tool_inputs"] == 0
+
+
+def rec_of(tid, stream, error=None):
+    return {"trial_id": tid, "task": "pc-port", "lesson": "preclaim", "arm": "told", "model": "m", "error": error, "pilot": False,
+            "stream": stream}
+
+
+def put(tmp_path, recs, extra_lines=()):
+    lines = [json.dumps(r) for r in recs] + list(extra_lines)
+    (tmp_path / "trials.jsonl").write_text("\n".join(lines) + "\n")
+
+
+def test_a_missing_stream_of_an_errored_non_build_trial_counts_as_unreadable(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("ACE_LAB_DATA", str(tmp_path))
+    put(tmp_path, [rec_of("a", outside_stream(tmp_path / "a.jsonl", "/h/x")), rec_of("b", str(tmp_path / "gone"), "timeout")])
+    assert cmd.main(["report"]) == 0
+    assert "outside-run-dir tool inputs: 1 (unreadable streams: 1)" in capsys.readouterr().out
+    assert cmd.main(["report", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["outside_run_dir_tool_inputs"] == 1 and data["outside_unreadable"] == 1
+
+
+def test_a_build_failed_record_without_a_stream_is_not_unreadable(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("ACE_LAB_DATA", str(tmp_path))
+    put(tmp_path, [rec_of("a", str(tmp_path / "never"), "build failed: OSError"), rec_of("b", None, "build failed: ValueError")])
+    assert cmd.main(["report"]) == 0
+    assert "outside-run-dir tool inputs: 0 (unreadable streams: 0)" in capsys.readouterr().out
+    put(tmp_path, [rec_of("a", str(tmp_path / "never"), "spawn failed: OSError")])
+    assert cmd.main(["report", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["outside_unreadable"] == 1
+
+
+def test_the_line_still_prints_when_every_stream_is_unreadable(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("ACE_LAB_DATA", str(tmp_path))
+    (tmp_path / "bad.jsonl").write_text("{nope\nalso nope\n")
+    put(tmp_path, [rec_of("a", str(tmp_path / "gone")), rec_of("b", str(tmp_path / "bad.jsonl")), rec_of("c", None), rec_of("d", 7), rec_of("e", "")])
+    assert cmd.main(["report"]) == 0
+    assert "outside-run-dir tool inputs: 0 (unreadable streams: 5)" in capsys.readouterr().out
+
+
+def test_an_unparseable_trials_line_is_counted_as_unreadable(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("ACE_LAB_DATA", str(tmp_path))
+    put(tmp_path, [], ["{not json", "[1, 2]", '{"no_trial_id": 1}', ""])
+    assert cmd.main(["report"]) == 0
+    assert "outside-run-dir tool inputs: 0 (unreadable streams: 3)" in capsys.readouterr().out
+
+
+def test_the_json_lists_the_trials_with_outside_paths_sorted(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("ACE_LAB_DATA", str(tmp_path))
+    put(tmp_path, [rec_of("z", outside_stream(tmp_path / "z.jsonl", "/h/x")), rec_of("b", outside_stream(tmp_path / "b.jsonl", "/r/work/a")),
+                   rec_of("a", outside_stream(tmp_path / "a.jsonl", "/h/1", "/h/2"))])
+    assert cmd.main(["report", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["outside_trials"] == ["a", "z"] and data["outside_run_dir_tool_inputs"] == 3 and data["outside_unreadable"] == 0
+    (tmp_path / "trials.jsonl").unlink()
+    assert cmd.main(["report", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["outside_trials"] == [] and data["outside_unreadable"] is None

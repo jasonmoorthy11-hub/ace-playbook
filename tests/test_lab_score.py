@@ -265,3 +265,20 @@ def test_outside_paths_is_zero_for_an_empty_stream_and_counts_every_absolute_pat
 @pytest.mark.parametrize("lesson", score.LESSONS)
 def test_every_lesson_carries_outside_paths(tmp_path, lesson):
     assert outside(tmp_path, [init("/r/work"), use("Write", "/x/p.md"), result()], lesson) == 1
+
+
+def test_outside_paths_counts_an_absolute_or_tilde_glob_pattern_and_grep_glob(tmp_path):
+    cwd = "/r/work"
+    ev = [init(cwd), use_in("Glob", pattern="/etc/*.conf"), use_in("Glob", pattern="~/.claude/**"), use_in("Grep", glob="/h/*.md", pattern="x"),
+          use_in("Grep", glob="~/x/*", pattern="x"), use_in("Glob", pattern="/r/work/**/*.py"), use_in("Grep", glob="/r/work/*.md", pattern="x")]
+    assert outside(tmp_path, ev + [result()]) == 4
+    assert outside(tmp_path, [init(cwd), use_in("Glob", pattern="**/*.py"), use_in("Grep", glob="*.md", pattern="/etc/passwd"),
+                              use_in("Grep", pattern="~/x"), use_in("Glob", pattern=7), result()]) == 0       # a Grep pattern is a regex
+    assert outside(tmp_path, [use_in("Glob", pattern="/r/work/*.py"), result()]) == 1                           # no init: every absolute path
+
+
+def test_outside_paths_resolves_a_relative_path_against_the_cwd_before_the_test(tmp_path):
+    cwd = "/r/work"
+    assert outside(tmp_path, [init(cwd), use("Read", "../work/a.py"), use("Read", "a/../../work/b.py"), result()]) == 0
+    assert outside(tmp_path, [init(cwd), use("Read", "../other/a.py"), use("Read", "../workshop/a.py"), result()]) == 2
+    assert outside(tmp_path, [use("Read", "../work/a.py"), result()]) == 1                                      # no init: a leading .. is outside
