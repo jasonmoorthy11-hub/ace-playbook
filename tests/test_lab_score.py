@@ -2,6 +2,7 @@
 
 import json
 import time
+import tracemalloc
 
 import pytest
 
@@ -255,7 +256,7 @@ def test_outside_paths_checks_relative_dotdot_and_all_three_input_keys(tmp_path)
           use_in("Grep", path="/etc", pattern="x"), use_in("NotebookEdit", notebook_path="/n/a.ipynb"),
           use_in("Glob", path="src", pattern="*.py"), use_in("Read", file_path=""), result()]
     assert outside(tmp_path, ev) == 4                                      # ../x, a/../../x, /etc, /n/a.ipynb
-    assert outside(tmp_path, [init(cwd), use_in("Read", file_path=7, path=None), result()]) == 0
+    assert outside(tmp_path, [init(cwd), use_in("Read", file_path="", path=None), result()]) == 0
 
 
 def test_outside_paths_is_zero_for_an_empty_stream_and_counts_every_absolute_path_without_an_init_event(tmp_path):
@@ -274,7 +275,7 @@ def test_outside_paths_counts_an_absolute_or_tilde_glob_pattern_and_grep_glob(tm
           use_in("Grep", glob="~/x/*", pattern="x"), use_in("Glob", pattern="/r/work/**/*.py"), use_in("Grep", glob="/r/work/*.md", pattern="x")]
     assert outside(tmp_path, ev + [result()]) == 4
     assert outside(tmp_path, [init(cwd), use_in("Glob", pattern="**/*.py"), use_in("Grep", glob="*.md", pattern="/etc/passwd"),
-                              use_in("Grep", pattern="~/x"), use_in("Glob", pattern=7), result()]) == 0       # a Grep pattern is a regex
+                              use_in("Grep", pattern="~/x"), use_in("Glob", pattern=""), result()]) == 0        # a Grep pattern is a regex
     assert outside(tmp_path, [use_in("Glob", pattern="/r/work/*.py"), result()]) == 1                           # no init: every absolute path
 
 
@@ -354,15 +355,20 @@ def test_a_path_alone_is_outside_when_it_has_a_brace_a_backslash_or_a_dotdot_aft
 
 
 def timed(fn):
+    tracemalloc.start()
     start = time.perf_counter()
-    out = fn()
-    assert time.perf_counter() - start < 1.0
+    try:
+        out = fn()
+        assert time.perf_counter() - start < 1.0
+        assert tracemalloc.get_traced_memory()[1] < 20 * 1024 * 1024
+    finally:
+        tracemalloc.stop()
     return out
 
 
 @pytest.mark.parametrize("val", ["{" + "a," * 100_000 + "b}/*", "{" + "a," * 10_000 + "b}" + "x" * 100_000, "{" * 10_000 + "a" + "}" * 10_000,
-                                 "{a}" * 100_000, "../" * 50_000 + "x", "x/" * 50_000 + "*/" + "../" * 50_000],
-                         ids=["commas", "commas-suffix", "nesting", "groups", "dotdots", "glob-dotdots"])
+                                 "{a}" * 100_000, "../" * 50_000 + "x", "x/" * 50_000 + "*/" + "../" * 50_000, "a" * 600_000, "?/" * 2_100],
+                         ids=["commas", "commas-suffix", "nesting", "groups", "dotdots", "glob-dotdots", "long-plain", "long-classes"])
 def test_a_pathological_pattern_is_counted_outside_fast(tmp_path, val):
     from ace_playbook.lab import outside as out
     assert timed(lambda: out.inputs("/r/work", "Glob", {"pattern": val})) == 1
@@ -386,3 +392,46 @@ def test_outside_scan_also_returns_whether_the_stream_had_any_event_blank_lines_
     assert score.outside_scan(write(tmp_path, [], pair=False)) == (0, 0, False, False)
     with pytest.raises(ValueError):
         score.outside_scan(write(tmp_path, ["{broken"], pair=False))
+
+
+@pytest.mark.parametrize("val,want", [("[.][.]/*", 1), ("src/[.][.]/[.][.]/*", 1), ("[!a][!a]/*", 1), ("??/*", 1), (".?/*", 1), (".*/x", 1),
+                                      ("{[.][.],x}/*", 1), ("[--/][.]/*", 1), ("?./*", 1), ("src/[.][.]/x.py", 0), ("**/test_[a-z]*.py", 0),
+                                      ("*.{py,md}", 0), ("src/**/*.py", 0), ("**/test_*.py", 0), ("{src,tests}/**/*.py", 0), ("src/*.py", 0)])
+def test_a_component_that_fnmatch_says_may_match_dotdot_counts_as_dotdot(tmp_path, val, want):
+    for name, key in (("Glob", "pattern"), ("Grep", "glob")):
+        extra = {} if name == "Glob" else {"pattern": "x"}
+        assert outside(tmp_path, [init("/r/work"), use_in(name, **{key: val}, **extra), result()]) == want, (name, val)
+
+
+def test_a_dotdot_class_in_a_joined_path_counts(tmp_path):
+    assert outside(tmp_path, [init("/r/work"), use_in("Glob", pattern="*.py", path="[.][.]"), result()]) == 1
+    assert outside(tmp_path, [init("/r/work"), use_in("Glob", pattern="[.][.]/*", path="src"), result()]) == 0      # src/../* is /r/work/*
+    assert outside(tmp_path, [init("/r/work"), use_in("Glob", pattern="[.][.]/[.][.]/*", path="src"), result()]) == 1
+
+
+@pytest.mark.parametrize("n,want", [(4096, 0), (4097, 1)])
+def test_a_pattern_over_4096_characters_counts_as_outside_before_it_is_expanded(tmp_path, n, want):
+    val = "a" * (n - 2) + "/*"
+    for name, key in (("Glob", "pattern"), ("Grep", "glob")):
+        extra = {} if name == "Glob" else {"pattern": "x"}
+        assert outside(tmp_path, [init("/r/work"), use_in(name, **{key: val}, **extra), result()]) == want, (name, n)
+
+
+@pytest.mark.parametrize("plen,want", [(4094, 0), (4095, 1)])
+def test_a_joined_pattern_over_4096_characters_counts_as_outside(tmp_path, plen, want):
+    assert outside(tmp_path, [init("/r/work"), use_in("Glob", pattern="*", path="p" * plen), result()]) == want       # path + "/*"
+
+
+@pytest.mark.parametrize("bad", [["a"], {"a": 1}, 7, True, 0, []], ids=["list", "dict", "int", "bool", "zero", "empty-list"])
+def test_a_non_string_pattern_glob_or_path_input_counts_as_outside(tmp_path, bad):
+    ev = lambda inp: outside(tmp_path, [init("/r/work"), use_in("Glob", **inp), result()])   # noqa: E731
+    for key in ("pattern", "glob", "path", "file_path", "notebook_path"):
+        assert ev({key: bad}) == 1, key
+    assert ev({"pattern": "*.py", "path": None}) == 0
+
+
+@pytest.mark.parametrize("val,want", [("a[/]../x", 1), ("a[+-0]../x", 1), ("[a/b]*", 1), ("[!/]x/*.py", 0), ("[ab]/*.py", 0), ("src/[a-z]x.py", 0), ("a[/", 0)])
+def test_a_class_that_may_hold_a_slash_is_read_as_a_dotdot_so_a_slash_in_it_does_not_hide_a_component(tmp_path, val, want):
+    for name, key in (("Glob", "pattern"), ("Grep", "glob")):
+        extra = {} if name == "Glob" else {"pattern": "x"}
+        assert outside(tmp_path, [init("/r/work"), use_in(name, **{key: val}, **extra), result()]) == want, (name, val)
