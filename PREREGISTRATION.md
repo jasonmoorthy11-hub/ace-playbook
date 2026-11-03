@@ -524,8 +524,8 @@ Deviations from the draft, each decided before any holdout session:
 - (c) Content eligibility (draft line 42): for the horizon, the three rules are removed from the operator's global CLAUDE.md (Discipline
   rules 6, 8 and 9) by a dated edit (decision D-232) and restored at the end. Residual exposure remains. The memory indexes of two
   project directories (SymbolicSystems, SymbolicSystems-ThinkHospitality) state the ExitPlanMode rule, and the descriptions of the
-  `brutal-honesty` and `cycle-close` skills, listed in every session, name the audit format. Both are present in either arm. For the two
-  hook-scored lessons, a hook's block message restates the rule, but only after a violation, so this exposure depends on the outcome. It
+  `brutal-honesty` and `cycle-close` skills, listed in every session, name the pre-claim audit (brutal-honesty also gives its format). Both are present in
+  either arm. For the two hook-scored lessons, a hook's block message restates the rule, but only after a violation, so this exposure depends on the outcome. It
   does not affect the binary primary, because the first block is itself the outcome event. It can affect the count secondary. Auto-memory
   files may also gain rule text during the horizon. At the switch-on and at `holdout_end` the operator records, in a private file in the
   data dir, every line (file path and full text) of the auto-loaded files (`$HOME/.claude/CLAUDE.md`, `$HOME/.claude/rules/*.md`, the root
@@ -542,7 +542,7 @@ Deviations from the draft, each decided before any holdout session:
   lesson's coin (its text and the layout shift, (k)) on a subject that may be aware of the experiment, demand effects included. A split by
   the project directory holding the session's transcript (a name ending in `-rebuild-lab` or containing `-ace-playbook`, against all
   others; joined by session id) is pre-stated as exploratory only.
-- (d) Step-0 gate (draft: "about six lessons at 2 % or more"): replaced by measured rates and a power table, stated before data. Counts
+- (d) Step-0 gate (draft: "fewer than about six lessons recur at 2% or more"): replaced by measured rates and a power table, stated before data. Counts
   were read on 2026-11-03 from `detector_events.jsonl` (rows to 2026-10-30T19:51Z), offline tier, without the interactive filter (77 of
   the 79 injection rows written before 2026-11-03T02:10Z carry no entrypoint; the field was added that day, and the two that do are 02:02Z
   `cli` and 02:07Z `sdk-cli`). The share of sessions with at least one violation, for preclaim / edit_unread_turn / exitplan, is 34 % / 18
@@ -631,7 +631,7 @@ Deviations from the draft, each decided before any holdout session:
 
   Each value is computed by one stated command. The seeds are generated as `secrets.token_hex(32)` each; the operator types each one
   into `python3 -c "import getpass,hashlib;print(hashlib.sha256(getpass.getpass().encode()).hexdigest())"` (for `holdout_seed` this is
-  the hash `config.check_holdout` compares with `holdout_seed_sha256`; the permutation seed has no config-side check). A 256-bit seed is
+  the hash `config.check_holdout` compares with `holdout_seed_sha256`; the permutation seed has no config-side hash check). A 256-bit seed is
   not recoverable from its public hash. The hooks and CLAUDE.md: `shasum -a 256` of `$HOME/.claude/hooks/stop-mid-task-audit.sh`,
   `$HOME/.claude/hooks/pretooluse-exitplan-question-check.sh` and `$HOME/.claude/CLAUDE.md`. The rest, from the checkout the SessionStart
   hook runs, with `PYTHONPATH="$HOME/ace-playbook" python3 -P -` fed the block below without its two-space list indentation. It prints, in
@@ -795,5 +795,5 @@ Switch-on order: steps 1-5 before `holdout_start` (a step 1-5 after it is mapped
    `seed_fp_mismatch`, `assignment_conflict`) 0. The second counts the sessions of D0 to D1 per entrypoint, from the injection log only:
    none lacks the field (no `None` key), and `unmatched_injection` is at most the number of non-`cli` sessions (automated runs whose
    transcript is not scanned). The third must print exactly one value, the first 8 hex digits of the filled `holdout_seed_sha256`
-   (`seed_fp` is public). If no interactive session ran, or a `cli` session of D0 to D1 was still open at the sweep, the check repeats for
+   (`seed_fp` is public). If no interactive session ran, or a `cli` session of D0 to D1 was not idle 60 minutes when the sweep ran, the check repeats for
    the next day. A failed check is fixed as a recorded bug fix of (k).
