@@ -241,7 +241,7 @@ def test_argv_adds_the_plan_flags_and_the_initialize_line_comes_first(lab):
     assert "acceptEdits" not in argv and rec["error"] is None and rec["exit_code"] == 0
     sent = [json.loads(x) for x in lab.read("stdin_all.json")]
     assert sent[0] == INIT and [s["message"]["content"] for s in sent[1:]] == list(tasks.get("xp-greet").turns)
-    assert lab.read("settings.json") == {"plansDirectory": str(lab.runs / "xp-greet-told" / "plans")}
+    assert lab.read("settings.json") == {"plansDirectory": str(lab.runs / "xp-greet-told" / "work" / ".lab-plans")}
 
 
 def test_the_other_lessons_have_neither_the_prompt_tool_flag_nor_an_initialize_line(lab):

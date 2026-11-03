@@ -1,7 +1,7 @@
 """One lab trial: build the run dir, launch `claude -p` in stream-json mode, drive the turns, save the raw stream (docs/lab.md).
 
 Isolation: `--setting-sources ""` (no user CLAUDE.md, hooks or settings), `--disallowedTools=...` on every trial (Bash, web and agent
-tools), the hooks and `plansDirectory` come only from the lab settings file, the prompts go through stdin (never argv), and
+tools), the hooks and `plansDirectory` (`<work>/.lab-plans`) come only from the lab settings file, the prompts go through stdin (never argv), and
 ANTHROPIC_API_KEY and CLAUDECODE are removed from the environment. The lesson text is read from the operator's store by id at run time; the
 record keeps only `sha256(text)[:16]`. The only run-time reader of the store here.
 The process plumbing (pump, turn loop, group stop) is in drive.py.
@@ -51,9 +51,9 @@ def trial_id(model: str, task_id: str, arm: str, rep: int, pilot: bool = False) 
     return re.sub(r"[^A-Za-z0-9._-]", "_", f"{'pilot.' if pilot else ''}{model}.{task_id}.{arm}.r{rep}")
 
 
-def settings(task: tasks.Task, run_dir: Path) -> dict:
-    """The lab settings file: the plans directory, and the Stop hook for preclaim tasks. Nothing else."""
-    out: dict = {"plansDirectory": str(Path(run_dir) / "plans")}
+def settings(task: tasks.Task, work: Path) -> dict:
+    """The lab settings file: the plans directory (`<work>/.lab-plans`, inside the project root), and the Stop hook for preclaim tasks."""
+    out: dict = {"plansDirectory": str(tasks.plans_dir(work))}
     if task.lesson == "preclaim":
         out["hooks"] = {"Stop": [{"hooks": [{"type": "command", "command": str(HOOK)}]}]}
     return out
@@ -98,9 +98,9 @@ def trial(task: tasks.Task, arm: str, model: str, lesson_text: str, run_dir: Pat
     except Exception as exc:                                                 # a broken spec or a full disk is a recorded error
         rec["error"] = f"build failed: {type(exc).__name__}"
         return rec
-    (run_dir / "plans").mkdir(exist_ok=True)
+    tasks.plans_dir(work).mkdir(exist_ok=True)
     with open_private(run_dir / "settings.json") as fh:
-        json.dump(settings(task, run_dir), fh)
+        json.dump(settings(task, work), fh)
     argv = command(claude, model, task, run_dir / "settings.json", arm, lesson_text)
     env = {k: v for k, v in os.environ.items() if k not in DROP_ENV}
     lines: queue.Queue = queue.Queue()

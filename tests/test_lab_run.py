@@ -103,12 +103,22 @@ def test_settings_file_carries_the_stop_hook_for_preclaim_and_plans_dir_only_oth
     lab.scenario(turns=[READ_X, READ_X])
     lab.go("pc-port", "told")
     s = lab.read("settings.json")
-    assert set(s) == {"plansDirectory", "hooks"} and s["plansDirectory"] == str(lab.runs / "pc-port-told" / "plans")
+    assert set(s) == {"plansDirectory", "hooks"} and s["plansDirectory"] == str(lab.runs / "pc-port-told" / "work" / ".lab-plans")
     cmd = s["hooks"]["Stop"][0]["hooks"][0]
     assert cmd["type"] == "command" and cmd["command"] == str(run.HOOK) and os.access(cmd["command"], os.X_OK)
-    assert run.HOOK.name == "stop-mid-task-audit.sh" and (lab.runs / "pc-port-told" / "plans").is_dir()
+    assert run.HOOK.name == "stop-mid-task-audit.sh" and (lab.runs / "pc-port-told" / "work" / ".lab-plans").is_dir()
     lab.go("eu-parser", "told")
-    assert lab.read("settings.json") == {"plansDirectory": str(lab.runs / "eu-parser-told" / "plans")}
+    assert lab.read("settings.json") == {"plansDirectory": str(lab.runs / "eu-parser-told" / "work" / ".lab-plans")}
+
+
+@pytest.mark.parametrize("task_id", ["pc-port", "eu-parser", "xp-greet"])
+def test_plans_directory_is_inside_the_project_root_exists_and_leaves_git_clean(lab, task_id):
+    lab.scenario(turns=[{}, {}])
+    lab.go(task_id, "told")
+    work = (lab.runs / f"{task_id}-told" / "work").resolve()
+    plans = lab.read("settings.json")["plansDirectory"]
+    assert plans == str(work / ".lab-plans") and plans.startswith(str(work) + "/") and Path(plans).is_dir()
+    assert Path((lab.dir / "cwd.txt").read_text()).resolve() == work
 
 
 def test_the_agent_runs_in_the_built_work_dir_and_the_between_hook_rewrites_files(lab):

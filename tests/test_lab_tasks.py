@@ -109,6 +109,17 @@ def test_build_writes_files_and_commits_with_a_fixed_author(tmp_path):
     assert git(work, "status", "--short") == ""
 
 
+def test_the_plans_directory_is_excluded_so_git_status_stays_clean_after_a_plan_is_written(tmp_path):
+    work = tasks.build(by_lesson("exitplan")[0], tmp_path / "run")
+    plans = tasks.plans_dir(work)
+    assert plans == work / ".lab-plans" and str(plans).startswith(str(work) + "/")
+    plans.mkdir()
+    (plans / "plan.md").write_text("a plan\n")
+    assert git(work, "status", "--porcelain") == "" and git(work, "check-ignore", ".lab-plans/plan.md") == ".lab-plans/plan.md"
+    (work / "stray.txt").write_text("x")
+    assert git(work, "status", "--porcelain") == "?? stray.txt"                # the exclude hides the plans directory only
+
+
 def test_build_is_reproducible_across_directories(tmp_path):
     t = by_lesson("edit_unread")[0]
     a, b = tasks.build(t, tmp_path / "a"), tasks.build(t, tmp_path / "b")
