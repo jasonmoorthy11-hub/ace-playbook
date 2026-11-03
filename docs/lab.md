@@ -17,7 +17,14 @@ across the lessons of a model, and mean violations per trial as a descriptive se
   `STOP_FB` and `SH_NAME` regexes.
 - Lesson `edit_unread` (store id L-f8a355f9): an Edit, MultiEdit or Write on an existing file that was not Read in the same user turn (a turn
   is everything up to a `result` event). The Edit tool only needs a read earlier in the session, so a turn-2 edit of a turn-1 file succeeds and
-  counts. Some tasks rewrite the file by hand between turns, so a stale edit is a real error. A file the task never had is not a violation.
+  counts. Each tool_use is paired with its tool_result by id. The PRIMARY count is the edits whose result is NOT an error (the field detector's
+  rule, `detectors.py` `_unread`); a failed Read is not a read, and a Write counts only on a path the session already knows. `attempted`
+  (secondary) counts the same edits whatever their result (a tool-rejected edit, or a tool_use with no result, is attempted only).
+- Lab-only conventions. The `result` event as the turn boundary and the resolution of relative paths against the init `cwd` exist only in the
+  lab scorer. The field detector cannot score a lab stream for edit_unread: the stream has no user-prompt echo, so its turn never resets, and
+  `edited_text_file` reminders count as reads in the field. A lab number is therefore a lab number, not a field rate.
+- Each trial record also carries `permission_denials` (the sum of each turn's `result.permission_denials`, 0 when absent): a task that needs a
+  tool the permission mode denies would show here. No task needs Bash.
 
 ## Isolation
 
@@ -46,8 +53,9 @@ python -m ace_playbook.lab report [--json] [--exclude-pilot]
 ```
 
 `run` builds tasks x arms x reps, shuffles with `random.Random(seed)`, runs sequentially, appends a record per trial and prints one counts line
-(no text). Trials already recorded are skipped, so the same command resumes. `--dry-run` prints the plan only. `report` scores every saved
-stream; trials with a recorded error or a missing stream are excluded and counted per arm.
+(no text). Trials already recorded are skipped, so the same command resumes; a trial whose last record has an error is retried and the later
+record wins. A `--pilot` trial id carries a `pilot.` prefix, so a pilot and a main run never share ids (a relative `--claude` path is resolved
+first). `--dry-run` prints the plan only. `report` scores every saved stream; trials with a recorded error or a missing stream are excluded and counted per arm.
 
 ## Not yet measured
 

@@ -20,14 +20,16 @@ def data_dir() -> Path:
 
 
 def recorded(trials: Path) -> set[str]:
-    ids: set[str] = set()
+    """Trial ids whose LAST record has no error; an errored trial is not recorded, so a resume retries it (a later record wins)."""
+    last: dict[str, bool] = {}
     if trials.exists():
         for line in trials.read_text(encoding="utf-8", errors="replace").splitlines():
             try:
-                ids.add(json.loads(line)["trial_id"])
-            except (ValueError, KeyError, TypeError):
+                rec = json.loads(line)
+                last[rec["trial_id"]] = not rec.get("error")
+            except (ValueError, KeyError, TypeError, AttributeError):
                 continue
-    return ids
+    return {tid for tid, ok in last.items() if ok}
 
 
 def plan(args) -> list[tuple[tasks.Task, str, int]]:
@@ -66,7 +68,8 @@ def cmd_run(args) -> int:
         return 2
     data = data_dir()
     done = recorded(data / "trials.jsonl")
-    ids = [run.trial_id(args.model, t.id, a, r) for t, a, r in items]
+    ids = [run.trial_id(args.model, t.id, a, r, args.pilot) for t, a, r in items]
+    claude = str(Path(args.claude).resolve()) if "/" in args.claude else args.claude            # the work dir becomes the cwd
     if args.dry_run:
         for i, tid in enumerate(ids, 1):
             print(f"[{i}/{len(ids)}] {tid}" + (" (recorded, skipped)" if tid in done else ""))
@@ -86,7 +89,7 @@ def cmd_run(args) -> int:
             continue
         run_dir = data / "runs" / tid
         shutil.rmtree(run_dir, ignore_errors=True)
-        rec = run.trial(task, arm, args.model, text, run_dir, data, claude=args.claude, rep=rep, pilot=args.pilot)
+        rec = run.trial(task, arm, args.model, text, run_dir, data, claude=claude, rep=rep, pilot=args.pilot)
         with run.open_private(data / "trials.jsonl", append=True) as fh:
             fh.write(json.dumps(rec, sort_keys=True) + "\n")
         print(counts_line(i, len(ids), rec, args.lesson), flush=True)
@@ -109,7 +112,8 @@ def cmd_report(args) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m ace_playbook.lab")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("run", help="run trials (tasks x arms x reps, shuffled by --seed), appending to trials.jsonl")
+    resume = "Trials already recorded are skipped, but a trial whose last record has an error is retried (a later record wins)."
+    p = sub.add_parser("run", help="run trials (tasks x arms x reps, shuffled by --seed), appending to trials.jsonl", description=resume)
     p.add_argument("--model", required=True)
     p.add_argument("--lesson", required=True, choices=sorted(tasks.LESSON_IDS))
     p.add_argument("--reps", type=int, default=1)

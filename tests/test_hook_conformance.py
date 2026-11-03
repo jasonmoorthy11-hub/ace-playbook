@@ -212,7 +212,7 @@ ABSENT = ("seal", "dashboard", "dashboard_html", "status", "digest", "queue", "r
           "reader", "readerloop", "validate", "compose", "canary", "model",
           "arms", "arms_stats", "arms_window", "labels_queue", "arm_start",
           "arm_check", "carry", "vet", "urlsafe",
-          "lab", "tasks", "score", "run", "stats")   # the lab package (`lab` catches every submodule; the rest name them)
+          "lab")   # the lab package (matching is per name component, so `lab` catches every submodule)
 # `watch`: network-using (W1); the W2 Reader runs `claude -p` (subprocess)
 HEAVY = {"sqlite3", "subprocess", "socket", "ssl", "http", "urllib.request", "asyncio", "multiprocessing", "threading", "ctypes"}
 

@@ -25,6 +25,11 @@ def fisher_two_sided(k1: int, n1: int, k0: int, n0: int) -> float | None:
     return min(1.0, sum(w for w in weight.values() if w <= weight[k1]) / math.comb(total, successes))
 
 
+def _show(p: float) -> float:
+    """Six significant digits for display (a tiny p must not round to 0.0); never fed back into Holm."""
+    return float(f"{p:.6g}")
+
+
 def _arm(rows: list[dict]) -> dict:
     n, k = len(rows), sum(bool(r["any"]) for r in rows)
     return {"n": n, "k": k, "rate": round(k / n, 4) if n else None, "wilson95": wilson(k, n),
@@ -34,18 +39,19 @@ def _arm(rows: list[dict]) -> dict:
 def summarize(rows: list[dict]) -> list[dict]:
     """rows: {model, lesson, arm, violations, any}. One group per (model, lesson), Holm-adjusted across the lessons of a model."""
     keys = sorted({(r["model"], r["lesson"]) for r in rows})
-    groups = []
+    groups, raw = [], {}
     for model, lesson in keys:
         mine = [r for r in rows if (r["model"], r["lesson"]) == (model, lesson)]
         told, not_told = _arm([r for r in mine if r["arm"] == "told"]), _arm([r for r in mine if r["arm"] == "not_told"])
         diff = None if told["rate"] is None or not_told["rate"] is None else round(told["rate"] - not_told["rate"], 4)
         p = fisher_two_sided(told["k"], told["n"], not_told["k"], not_told["n"])
+        raw[model, lesson] = p                                                  # Holm runs on the raw p; only the display is rounded
         groups.append({"model": model, "lesson": lesson, "told": told, "not_told": not_told, "diff": diff,
-                       "fisher_p": None if p is None else round(p, 6), "p_holm": None, "reject": False})
+                       "fisher_p": None if p is None else _show(p), "p_holm": None, "reject": False})
     for model in sorted({g["model"] for g in groups}):
         same = [g for g in groups if g["model"] == model]
-        for g, (adj, rej) in zip(same, holm([g["fisher_p"] for g in same])):
-            g["p_holm"], g["reject"] = round(adj, 6), rej and g["fisher_p"] is not None
+        for g, (adj, rej) in zip(same, holm([raw[model, g["lesson"]] for g in same])):
+            g["p_holm"], g["reject"] = _show(adj), rej and raw[model, g["lesson"]] is not None
     return groups
 
 

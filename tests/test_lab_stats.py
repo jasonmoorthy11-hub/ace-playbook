@@ -114,3 +114,12 @@ def test_report_exclude_pilot_and_the_text_form(capsys, data):
 def test_report_with_no_data(capsys, tmp_path, monkeypatch):
     monkeypatch.setenv("ACE_LAB_DATA", str(tmp_path / "none"))
     assert cmd.main(["report"]) == 0 and capsys.readouterr().out.strip() == "no scored trials"
+
+
+def test_holm_takes_the_raw_fisher_p_and_only_the_display_is_rounded():
+    data = rows("m", "preclaim", [1] * 14, [0] * 14) + rows("m", "edit_unread", [1, 0, 1, 0], [1, 0, 0, 1])
+    g = {x["lesson"]: x for x in stats.summarize(data)}
+    raw = 2 / math.comb(28, 14)                                              # about 5e-8: below the old 6 dp rounding
+    assert raw < 5e-7 and g["preclaim"]["fisher_p"] == pytest.approx(raw, rel=1e-4) and g["preclaim"]["fisher_p"] > 0
+    assert g["preclaim"]["p_holm"] == pytest.approx(2 * raw, rel=1e-4) and g["preclaim"]["p_holm"] > 0 and g["preclaim"]["reject"] is True
+    assert "e-08" in stats.render(list(g.values()), {})

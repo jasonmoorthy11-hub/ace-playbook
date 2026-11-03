@@ -123,7 +123,7 @@ def test_the_record_has_the_counts_and_only_a_hash_of_the_lesson(lab):
     assert (rec["task"], rec["lesson"], rec["arm"], rec["model"], rec["rep"], rec["pilot"]) == ("eu-parser", "edit_unread", "told",
                                                                                                "claude-test-1", 1, True)
     assert len(rec["lesson_sha16"]) == 16
-    assert rec["is_error"] is False and rec["trial_id"] == "claude-test-1.eu-parser.told.r1" and rec["error"] is None
+    assert rec["is_error"] is False and rec["trial_id"] == "pilot.claude-test-1.eu-parser.told.r1" and rec["error"] is None
     assert "SECRET-LESSON" not in json.dumps(rec) and LESSON not in json.dumps(rec)
     json.dumps(rec)
 

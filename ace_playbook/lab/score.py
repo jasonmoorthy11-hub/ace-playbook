@@ -1,10 +1,13 @@
 """Score one saved stream-json file for one lesson: deterministic, no model, no network.
 
 preclaim: the number of `type:"user"` events whose text starts `Stop hook feedback:` and whose bracketed hook name is
-`stop-mid-task-audit.sh` (the field detector's own `STOP_FB` and `SH_NAME`, last match in the bracket as `detectors._hook_name`).
-edit_unread: a turn is everything up to the next `result` event. An Edit or MultiEdit (the file must exist) or a Write of a file the
-session already knows (read, edited or written earlier) is a violation when that file was not Read, Edited or Written earlier in the
-SAME turn. Paths are resolved against the init event's `cwd`. Several edits of one file in a turn count once (the first).
+`stop-mid-task-audit.sh` (the field detector's own `STOP_FB` and `SH_NAME`, last match in the bracket as `detectors._hook_name`). As in the
+field (events.py), the text blocks of one user event are joined with a newline and an event that carries a tool_result is skipped.
+edit_unread: a turn is everything up to the next `result` event. Every Edit, MultiEdit or Write tool_use is paired with its tool_result by
+id. The PRIMARY count (`violations`) is the edits whose result is NOT an error (as the field detector, detectors.py `_unread`) that touch
+a file not Read, Edited or Written (successfully) earlier in the SAME turn; a Write counts only on a path the session already knows. The
+secondary count `attempted` is the same test ignoring the result status (a tool-rejected edit, or a tool_use with no result, counts). A
+failed Read is not a read. Paths are resolved against the init event's `cwd`; several edits of one file in a turn count once.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ from ..compile.detectors import BRACKET_CAP, SH_NAME, STOP_FB
 
 HOOK_NAME = "stop-mid-task-audit.sh"
 LESSONS = ("preclaim", "edit_unread")
+EDITS = ("Edit", "MultiEdit", "Write")
 
 
 def _events(path):
@@ -47,13 +51,13 @@ def _content(ev) -> list:
 def _hook_blocks(ev) -> int:
     if ev.get("type") != "user":
         return 0
-    for block in _content(ev):
-        text = block.get("text")
-        m = STOP_FB.match(text) if block.get("type") == "text" and isinstance(text, str) and text.startswith("Stop hook feedback") else None
-        found = SH_NAME.findall((m.group(1) or "")[:BRACKET_CAP]) if m else []
-        if found and found[-1] == HOOK_NAME:
-            return 1
-    return 0
+    blocks = _content(ev)
+    if any(b.get("type") == "tool_result" for b in blocks):
+        return 0
+    text = "\n".join(b["text"] for b in blocks if b.get("type") == "text" and isinstance(b.get("text"), str))
+    m = STOP_FB.match(text) if text.startswith("Stop hook feedback") else None
+    found = SH_NAME.findall((m.group(1) or "")[:BRACKET_CAP]) if m else []
+    return int(bool(found) and found[-1] == HOOK_NAME)
 
 
 def _resolve(cwd: str, path: str) -> str:
@@ -64,35 +68,70 @@ def _preclaim(events) -> int:
     return sum(_hook_blocks(ev) for ev in events)
 
 
-def _edit_unread(events) -> int:
-    cwd, known, seen, violations = "/", set(), set(), 0
-    for ev in events:
+class _Walk:
+    """The edit_unread state machine: tool_uses wait in `pending` until their tool_result settles them."""
+
+    def __init__(self) -> None:
+        self.cwd, self.known, self.seen, self.pending, self.violations, self.attempted = "/", set(), set(), {}, 0, 0
+
+    def settle(self, name: str, path: str, error: bool, answered: bool = True) -> None:
+        ok = answered and not error
+        if name == "Read":
+            if ok:
+                self.seen.add(path)
+                self.known.add(path)
+            return
+        if path not in self.seen and (name != "Write" or path in self.known):
+            self.attempted += 1
+            self.violations += ok
+        if ok:
+            self.seen.add(path)
+            self.known.add(path)
+
+    def flush(self) -> None:
+        """Settle the tool_uses that never got a result (a cut stream): attempted only, no state change."""
+        for name, path in self.pending.values():
+            self.settle(name, path, True, answered=False)
+        self.pending = {}
+
+    def feed(self, ev) -> None:
         kind = ev.get("type")
         if kind == "system" and ev.get("subtype") == "init" and isinstance(ev.get("cwd"), str):
-            cwd = ev["cwd"]
+            self.cwd = ev["cwd"]
         elif kind == "result":
-            seen = set()
+            self.flush()
+            self.seen = set()
         elif kind == "assistant":
             for block in _content(ev):
                 inp = block.get("input")
                 path = inp.get("file_path") if isinstance(inp, dict) else None
-                if block.get("type") != "tool_use" or not isinstance(path, str) or not path:
-                    continue
-                p, name = _resolve(cwd, path), block.get("name")
-                if name == "Read":
-                    seen.add(p)
-                elif name in ("Edit", "MultiEdit", "Write"):
-                    if p not in seen and (name != "Write" or p in known):
-                        violations += 1
-                    seen.add(p)
-                known.add(p)
-    return violations
+                if block.get("type") == "tool_use" and isinstance(path, str) and path and block.get("name") in ("Read", *EDITS):
+                    key = block["id"] if isinstance(block.get("id"), str) else f"anon{len(self.pending)}"
+                    self.pending[key] = (block["name"], _resolve(self.cwd, path))
+        elif kind == "user":
+            for block in _content(ev):
+                if block.get("type") == "tool_result" and block.get("tool_use_id") in self.pending:
+                    self.settle(*self.pending.pop(block["tool_use_id"]), bool(block.get("is_error")))
+
+
+def _edit_unread(events) -> tuple[int, int]:
+    """(violations, attempted)"""
+    walk = _Walk()
+    for ev in events:
+        walk.feed(ev)
+    walk.flush()
+    return walk.violations, walk.attempted
 
 
 def score(stream_path, lesson: str) -> dict:
-    """{"violations": n, "any": n > 0, "turns": number of result events, "parse_errors": e}; ValueError for an unknown lesson."""
+    """{"violations": n, "any": n > 0, "turns": number of result events, "parse_errors": e}, plus `attempted` for edit_unread;
+    ValueError for an unknown lesson."""
     if lesson not in LESSONS:
         raise ValueError(f"unknown lesson: {lesson}")
     events, bad = _events(stream_path)
-    n = _preclaim(events) if lesson == "preclaim" else _edit_unread(events)
-    return {"violations": n, "any": n > 0, "turns": sum(ev.get("type") == "result" for ev in events), "parse_errors": bad}
+    extra: dict = {}
+    if lesson == "preclaim":
+        n = _preclaim(events)
+    else:
+        n, extra["attempted"] = _edit_unread(events)
+    return {"violations": n, "any": n > 0, "turns": sum(ev.get("type") == "result" for ev in events), "parse_errors": bad, **extra}
