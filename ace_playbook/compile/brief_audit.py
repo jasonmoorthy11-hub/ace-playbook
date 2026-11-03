@@ -69,6 +69,17 @@ def call_blocks(evs: list) -> list:
     return out
 
 
+def result_blocks(evs: list) -> list:
+    """Every tool result block of the user messages: a content block whose `type` ends with `tool_result` (tool_result, mcp_tool_result). A
+    single block given as a dict counts like a list of one. A result block in any other event is not a result."""
+    out = []
+    for e in evs:
+        content = e["message"].get("content") if e.get("type") == "user" and isinstance(e.get("message"), dict) else None
+        out += [b for b in (content if isinstance(content, list) else [content])
+                if isinstance(b, dict) and isinstance(b.get("type"), str) and b["type"].endswith("tool_result")]
+    return out
+
+
 def tool_uses(evs: list) -> set:
     """The names of the call blocks (strings only; see `nameless_calls`)."""
     return {b["name"] for b in call_blocks(evs) if isinstance(b.get("name"), str)}
@@ -154,7 +165,8 @@ def append_row(path, row: dict) -> None:
 # text `brief refusal` writes, anything else is "other". `stage N failed (exit R)` is read without its exit code.
 REASONS = ("config", "lock", "no /usr/bin/perl", "cannot create the brief directory", "cannot open the lock file", "cannot create the run directory",
            "empty or malformed tool allowlist or deny list", "due check failed", "stage 1 failed", "stage 2 failed", "tool audit failed",
-           "stage 1 gave no result", "digest refused", "stage 2 gave no result", "brief refused", "state file")
+           "stage 1 gave no result", "digest refused", "stage 2 gave no result", "brief refused", "state file", "connectors pending",
+           "connectors check failed")
 
 
 def as_dict(x) -> dict:

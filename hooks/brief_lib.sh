@@ -1,5 +1,5 @@
 # Helpers of hooks/brief.sh, sourced by it (functions only; docs/design/compiler.md 8.x "Brief (as built)"). The caller sets PYB (the python
-# command), RUN (brief_dir/run) and CHILD (the pid of the tracked background step, "" when none) before it calls these.
+# command), HOOKS, RUN (brief_dir/run) and CHILD (the pid of the tracked background step, "" when none) before it calls these.
 fail() {   # $1 the reason (stderr, and a `refusal` ledger row, best effort and only a reason of the fixed set), $2 any: a stage timeout, which has its row
   echo "brief: $1" >&2; [ -n "${2:-}" ] || py refusal "$1" > /dev/null 2>&1 || true; exit 1      # py = run_bg: a TERM stops it at once
 }
@@ -9,6 +9,14 @@ run_bg() {   # every long step runs in the background and is waited for: a foreg
   CHILD=$!; wait "$CHILD"; local rc=$?; CHILD=""; return "$rc"
 }
 py() { run_bg "${PYB[@]}" -m ace_playbook.compile.brief "$@"; }
+conn() { run_bg "${PYB[@]}" -m ace_playbook.compile.brief_conn "$@"; }      # the connectors check: exit 0 ready, 2 not ready, 1 could not check
+conn_check() { conn "$RUN/stage1.jsonl" --allow "$HOOKS/brief_allowed_tools.txt" > "$RUN/res_conn.json"; }
+ledger_stage() {   # $1 stage name, $2 its stream: one ledger row when the stream holds a result
+  py extract "$2" --what rate_limit > "$RUN/rl_first.json" 2>/dev/null
+  py extract "$2" --what rate_limit --last > "$RUN/rl_last.json" 2>/dev/null
+  py extract "$2" --what result > "$RUN/res_$1.json" 2>/dev/null || return 0
+  py ledger "$RUN/rl_first.json" "$RUN/rl_last.json" "$1" "$RUN/res_$1.json" || echo "brief: ledger row failed for $1" >&2
+}
 names() {   # $1 a list file -> `a,b,c`. A line is blank, a full-line `#` comment or ONE name of [A-Za-z0-9_][A-Za-z0-9_.-]*; a BOM, a leading `-`, a
   # `#` after a name, a space inside, a NUL anywhere or any other byte fails (rc 1), exactly as hooks/brief_guard.py reads the file.
   # LC_ALL=C: only ASCII blanks are blanks.
@@ -30,11 +38,13 @@ except BlockingIOError: sys.exit(75)' 2> /dev/null; local rc=$?      # stderr of
   [ "$rc" -eq 75 ] && exit 0
   fail "lock"
 }
-limits() {   # sets STAGE_T (the wall-clock limit of a stage) and GRACE (the wait between TERM and KILL), integers >= 1 in seconds, and ALARM
+limits() {   # sets STAGE_T (the wall-clock limit of a stage) and GRACE (the wait between TERM and KILL), integers >= 1 in seconds, RETRY_S (the wait
+  # before the one stage-1 retry, an integer >= 0, 15 by default) and ALARM
   # (a prefix that makes a stage die on its own alarm even when this script is gone: the lock fd 9 is inherited by the stage)
   STAGE_T="${ACE_BRIEF_STAGE_TIMEOUT:-600}" GRACE="${ACE_BRIEF_KILL_GRACE:-10}"
   [[ "$STAGE_T" =~ ^[0-9]{1,6}$ ]] && STAGE_T=$((10#$STAGE_T)) && [ "$STAGE_T" -ge 1 ] || STAGE_T=600
   [[ "$GRACE" =~ ^[0-9]{1,6}$ ]] && GRACE=$((10#$GRACE)) && [ "$GRACE" -ge 1 ] || GRACE=10
+  RETRY_S="${ACE_BRIEF_RETRY_SLEEP:-15}"; [[ "$RETRY_S" =~ ^[0-9]{1,6}$ ]] && RETRY_S=$((10#$RETRY_S)) || RETRY_S=15
   ALARM=(/usr/bin/perl -e '$SIG{ALRM} = "DEFAULT"; alarm shift; exec @ARGV' "$((STAGE_T + GRACE))")      # a launcher may have left SIGALRM ignored
 }
 watch() {   # $1 pid, $2 seconds, $3 grace: TERM the pid when the time is up (and leave $RUN/timed_out), KILL it when it outlives the grace

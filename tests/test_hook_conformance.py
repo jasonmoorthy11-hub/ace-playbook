@@ -206,14 +206,14 @@ ALLOWED_ACE = {"ace_playbook", "ace_playbook.config", "ace_playbook.canon", "ace
                    "detectors", "events", "shell", "srchash", "grammar", "contracts",
                    "shadow_guard", "shadow_arm", "phase"))}      # S-1 F1: the over-cap raw scan, the matcher test and the output decision; `re` only
 ABSENT = ("seal", "dashboard", "dashboard_html", "status", "digest", "queue", "report", "synth", "metrics", "scrub", "measure",
-          "brief", "brief_render", "brief_excl", "brief_audit", "nightly_notes",
+          "brief", "brief_render", "brief_excl", "brief_audit", "brief_conn", "nightly_notes",
           "watch", "fetch", "inventory", "match", "store", "summary", "chars", "fsio", "cssstyle", "records", "pin",
           "reconcile", "htmlrules", "mdrules", "stylepass", "cssscan", "treebuild", "treemodes", "treestyle", "treewalk",
           "reader", "readerloop", "validate", "compose", "canary", "model",
           "arms", "arms_stats", "arms_window", "labels_queue", "arm_start",
           "arm_check", "carry", "vet", "urlsafe",
-          "lab")   # the lab package (matching is per name component, so `lab` catches every submodule)
-# `watch`: network-using (W1); the W2 Reader runs `claude -p` (subprocess)
+          "holdout_power", "holdout_report", "holdout_io",
+          "lab")   # `watch`: network-using (W1); the W2 Reader runs `claude -p` (subprocess); `lab` catches every lab submodule (per name component)
 HEAVY = {"sqlite3", "subprocess", "socket", "ssl", "http", "urllib.request", "asyncio", "multiprocessing", "threading", "ctypes"}
 
 

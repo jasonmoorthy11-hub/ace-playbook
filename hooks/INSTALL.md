@@ -101,6 +101,9 @@ Why these values:
   background hooks, and SessionEnd has no decision control, so the field there is documentation
   of intent.
 
+The three session hooks set `PYTHONPATH` to the repo only and ignore any `PYTHONPATH` in the operator's environment; an `ACE_PLAYBOOK_HOME` that is not an
+absolute path to the repo (relative, holding `:` or a newline, or without the package) is refused (the hook then does nothing) (see LIMITATIONS.md).
+
 Optional but recommended: a `ConfigChange` hook of your own that logs edits to settings, hooks
 and skills, so any change to the hooks above is visible. This repo does not ship one.
 
@@ -696,6 +699,14 @@ only as text inside a parsed line (an allowed tool's input, a mail body) is data
 tools the audit refuses every run; the first real `brief.sh --force` is the acceptance test. Read the summary line (it shows the size of
 the init list and which tools drifted) and the `drift` row of `brief_ledger.jsonl`, then decide whether to tighten the scope or to
 widen the audit. That detects drift, it cannot undo a call that already ran.
+Right after the audit, `python -m ace_playbook.compile.brief_conn <stream> --allow hooks/brief_allowed_tools.txt` checks the connectors: the claude.ai
+connectors attach late and can be `pending` or absent at init. Every server of the allowlist (Gmail, Google Calendar, Linear) must be ready: listed as
+`connected` in the first init event, or a tool of it was called and that call's result is not an error (`is_error` absent, null or false; a
+server not `connected` at init and ready by such a call is named in `late` in the JSON line).
+Stage 1 must also have called at least one of their tools. Not ready (exit 2) means ONE retry after
+`ACE_BRIEF_RETRY_SLEEP` seconds (default 15; 1 to 6 digits, 0 allowed, else the default); still not ready ends the run with
+`brief: connectors pending, run refused` on stderr and in the notification, then the check's JSON line (slugs only), a `refused` ledger row and no
+stage 2. A retry means two `stage1` ledger rows.
 It cannot use `--strict-mcp-config`, because the claude.ai connectors are account-level and cannot be named in an mcp-config file.
 The prompt is always the last argument, after a single-value flag, because `--tools`, `--allowedTools` and `--disallowedTools` take
 a variadic list that would swallow a positional prompt.
@@ -724,7 +735,8 @@ SIGHUP (exit 143, 130 and 129), which also stop the running `claude` or python s
 waited for, so the signal is not deferred). The handler ignores further signals first, so a burst of them cannot skip the purge, and it
 waits at most `ACE_BRIEF_KILL_GRACE` seconds for the children before it SIGKILLs them (a stage that ignores TERM cannot hold it). A SIGKILL
 cannot be caught: it leaves the raw files, and the next run deletes them first thing
-(`ACE_BRIEF_KEEP=1` keeps them, 0600, under `brief_dir/run`; the session transcript is
+(`ACE_BRIEF_KEEP=1` keeps them, 0600, under `brief_dir/run`, only the LAST attempt's streams, because the purge before the retry removes the first
+attempt's; the session transcript is
 never written, see Sessions above). `digest_clean.json` (summaries after the exclusions) stays there until the next run.
 
 **One run at a time.** `brief.sh` takes a kernel `flock` (python's `fcntl` on the inherited fd 9; the interpreter is `ACE_PYTHON`,

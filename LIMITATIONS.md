@@ -490,6 +490,11 @@ synthetic corpus is generated to match its own patterns, so detection on it is c
 Paraphrase leakage (a lesson that restates a token's prefix or last characters) is a hypothesis
 the long-token lint partly covers and nothing measures.
 
+Fixed 2026-11-02: the session hooks once appended an inherited `PYTHONPATH`; an empty or relative element (`.`, `sub`), or an element naming the working
+directory, put the cwd or a cwd subdirectory before the stdlib (a planted `json.py`). The hooks now set `PYTHONPATH` to the repo only, and an
+`ACE_PLAYBOOK_HOME` that is not an absolute path to the repo (relative, holding `:` or a newline, or without the package) is refused
+(the hook then does nothing).
+
 ## Provenance origins
 
 - A pre-existing third-party file under the session's working directory that matches none of the untrusted markers (a cloned repo's
@@ -597,6 +602,20 @@ The `last refusal:` line of `brief status` names only a reason from a fixed list
 own row); a run
 whose config or brief directory cannot be read has no ledger to write to, so its refusal stays on stderr only, and a quiet exit (another run holding the
 lock, not due) is not a refusal.
+
+The claude.ai connectors attach asynchronously on Claude Code 2.1.309: at stage 1's init a connector may be `pending` or absent from `mcp_servers`.
+The model may then see none of its tools and answer an empty digest, or load them itself (ToolSearch) and read all three. `brief_conn` refuses a stage 1
+in which Gmail, Google Calendar or Linear is not ready, or with zero connector calls (one retry first, so a second stage-1 call is paid for). A
+connector is ready when its entry was `connected` in the first init event, or when a tool of it was called and the result of that call (matched by
+`tool_use_id`) is not an error (`is_error` absent, null or false); one that was not `connected` at init and is ready by such a call is in `late`.
+`pending` and `missing` list only the connectors that are not ready. Only `is_error` is read, never the result's content: a failure that comes
+back as a non-error result (text saying the server is not connected) counts as a successful call, as it already did on the init path.
+Servers are matched by slug (every character outside `[A-Za-z0-9]` becomes `_`), so a second server whose name slugs the same way (`claude_ai_Gmail`,
+`claude.ai-Gmail`) counts for that connector. The only read test beyond that is `calls >= 1` across the three connectors together: a run that called
+only Linear (the others `connected` at init) can still report `calendar 0, mail 0 of 0` as `ok`, and a connector call that returned an error still
+counts toward `calls` (it does not make a connector that was not `connected` at init ready). A genuinely empty day with at least one call stays `ok`.
+With `T` = `ACE_BRIEF_STAGE_TIMEOUT` + `ACE_BRIEF_KILL_GRACE`, stage 1 with its retry can last up to 2 x `T` + `ACE_BRIEF_RETRY_SLEEP`
+seconds, and the whole run up to 3 x `T` + `ACE_BRIEF_RETRY_SLEEP` plus the code steps (stage 2 has its own limit).
 
 ## Nightly check notes
 

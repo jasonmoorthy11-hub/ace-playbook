@@ -27,7 +27,7 @@ dated SECURITY/README/INSTALL amendments recorded under "Amendments" at the end.
 |---|---|
 | Stage-1 hooks fail open, exit 0, never block, no network; they do not `exec` Python and end in `exit 0`; they pass `-P` since `d22cc16` | SECURITY.md:36-37; inject/__main__.py:1-5, 61-64; hooks/sessionstart.sh:4-5, hooks/stop_citation_ledger.sh:4-5, hooks/sessionend.sh:5-6 |
 | Ledgers are append-only JSONL, 0600, `sort_keys` | inject/ledger.py:11-17 |
-| Exposure ledger (`injections.jsonl`) holds `shown_ids`, `holdout_ids` per session | inject/injector.py:125-134 |
+| Exposure ledger (`injections.jsonl`) holds `shown_ids`, `holdout_ids`, `entrypoint` per session | inject/injector.py:144-153 |
 | Citation ledger holds `[L-id]` strings the agent wrote (agent self-report) | inject/citations.py:11-25 |
 | Inertness check to reuse for proposal messages; **not cheaply importable today** (see 7.2), so it moves to a leaf module in step 1 | inject/sanitize.py:108-120; store/schema.py:64-78 |
 | Lesson evidence = `{quote, origin, session_id}`, live status needs user origin | store/schema.py:106-121, 143-144 |
@@ -1689,10 +1689,38 @@ marker, exits 1, and a rerun is clean.
 
 *Still open.* The spillover comparison, and the operator's tag and OpenTimestamps proof at the arm start.
 
+#### Holdout analysis (field experiment on the injected lessons)
+
+- `python -m ace_playbook.store exempt|unexempt <lesson_id>` set `holdout_exempt` (a PATCH delta, then the view rebuild, as `pin`/`unpin`); `list` marks it.
+- `python -m ace_playbook.compile.holdout_power [--events PATH] [--since ISO] [--rates] [--weeks] [--rr] [--method normal|perm] [--json]`: Monte Carlo
+  power of the per-session, per-lesson holdout (`LESSONS`; binary and count outcomes; `fit` by moments, NB or Poisson, over sessions that started
+  at or after `--since`, default the earliest start with a detector fire row, printed). A `normal` cell under 60 sessions per arm runs as `perm`
+  and is labelled `small-n`. `holdout_io` holds what both modules share (UTC stamps with or without milliseconds).
+- `python -m ace_playbook.compile.holdout_report [--min-prompts 1] [--json]` is the single confirmatory read: it tests the window registered in the
+  config (`holdout_start`, `holdout_end`: whole-second UTC stamps, start < end), and only once `holdout_end` has passed. `--interim-descriptive
+  [--start ISO --end ISO]` describes any window; `--start/--end` with anything else, or a half window, refuses. Raw session ids join the offline-tier
+  detector rows by `session_hash`; the newest `_session` row needs `prompts` >= N and `start` (ms allowed) in [start, end). Excluded and counted:
+  `not_interactive`, `refused`, `holdout_off`, `mixed_rate` (a rate-0 and a live row in one session), `rate_not_half`, `seed_fp_mismatch`,
+  `assignment_conflict`, lessons in no list, unmatched sessions, `null_session_id` rows; a lesson in `dropped_cap` counts as shown (`dropped_cap`).
+- Eligible sessions are interactive (D-239): `entrypoint == "cli"` on every injection row of the session. The injector records the field from
+  `CLAUDE_CODE_ENTRYPOINT` (`sdk-py`, `sdk-cli`, ... for automation); rows without it (legacy) or with any other value are excluded as
+  `not_interactive`, decided before the coin and before the other session reasons. `holdout_power --rates` must be the interactive rate.
+- Per lesson: PRIMARY the difference in the share of sessions with the mistake (Wilson interval per arm), SECONDARY the difference in mean counts;
+  `permutation_test` (0.5, 10,000 draws, config `holdout_permutation_seed`) and `holm` over the three lessons, the two families apart. The
+  secondary's `shift_ci95_null_redraws` is D minus the null re-draws' quantiles, not a confidence interval; the primary has none.
+- Refuses (exit 2): the seed or the window unset; a window stamp that is not a real date (config validation says so too); `--min-prompts` other than
+  the registered 1; before `holdout_end` unless `--interim-descriptive` (per-arm n and means, no p-value, no interval,
+  headed `descriptive, not the pre-registered test`). Neither module is on the hook path; neither prints text or the seed.
+- The three lessons must never be `holdout_exempt` during the registered window (the injector always shows an exempt lesson, so its row would look
+  coin-shown): the report reads the delta LOG (not the SQLite view, which keeps no history) and the confirmatory read refuses (exit 2, one line
+  naming the id) if any record sets `holdout_exempt` true on one of them with a `ts` before `holdout_end`, even if a later record unexempts it, or
+  if the log cannot be read; a record from `holdout_end` on does not count. `--interim-descriptive` prints `lessons_exempt` (the same ids, or
+  `unreadable`). The config's calendar check of the window stamps is by hand (month lengths, Gregorian leap years): no `datetime` import on the hook path.
+
 ### 8.x Brief (as built)
 
-Order W3 of the watcher and cockpit design (section 7, "The brief"). Not on the hook path: `brief`, `brief_render`, `brief_excl` and
-`brief_audit` are on the conformance ABSENT tuple, `__main__.py` is untouched (the brief has its own entry point,
+Order W3 of the watcher and cockpit design (section 7, "The brief"). Not on the hook path: `brief`, `brief_render`, `brief_excl`,
+`brief_audit` and `brief_conn` are on the conformance ABSENT tuple, `__main__.py` is untouched (the brief has its own entry point,
 `python -m ace_playbook.compile.brief <verb>`), and nothing in metrics, report, status, seal or the detectors changed.
 
 - **Principals and controls.** A read-only principal (it reads calendar, mail and Linear; it has no write tool and no outbound channel).
@@ -1764,7 +1792,10 @@ Order W3 of the watcher and cockpit design (section 7, "The brief"). Not on the 
   (exit 2 on a schema or exclusions failure), `render <brief>` (writes `brief.html` and the validated `brief.json`, prints the path),
   `extract <stream> --what rate_limit|result|text [--last]` (the result object gains `_tools_called`, the names that may be written, and
   `_unknown_tools`, the count of the others), `ledger <before> <after> <stage> <result>`,
-  `state-mark` (writes `brief_state.json`: `last_brief`, `needs_you_count`), `tools-audit <stream> --allow <file>` (exit 2 on drift), `timeout-mark
+  `state-mark` (writes `brief_state.json`: `last_brief`, `needs_you_count`), `tools-audit <stream> --allow <file>` (exit 2 on drift),
+  `brief_conn <stream> --allow <file>` (its own module; exit 2 when not ready: a read connector that was neither `connected` in the first init
+  event nor answered a call -- a tool_use of it whose tool_result, matched by `tool_use_id`, is not an error (`is_error` absent, null or
+  false); one not `connected` at init and ready by such a call is listed in `late` -- or no connector call), `timeout-mark
   <stage>` (a ledger row `{ts, stage, timeout}`), `refusal <reason>` (a ledger row `{ts, stage: "run", refused: <reason>}`; the reason is checked against the
   FIXED set `brief_audit.REASONS`, the `fail` literals of `brief.sh` and `brief_lib.sh` without the `(exit N)` tail, and anything else is written as
   `other`, never
