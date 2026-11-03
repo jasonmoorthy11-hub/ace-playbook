@@ -79,12 +79,13 @@ def test_read_only_tools_are_allowed_only_when_every_path_input_resolves_inside_
     (work / "link").symlink_to(outside)
     (work / "flink.txt").symlink_to(outside / "secret.txt")
     (work / "ok").symlink_to(work / "sub")
-    for tool, inp in [("Read", {"file_path": str(work / "a.py")}), ("Read", {"file_path": "a.py"}), ("Read", {"file_path": "sub/new.py"}),
-                      ("Read", {"file_path": str(work / "sub" / ".." / "a.py")}), ("Grep", {"pattern": "x"}), ("Glob", {"pattern": "*.py"}),
-                      ("Grep", {"pattern": "x", "path": "sub"}), ("LS", {"path": str(work)}), ("Glob", {"pattern": "*", "path": "ok"}),
-                      ("ToolSearch", {"query": "x"}), ("Read", {"file_path": str(work)})]:
+    for tool, inp in [("Read", {"file_path": "a.py"}), ("Read", {"file_path": "sub/new.py"}), ("Grep", {"pattern": "x"}),
+                      ("Glob", {"pattern": "*.py"}), ("Grep", {"pattern": "x", "path": "sub"}), ("Glob", {"pattern": "*", "path": "ok"}),
+                      ("ToolSearch", {"query": "x"}), ("Grep", {"pattern": "a/b ~ \\s"})]:
         assert can_use(tool, inp, work)[1] == "allow", (tool, inp)
-    for tool, inp in [("Read", {"file_path": "/etc/passwd"}), ("Read", {"file_path": "../outside/secret.txt"}),
+    for tool, inp in [("Read", {"file_path": str(work / "a.py")}), ("LS", {"path": str(work)}), ("Read", {"file_path": str(work)}),
+                      ("Read", {"file_path": str(work / "sub" / ".." / "a.py")}), ("Read", {"file_path": "sub/../a.py"}),
+                      ("Read", {"file_path": "/etc/passwd"}), ("Read", {"file_path": "../outside/secret.txt"}),
                       ("Read", {"file_path": str(work / ".." / "outside" / "secret.txt")}), ("Read", {"file_path": "link/secret.txt"}),
                       ("Read", {"file_path": "flink.txt"}), ("Grep", {"pattern": "x", "path": str(outside)}),
                       ("Grep", {"pattern": "x", "path": "link"}), ("LS", {"path": "/"}), ("Glob", {"pattern": "*", "path": ".."}),
@@ -98,14 +99,50 @@ def test_read_only_tools_are_allowed_only_when_every_path_input_resolves_inside_
 def test_a_tilde_path_is_outside_the_run_dir_because_the_file_tools_expand_it_to_home(tmp_path):
     work = tmp_path / "work"
     work.mkdir()
-    (work / "notes~backup.txt").write_text("x")
     for tool, key in [("Read", "file_path"), ("Grep", "path"), ("LS", "path"), ("Glob", "path"), ("Read", "notebook_path")]:
         for val in ("~", "~/.ssh/id_rsa", "~/x", "~user/x", "~root"):
             assert can_use(tool, {key: val}, work) == (deny("rp", exitplan.OTHER_MSG), "other_denied"), (tool, key, val)
     assert can_use("Glob", {"pattern": "~/*"}, work) == (deny("rp", exitplan.OTHER_MSG), "other_denied")
-    for tool, key in [("Read", "file_path"), ("Grep", "path")]:                              # a later `~` is just a name
-        assert can_use(tool, {key: "notes~backup.txt"}, work)[1] == "allow"
-    assert can_use("Read", {"file_path": "sub/~x"}, work)[1] == "allow"
+    for tool, key in [("Read", "file_path"), ("Grep", "path")]:                              # round 4: any `~` is outside the accept-rule
+        assert can_use(tool, {key: "notes~backup.txt"}, work)[1] == "other_denied"
+    assert can_use("Read", {"file_path": "sub/~x"}, work)[1] == "other_denied"
+
+
+PATH_TOOLS = [("Read", "file_path"), ("Read", "notebook_path"), ("Grep", "path"), ("Glob", "path"), ("LS", "path")]
+BAD_PATHS = [" /etc/passwd", "\t/etc/passwd", "\n/etc/hosts", " ~/.ssh/id_rsa", " ~", ".. ", " ..", " /etc", "a.py ", "a.py\n", "\ufeffa.py",
+             "caf\u00e9.py", "$HOME/x", "a:b", "a\\b", "a" * 201, "", "-rf", ".", "./a.py", "sub//..", "sub/../a.py", "%USERPROFILE%/x"]
+GOOD_PATHS = ["a.py", "src/a.py", "docs/READ-ME.md", "a" * 200]
+
+
+@pytest.mark.parametrize("tool,key", PATH_TOOLS)
+def test_the_accept_rule_denies_every_unusual_path_shape_and_an_absolute_path_inside_the_run_dir(tmp_path, tool, key):
+    work = tmp_path / "work"
+    (work / "src").mkdir(parents=True)
+    (work / "a.py").write_text("x")
+    for val in BAD_PATHS + [str(work / "a.py"), str(work)]:
+        assert can_use(tool, {key: val}, work) == (deny("rp", exitplan.OTHER_MSG), "other_denied"), (tool, key, val)
+    for val in GOOD_PATHS:
+        assert can_use(tool, {key: val}, work)[1] == "allow", (tool, key, val)
+
+
+@pytest.mark.parametrize("pattern", [" /etc/*", " ~/*", "~/*", "/etc/*", "../*", "src/../*", "*.py ", "\t*.py", "\ufeff*.py", "[ab].py",
+                                     "{a,b}.py", "*.p\u00fd", "$HOME/*", "a\\*", "", "-*", "*" * 201, "src/*.py\n"])
+def test_a_glob_pattern_or_glob_input_outside_the_accept_rule_is_denied(tmp_path, pattern):
+    assert can_use("Glob", {"pattern": pattern}, tmp_path)[1] == "other_denied"
+    assert can_use("Grep", {"pattern": "x", "glob": pattern}, tmp_path)[1] == "other_denied"
+
+
+@pytest.mark.parametrize("pattern", ["*.py", "src/**/*.py", "?.py", "docs/*-*.md", "**"])
+def test_a_plain_glob_pattern_is_accepted(tmp_path, pattern):
+    assert can_use("Glob", {"pattern": pattern}, tmp_path)[1] == "allow"
+    assert can_use("Grep", {"pattern": "x", "glob": pattern}, tmp_path)[1] == "allow"
+
+
+def test_an_unknown_input_key_that_looks_like_a_path_is_denied_and_grep_patterns_are_left_alone(tmp_path):
+    assert can_use("Read", {"file_path": "a.py", "extra": "/etc/passwd"}, tmp_path)[1] == "other_denied"
+    assert can_use("Grep", {"pattern": "x", "output_mode": "a/b"}, tmp_path)[1] == "other_denied"
+    assert can_use("Read", {"file_path": "a.py", "offset": 3, "limit": 5}, tmp_path)[1] == "allow"
+    assert can_use("Grep", {"pattern": "/etc/(passwd|hosts)", "output_mode": "content"}, tmp_path)[1] == "allow"
 
 
 def test_a_denied_read_is_counted_as_other_denied_by_the_driver_and_by_the_scorer(lab):
