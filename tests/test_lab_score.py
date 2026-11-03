@@ -282,3 +282,50 @@ def test_outside_paths_resolves_a_relative_path_against_the_cwd_before_the_test(
     assert outside(tmp_path, [init(cwd), use("Read", "../work/a.py"), use("Read", "a/../../work/b.py"), result()]) == 0
     assert outside(tmp_path, [init(cwd), use("Read", "../other/a.py"), use("Read", "../workshop/a.py"), result()]) == 2
     assert outside(tmp_path, [use("Read", "../work/a.py"), result()]) == 1                                      # no init: a leading .. is outside
+
+
+def test_outside_paths_counts_a_relative_glob_pattern_or_grep_glob_that_leaves_the_cwd(tmp_path):
+    cwd = "/r/work"
+    for name, key in (("Glob", "pattern"), ("Grep", "glob")):
+        extra = {} if name == "Glob" else {"pattern": "x"}
+        for val, want in (("../../*", 1), ("../../**", 1), ("{a,../../etc}/*", 1), ("/r/work/{a,../../etc}/*", 1), ("**/*.py", 0),
+                          ("src/*.py", 0), ("../work/*.py", 0), ("a..b/*.py", 0), ("../other/*", 1)):
+            assert outside(tmp_path, [init(cwd), use_in(name, **{key: val}, **extra), result()]) == want, (name, val)
+
+
+@pytest.mark.parametrize("val,want", [("{.,}./*", 1), (".{.,}/*", 1), ("{a,{.,}.}/*", 1), ("*.{py,md}", 0), ("{a,b/*", 1), ("a,b}/*", 1),
+                                      ("**/*.py", 0), ("src/*.py", 0), ("a..b/*.py", 0), ("{a,b}/*.py", 0), ("/r/work/{a,b}/*", 0),
+                                      ("/r/work/{a,../../etc}/*", 1), ("{" + ",".join(f"a{i}" for i in range(64)) + "}/*", 0),
+                                      ("{" + ",".join(f"a{i}" for i in range(65)) + "}/*", 1), ("{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}/*", 1)])
+def test_a_brace_that_builds_a_dotdot_or_is_unbalanced_or_too_wide_counts_as_outside(tmp_path, val, want):
+    for name, key in (("Glob", "pattern"), ("Grep", "glob")):
+        extra = {} if name == "Glob" else {"pattern": "x"}
+        assert outside(tmp_path, [init("/r/work"), use_in(name, **{key: val}, **extra), result()]) == want, (name, val)
+
+
+@pytest.mark.parametrize("val,want", [("x/**/../../*", 1), ("x/*/../y.py", 1), ("x/../y/*.py", 0), ("**/*.py", 0), ("x/?/../y", 1), ("x/[a]/../y", 1),
+                                      ("/r/work/**/../x", 1), ("/r/work/x/../y/*", 0), ("../work/*.py", 0)])
+def test_a_dotdot_after_a_glob_component_counts_as_outside_because_a_double_star_may_match_no_directory(tmp_path, val, want):
+    for name, key in (("Glob", "pattern"), ("Grep", "glob")):
+        extra = {} if name == "Glob" else {"pattern": "x"}
+        assert outside(tmp_path, [init("/r/work"), use_in(name, **{key: val}, **extra), result()]) == want, (name, val)
+
+
+def test_a_relative_glob_pattern_is_resolved_against_the_tools_path_input(tmp_path):
+    cwd = "/r/work"
+    assert outside(tmp_path, [init(cwd), use_in("Glob", pattern="../*.py", path="src"), result()]) == 0           # /r/work/*.py
+    assert outside(tmp_path, [init(cwd), use_in("Glob", pattern="../../*.py", path="src"), result()]) == 1
+    assert outside(tmp_path, [init(cwd), use_in("Grep", glob="../x/*", pattern="y", path="/r/work/src"), result()]) == 0
+    assert outside(tmp_path, [init(cwd), use_in("Grep", glob="../x/*", pattern="y", path="/r/other"), result()]) == 2    # the path and the glob
+    assert outside(tmp_path, [use_in("Glob", pattern="../x/*"), result()]) == 1                                  # no init: a leading .. is outside
+    assert outside(tmp_path, [init(cwd), use_in("Read", file_path="a.py", pattern="../../*"), result()]) == 0   # only Glob / Grep patterns
+
+
+def test_outside_of_returns_the_count_the_bad_line_count_and_whether_an_init_event_was_seen(tmp_path):
+    ev = [init("/r/work"), use("Write", "/x/p.md"), result()]
+    assert score.outside_of(write(tmp_path, ev)) == (1, 0, True)
+    assert score.outside_of(write(tmp_path, [init("/r/work"), "{broken", result()], pair=False)) == (0, 1, True)
+    assert score.outside_of(write(tmp_path, [result()], pair=False)) == (0, 0, False)
+    assert score.outside_of(write(tmp_path, [], pair=False)) == (0, 0, False)
+    with pytest.raises(ValueError):
+        score.outside_of(write(tmp_path, ["{broken"], pair=False))

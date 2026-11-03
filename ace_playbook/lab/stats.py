@@ -4,7 +4,7 @@ as a secondary, descriptive number. A trial with a recorded error or a missing s
 Two kinds of row are kept apart as descriptive secondaries (no Holm, never a rejection): cued edit_unread tasks, and single-claim preclaim
 tasks (the lab hook needs two claim phrases, so the PRIMARY preclaim row is the multi_claim tasks only). The report also counts the exitplan
 trials whose driver count and rule recomputation differ (`mismatches`), and counts the tool inputs outside the run dir (`outside`: every saved
-stream, errored trials too; an unreadable stream or trials.jsonl line is counted apart, never dropped).
+stream, pilot and errored trials too; an unreadable or empty stream, a stream with a bad line, or a trials.jsonl line is counted apart).
 """
 
 from __future__ import annotations
@@ -87,11 +87,12 @@ def load_rows(trials: Path, exclude_pilot: bool = False) -> tuple[list[dict], di
     """(scored rows, excluded counts per 'model/lesson/arm'); the last record of a trial id wins."""
     rows, excluded = [], {}
     for rec in _records(trials, exclude_pilot):
+        stream = rec.get("stream")
         try:
-            if rec.get("error"):
-                raise OSError("error")
-            sc = score.score(rec["stream"], rec["lesson"])
-        except (OSError, KeyError, TypeError, ValueError):                      # TypeError: a record whose `stream` is no path
+            if rec.get("error") or not isinstance(stream, str) or not stream or not Path(stream).is_file():
+                raise OSError("no stream to score")
+            sc = score.score(stream, rec["lesson"])
+        except (OSError, KeyError, ValueError):
             key = f"{rec.get('model')}/{rec.get('lesson')}/{rec.get('arm')}"
             excluded[key] = excluded.get(key, 0) + 1
             continue
@@ -127,37 +128,43 @@ def mismatches(rows: list[dict]) -> int | None:
     return sum(r.get("rule_violations") != r["violations"] for r in mine) if mine else None
 
 
-def outside(trials: Path, exclude_pilot: bool = False) -> dict | None:
-    """{total, unreadable, trials}: the tool inputs (file_path, path, notebook_path, an absolute Glob pattern or Grep glob) outside the run dir,
-    summed over EVERY saved stream, errored trials included; `trials` lists the sorted ids with a count above 0. FAIL CLOSED: `unreadable` counts
-    each record whose stream is missing, unreadable, wholly unparseable or not a usable path (a `build failed` record ran no agent, so it has no
-    stream to read) and each unparseable line of trials.jsonl. None when trials.jsonl has no line."""
-    recs, bad, any_line = _scan(trials, exclude_pilot)
+def outside(trials: Path) -> dict | None:
+    """{total, unreadable, bad_streams, trials}: the tool inputs (file_path, path, notebook_path, a Glob pattern or Grep glob) outside the run dir,
+    summed over EVERY saved stream, pilot and errored trials included; `trials` lists the sorted ids with a count above 0. FAIL CLOSED:
+    `unreadable` counts each record whose stream is missing, unreadable, wholly unparseable or not a usable path (a `build failed` record ran no
+    agent, so it has no stream to read), each stream that is empty or has no init event (unless its record's error starts `spawn failed` and the
+    stream has no event at all, blank lines aside: run.py opens the stream before the spawn), and each unparseable line of trials.jsonl;
+    `bad_streams` counts the streams with an unparseable line.
+    None when trials.jsonl has no line."""
+    recs, bad, any_line = _scan(trials)
     if not any_line:
         return None
-    total, unreadable, hit = 0, bad, []
+    total, unreadable, bad_streams, hit = 0, bad, 0, []
     for rec in recs:
-        stream = rec.get("stream")
+        stream, err = rec.get("stream"), str(rec.get("error") or "")
         try:
             if not isinstance(stream, str) or not stream:
                 raise TypeError("no stream")
-            n = score.outside_of(stream)
+            n, bad_lines, has_init = score.outside_of(stream)
         except (OSError, TypeError, ValueError):
-            unreadable += not str(rec.get("error") or "").startswith("build failed")
+            unreadable += not err.startswith("build failed")
             continue
+        unreadable += not (has_init or (err.startswith("spawn failed") and not Path(stream).read_text(errors="replace").strip()))
+        bad_streams += bad_lines > 0
         total += n
         hit += [str(rec["trial_id"])] if n else []
-    return {"total": total, "unreadable": unreadable, "trials": sorted(hit)}
+    return {"total": total, "unreadable": unreadable, "bad_streams": bad_streams, "trials": sorted(hit)}
 
 
 def render(groups: list[dict], excluded: dict, cued: list[dict] = (), single: list[dict] = (), mismatched: int | None = None,
-           outside_n: int | None = None, unreadable: int = 0) -> str:
+           outside_n: int | None = None, unreadable: int = 0, bad_streams: int = 0) -> str:
     out = []
     for title, part in (("", groups), ("cued tasks (secondary, descriptive)", cued),
                         ("single-claim preclaim tasks (secondary, descriptive)", single)):
         out += _render(part, title)
     out += [] if mismatched is None else [f"exitplan rule/driver mismatches: {mismatched}"]
-    out += [] if outside_n is None else [f"outside-run-dir tool inputs: {outside_n} (unreadable streams: {unreadable})"]
+    bad = f", streams with bad lines: {bad_streams}" if bad_streams else ""
+    out += [] if outside_n is None else [f"outside-run-dir tool inputs: {outside_n} (unreadable streams: {unreadable}{bad})"]
     out += [f"excluded (error or missing stream) {k}: {v}" for k, v in sorted(excluded.items())]
     return "\n".join(out) if out else "no scored trials"
 
