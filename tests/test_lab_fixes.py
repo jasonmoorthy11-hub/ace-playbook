@@ -299,6 +299,17 @@ def test_a_build_failed_record_names_no_stream_so_it_cannot_hide_an_orphan(lab, 
     assert found["orphan_streams"] == 1 and found["total"] >= 1 and found["trials"] == [lost["trial_id"]]
 
 
+def test_an_old_build_failed_record_that_still_carries_a_stream_path_names_no_stream(lab):
+    lab.scenario(turns=[ESC])
+    shutil.rmtree(lab.runs, ignore_errors=True)
+    lost = lab.go("pc-port", "told")                                                  # the interrupted attempt: T.a1.jsonl, no record
+    old = {**lost, "error": "build failed: OSError", "exit_code": None, "stream": lost["stream"]}   # the pre-wave-11 shape
+    with run.open_private(lab.data / "trials.jsonl", append=True) as fh:
+        fh.write(json.dumps(old, sort_keys=True) + "\n")
+    found = stats.outside(lab.data / "trials.jsonl")
+    assert found["orphan_streams"] == 1 and found["total"] >= 1
+
+
 def test_a_record_naming_another_dirs_stream_does_not_hide_a_local_stream_of_the_same_name(lab):
     lab.scenario(turns=[ESC])
     shutil.rmtree(lab.runs, ignore_errors=True)
