@@ -11,7 +11,8 @@ earlier in the SAME turn; a Write counts only on a path the session already know
 secondary count `attempted` is the same test ignoring the result status (a tool-rejected edit, or a tool_use with no result, counts). A
 failed Read is not a read. Paths are resolved against the init event's `cwd`; several edits of one file in a turn count once.
 outside_paths (every lesson): the tool_use inputs `file_path`, `path` and `notebook_path` that leave the init `cwd`: absolute and not equal to or
-under it (after `posixpath.normpath`), or relative with a `..` that normalises outside; with no init event every absolute path counts.
+under it (after `posixpath.normpath`), or relative with a `..` that normalises outside, or starting with `~` (Claude Code expands `~` and `~user`
+to a home dir); with no init event every absolute path counts.
 exitplan: the ExitPlanMode control_requests that received the neutral deny (exitplan.py `count`, from the driver's own lines in the stream);
 `rule_violations` is the same rule recomputed from the `lab_turn` lines alone, `other_denied` the denied non-read-only tool requests.
 """
@@ -73,7 +74,9 @@ def _resolve(cwd: str, path: str) -> str:
 
 
 def _leaves(cwd, path: str) -> int:
-    """1 when the path input is outside `cwd` (None: unknown, so every absolute path is), else 0."""
+    """1 when the path input is outside `cwd` (None: unknown, so every absolute path is), else 0; a leading `~` is outside (expanded to a home dir)."""
+    if path.startswith("~"):
+        return 1
     if posixpath.isabs(path):
         norm = posixpath.normpath(path)
         return int(cwd is None or not (norm == cwd or norm.startswith(cwd.rstrip("/") + "/")))
@@ -91,6 +94,11 @@ def _outside(events) -> int:
                 if block.get("type") == "tool_use" and isinstance(inp, dict):
                     found += sum(_leaves(cwd, inp[k]) for k in PATH_KEYS if isinstance(inp.get(k), str) and inp[k])
     return found
+
+
+def outside_of(stream_path) -> int:
+    """The outside-run-dir tool-input count of one saved stream, whatever its trial's outcome (OSError when the file is unreadable)."""
+    return _outside(_events(stream_path)[0])
 
 
 def _preclaim(events) -> int:

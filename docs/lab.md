@@ -57,7 +57,7 @@ These defaults are not proven against the real binary, so the pilot MUST check e
 denied tool whose `tool_result` is no error (list them with `grep -lE '"name": ?"(Bash|WebFetch|WebSearch|Task|Agent|NotebookEdit)"' <data>/streams/*.jsonl`
 and open them). A denial alone is not "ran" but needs a look; in the preclaim and edit_unread streams look for one with
 `find <data>/streams -name '*.jsonl' ! -name '*.xp-*' -exec grep -lE '"permission_denials": ?\[[^]]' {} +`.
-The operator stops a run if `report` shows `outside-run-dir tool inputs` above 0 (tool_use path inputs outside the stream's init `cwd`).
+The operator stops a run if `report` shows `outside-run-dir tool inputs` above 0 (inputs outside the init `cwd` or starting with `~`; errored trials count).
 
 ## Isolation
 

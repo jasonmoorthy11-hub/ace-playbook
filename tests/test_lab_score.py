@@ -234,6 +234,15 @@ def test_outside_paths_counts_absolute_inputs_not_under_the_init_cwd(tmp_path):
     assert outside(tmp_path, [init(cwd), use("Read", "/r/work"), use("Read", "/r/workshop/a.py"), result()]) == 1     # a sibling prefix is outside
 
 
+def test_outside_paths_counts_a_tilde_path_because_claude_code_expands_it_to_a_home_dir(tmp_path):
+    cwd = "/r/work"
+    assert outside(tmp_path, [init(cwd), use("Write", "~/.claude/plans/p.md"), result()]) == 1
+    assert outside(tmp_path, [init(cwd), use("Write", "~root/x"), result()]) == 1
+    assert outside(tmp_path, [init(cwd), use_in("Grep", path="~", pattern="x"), result()]) == 1
+    assert outside(tmp_path, [init(cwd), use("Write", "a/b~c.py"), use("Write", "sub/~x"), result()]) == 0       # only a leading ~ expands
+    assert outside(tmp_path, [init(cwd), use("Write", "docs/p.md"), result()]) == 0
+
+
 def use_in(name, **inp):
     """A tool_use with exactly these input keys (`use` reserves `path`)."""
     return {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": f"u{name}{sorted(inp)}", "name": name, "input": inp}]}}

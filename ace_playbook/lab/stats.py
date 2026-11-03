@@ -3,7 +3,8 @@ Fisher exact p (stdlib hypergeometric, exact integer arithmetic), Holm across th
 as a secondary, descriptive number. A trial with a recorded error or a missing stream is excluded and counted, per arm, never scored.
 Two kinds of row are kept apart as descriptive secondaries (no Holm, never a rejection): cued edit_unread tasks, and single-claim preclaim
 tasks (the lab hook needs two claim phrases, so the PRIMARY preclaim row is the multi_claim tasks only). The report also counts the exitplan
-trials whose driver count and rule recomputation differ (`mismatches`), and sums the tool inputs that leave the run dir (`outside`).
+trials whose driver count and rule recomputation differ (`mismatches`), and sums the tool inputs outside the run dir (`outside`: every saved
+stream, errored trials too).
 """
 
 from __future__ import annotations
@@ -61,8 +62,8 @@ def summarize(rows: list[dict], cued: bool = False, single: bool = False) -> lis
     return groups
 
 
-def load_rows(trials: Path, exclude_pilot: bool = False) -> tuple[list[dict], dict]:
-    """(scored rows, excluded counts per 'model/lesson/arm'); the last record of a trial id wins."""
+def _records(trials: Path, exclude_pilot: bool = False) -> list[dict]:
+    """The last record of each trial id, in file order; pilot records dropped when `exclude_pilot`."""
     last: dict[str, dict] = {}
     for line in (Path(trials).read_text(encoding="utf-8", errors="replace").splitlines() if Path(trials).exists() else []):
         try:
@@ -70,10 +71,13 @@ def load_rows(trials: Path, exclude_pilot: bool = False) -> tuple[list[dict], di
             last[rec["trial_id"]] = rec
         except (ValueError, KeyError, TypeError):
             continue
+    return [rec for rec in last.values() if not (exclude_pilot and rec.get("pilot"))]
+
+
+def load_rows(trials: Path, exclude_pilot: bool = False) -> tuple[list[dict], dict]:
+    """(scored rows, excluded counts per 'model/lesson/arm'); the last record of a trial id wins."""
     rows, excluded = [], {}
-    for rec in last.values():
-        if exclude_pilot and rec.get("pilot"):
-            continue
+    for rec in _records(trials, exclude_pilot):
         try:
             if rec.get("error"):
                 raise OSError("error")
@@ -114,9 +118,16 @@ def mismatches(rows: list[dict]) -> int | None:
     return sum(r.get("rule_violations") != r["violations"] for r in mine) if mine else None
 
 
-def outside(rows: list[dict]) -> int | None:
-    """The tool inputs (file_path, path, notebook_path) outside the run dir, summed over the scored trials; None when none was scored."""
-    return sum(r.get("outside_paths", 0) for r in rows) if rows else None
+def outside(trials: Path, exclude_pilot: bool = False) -> int | None:
+    """The tool inputs (file_path, path, notebook_path) outside the run dir, summed over EVERY readable saved stream, errored trials included
+    (a safety count must not skip a trial because its record has an error); None when no stream was readable."""
+    total = None
+    for rec in _records(trials, exclude_pilot):
+        try:
+            total = (total or 0) + score.outside_of(rec["stream"])
+        except (OSError, KeyError, TypeError, ValueError):
+            continue
+    return total
 
 
 def render(groups: list[dict], excluded: dict, cued: list[dict] = (), single: list[dict] = (), mismatched: int | None = None,

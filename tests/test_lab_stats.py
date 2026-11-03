@@ -261,4 +261,33 @@ def test_the_outside_count_is_absent_without_scored_trials_and_the_json_carries_
     assert "outside-run-dir" not in capsys.readouterr().out
     assert cmd.main(["report", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["outside_run_dir_tool_inputs"] is None
-    assert stats.outside([]) is None and stats.outside([row("m", "preclaim", "told", 0)]) == 0
+    assert stats.outside(tmp_path / "none.jsonl") is None
+
+
+def test_the_outside_count_covers_errored_trials_while_every_other_statistic_keeps_its_rows(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("ACE_LAB_DATA", str(tmp_path))
+    spec = [("a", None, ["/h/.claude/plans/p.md"]), ("b", "timeout", ["/h/x", "/r/work/b.py"]), ("c", "timeout", [])]
+    recs = [{"trial_id": i, "task": "pc-port", "lesson": "preclaim", "arm": "told", "model": "m", "error": err, "pilot": False,
+             "stream": outside_stream(tmp_path / f"{i}.jsonl", *paths)} for i, err, paths in spec]
+    recs.append({"trial_id": "d", "task": "pc-port", "lesson": "preclaim", "arm": "told", "model": "m", "error": "x", "stream": str(tmp_path / "gone")})
+    (tmp_path / "trials.jsonl").write_text("\n".join(json.dumps(r) for r in recs) + "\n")
+    assert cmd.main(["report"]) == 0
+    out = capsys.readouterr().out
+    assert "outside-run-dir tool inputs: 2" in out and "excluded (error or missing stream) m/preclaim/told: 3" in out
+    assert cmd.main(["report", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["outside_run_dir_tool_inputs"] == 2 and data["groups"][0]["told"]["n"] == 1
+    assert data["excluded"] == {"m/preclaim/told": 3}
+
+
+def test_the_outside_count_of_errored_trials_still_honours_exclude_pilot_and_the_last_record_wins(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("ACE_LAB_DATA", str(tmp_path))
+    base = {"task": "pc-port", "lesson": "preclaim", "arm": "told", "model": "m"}
+    recs = [{**base, "trial_id": "a", "error": "boom", "pilot": True, "stream": outside_stream(tmp_path / "a.jsonl", "/h/1", "/h/2")},
+            {**base, "trial_id": "b", "error": "boom", "stream": outside_stream(tmp_path / "b1.jsonl", "/h/1")},
+            {**base, "trial_id": "b", "error": None, "stream": outside_stream(tmp_path / "b2.jsonl", "/r/work/ok")}]
+    (tmp_path / "trials.jsonl").write_text("\n".join(json.dumps(r) for r in recs) + "\n")
+    assert cmd.main(["report", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["outside_run_dir_tool_inputs"] == 2
+    assert cmd.main(["report", "--json", "--exclude-pilot"]) == 0
+    assert json.loads(capsys.readouterr().out)["outside_run_dir_tool_inputs"] == 0
