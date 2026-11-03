@@ -604,11 +604,16 @@ whose config or brief directory cannot be read has no ledger to write to, so its
 lock, not due) is not a refusal.
 
 The claude.ai connectors attach asynchronously on Claude Code 2.1.309: at stage 1's init a connector may be `pending` or absent from `mcp_servers`.
-The model then sees none of its tools and answers an empty digest. `brief_conn` refuses an init without Gmail, Google Calendar and Linear all
-`connected`, or a stage 1 with zero connector calls (one retry first, so a second stage-1 call is paid for). Servers are matched by slug (every
-character outside `[A-Za-z0-9]` becomes `_`), so a second server whose name slugs the same way (`claude_ai_Gmail`, `claude.ai-Gmail`) counts for that
-connector. The only read test is `calls >= 1` across the three connectors together: a run that called only Linear can still report `calendar 0, mail 0
-of 0` as `ok`, and a connector call that returned an error still counts as a call. A genuinely empty day with at least one call stays `ok`.
+The model may then see none of its tools and answer an empty digest, or load them itself (ToolSearch) and read all three. `brief_conn` refuses a stage 1
+in which Gmail, Google Calendar or Linear is not ready, or with zero connector calls (one retry first, so a second stage-1 call is paid for). A
+connector is ready when its entry was `connected` in the first init event, or when a tool of it was called and the result of that call (matched by
+`tool_use_id`) is not an error (`is_error` absent, null or false); one that was not `connected` at init and is ready by such a call is in `late`.
+`pending` and `missing` list only the connectors that are not ready. Only `is_error` is read, never the result's content: a failure that comes
+back as a non-error result (text saying the server is not connected) counts as a successful call, as it already did on the init path.
+Servers are matched by slug (every character outside `[A-Za-z0-9]` becomes `_`), so a second server whose name slugs the same way (`claude_ai_Gmail`,
+`claude.ai-Gmail`) counts for that connector. The only read test beyond that is `calls >= 1` across the three connectors together: a run that called
+only Linear (the others `connected` at init) can still report `calendar 0, mail 0 of 0` as `ok`, and a connector call that returned an error still
+counts toward `calls` (it does not make a connector that was not `connected` at init ready). A genuinely empty day with at least one call stays `ok`.
 With `T` = `ACE_BRIEF_STAGE_TIMEOUT` + `ACE_BRIEF_KILL_GRACE`, stage 1 with its retry can last up to 2 x `T` + `ACE_BRIEF_RETRY_SLEEP`
 seconds, and the whole run up to 3 x `T` + `ACE_BRIEF_RETRY_SLEEP` plus the code steps (stage 2 has its own limit).
 
