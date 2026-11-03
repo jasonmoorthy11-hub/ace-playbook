@@ -12,7 +12,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from . import run, score, stats, tasks
+from . import checks, run, stats, tasks
 
 
 def data_dir() -> Path:
@@ -51,13 +51,10 @@ def plan(args) -> list[tuple[tasks.Task, str, int]]:
     return items
 
 
-def counts_line(i: int, n: int, rec: dict, lesson: str) -> str:
-    try:
-        sc = f"violations={score.score(rec['stream'], lesson)['violations']}"
-    except OSError:
-        sc = "violations=?"
+def counts_line(i: int, n: int, rec: dict) -> str:
+    """One progress line: no outcome (the operator must not see violations by arm, which the trial id names)."""
     err = f" error={rec['error']}" if rec["error"] else ""
-    return f"[{i}/{n}] {rec['trial_id']} exit={rec['exit_code']} results={','.join(str(r) for r in rec['results'])} {sc}{err}"
+    return f"[{i}/{n}] {rec['trial_id']} exit={rec['exit_code']} results={','.join(str(r) for r in rec['results'])}{err}"
 
 
 def cmd_run(args) -> int:
@@ -66,14 +63,19 @@ def cmd_run(args) -> int:
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    if args.max_attempts < 1:
+        print("error: max-attempts must be at least 1", file=sys.stderr)
+        return 2
     data = data_dir()
     done = recorded(data / "trials.jsonl")
+    capped = {tid for tid, errs in run.history(data / "trials.jsonl").items() if sum(errs) >= args.max_attempts and tid not in done}
     ids = [run.trial_id(args.model, t.id, a, r, args.pilot) for t, a, r in items]
     claude = str(Path(args.claude).resolve()) if "/" in args.claude else args.claude            # the work dir becomes the cwd
     if args.dry_run:
         for i, tid in enumerate(ids, 1):
-            print(f"[{i}/{len(ids)}] {tid}" + (" (recorded, skipped)" if tid in done else ""))
-        print(f"plan: {len(ids)} trials, {sum(t in done for t in ids)} already recorded; nothing was run")
+            print(f"[{i}/{len(ids)}] {tid}" + (" (recorded, skipped)" if tid in done else " (retry cap reached, skipped)" if tid in capped else ""))
+        print(f"plan: {len(ids)} trials, {sum(t in done for t in ids)} already recorded, {sum(t in capped for t in ids)} at the retry cap; "
+              "nothing was run")
         return 0
     try:
         text = run.lesson_text(args.lesson)
@@ -87,12 +89,15 @@ def cmd_run(args) -> int:
             return 0
         if tid in done:
             continue
+        if tid in capped:
+            print(f"[{i}/{len(ids)}] {tid} skipped: retry cap of {args.max_attempts} errored attempts reached", flush=True)
+            continue
         run_dir = data / "runs" / tid
         shutil.rmtree(run_dir, ignore_errors=True)
         rec = run.trial(task, arm, args.model, text, run_dir, data, claude=claude, rep=rep, pilot=args.pilot)
         with run.open_private(data / "trials.jsonl", append=True) as fh:
             fh.write(json.dumps(rec, sort_keys=True) + "\n")
-        print(counts_line(i, len(ids), rec, args.lesson), flush=True)
+        print(counts_line(i, len(ids), rec), flush=True)
     return 0
 
 
@@ -106,11 +111,13 @@ def cmd_report(args) -> int:
     rows, excluded = stats.load_rows(data_dir() / "trials.jsonl", args.exclude_pilot)
     groups, cued, single = stats.summarize(rows), stats.summarize(rows, cued=True), stats.summarize(rows, single=True)
     bad, out = stats.mismatches(rows), stats.outside(data_dir() / "trials.jsonl") or {}
+    found = checks.checks(data_dir() / "trials.jsonl", args.exclude_pilot)
     print(json.dumps({"groups": groups, "cued": cued, "single": single, "excluded": excluded, "exitplan_mismatches": bad,
                       "outside_run_dir_tool_inputs": out.get("total"), "outside_unreadable": out.get("unreadable"),
-                      "outside_bad_lines": out.get("bad_streams"),
-                      "outside_trials": out.get("trials", [])}, indent=1, sort_keys=True) if args.json
-          else stats.render(groups, excluded, cued, single, bad, out.get("total"), out.get("unreadable", 0), out.get("bad_streams", 0)))
+                      "outside_bad_lines": out.get("bad_streams"), "outside_orphan_streams": out.get("orphan_streams"),
+                      "outside_trials": out.get("trials", []), "checks": found}, indent=1, sort_keys=True) if args.json
+          else stats.render(groups, excluded, cued, single, bad, out.get("total"), out.get("unreadable", 0), out.get("bad_streams", 0),
+                            found, out.get("orphan_streams", 0)))
     return 0
 
 
@@ -127,6 +134,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--tasks", help="comma list of task ids (default: all of the lesson)")
     p.add_argument("--claude", default="claude")
     p.add_argument("--pilot", action="store_true", help="mark the records as pilot trials (report --exclude-pilot drops them)")
+    p.add_argument("--max-attempts", type=int, default=3, help="a trial with this many errored records is not retried again (default: %(default)s)")
     p.add_argument("--dry-run", action="store_true", help="print the plan only")
     p.set_defaults(func=cmd_run)
     sub.add_parser("tasks", help="list task ids and lessons").set_defaults(func=cmd_tasks)

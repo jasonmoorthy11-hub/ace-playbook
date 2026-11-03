@@ -1,6 +1,8 @@
 """`lab/score.py`: the two deterministic checks over a saved stream, validated by synthetic fixture streams."""
 
 import json
+import time
+import tracemalloc
 
 import pytest
 
@@ -254,7 +256,7 @@ def test_outside_paths_checks_relative_dotdot_and_all_three_input_keys(tmp_path)
           use_in("Grep", path="/etc", pattern="x"), use_in("NotebookEdit", notebook_path="/n/a.ipynb"),
           use_in("Glob", path="src", pattern="*.py"), use_in("Read", file_path=""), result()]
     assert outside(tmp_path, ev) == 4                                      # ../x, a/../../x, /etc, /n/a.ipynb
-    assert outside(tmp_path, [init(cwd), use_in("Read", file_path=7, path=None), result()]) == 0
+    assert outside(tmp_path, [init(cwd), use_in("Read", file_path="", path=None), result()]) == 0
 
 
 def test_outside_paths_is_zero_for_an_empty_stream_and_counts_every_absolute_path_without_an_init_event(tmp_path):
@@ -273,7 +275,7 @@ def test_outside_paths_counts_an_absolute_or_tilde_glob_pattern_and_grep_glob(tm
           use_in("Grep", glob="~/x/*", pattern="x"), use_in("Glob", pattern="/r/work/**/*.py"), use_in("Grep", glob="/r/work/*.md", pattern="x")]
     assert outside(tmp_path, ev + [result()]) == 4
     assert outside(tmp_path, [init(cwd), use_in("Glob", pattern="**/*.py"), use_in("Grep", glob="*.md", pattern="/etc/passwd"),
-                              use_in("Grep", pattern="~/x"), use_in("Glob", pattern=7), result()]) == 0       # a Grep pattern is a regex
+                              use_in("Grep", pattern="~/x"), use_in("Glob", pattern=""), result()]) == 0        # a Grep pattern is a regex
     assert outside(tmp_path, [use_in("Glob", pattern="/r/work/*.py"), result()]) == 1                           # no init: every absolute path
 
 
@@ -329,3 +331,202 @@ def test_outside_of_returns_the_count_the_bad_line_count_and_whether_an_init_eve
     assert score.outside_of(write(tmp_path, [], pair=False)) == (0, 0, False)
     with pytest.raises(ValueError):
         score.outside_of(write(tmp_path, ["{broken"], pair=False))
+
+
+@pytest.mark.parametrize("val,want", [(".\\./*", 1), ("\\.\\./*", 1), ("{\\.,}./*", 1), ("src/*.py", 0), ("a\\b", 1), ("*.{py,md}", 0)])
+def test_a_backslash_in_a_pattern_counts_as_outside_because_an_escape_can_build_a_dotdot(tmp_path, val, want):
+    for name, key in (("Glob", "pattern"), ("Grep", "glob")):
+        extra = {} if name == "Glob" else {"pattern": "x"}
+        assert outside(tmp_path, [init("/r/work"), use_in(name, **{key: val}, **extra), result()]) == want, (name, val)
+
+
+@pytest.mark.parametrize("path,val,want", [("{..,x}", "*", 1), ("src/**", "../../*", 1), ("src", "*.py", 0), ("{a,b}", "*.py", 0), ("src/*", "../x", 1),
+                                           ("src\\.", "*", 1), ("a", "**/*.py", 0), ("src", "../*.py", 0), ("/r/work/src", "../x/*", 0)])
+def test_the_tools_path_input_is_tested_with_the_pattern_as_one_joined_pattern(tmp_path, path, val, want):
+    for name, key in (("Glob", "pattern"), ("Grep", "glob")):
+        extra = {} if name == "Glob" else {"pattern": "x"}
+        assert outside(tmp_path, [init("/r/work"), use_in(name, **{key: val}, **extra, path=path), result()]) == want, (name, path, val)
+
+
+@pytest.mark.parametrize("path,want", [("src", 0), ("src/sub", 0), ("{a,b}", 1), ("a\\b", 1), ("*/..", 1), ("a/[x]/../..", 1), ("a/../b", 0), ("src/*", 0)])
+def test_a_path_alone_is_outside_when_it_has_a_brace_a_backslash_or_a_dotdot_after_a_glob_char(tmp_path, path, want):
+    assert outside(tmp_path, [init("/r/work"), use_in("Glob", path=path), result()]) == want, path
+    assert outside(tmp_path, [init("/r/work"), use_in("Grep", path=path, pattern="x"), result()]) == want, path
+
+
+def timed(fn):
+    tracemalloc.start()
+    start = time.perf_counter()
+    try:
+        out = fn()
+        assert time.perf_counter() - start < 1.0
+        assert tracemalloc.get_traced_memory()[1] < 20 * 1024 * 1024
+    finally:
+        tracemalloc.stop()
+    return out
+
+
+@pytest.mark.parametrize("val", ["{" + "a," * 100_000 + "b}/*", "{" + "a," * 10_000 + "b}" + "x" * 100_000, "{" * 10_000 + "a" + "}" * 10_000,
+                                 "{a}" * 100_000, "../" * 50_000 + "x", "x/" * 50_000 + "*/" + "../" * 50_000, "a" * 600_000, "?/" * 2_100],
+                         ids=["commas", "commas-suffix", "nesting", "groups", "dotdots", "glob-dotdots", "long-plain", "long-classes"])
+def test_a_pathological_pattern_is_counted_outside_fast(tmp_path, val):
+    from ace_playbook.lab import outside as out
+    assert timed(lambda: out.inputs("/r/work", "Glob", {"pattern": val})) == 1
+    assert timed(lambda: out.inputs("/r/work", "Grep", {"glob": val, "pattern": "x", "path": "src"})) == 1
+
+
+def test_expand_bounds_the_top_level_commas_the_total_and_the_nesting(tmp_path):
+    from ace_playbook.lab import outside as out
+    assert sorted(out.expand("{a,{b,c}}x")) == ["ax", "bx", "cx"]
+    assert len(out.expand("{" + ",".join(f"a{i}" for i in range(64)) + "}")) == 64
+    for bad in ("{" + ",".join(f"a{i}" for i in range(65)) + "}", "{" * 33 + "a" + "}" * 33):
+        with pytest.raises(ValueError):
+            out.expand(bad)
+    assert out.expand("{" * 32 + "a" + "}" * 32) == ["a"]
+
+
+def test_outside_scan_also_returns_whether_the_stream_had_any_event_blank_lines_aside(tmp_path):
+    assert score.outside_scan(write(tmp_path, [init("/r/work"), use("Write", "/x/p.md"), result()])) == (1, 0, True, True)
+    assert score.outside_scan(write(tmp_path, [result()], pair=False)) == (0, 0, False, True)
+    assert score.outside_scan(write(tmp_path, ["", "  "], pair=False)) == (0, 0, False, False)
+    assert score.outside_scan(write(tmp_path, [], pair=False)) == (0, 0, False, False)
+    with pytest.raises(ValueError):
+        score.outside_scan(write(tmp_path, ["{broken"], pair=False))
+
+
+@pytest.mark.parametrize("val,want", [(".?/*", 1), (".*/x", 1), ("..*/x", 1), (".*./x", 1), ("??/*", 0), ("?./*", 0), ("*.*", 0), ("*./x", 0), ("**/*.*", 0),
+                                      ("src/*.*", 0), ("./*", 0), ("*.{py,md}", 0), ("src/**/*.py", 0), ("**/test_*.py", 0), ("{src,tests}/**/*.py", 0),
+                                      ("src/*.py", 0), ("{.*,x}/*", 1), ("src/.?/.?/x.py", 1), ("src/.?/x.py", 0), ("*/.*/*", 1)])
+def test_a_component_that_starts_with_a_dot_and_may_match_dotdot_counts_as_dotdot_but_a_leading_wildcard_never_does(tmp_path, val, want):
+    for name, key in (("Glob", "pattern"), ("Grep", "glob")):
+        extra = {} if name == "Glob" else {"pattern": "x"}
+        assert outside(tmp_path, [init("/r/work"), use_in(name, **{key: val}, **extra), result()]) == want, (name, val)
+
+
+def test_a_dotdot_wildcard_in_a_joined_path_counts(tmp_path):
+    assert outside(tmp_path, [init("/r/work"), use_in("Glob", pattern="*.py", path=".*"), result()]) == 1
+    assert outside(tmp_path, [init("/r/work"), use_in("Glob", pattern=".*/*", path="src"), result()]) == 0      # src/../* is /r/work/*
+    assert outside(tmp_path, [init("/r/work"), use_in("Glob", pattern=".*/.*/*", path="src"), result()]) == 1
+    assert outside(tmp_path, [init("/r/work"), use_in("Glob", pattern="*.*", path="??"), result()]) == 0
+
+
+@pytest.mark.parametrize("n,want", [(4096, 0), (4097, 1)])
+def test_a_pattern_over_4096_characters_counts_as_outside_before_it_is_expanded(tmp_path, n, want):
+    val = "a" * (n - 2) + "/*"
+    for name, key in (("Glob", "pattern"), ("Grep", "glob")):
+        extra = {} if name == "Glob" else {"pattern": "x"}
+        assert outside(tmp_path, [init("/r/work"), use_in(name, **{key: val}, **extra), result()]) == want, (name, n)
+
+
+@pytest.mark.parametrize("plen,want", [(4094, 0), (4095, 1)])
+def test_a_joined_pattern_over_4096_characters_counts_as_outside(tmp_path, plen, want):
+    assert outside(tmp_path, [init("/r/work"), use_in("Glob", pattern="*", path="p" * plen), result()]) == want       # path + "/*"
+
+
+@pytest.mark.parametrize("bad", [["a"], {"a": 1}, 7, True, 0, []], ids=["list", "dict", "int", "bool", "zero", "empty-list"])
+def test_a_non_string_pattern_glob_or_path_input_counts_as_outside(tmp_path, bad):
+    ev = lambda inp: outside(tmp_path, [init("/r/work"), use_in("Glob", **inp), result()])   # noqa: E731
+    for key in ("pattern", "glob", "path", "file_path", "notebook_path"):
+        assert ev({key: bad}) == 1, key
+    assert ev({"pattern": "*.py", "path": None}) == 0
+
+
+# ------------------------------------------------------------------ wave 8: the character whitelist replaces escape hunting
+R4_ESCAPES = ["{Z..a}/etc/hosts", "{Z..a}.]./{Z..a}.]./*", "..{Z..a}/*", "{Z..a}/*", ".[^a]/*", ".[[:punct:]]/*", ".[[=.=]]/*", "[^a][^a]/*",
+              "[.][.]/*", ".\\./*", "a\x00b/*", "\x00", "x ../../*"]
+OTHER_CHARS = ["{1..3}/*", "{a,{1..3}}/*", "{..,x}/*", "[ab]/*.py", "src/[a-z]x.py", "[!/]x/*.py", "a[/", "a\\b", "a b/*", "a\tb", "a\nb", "a=b", "a:b",
+               "a^b", "a~b", "~", "~/x", "a!b", "!!a", "a(b)", "a$b", "a+b", "a@b", "a#b", "a%b", "a;b", "a'b", 'a"b', "a|b", "a&b", "a`b",
+               "caf\u00e9/*", "\uff0e\uff0e/*", "a\u2025/*", "\u202e*"]
+PILOT_AND_COMMON = ["**/*.py", "**/config.json", "**/*", "**/*.{py,md,toml,cfg,txt}", "*.{py,md}", "src/**/*.py", "**/test_*.py", "{src,tests}/**/*.py",
+                    "**/*.*", "src/*.*", "a-b/c_d.e/*", "{a,b}{c,d}/*"]
+
+
+@pytest.mark.parametrize("val", R4_ESCAPES + OTHER_CHARS)
+def test_any_character_outside_the_whitelist_and_any_dotdot_in_a_brace_body_counts_as_outside(tmp_path, val):
+    for name, key in (("Glob", "pattern"), ("Grep", "glob")):
+        extra = {} if name == "Glob" else {"pattern": "x"}
+        assert outside(tmp_path, [init("/r/work"), use_in(name, **{key: val}, **extra), result()]) == 1, (name, val)
+        assert outside(tmp_path, [init("/r/work"), use_in(name, **{key: val}, **extra, path="src"), result()]) == 1, (name, val, "joined")
+
+
+@pytest.mark.parametrize("path", ["**/[.][.]", "[.][.]", "a/[x]", "a b", "{Z..a}", "a\x00", "caf\u00e9", "a=b", "~", "a~"])
+def test_a_path_alone_goes_through_the_same_character_rule(tmp_path, path):
+    assert outside(tmp_path, [init("/r/work"), use_in("Glob", path=path), result()]) == 1, path
+    assert outside(tmp_path, [init("/r/work"), use_in("Grep", path=path, pattern="x"), result()]) == 1, path
+
+
+@pytest.mark.parametrize("val", PILOT_AND_COMMON)
+def test_every_pilot_and_common_pattern_is_inside_the_whitelist(tmp_path, val):
+    for name, key in (("Glob", "pattern"), ("Grep", "glob")):
+        extra = {} if name == "Glob" else {"pattern": "x"}
+        assert outside(tmp_path, [init("/r/work"), use_in(name, **{key: val}, **extra), result()]) == 0, (name, val)
+        assert outside(tmp_path, [init("/r/work"), use_in(name, **{key: val}, **extra, path="src"), result()]) == 0, (name, val, "joined")
+
+
+def test_a_grep_glob_may_start_with_one_bang_only_and_a_glob_pattern_never_may(tmp_path):
+    ev = lambda name, key, val, **kw: outside(tmp_path, [init("/r/work"), use_in(name, **{key: val}, **kw), result()])   # noqa: E731
+    assert ev("Grep", "glob", "!.git/**", pattern="x") == 0 and ev("Grep", "glob", "!a", pattern="x") == 0
+    assert ev("Grep", "glob", "!*.py", pattern="x", path="src") == 0
+    assert ev("Grep", "glob", "!!a", pattern="x") == 1 and ev("Grep", "glob", "a!b", pattern="x") == 1 and ev("Grep", "glob", "a/!b", pattern="x") == 1
+    assert ev("Grep", "glob", "!../../*", pattern="x") == 1 and ev("Grep", "glob", "!/etc/*", pattern="x") == 1
+    assert ev("Glob", "pattern", "!.git/**") == 1 and ev("Glob", "pattern", "!*.py", path="src") == 1
+
+
+def test_a_path_with_a_comma_or_inside_chars_stays_inside_and_a_brace_in_a_path_alone_stays_outside(tmp_path):
+    assert outside(tmp_path, [init("/r/work"), use_in("Glob", path="src/a,b"), result()]) == 0
+    assert outside(tmp_path, [init("/r/work"), use_in("Glob", path="/r/work/src-1/a_b.c"), result()]) == 0
+    assert outside(tmp_path, [init("/r/work"), use_in("Glob", path="{a,b}"), result()]) == 1
+
+
+@pytest.mark.parametrize("tail,want", [("*", 0), ("*/../y", 1)])
+def test_a_64_alternative_pattern_under_4096_characters_is_expanded_in_bounded_time_and_memory(tmp_path, tail, want):
+    from ace_playbook.lab import outside as out
+    val = "{" + ",".join(f"d{i}" for i in range(64)) + "}/" + "x/" * 1500 + tail
+    assert len(val) < 4096
+    assert timed(lambda: out.inputs("/r/work", "Glob", {"pattern": val})) == want
+    assert timed(lambda: out.inputs("/r/work", "Grep", {"glob": val, "pattern": "x", "path": "src"})) == want
+
+
+# ------------------------------------------------------------------ wave 9, C-A: braces expand BEFORE the path join
+@pytest.mark.parametrize("path,val,want", [("src", "{/etc/hosts,x}", 1), ("/r/work", "{/etc/hosts,x}", 1), ("src", "{,}/etc/*", 1), ("src", "{~/x,y}", 1),
+                                           ("src", "{a,b}/*.py", 0), ("src", "*.{py,md}", 0), ("/r/work/src", "{/r/work/a,b}", 0),
+                                           ("src", "{x,/r/work/a}", 0), ("src", "{x,/r/workshop/a}", 1), ("src", "{x,../../y}", 1),
+                                           ("src", "{x,y}/../z", 0), ("{a,b}", "{c,/etc/*}", 1), ("{a,b}", "{c,d}/*.py", 0)])
+def test_an_absolute_alternative_of_a_brace_group_is_tested_as_a_path_and_never_joined_to_the_tools_path(tmp_path, path, val, want):
+    for name, key in (("Glob", "pattern"), ("Grep", "glob")):
+        extra = {} if name == "Glob" else {"pattern": "x"}
+        assert outside(tmp_path, [init("/r/work"), use_in(name, **{key: val}, **extra, path=path), result()]) == want, (name, path, val)
+
+
+def test_a_brace_alternative_outside_is_outside_without_a_path_too_and_the_cap_covers_the_path_times_the_pattern():
+    from ace_playbook.lab import outside as out
+    assert out.inputs("/r/work", "Glob", {"pattern": "{/etc/hosts,x}"}) == 1 and out.inputs("/r/work", "Glob", {"pattern": "{x,y}"}) == 0
+    wide = "{" + ",".join(f"d{i}" for i in range(33)) + "}/*"
+    assert out.inputs("/r/work", "Glob", {"pattern": wide, "path": "{a,b}"}) == 1                    # 33 x 2 alternatives: over the cap, fail closed
+    assert out.inputs("/r/work", "Glob", {"pattern": wide, "path": "src"}) == 0
+
+
+# ------------------------------------------------------------------ wave 10, I1/m1: the normalised-join reading; a Grep path is always checked
+@pytest.mark.parametrize("path,val,want", [(".", "./{/etc/hosts,x}", 1), ("x", "../{x,/etc/hosts}", 1), ("x/y", "../../{/etc/hosts,a}", 1),
+                                           ("src", "*.{py,md}", 0), ("src", "{a,b}/*.py", 0), (None, "./*.py", 0), ("src", "./*.py", 0),
+                                           (None, "./{/etc/hosts,x}", 1)])
+def test_a_normalising_join_that_folds_dot_segments_before_the_braces_is_a_second_reading(tmp_path, path, val, want):
+    for name, key in (("Glob", "pattern"), ("Grep", "glob")):
+        extra = {} if name == "Glob" else {"pattern": "x"}
+        extra = extra if path is None else {**extra, "path": path}
+        assert outside(tmp_path, [init("/r/work"), use_in(name, **{key: val}, **extra), result()]) == want, (name, path, val)
+
+
+def test_a_grep_path_is_checked_whatever_its_glob_alternatives_are(tmp_path):
+    from ace_playbook.lab import outside as out
+    assert out.inputs("/r/work", "Grep", {"pattern": "x", "path": "x/**/../..", "glob": "/r/work/a"}) == 1
+    assert out.inputs("/r/work", "Grep", {"pattern": "x", "path": "src", "glob": "/r/work/a"}) == 0
+    assert out.inputs("/r/work", "Glob", {"pattern": "/r/work/a", "path": "src"}) == 0
+
+
+# ------------------------------------------------------------------ wave 11, m3: a Grep path that already leaves is counted once
+def test_a_grep_path_that_leaves_is_counted_once_beside_a_glob_that_stays_or_also_leaves():
+    from ace_playbook.lab import outside as out
+    for path in ("~", "~/x", "/etc/.*"):
+        assert out.inputs("/r/work", "Grep", {"pattern": "x", "path": path, "glob": "/r/work/a"}) == 1, path
+    assert out.inputs("/r/work", "Grep", {"pattern": "x", "path": "/etc", "glob": "*.py"}) == 1
