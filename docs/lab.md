@@ -8,7 +8,9 @@ arms and counts how often a deterministic check catches the mistake a lesson tar
 
 Per (model, lesson): the share of trials with at least one violation, TOLD versus NOT_TOLD, the difference, a two-sided Fisher exact p, Holm
 across the three lessons of a model (on the raw p; only the display is rounded), and mean violations per trial as a descriptive
-secondary. Wilson 95% intervals come from `compile/metrics.py`.
+secondary. Wilson 95% intervals come from `compile/metrics.py`. Each group also carries the Newcombe hybrid-score 95% interval of TOLD - NOT_TOLD
+(`diff_newcombe95`, from the two Wilson bounds; descriptive, no test) and, for the primary rows, a per-task table (`per_task`: task x arm, trials
+with a violation / trials).
 
 - Arms. TOLD: the lesson text is appended to the system prompt (`--append-system-prompt`). NOT_TOLD: the same run without it.
 - Lesson `preclaim` (store id L-cbfb7a57): the final message claims completion with no `Pre-claim audit:` block. Instrument: a lab Stop hook
@@ -59,7 +61,15 @@ These defaults are not proven against the real binary, so the pilot MUST check e
 denied tool whose `tool_result` is no error (list them with `grep -lE '"name": ?"(Bash|WebFetch|WebSearch|Task|Agent|NotebookEdit)"' <data>/streams/*.jsonl`
 and open them). A denial alone is not "ran" but needs a look; in the preclaim and edit_unread streams look for one with
 `find <data>/streams -name '*.jsonl' ! -name '*.xp-*' -exec grep -lE '"permission_denials": ?\[[^]]' {} +`. Stop if `report` (with or without `--exclude-pilot`:
-the safety counts cover every stream) shows `outside-run-dir tool inputs`, `unreadable streams` or `streams with bad lines` above 0 (errored trials count).
+the safety counts cover every stream of every attempt, errored and retried trials too) shows `outside-run-dir tool inputs`, `unreadable streams` or
+`streams with bad lines` above 0, or shows `orphan streams` (a stream no record names, left by an interrupted attempt: it is read, counted apart and is a
+STOP; a record names a stream only when its `stream` path resolves to that very file, a `build failed` record names none (also an older record that
+still carries a stream path), and a streams dir that cannot be listed counts as an unreadable stream).
+The outside count is a whitelist: a Glob `pattern`, a Grep `glob` (one leading `!` allowed) or a `path` may hold only ASCII
+`A-Za-z0-9_./*?-` and `{ } ,`, with no `..` inside a brace body; any other character, or a `..` that may leave the run dir, counts as outside (fail closed).
+The braces are expanded FIRST: an absolute alternative (`{/etc/hosts,x}`) is tested as a path and never joined to the tool's `path`; a relative one is
+joined. A second reading joins first and normalises (`./`, `x/..`), then expands; either reading leaving counts. A Grep `path` is its search root and
+is always checked, whatever its glob says, and counted once (a `path` that already leaves is not counted again for the glob joined to it).
 
 ## Isolation
 
@@ -74,8 +84,10 @@ the safety counts cover every stream) shows `outside-run-dir tool inputs`, `unre
 
 ## Data handling
 
-- The raw stream of each trial is saved to `<data>/streams/<trial id>.jsonl` (files 0600, directories 0700). Streams are private and are never
-  committed. `trials.jsonl` (0600) holds one record per trial: ids, arm, model, exit code, per-turn result subtypes, costs, stream path, error.
+- The raw stream of each ATTEMPT is saved to `<data>/streams/<trial id>.a<n>.jsonl` (n = 1 + the earlier records of that trial id, or the next free n;
+  created new, an existing stream is never opened for writing; old data dirs hold `<trial id>.jsonl`). Files 0600, directories 0700;
+  streams are private and never committed. `trials.jsonl` (0600) holds one record per attempt: ids, arm, model, exit code, per-turn result subtypes,
+  costs, stream path, error.
 - The lesson text is read at run time from the operator's store (read-only view, by lesson id). It is never stored in this repository and never
   logged or printed; a record keeps only `sha256(text)[:16]`.
 - The data dir is `$ACE_LAB_DATA`, else `~/.local/share/ace-playbook/lab`. A `STOP` file in it halts a run before the next trial.
@@ -85,14 +97,21 @@ the safety counts cover every stream) shows `outside-run-dir tool inputs`, `unre
 ```
 python -m ace_playbook.lab tasks
 python -m ace_playbook.lab run --model M --lesson preclaim|edit_unread|exitplan --reps N --seed S [--arms told,not_told] [--tasks id,...]
-                               [--claude PATH] [--pilot] [--dry-run]
+                               [--claude PATH] [--pilot] [--max-attempts 3] [--dry-run]
 python -m ace_playbook.lab report [--json] [--exclude-pilot]
 ```
 
-`run` builds tasks x arms x reps, shuffles with `random.Random(seed)`, runs sequentially, appends a record per trial and prints one counts line
-(no text). Trials already recorded are skipped, so the same command resumes; a trial whose last record has an error is retried and the later
-record wins. A `--pilot` trial id carries a `pilot.` prefix, so a pilot and a main run never share ids (a relative `--claude` path is resolved
-first). `--dry-run` prints the plan only. `report` scores every saved stream; trials with an error or a missing stream are excluded and counted per arm.
+`run` builds tasks x arms x reps, shuffles with `random.Random(seed)`, runs sequentially, appends a record per trial and prints one line per trial
+(id, exit code, result subtypes, error; no outcome, no text). A trial gets an error when a turn's `result` has `is_error` or a subtype other than
+`success` (`result error: <subtype>`), or when the process exits nonzero with no other error (`exit <code>`); after an error result the driver sends
+no further turns. Trials already recorded are skipped, so the same command resumes; a trial whose last record has an error is retried (new
+attempt, new stream) and the later record wins, but a trial with `--max-attempts` (default 3) errored records is not retried again and stays excluded.
+A `--pilot` trial id carries a `pilot.` prefix, so a pilot and a main run never share ids (a relative `--claude` path is resolved first).
+`--dry-run` prints the plan only. `report` scores the last record of each trial id; trials with an error or a missing stream are excluded and counted per arm.
+`report` always prints `checks` (JSON `checks`; empty Counters without records), counts only, never an outcome: `lesson_sha16` (`lesson/sha16` over the
+last record of each trial id), `binary` (`<claude_code_version>/<model>` of each attempt's init event, `None/None` without one), `model_usage` (the
+`modelUsage` keys of each result event, every attempt), `attempt_errors` (`<arm>/<error>` over every record) and
+`first_attempt_errors` (the same over attempt 1 only); `--exclude-pilot` drops the pilot records from all five (checks stay main-only).
 
 ## Not yet measured
 

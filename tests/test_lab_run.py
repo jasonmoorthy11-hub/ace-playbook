@@ -133,7 +133,7 @@ def test_the_stream_is_saved_private_and_complete(lab):
     lab.scenario(turns=[READ_X, READ_X])
     rec = lab.go("eu-parser", "told", rep=3)
     path = Path(rec["stream"])
-    assert path == lab.data / "streams" / "claude-test-1.eu-parser.told.r3.jsonl"
+    assert path == lab.data / "streams" / "claude-test-1.eu-parser.told.r3.a1.jsonl"
     assert stat.S_IMODE(path.stat().st_mode) == 0o600 and stat.S_IMODE(path.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(lab.data.stat().st_mode) == 0o700
     types = [json.loads(x)["type"] for x in path.read_text().splitlines()]
@@ -255,7 +255,8 @@ def test_cli_runs_every_trial_once_records_private_json_and_prints_counts_only(c
     assert code == 0 and len(rows) == 8 and len(out.splitlines()) == 8 and err == ""
     assert {(r["task"], r["arm"], r["rep"]) for r in rows} == {(t, a, r) for t in ("pc-port", "pc-ini") for a in run.ARMS for r in (0, 1)}
     assert stat.S_IMODE((cli_env / "trials.jsonl").stat().st_mode) == 0o600 and all(not r["pilot"] and r["error"] is None for r in rows)
-    assert "violations=0" in out and "exit=0" in out and "results=success" in out and LESSON not in out + json.dumps(rows)
+    assert "violations" not in out and "exit=0" in out and "results=success" in out and LESSON not in out + json.dumps(rows)
+    assert all(x.startswith("[") and "] m1." in x for x in out.splitlines())
 
 
 def test_cli_resume_skips_recorded_trials_and_the_stop_file_halts_cleanly(capsys, cli_env):

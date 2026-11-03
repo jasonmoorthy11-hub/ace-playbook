@@ -83,7 +83,7 @@ def send(proc: subprocess.Popen, obj: dict) -> None:
 
 
 def drive(proc, task, work, lines, deadline, rec, ctl=None) -> str | None:
-    """Send each turn, wait for its result, run the `between` hook. Returns an error string or None."""
+    """Send each turn, wait for its result, run the `between` hook. Returns an error string or None (an `is_error` or non-success result is one)."""
     try:
         if ctl is not None:
             ctl.start()
@@ -106,6 +106,8 @@ def drive(proc, task, work, lines, deadline, rec, ctl=None) -> str | None:
             rec["costs"].append(res["total_cost_usd"])
         denials = res.get("permission_denials")
         rec["permission_denials"] += len(denials) if isinstance(denials, list) else 0
+        if res.get("is_error") or res.get("subtype") != "success":                  # a failed turn is an error: excluded, then retried
+            return f"result error: {res.get('subtype')}"
         try:
             tasks.between(task, work, i)
         except Exception as exc:                                             # a broken spec is a recorded error, never a crash
