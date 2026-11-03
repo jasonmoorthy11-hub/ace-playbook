@@ -691,10 +691,11 @@ Deviations from the draft, each decided before any holdout session:
 
   ```bash
   export GIT_NO_REPLACE_OBJECTS=1; f=PREREGISTRATION.md; d=$(git diff -U0 "$R" "$F" -- "$f")
-  [ "$(git cat-file commit "$F" | sed -n 's/^parent //p')" = "$(git rev-parse "$R^{commit}")" ] || echo "FAIL parent"
+  [ "$(git cat-file commit "$F" | sed -n '/^$/q; s/^parent //p')" = "$(git rev-parse "$R^{commit}")" ] || echo "FAIL parent"
   [ "$(git rev-list --parents -n 1 "$F" | wc -w)" -eq 2 ] || echo "FAIL merge"
   git log -1 --format=%B "$F" | grep -qF "$(git rev-parse "$R")" || echo "FAIL message"
   [ "$(git diff --numstat "$R" "$F")" = "$(printf '3\t3\t%s' "$f")" ] || echo "FAIL numstat"
+  [ -z "$(git diff --summary "$R" "$F")" ] || echo "FAIL mode"
   [ "$(grep -cE '^-[^-].*<[A-Z0-9_]+>' <<<"$d")" = 3 ] || echo "FAIL removed"
   [ "$(grep -cE '^\+[^+].* [0-9a-f]{64}$' <<<"$d")" = 3 ] || echo "FAIL added"
   grep '^@@' <<<"$d" | awk '$2 != "-" substr($3,2) {print "FAIL moved"; exit}'
@@ -704,9 +705,10 @@ Deviations from the draft, each decided before any holdout session:
 
   It passes only when it prints nothing. (Tested before this entry on a throwaway repository: an honest fill passes; a re-indented code
   line, a changed label, a 65-character or upper-case token, a second changed file, a moved placeholder line, a two-commit range, a
-  merge commit, a merge hidden by `git replace --graft` or by info/grafts and a message without R's sha each fail.) A read-only docs-lens
-  review confirms the fill. F is the last commit on this branch, its tip at the merge, and the sha256 of the merged PREREGISTRATION.md
-  equals the stamped one.
+  merge commit, a merge hidden by `git replace --graft` or by info/grafts, a root commit with a forged parent line, a mode change and a
+  message without R's sha each fail.) The gate catches accidental changes to a single honest fill; the pushed history and the
+  OpenTimestamps stamp are the record against deliberate forgery. A read-only docs-lens review confirms the fill. F is the last commit on
+  this branch, its tip at the merge, and the sha256 of the merged PREREGISTRATION.md equals the stamped one.
 
   Before the read, the operator checks that sha256 of each config seed equals its line above, that every live injection row's `seed_fp`
   equals the first 8 hex digits of `holdout_seed_sha256`, that every other value in the block reproduces by its command, and that the six
@@ -751,15 +753,17 @@ Deviations from the draft, each decided before any holdout session:
   Where a change falls under two rules (a detector source file is also in the measurement code set), the union applies: here, all
   three. A change recorded as a bug fix (it restores the registered behaviour and applies to both arms), with the new hash of each
   changed frozen value, and confirmed by a docs-lens review, all before the read, is exempt from the mapping above; each exempted fix
-  is listed with the read. A step 1-5 done after `holdout_start` (in order, with a dated line) keeps the read confirmatory: the
-  sessions before step 5 are `holdout_off` exclusions. If the holdout is switched off before `holdout_end`, the sessions up to the
+  is listed with the read. A step 1-5 done after `holdout_start` in order, with a dated line, keeps the read confirmatory, except a
+  step 4 delayed by a (j) amendment, which follows the start-move rule of (j); sessions with any injection row before step 5 are
+  `holdout_off` or `mixed_rate` exclusions, and the read reports the date of step 5 and the shortened window. Steps 1-5 done out of
+  order make the read exploratory for all three. If the holdout is switched off before `holdout_end`, the sessions up to the
   switch-off are analysed and the result is labelled exploratory.
 - (l) Null handling (replacing the draft's paragraph, whose figures assumed another horizon and rate): if no lesson's Holm-adjusted p is
   below 0.05, the README reports "no detectable effect" with D, the per-arm rates and the power table in (d). No other outcome, window
   or subset is searched for an effect. A significant D in the harmful direction (more violations when shown) is reported as harm.
 - (m) At the horizon, the three rules return to CLAUDE.md and `holdout_enabled` returns to false.
 
-Switch-on order: steps 1-5 before `holdout_start` (a step 1-5 after it is a deviation, mapped in (k)); step 6 follows later, as it states.
+Switch-on order: steps 1-5 before `holdout_start` (a step 1-5 after it is mapped in (k)); step 6 follows later, as it states.
 
 1. The operator removes rules 6, 8 and 9 from the global CLAUDE.md (D-232) and writes the rule-line record of (c).
 2. `store exempt L-b3d1fba9` (the delta log has no exempt record yet).
