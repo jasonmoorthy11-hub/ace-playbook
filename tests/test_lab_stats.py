@@ -383,6 +383,28 @@ def test_an_empty_blank_or_init_less_stream_is_unreadable_unless_the_spawn_faile
     assert data["outside_unreadable"] == 0 and data["outside_bad_lines"] == 0
 
 
+def test_m3_branches_a_timeout_with_init_is_readable_and_a_build_failed_record_with_an_empty_stream_is_not(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("ACE_LAB_DATA", str(tmp_path))
+    put(tmp_path, [rec_of("a", outside_stream(tmp_path / "a.jsonl"), "timeout")])                  # init, no tool use: readable
+    assert cmd.main(["report", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["outside_unreadable"] == 0
+    put(tmp_path, [rec_of("b", text_stream(tmp_path / "b"), "build failed: OSError")])             # exempt only without a stream: this one exists
+    assert cmd.main(["report", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["outside_unreadable"] == 1
+
+
+def test_the_spawn_failed_exemption_is_only_for_a_stream_with_no_events_at_all(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("ACE_LAB_DATA", str(tmp_path))
+    noinit = json.dumps({"type": "result", "subtype": "success"}) + "\n"
+    put(tmp_path, [rec_of("a", text_stream(tmp_path / "a", noinit), "spawn failed: OSError")])
+    assert cmd.main(["report", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["outside_unreadable"] == 1
+    put(tmp_path, [rec_of("a", text_stream(tmp_path / "a"), "spawn failed: OSError"), rec_of("b", text_stream(tmp_path / "b", " \n\n"), "spawn failed: X"),
+                   rec_of("c", outside_stream(tmp_path / "c.jsonl"), "spawn failed: X")])
+    assert cmd.main(["report", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["outside_unreadable"] == 0
+
+
 def test_a_stream_with_some_unparseable_lines_is_counted_separately_in_the_same_line_and_the_json(capsys, tmp_path, monkeypatch):
     monkeypatch.setenv("ACE_LAB_DATA", str(tmp_path))
     good = outside_stream(tmp_path / "g.jsonl", "/h/x")

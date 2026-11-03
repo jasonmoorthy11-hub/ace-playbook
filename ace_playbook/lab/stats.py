@@ -132,8 +132,9 @@ def outside(trials: Path) -> dict | None:
     """{total, unreadable, bad_streams, trials}: the tool inputs (file_path, path, notebook_path, a Glob pattern or Grep glob) outside the run dir,
     summed over EVERY saved stream, pilot and errored trials included; `trials` lists the sorted ids with a count above 0. FAIL CLOSED:
     `unreadable` counts each record whose stream is missing, unreadable, wholly unparseable or not a usable path (a `build failed` record ran no
-    agent, so it has no stream to read), each stream that is empty or has no init event (unless its record's error starts `spawn failed`: run.py
-    opens the stream before the spawn), and each unparseable line of trials.jsonl; `bad_streams` counts the streams with an unparseable line.
+    agent, so it has no stream to read), each stream that is empty or has no init event (unless its record's error starts `spawn failed` and the
+    stream has no event at all, blank lines aside: run.py opens the stream before the spawn), and each unparseable line of trials.jsonl;
+    `bad_streams` counts the streams with an unparseable line.
     None when trials.jsonl has no line."""
     recs, bad, any_line = _scan(trials)
     if not any_line:
@@ -148,7 +149,7 @@ def outside(trials: Path) -> dict | None:
         except (OSError, TypeError, ValueError):
             unreadable += not err.startswith("build failed")
             continue
-        unreadable += not (has_init or err.startswith("spawn failed"))
+        unreadable += not (has_init or (err.startswith("spawn failed") and not Path(stream).read_text(errors="replace").strip()))
         bad_streams += bad_lines > 0
         total += n
         hit += [str(rec["trial_id"])] if n else []

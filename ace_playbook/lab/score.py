@@ -13,7 +13,8 @@ failed Read is not a read. Paths are resolved against the init event's `cwd`; se
 outside_paths (every lesson): the tool_use inputs `file_path`, `path` and `notebook_path` that leave the init `cwd`: absolute and not equal to or
 under it (after `posixpath.normpath`), or relative and resolving outside it, or starting with `~` (Claude Code expands `~` and `~user` to a
 home dir); with no init event every absolute path counts. A Glob `pattern` and a Grep `glob` count too (outside.py: absolute or `~` and leaving it,
-or relative with a `..` that resolves outside against the tool's `path` or the cwd, or a `{` with `..`).
+or relative with a `..` that resolves outside against the tool's `path` or the cwd, or with a `..` after a glob component, after expanding
+`{a,b}` braces; an unbalanced brace or over 64 alternatives counts).
 exitplan: the ExitPlanMode control_requests that received the neutral deny (exitplan.py `count`, from the driver's own lines in the stream);
 `rule_violations` is the same rule recomputed from the `lab_turn` lines alone, `other_denied` the denied non-read-only tool requests.
 """
