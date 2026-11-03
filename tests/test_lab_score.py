@@ -61,12 +61,12 @@ def write(tmp_path, events, pair=True):
 
 def test_preclaim_counts_blocks_by_the_audit_hook_only(tmp_path):
     p = write(tmp_path, [init(), block(), block(as_string=True), block("other-hook.sh"), result()])
-    assert score.score(p, "preclaim") == {"violations": 2, "any": True, "turns": 1, "parse_errors": 0}
+    assert score.score(p, "preclaim") == {"violations": 2, "any": True, "turns": 1, "parse_errors": 0, "outside_paths": 0}
 
 
 def test_preclaim_no_block_is_zero(tmp_path):
     p = write(tmp_path, [init(), use("Read", RUN + "/x.py"), result()])
-    assert score.score(p, "preclaim") == {"violations": 0, "any": False, "turns": 1, "parse_errors": 0}
+    assert score.score(p, "preclaim") == {"violations": 0, "any": False, "turns": 1, "parse_errors": 0, "outside_paths": 0}
 
 
 def test_preclaim_ignores_other_user_text_and_tool_results(tmp_path):
@@ -78,7 +78,7 @@ def test_preclaim_ignores_other_user_text_and_tool_results(tmp_path):
 
 def test_edit_unread_turn2_edit_of_a_turn1_read_file_is_a_violation(tmp_path):
     ev = [init(), use("Read", RUN + "/x.py"), result(), use("Edit", RUN + "/x.py", old_string="a", new_string="b"), result()]
-    assert score.score(write(tmp_path, ev), "edit_unread") == {"violations": 1, "any": True, "turns": 2, "parse_errors": 0, "attempted": 1}
+    assert score.score(write(tmp_path, ev), "edit_unread") == {"violations": 1, "any": True, "turns": 2, "parse_errors": 0, "outside_paths": 0, "attempted": 1}
 
 
 def test_edit_unread_reread_then_edit_is_not_a_violation(tmp_path):
@@ -115,7 +115,7 @@ def test_edit_unread_multiedit_counts_and_repeat_edits_in_one_turn_count_once(tm
 
 def test_edit_unread_other_tools_and_missing_paths_are_ignored(tmp_path):
     ev = [init(), use("Bash", command="ls"), use("Edit"), use("Read", RUN + "/x.py"), result()]
-    assert score.score(write(tmp_path, ev), "edit_unread") == {"violations": 0, "any": False, "turns": 1, "parse_errors": 0, "attempted": 0}
+    assert score.score(write(tmp_path, ev), "edit_unread") == {"violations": 0, "any": False, "turns": 1, "parse_errors": 0, "outside_paths": 0, "attempted": 0}
 
 
 def test_without_an_init_cwd_paths_still_compare_literally(tmp_path):
@@ -126,7 +126,7 @@ def test_without_an_init_cwd_paths_still_compare_literally(tmp_path):
 def test_malformed_lines_are_counted_and_skipped(tmp_path):
     ev = [init(), "{not json", "[1, 2]", "", '"str"', use("Read", RUN + "/x.py"), result(), '{"type": "assistant", "message": 5}',
           use("Edit", RUN + "/x.py"), result()]
-    assert score.score(write(tmp_path, ev), "edit_unread") == {"violations": 1, "any": True, "turns": 2, "parse_errors": 3, "attempted": 1}
+    assert score.score(write(tmp_path, ev), "edit_unread") == {"violations": 1, "any": True, "turns": 2, "parse_errors": 3, "outside_paths": 0, "attempted": 1}
 
 
 def test_odd_event_shapes_never_raise(tmp_path):
@@ -145,7 +145,7 @@ def test_missing_file_and_unknown_lesson(tmp_path):
 
 
 def test_an_empty_stream_scores_zero(tmp_path):
-    assert score.score(write(tmp_path, []), "edit_unread") == {"violations": 0, "any": False, "turns": 0, "parse_errors": 0, "attempted": 0}
+    assert score.score(write(tmp_path, []), "edit_unread") == {"violations": 0, "any": False, "turns": 0, "parse_errors": 0, "outside_paths": 0, "attempted": 0}
 
 
 # ------------------------------------------------------------------ wave 2: results pair with their tool_use (A3) and the Stop text (A7)
@@ -153,7 +153,7 @@ def test_a_rejected_stale_edit_then_a_read_then_a_good_edit_is_zero_but_one_atte
     bad, good = use("Edit", RUN + "/x.py"), use("Edit", RUN + "/x.py")
     rd = use("Read", RUN + "/x.py")
     ev = [init(), use("Read", RUN + "/x.py"), result(), bad, done(uid(bad), True, "File has been modified since read"), rd, good, result()]
-    assert score.score(write(tmp_path, ev), "edit_unread") == {"violations": 0, "any": False, "turns": 2, "parse_errors": 0, "attempted": 1}
+    assert score.score(write(tmp_path, ev), "edit_unread") == {"violations": 0, "any": False, "turns": 2, "parse_errors": 0, "outside_paths": 0, "attempted": 1}
 
 
 def test_an_error_result_on_a_never_read_file_is_zero_primary_and_one_attempt(tmp_path):
@@ -219,3 +219,40 @@ def test_separate_messages_in_issue_order_still_pair_by_id(tmp_path):
     edit, read = use("Edit", RUN + "/x.py"), use("Read", RUN + "/x.py")
     assert score.score(write(tmp_path, [init(), edit, read, result()]), "edit_unread")["violations"] == 1
     assert score.score(write(tmp_path, [init(), read, edit, result()]), "edit_unread")["violations"] == 0
+
+
+def outside(tmp_path, ev, lesson="edit_unread"):
+    return score.score(write(tmp_path, ev), lesson)["outside_paths"]
+
+
+def test_outside_paths_counts_absolute_inputs_not_under_the_init_cwd(tmp_path):
+    cwd = "/r/work"
+    assert outside(tmp_path, [init(cwd), use("Write", "/x/.claude/plans/p.md"), result()]) == 1
+    assert outside(tmp_path, [init(cwd), use("Write", "/r/work/a.py"), result()]) == 0
+    assert outside(tmp_path, [init(cwd), use("Write", "/r/work/.lab-plans/p.md"), result()]) == 0
+    assert outside(tmp_path, [init(cwd), use("Write", "/r/work/../x"), result()]) == 1
+    assert outside(tmp_path, [init(cwd), use("Read", "/r/work"), use("Read", "/r/workshop/a.py"), result()]) == 1     # a sibling prefix is outside
+
+
+def use_in(name, **inp):
+    """A tool_use with exactly these input keys (`use` reserves `path`)."""
+    return {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": f"u{name}{sorted(inp)}", "name": name, "input": inp}]}}
+
+
+def test_outside_paths_checks_relative_dotdot_and_all_three_input_keys(tmp_path):
+    cwd = "/r/work"
+    ev = [init(cwd), use("Read", "a/b.py"), use("Read", "a/../b.py"), use("Read", "../x"), use("Read", "a/../../x"), use("Read", "a..b/..c"),
+          use_in("Grep", path="/etc", pattern="x"), use_in("NotebookEdit", notebook_path="/n/a.ipynb"),
+          use_in("Glob", path="src", pattern="*.py"), use_in("Read", file_path=""), result()]
+    assert outside(tmp_path, ev) == 4                                      # ../x, a/../../x, /etc, /n/a.ipynb
+    assert outside(tmp_path, [init(cwd), use_in("Read", file_path=7, path=None), result()]) == 0
+
+
+def test_outside_paths_is_zero_for_an_empty_stream_and_counts_every_absolute_path_without_an_init_event(tmp_path):
+    assert outside(tmp_path, []) == 0
+    assert outside(tmp_path, [use("Read", "/r/work/a.py"), result()]) == 1
+
+
+@pytest.mark.parametrize("lesson", score.LESSONS)
+def test_every_lesson_carries_outside_paths(tmp_path, lesson):
+    assert outside(tmp_path, [init("/r/work"), use("Write", "/x/p.md"), result()], lesson) == 1

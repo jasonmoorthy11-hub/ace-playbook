@@ -3,7 +3,7 @@ Fisher exact p (stdlib hypergeometric, exact integer arithmetic), Holm across th
 as a secondary, descriptive number. A trial with a recorded error or a missing stream is excluded and counted, per arm, never scored.
 Two kinds of row are kept apart as descriptive secondaries (no Holm, never a rejection): cued edit_unread tasks, and single-claim preclaim
 tasks (the lab hook needs two claim phrases, so the PRIMARY preclaim row is the multi_claim tasks only). The report also counts the exitplan
-trials whose driver count and rule recomputation differ (`mismatches`).
+trials whose driver count and rule recomputation differ (`mismatches`), and sums the tool inputs that leave the run dir (`outside`).
 """
 
 from __future__ import annotations
@@ -114,12 +114,19 @@ def mismatches(rows: list[dict]) -> int | None:
     return sum(r.get("rule_violations") != r["violations"] for r in mine) if mine else None
 
 
-def render(groups: list[dict], excluded: dict, cued: list[dict] = (), single: list[dict] = (), mismatched: int | None = None) -> str:
+def outside(rows: list[dict]) -> int | None:
+    """The tool inputs (file_path, path, notebook_path) outside the run dir, summed over the scored trials; None when none was scored."""
+    return sum(r.get("outside_paths", 0) for r in rows) if rows else None
+
+
+def render(groups: list[dict], excluded: dict, cued: list[dict] = (), single: list[dict] = (), mismatched: int | None = None,
+           outside_n: int | None = None) -> str:
     out = []
     for title, part in (("", groups), ("cued tasks (secondary, descriptive)", cued),
                         ("single-claim preclaim tasks (secondary, descriptive)", single)):
         out += _render(part, title)
     out += [] if mismatched is None else [f"exitplan rule/driver mismatches: {mismatched}"]
+    out += [] if outside_n is None else [f"outside-run-dir tool inputs: {outside_n}"]
     out += [f"excluded (error or missing stream) {k}: {v}" for k, v in sorted(excluded.items())]
     return "\n".join(out) if out else "no scored trials"
 

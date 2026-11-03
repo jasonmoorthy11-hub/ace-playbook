@@ -19,6 +19,7 @@ from pathlib import Path
 from .plantasks import SPECS
 
 LESSON_IDS = {"preclaim": "L-cbfb7a57", "edit_unread": "L-f8a355f9", "exitplan": "L-93544dae"}   # store ids; text read at run time
+PLANS = ".lab-plans"                                                         # inside the project root: Claude Code ignores a plansDirectory outside it
 AUTHOR = {"GIT_AUTHOR_NAME": "lab", "GIT_AUTHOR_EMAIL": "lab@example.com", "GIT_COMMITTER_NAME": "lab",
           "GIT_COMMITTER_EMAIL": "lab@example.com", "GIT_AUTHOR_DATE": "2026-01-01T00:00:00Z", "GIT_COMMITTER_DATE": "2026-01-01T00:00:00Z"}
 
@@ -119,15 +120,25 @@ def _write(work: Path, files: dict[str, str]) -> None:
         path.write_text(content)
 
 
+def plans_dir(work: Path) -> Path:
+    """The plan-file directory of a built task repo: `<work>/.lab-plans`. The one place that computes it."""
+    return Path(work) / PLANS
+
+
 def build(task: Task, run_dir: Path) -> Path:
     """Write the task's files into `run_dir/work` and commit them in a fresh git repo (fixed author and dates); returns that
-    directory, resolved once (no symlink or `..` in it): the cwd, the driver and the exit-plan accept-rule all use this path."""
+    directory, resolved once (no symlink or `..` in it): the cwd, the driver and the exit-plan accept-rule all use this path.
+    The plans directory is excluded in `.git/info/exclude`, so `git status` stays clean whatever the agent writes there."""
     work = (Path(run_dir) / "work").resolve()
     work.mkdir(parents=True, exist_ok=True)
     _write(work, task.files)
     env = {**os.environ, **AUTHOR, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
     for args in (["init", "-q"], ["add", "-A"], ["-c", "commit.gpgsign=false", "commit", "-q", "-m", "start"]):
         subprocess.run(["git", *args], cwd=work, env=env, check=True, capture_output=True)
+    exclude = work / ".git" / "info" / "exclude"
+    exclude.parent.mkdir(exist_ok=True)
+    with exclude.open("a", encoding="utf-8") as fh:
+        fh.write(f"{PLANS}/\n")
     return work
 
 

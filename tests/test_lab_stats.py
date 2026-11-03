@@ -231,3 +231,34 @@ def test_the_json_carries_zero_when_exitplan_trials_were_scored_and_none_differ(
     (tmp_path / "trials.jsonl").write_text("\n".join(json.dumps(r) for r in recs) + "\n")
     assert cmd.main(["report", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["exitplan_mismatches"] == 0
+
+
+def outside_stream(path, *paths):
+    ev = [{"type": "system", "subtype": "init", "cwd": "/r/work"}]
+    ev += [{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": f"t{i}", "name": "Write", "input": {"file_path": p}}]}}
+           for i, p in enumerate(paths)]
+    path.write_text("\n".join(json.dumps(e) for e in ev + [{"type": "result", "subtype": "success"}]) + "\n")
+    return str(path)
+
+
+def test_the_report_prints_and_the_json_carries_the_outside_run_dir_count_pilot_included_unless_excluded(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("ACE_LAB_DATA", str(tmp_path))
+    spec = [("a", False, ["/r/work/a.py", "/h/.claude/plans/p.md"]), ("b", False, ["/r/work/b.py"]), ("c", True, ["/h/x", "/r/x"])]
+    recs = [{"trial_id": i, "task": "pc-port", "lesson": "preclaim", "arm": "told", "model": "m", "error": None, "pilot": pilot,
+             "stream": outside_stream(tmp_path / f"{i}.jsonl", *paths)} for i, pilot, paths in spec]
+    (tmp_path / "trials.jsonl").write_text("\n".join(json.dumps(r) for r in recs) + "\n")
+    assert cmd.main(["report"]) == 0
+    assert "outside-run-dir tool inputs: 3" in capsys.readouterr().out
+    assert cmd.main(["report", "--exclude-pilot"]) == 0
+    assert "outside-run-dir tool inputs: 1" in capsys.readouterr().out
+    assert cmd.main(["report", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["outside_run_dir_tool_inputs"] == 3
+
+
+def test_the_outside_count_is_absent_without_scored_trials_and_the_json_carries_null(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("ACE_LAB_DATA", str(tmp_path))
+    assert cmd.main(["report"]) == 0
+    assert "outside-run-dir" not in capsys.readouterr().out
+    assert cmd.main(["report", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["outside_run_dir_tool_inputs"] is None
+    assert stats.outside([]) is None and stats.outside([row("m", "preclaim", "told", 0)]) == 0

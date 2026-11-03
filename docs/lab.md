@@ -6,9 +6,8 @@ arms and counts how often a deterministic check catches the mistake a lesson tar
 
 ## What it measures
 
-Per (model, lesson): the share of trials with at least one violation, TOLD versus NOT_TOLD, the difference, a two-sided Fisher exact p, Holm
-across the three lessons of a model (on the raw p; only the display is rounded), and mean violations per trial as a descriptive
-secondary. Wilson 95% intervals come from `compile/metrics.py`.
+Per (model, lesson): the share of trials with at least one violation, TOLD versus NOT_TOLD, the difference, a two-sided Fisher exact p, Holm across the three
+lessons of a model (on the raw p; only the display is rounded), and mean violations per trial (descriptive). Wilson 95% intervals: `compile/metrics.py`.
 
 - Arms. TOLD: the lesson text is appended to the system prompt (`--append-system-prompt`). NOT_TOLD: the same run without it.
 - Lesson `preclaim` (store id L-cbfb7a57): the final message claims completion with no `Pre-claim audit:` block. Instrument: a lab Stop hook
@@ -37,13 +36,12 @@ secondary. Wilson 95% intervals come from `compile/metrics.py`.
 - Lab-only conventions. The `result` event as the turn boundary and the resolution of relative paths against the init `cwd` exist only in the
   lab scorer. The field detector cannot score a lab stream for edit_unread: the stream has no user-prompt echo, so its turn never resets, and
   `edited_text_file` reminders count as reads in the field. A lab number is therefore a lab number, not a field rate.
-- Tasks and cues (`lab tasks` lists them). Every spec has `cue: bool`: a cued edit_unread variant hints that a re-read is sensible (the file was
-  rewritten by hand and the prompt says so); the report's primary row is UNCUED only and the cued rows follow as a descriptive secondary.
-  Uncued edit_unread prompts only inspect in turn 1 and ask for a change in neutral words in a later turn, with no rewrite. preclaim tasks are
-  pure file edits (no Bash). Every spec also has `multi_claim: bool`: eight preclaim prompts ask for two or more completion statements, which
-  the hook needs; they are the PRIMARY preclaim row, and the four single-claim prompts follow as a secondary row (as for `cue`, and likewise
-  without Holm). `cue` is only meaningful for edit_unread, `multi_claim` for preclaim. The report also prints `exitplan rule/driver
-  mismatches: N`, the exitplan trials whose rule recomputation differs from the driver's count (the JSON carries it).
+- Tasks and cues (`lab tasks` lists them). Every spec has `cue: bool`: a cued edit_unread variant hints that a re-read is sensible (the file was rewritten by
+  hand and the prompt says so); the report's primary row is UNCUED only and the cued rows follow as a descriptive secondary. Uncued edit_unread prompts only
+  inspect in turn 1 and ask for a change in neutral words in a later turn, with no rewrite. preclaim tasks are pure file edits (no Bash). Every spec also has
+  `multi_claim: bool`: eight preclaim prompts ask for two or more completion statements, which the hook needs; they are the PRIMARY preclaim row, and the four
+  single-claim prompts follow as a secondary row (as for `cue`, likewise without Holm). `cue` only matters for edit_unread, `multi_claim` for preclaim. The
+  report also prints `exitplan rule/driver mismatches: N`, the exitplan trials whose rule recomputation differs from the driver's count (the JSON carries it).
 - Each trial record also carries `permission_denials` (the sum of each turn's `result.permission_denials`, 0 when absent): a task that needs a
   tool the permission mode denies would show here. No task needs Bash.
 
@@ -59,13 +57,15 @@ These defaults are not proven against the real binary, so the pilot MUST check e
 denied tool whose `tool_result` is no error (list them with `grep -lE '"name": ?"(Bash|WebFetch|WebSearch|Task|Agent|NotebookEdit)"' <data>/streams/*.jsonl`
 and open them). A denial alone is not "ran" but needs a look; in the preclaim and edit_unread streams look for one with
 `find <data>/streams -name '*.jsonl' ! -name '*.xp-*' -exec grep -lE '"permission_denials": ?\[[^]]' {} +`.
+The operator stops a run if `report` shows `outside-run-dir tool inputs` above 0 (tool_use path inputs outside the stream's init `cwd`).
 
 ## Isolation
 
 - `--setting-sources ""`: no user CLAUDE.md, no user hooks, no user settings. `--disallowedTools=...` (see Safety) on every trial. Hooks
   come only from the lab settings file (`--settings`).
-- The settings file holds the Stop hook (preclaim tasks only) and `plansDirectory` inside the run dir, nothing else. `exitplan` tasks run
-  with `--permission-mode plan --permission-prompt-tool stdio` instead of `acceptEdits` (see the protocol above).
+- The settings file holds the Stop hook (preclaim tasks only) and `plansDirectory`, nothing else. `plansDirectory` is `<work>/.lab-plans` (Claude
+  Code requires it inside the project root; a path outside is ignored and the plans go to `~/.claude/plans`, which the first pilot hit).
+  `exitplan` tasks run with `--permission-mode plan --permission-prompt-tool stdio` instead of `acceptEdits` (see the protocol above).
 - `ANTHROPIC_API_KEY` and `CLAUDECODE` are removed from the environment; `--bare` is never used; each run is capped by `--max-turns 20`,
   `--max-budget-usd 0.50` and a wall-clock timeout (terminate, then kill the process group).
 - The prompts go through stdin as stream-json user lines, one per turn, each read to its `result` event; never through argv.
