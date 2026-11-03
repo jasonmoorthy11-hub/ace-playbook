@@ -10,8 +10,8 @@ without it (NOT_TOLD), for a coding agent run headless (`claude -p`) on small sy
 described in `docs/lab.md`; this file fixes the confirmatory analysis. A lab number is a lab number, not a field rate (docs/lab.md).
 
 ## Instrument
-- Code: the lab code set at commit FILL_COMMIT: every `ace_playbook` module loaded by `ace_playbook.lab.__main__`, plus
-  `ace_playbook/lab/hooks/stop-mid-task-audit.sh` and `docs/lab.md` (32 files at a8b67a4). Its hash, run with `bash` in the repository:
+- Code: the lab code set at commit d03ceb7ceacfd13e06da47b10637980aaa170215: every `ace_playbook` module loaded by `ace_playbook.lab.__main__`, plus
+  `ace_playbook/lab/hooks/stop-mid-task-audit.sh` and `docs/lab.md` (35 files at that commit). Its hash, run with `bash` in the repository:
 
   ```bash
   set -euo pipefail
@@ -23,11 +23,13 @@ described in `docs/lab.md`; this file fixes the confirmatory analysis. A lab num
   echo "$(echo "$L" | wc -l | tr -d ' ') $(git ls-files -s --error-unmatch -- $L | shasum -a 256 | cut -c1-64)"
   ```
 
-  Registered output: FILL_CODESET. The command is run before the first scored trial and again before the report; a different output
-  stops the run (before) or is reported as a deviation (after).
-- Tasks: `uv run python -m ace_playbook.lab tasks | shasum -a 256` at that commit: FILL_TASKS. This hashes the task list only; the task
-  content (prompts, files) is pinned by the code set (`ace_playbook/lab/tasks.py` is in it).
-- Environment, recorded with the result (not a STOP): `uv run python -V` and `shasum -a 256 uv.lock` at the registered commit.
+  Registered output: `35 4a892e8e0e172a1d91f7a7f6c0c5a1723aa699be403e04e7e379066d998cd47b`. The command is run before the first scored
+  trial and again before the report; a different output stops the run (before) or is reported as a deviation (after).
+- Tasks: `uv run python -m ace_playbook.lab tasks | shasum -a 256` at that commit:
+  `b98558eac89f30af9cee8f0940f7d693e95db73f6fbb963c2b4ac53538a46b18`. This hashes the task list only; the task content (prompts, files)
+  is pinned by the code set (`ace_playbook/lab/tasks.py` is in it).
+- Environment, recorded with the result (not a STOP): `uv run python -V` and `shasum -a 256 uv.lock` at the registered commit (when this
+  was written: `Python 3.12.15`, `726fd6299f08af3ce8b3f3bd050e040841b158b5c961cf72a1abd46c2f5dc285`).
 - Lessons: the text is read at run time from the operator's store; each trial record keeps `sha256(text)[:16]`. Registered: preclaim
   L-cbfb7a57 `403bac3abaed7d36`, edit_unread L-f8a355f9 `5e0a169cf0eaf46c`, exitplan L-93544dae `05204efb06eb3f69` (the values of every
   pilot record, 2026-11-02/03). A sha16 that differs is a STOP (Safety below), not an exclusion.
