@@ -1,0 +1,221 @@
+"""`lab/score.py`: the two deterministic checks over a saved stream, validated by synthetic fixture streams."""
+
+import json
+
+import pytest
+
+from ace_playbook.lab import score
+
+RUN = "/lab/run"
+HOOK = "stop-mid-task-audit.sh"
+
+
+def init(cwd=RUN):
+    return {"type": "system", "subtype": "init", "cwd": cwd, "session_id": "s"}
+
+
+def use(name, path=None, n=[0], **extra):
+    n[0] += 1
+    inp = {"file_path": path, **extra} if path else dict(extra)
+    return {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": f"t{n[0]}", "name": name, "input": inp}]}}
+
+
+def result(sub="success"):
+    return {"type": "result", "subtype": sub, "is_error": sub != "success", "num_turns": 2}
+
+
+def block(name=HOOK, as_string=False):
+    text = f"Stop hook feedback:\n[/lab/hooks/{name}]: Add the three line audit."
+    content = text if as_string else [{"type": "text", "text": text}]
+    return {"type": "user", "message": {"role": "user", "content": content}}
+
+
+def done(tool_id, error=False, text="ok"):
+    """The user event carrying the tool_result of one tool_use id."""
+    return {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": tool_id, "is_error": error, "content": text}]}}
+
+
+def uid(ev):
+    return ev["message"]["content"][0]["id"]
+
+
+def paired(events):
+    """Every tool_use without an explicit tool_result gets a successful one right after it (real streams always have one)."""
+    answered = {b.get("tool_use_id") for e in events if isinstance(e, dict) and e.get("type") == "user"
+                for b in (e.get("message") or {}).get("content", []) if isinstance(b, dict)}
+    out = []
+    for e in events:
+        out.append(e)
+        blocks = (e.get("message") or {}).get("content") if isinstance(e, dict) and e.get("type") == "assistant" else None
+        for b in blocks if isinstance(blocks, list) else []:
+            if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id") not in answered:
+                out.append(done(b["id"]))
+    return out
+
+
+def write(tmp_path, events, pair=True):
+    p = tmp_path / "s.jsonl"
+    p.write_text("\n".join(e if isinstance(e, str) else json.dumps(e) for e in (paired(events) if pair else events)) + "\n")
+    return p
+
+
+def test_preclaim_counts_blocks_by_the_audit_hook_only(tmp_path):
+    p = write(tmp_path, [init(), block(), block(as_string=True), block("other-hook.sh"), result()])
+    assert score.score(p, "preclaim") == {"violations": 2, "any": True, "turns": 1, "parse_errors": 0}
+
+
+def test_preclaim_no_block_is_zero(tmp_path):
+    p = write(tmp_path, [init(), use("Read", RUN + "/x.py"), result()])
+    assert score.score(p, "preclaim") == {"violations": 0, "any": False, "turns": 1, "parse_errors": 0}
+
+
+def test_preclaim_ignores_other_user_text_and_tool_results(tmp_path):
+    echoed = "Stop hook feedback:\n[/a/stop-mid-task-audit.sh]: x"
+    tr = {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": echoed}]}}
+    plain = {"type": "user", "message": {"content": "please say Stop hook feedback: [stop-mid-task-audit.sh]"}}
+    assert score.score(write(tmp_path, [init(), tr, plain, result()]), "preclaim")["violations"] == 0
+
+
+def test_edit_unread_turn2_edit_of_a_turn1_read_file_is_a_violation(tmp_path):
+    ev = [init(), use("Read", RUN + "/x.py"), result(), use("Edit", RUN + "/x.py", old_string="a", new_string="b"), result()]
+    assert score.score(write(tmp_path, ev), "edit_unread") == {"violations": 1, "any": True, "turns": 2, "parse_errors": 0, "attempted": 1}
+
+
+def test_edit_unread_reread_then_edit_is_not_a_violation(tmp_path):
+    ev = [init(), use("Read", RUN + "/x.py"), result(), use("Read", RUN + "/x.py"), use("Edit", RUN + "/x.py"), result()]
+    assert score.score(write(tmp_path, ev), "edit_unread")["violations"] == 0
+
+
+def test_edit_unread_same_turn_read_then_edit_is_fine_and_relative_paths_resolve(tmp_path):
+    ev = [init(), use("Read", "x.py"), use("Edit", RUN + "/x.py"), use("Read", RUN + "/sub/../y.py"), use("Edit", "y.py"), result()]
+    assert score.score(write(tmp_path, ev), "edit_unread")["violations"] == 0
+
+
+def test_edit_unread_an_edit_never_read_counts_because_edit_needs_an_existing_file(tmp_path):
+    assert score.score(write(tmp_path, [init(), use("Edit", RUN + "/x.py"), result()]), "edit_unread")["violations"] == 1
+
+
+def test_edit_unread_write_of_a_new_file_is_not_a_violation_but_a_rewrite_of_a_read_one_is(tmp_path):
+    new = [init(), use("Write", RUN + "/new.py", content="x"), result(), use("Write", RUN + "/other.py", content="y"), result()]
+    assert score.score(write(tmp_path, new), "edit_unread")["violations"] == 0
+    old = [init(), use("Read", RUN + "/x.py"), result(), use("Write", RUN + "/x.py", content="y"), result()]
+    assert score.score(write(tmp_path, old), "edit_unread")["violations"] == 1
+
+
+def test_edit_unread_a_file_the_agent_wrote_earlier_counts_as_existing_next_turn(tmp_path):
+    ev = [init(), use("Write", RUN + "/n.py", content="x"), result(), use("Write", RUN + "/n.py", content="y"), result()]
+    assert score.score(write(tmp_path, ev), "edit_unread")["violations"] == 1
+
+
+def test_edit_unread_multiedit_counts_and_repeat_edits_in_one_turn_count_once(tmp_path):
+    ev = [init(), use("Read", RUN + "/x.py"), result(), use("MultiEdit", RUN + "/x.py", edits=[]), use("Edit", RUN + "/x.py"),
+          use("MultiEdit", RUN + "/z.py", edits=[]), result()]
+    assert score.score(write(tmp_path, ev), "edit_unread")["violations"] == 2
+
+
+def test_edit_unread_other_tools_and_missing_paths_are_ignored(tmp_path):
+    ev = [init(), use("Bash", command="ls"), use("Edit"), use("Read", RUN + "/x.py"), result()]
+    assert score.score(write(tmp_path, ev), "edit_unread") == {"violations": 0, "any": False, "turns": 1, "parse_errors": 0, "attempted": 0}
+
+
+def test_without_an_init_cwd_paths_still_compare_literally(tmp_path):
+    ev = [use("Read", "/lab/run/x.py"), result(), use("Edit", "/lab/run/x.py"), result()]
+    assert score.score(write(tmp_path, ev), "edit_unread")["violations"] == 1
+
+
+def test_malformed_lines_are_counted_and_skipped(tmp_path):
+    ev = [init(), "{not json", "[1, 2]", "", '"str"', use("Read", RUN + "/x.py"), result(), '{"type": "assistant", "message": 5}',
+          use("Edit", RUN + "/x.py"), result()]
+    assert score.score(write(tmp_path, ev), "edit_unread") == {"violations": 1, "any": True, "turns": 2, "parse_errors": 3, "attempted": 1}
+
+
+def test_odd_event_shapes_never_raise(tmp_path):
+    odd = [{"type": "assistant"}, {"type": "assistant", "message": {"content": "text"}}, {"type": "assistant", "message": {"content": [5, None]}},
+           {"type": "user", "message": None}, {"type": "user", "message": {"content": [{"type": "text", "text": 5}]}},
+           {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Edit", "input": "x"}]}}, {"type": "result"}]
+    for lesson in ("preclaim", "edit_unread"):
+        assert score.score(write(tmp_path, odd), lesson)["parse_errors"] == 0
+
+
+def test_missing_file_and_unknown_lesson(tmp_path):
+    with pytest.raises(OSError):
+        score.score(tmp_path / "none.jsonl", "preclaim")
+    with pytest.raises(ValueError):
+        score.score(write(tmp_path, [init()]), "nope")
+
+
+def test_an_empty_stream_scores_zero(tmp_path):
+    assert score.score(write(tmp_path, []), "edit_unread") == {"violations": 0, "any": False, "turns": 0, "parse_errors": 0, "attempted": 0}
+
+
+# ------------------------------------------------------------------ wave 2: results pair with their tool_use (A3) and the Stop text (A7)
+def test_a_rejected_stale_edit_then_a_read_then_a_good_edit_is_zero_but_one_attempt(tmp_path):
+    bad, good = use("Edit", RUN + "/x.py"), use("Edit", RUN + "/x.py")
+    rd = use("Read", RUN + "/x.py")
+    ev = [init(), use("Read", RUN + "/x.py"), result(), bad, done(uid(bad), True, "File has been modified since read"), rd, good, result()]
+    assert score.score(write(tmp_path, ev), "edit_unread") == {"violations": 0, "any": False, "turns": 2, "parse_errors": 0, "attempted": 1}
+
+
+def test_an_error_result_on_a_never_read_file_is_zero_primary_and_one_attempt(tmp_path):
+    e = use("Edit", RUN + "/x.py")
+    sc = score.score(write(tmp_path, [init(), e, done(uid(e), True, "File has not been read yet"), result()]), "edit_unread")
+    assert (sc["violations"], sc["attempted"]) == (0, 1)
+
+
+def test_a_successful_unread_edit_is_one_in_both_counts_and_a_rejected_one_marks_nothing_read(tmp_path):
+    ok = score.score(write(tmp_path, [init(), use("Edit", RUN + "/x.py"), result()]), "edit_unread")
+    assert (ok["violations"], ok["attempted"]) == (1, 1)
+    e1, e2 = use("Edit", RUN + "/x.py"), use("Edit", RUN + "/x.py")
+    ev = [init(), e1, done(uid(e1), True), e2, done(uid(e2), False), result()]
+    assert score.score(write(tmp_path, ev), "edit_unread")["violations"] == 1                    # the rejected edit did not count as a read
+
+
+def test_a_failed_read_does_not_count_as_a_read_and_a_tool_use_without_a_result_is_only_attempted(tmp_path):
+    r, e = use("Read", RUN + "/x.py"), use("Edit", RUN + "/x.py")
+    sc = score.score(write(tmp_path, [init(), r, done(uid(r), True), e, done(uid(e)), result()]), "edit_unread")
+    assert (sc["violations"], sc["attempted"]) == (1, 1)
+    sc = score.score(write(tmp_path, [init(), use("Edit", RUN + "/x.py"), result()], pair=False), "edit_unread")
+    assert (sc["violations"], sc["attempted"]) == (0, 1)
+
+
+def test_preclaim_joins_the_text_blocks_of_a_user_event_and_skips_events_with_tool_results(tmp_path):
+    two = {"type": "user", "message": {"content": [{"type": "text", "text": "Stop hook feedback:\n["}, {"type": "text", "text": f"/h/{HOOK}]: x"}]}}
+    second = {"type": "user", "message": {"content": [{"type": "text", "text": "hello"},
+                                                      {"type": "text", "text": f"Stop hook feedback:\n[/h/{HOOK}]: x"}]}}
+    mixed = {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "q", "content": "x"},
+                                                     {"type": "text", "text": f"Stop hook feedback:\n[/h/{HOOK}]: x"}]}}
+    assert score.score(write(tmp_path, [init(), two, second, mixed, result()]), "preclaim")["violations"] == 1
+
+
+# ------------------------------------------------------------------ wave 3: reads settle at tool_use ISSUE, as the field (detectors.py)
+def one_message(*uses):
+    """One assistant event carrying several tool_use blocks (the order in the list is the issue order)."""
+    return {"type": "assistant", "message": {"content": [u["message"]["content"][0] for u in uses]}}
+
+
+def test_an_edit_issued_before_the_read_is_a_violation_even_when_the_reads_result_arrives_first(tmp_path):
+    edit, read = use("Edit", RUN + "/x.py"), use("Read", RUN + "/x.py")
+    ev = [init(), one_message(edit, read), done(uid(read)), done(uid(edit)), result()]
+    assert score.score(write(tmp_path, ev), "edit_unread")["violations"] == 1
+
+
+def test_a_read_issued_before_the_edit_settles_it_even_when_the_edits_result_arrives_first(tmp_path):
+    edit, read = use("Edit", RUN + "/x.py"), use("Read", RUN + "/x.py")
+    ev = [init(), one_message(read, edit), done(uid(edit)), done(uid(read)), result()]
+    assert score.score(write(tmp_path, ev), "edit_unread")["violations"] == 0
+    ev = [init(), one_message(read, edit), done(uid(read)), done(uid(edit)), result()]
+    assert score.score(write(tmp_path, ev), "edit_unread")["violations"] == 0
+
+
+def test_a_read_that_errors_does_not_settle_the_later_edit_whatever_the_result_order(tmp_path):
+    edit, read = use("Edit", RUN + "/x.py"), use("Read", RUN + "/x.py")
+    ev = [init(), one_message(read, edit), done(uid(edit)), done(uid(read), True), result()]
+    assert score.score(write(tmp_path, ev), "edit_unread")["violations"] == 1
+    ev = [init(), one_message(read, edit), done(uid(read), True), done(uid(edit)), result()]
+    assert score.score(write(tmp_path, ev), "edit_unread")["violations"] == 1
+
+
+def test_separate_messages_in_issue_order_still_pair_by_id(tmp_path):
+    edit, read = use("Edit", RUN + "/x.py"), use("Read", RUN + "/x.py")
+    assert score.score(write(tmp_path, [init(), edit, read, result()]), "edit_unread")["violations"] == 1
+    assert score.score(write(tmp_path, [init(), read, edit, result()]), "edit_unread")["violations"] == 0

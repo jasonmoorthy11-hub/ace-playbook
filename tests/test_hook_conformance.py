@@ -212,7 +212,8 @@ ABSENT = ("seal", "dashboard", "dashboard_html", "status", "digest", "queue", "r
           "reader", "readerloop", "validate", "compose", "canary", "model",
           "arms", "arms_stats", "arms_window", "labels_queue", "arm_start",
           "arm_check", "carry", "vet", "urlsafe",
-          "holdout_power", "holdout_report", "holdout_io")   # `watch`: network-using (W1); the W2 Reader runs `claude -p` (subprocess)
+          "holdout_power", "holdout_report", "holdout_io",
+          "lab")   # `watch`: network-using (W1); the W2 Reader runs `claude -p` (subprocess); `lab` catches every lab submodule (per name component)
 HEAVY = {"sqlite3", "subprocess", "socket", "ssl", "http", "urllib.request", "asyncio", "multiprocessing", "threading", "ctypes"}
 
 
