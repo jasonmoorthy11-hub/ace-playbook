@@ -5,6 +5,7 @@ Two kinds of row are kept apart as descriptive secondaries (no Holm, never a rej
 tasks (the lab hook needs two claim phrases, so the PRIMARY preclaim row is the multi_claim tasks only). The report also counts the exitplan
 trials whose driver count and rule recomputation differ (`mismatches`), and counts the tool inputs outside the run dir (`outside`: every saved
 stream, pilot and errored trials too; an unreadable or empty stream, a stream with a bad line, or an unparseable trials.jsonl line is counted apart).
+Each group also carries the Newcombe 95% interval of the difference and, for the primary rows, a per-task table (describe.py).
 """
 
 from __future__ import annotations
@@ -15,7 +16,8 @@ from pathlib import Path
 
 from ..compile.arms_stats import ALPHA, holm
 from ..compile.metrics import wilson
-from . import score, tasks
+from . import checks as checks_mod
+from . import describe, score, tasks
 
 ARMS = ("told", "not_told")
 
@@ -54,7 +56,9 @@ def summarize(rows: list[dict], cued: bool = False, single: bool = False) -> lis
         p = fisher_two_sided(told["k"], told["n"], not_told["k"], not_told["n"])
         raw[model, lesson] = p                                                  # Holm runs on the raw p; only the display is rounded
         groups.append({"model": model, "lesson": lesson, "told": told, "not_told": not_told, "diff": diff,
-                       "fisher_p": None if p is None else _show(p), "p_holm": None, "reject": False})
+                       "fisher_p": None if p is None else _show(p), "p_holm": None, "reject": False,
+                       "diff_newcombe95": describe.newcombe(told["k"], told["n"], not_told["k"], not_told["n"]),
+                       **({"per_task": describe.per_task(mine)} if want == "primary" else {})})
     for model in sorted({g["model"] for g in groups} if want == "primary" else ()):
         same = [g for g in groups if g["model"] == model]
         for g, (adj, rej) in zip(same, holm([raw[model, g["lesson"]] for g in same])):
@@ -96,7 +100,8 @@ def load_rows(trials: Path, exclude_pilot: bool = False) -> tuple[list[dict], di
             key = f"{rec.get('model')}/{rec.get('lesson')}/{rec.get('arm')}"
             excluded[key] = excluded.get(key, 0) + 1
             continue
-        rows.append({"model": rec["model"], "lesson": rec["lesson"], "arm": rec["arm"], "cue": _cued(rec), "single": _single(rec), **sc})
+        rows.append({"model": rec["model"], "lesson": rec["lesson"], "arm": rec["arm"], "task": rec.get("task"), "cue": _cued(rec),
+                     "single": _single(rec), **sc})
     return rows, excluded
 
 
@@ -157,7 +162,7 @@ def outside(trials: Path) -> dict | None:
 
 
 def render(groups: list[dict], excluded: dict, cued: list[dict] = (), single: list[dict] = (), mismatched: int | None = None,
-           outside_n: int | None = None, unreadable: int = 0, bad_streams: int = 0) -> str:
+           outside_n: int | None = None, unreadable: int = 0, bad_streams: int = 0, checks: dict | None = None) -> str:
     out = []
     for title, part in (("", groups), ("cued tasks (secondary, descriptive)", cued),
                         ("single-claim preclaim tasks (secondary, descriptive)", single)):
@@ -165,6 +170,7 @@ def render(groups: list[dict], excluded: dict, cued: list[dict] = (), single: li
     out += [] if mismatched is None else [f"exitplan rule/driver mismatches: {mismatched}"]
     bad = f", streams with bad lines: {bad_streams}" if bad_streams else ""
     out += [] if outside_n is None else [f"outside-run-dir tool inputs: {outside_n} (unreadable streams: {unreadable}{bad})"]
+    out += [] if checks is None else [checks_mod.line(checks)]
     out += [f"excluded (error or missing stream) {k}: {v}" for k, v in sorted(excluded.items())]
     return "\n".join(out) if out else "no scored trials"
 
@@ -177,5 +183,6 @@ def _render(groups: list[dict], title: str) -> list[str]:
             a = g[arm]
             out.append(f"  {arm:<9} n={a['n']:<4} any={a['k']:<4} rate={a['rate']} wilson95={a['wilson95']} mean_violations={a['mean_violations']}")
         out.append(f"  diff(told - not_told)={g['diff']}  fisher p={g['fisher_p']}  holm p={g['p_holm']}  "
-                   f"{'REJECT' if g['reject'] else 'no rejection'} at {ALPHA}")
+                   f"{'REJECT' if g['reject'] else 'no rejection'} at {ALPHA}  newcombe95={g['diff_newcombe95']}")
+        out += describe.table_lines(g.get("per_task", {}))
     return out

@@ -134,6 +134,8 @@ def trial(task: tasks.Task, arm: str, model: str, lesson_text: str, run_dir: Pat
             if not pump.is_alive():
                 proc.stdout.close()
             rec["exit_code"] = proc.returncode
+            if rec["error"] is None and rec["exit_code"]:
+                rec["error"] = f"exit {rec['exit_code']}"
             try:
                 proc.stdin.close()
             except OSError:

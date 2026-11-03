@@ -12,7 +12,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from . import run, score, stats, tasks
+from . import checks, run, stats, tasks
 
 
 def data_dir() -> Path:
@@ -51,13 +51,10 @@ def plan(args) -> list[tuple[tasks.Task, str, int]]:
     return items
 
 
-def counts_line(i: int, n: int, rec: dict, lesson: str) -> str:
-    try:
-        sc = f"violations={score.score(rec['stream'], lesson)['violations']}"
-    except OSError:
-        sc = "violations=?"
+def counts_line(i: int, n: int, rec: dict) -> str:
+    """One progress line: no outcome (the operator must not see violations by arm, which the trial id names)."""
     err = f" error={rec['error']}" if rec["error"] else ""
-    return f"[{i}/{n}] {rec['trial_id']} exit={rec['exit_code']} results={','.join(str(r) for r in rec['results'])} {sc}{err}"
+    return f"[{i}/{n}] {rec['trial_id']} exit={rec['exit_code']} results={','.join(str(r) for r in rec['results'])}{err}"
 
 
 def cmd_run(args) -> int:
@@ -92,7 +89,7 @@ def cmd_run(args) -> int:
         rec = run.trial(task, arm, args.model, text, run_dir, data, claude=claude, rep=rep, pilot=args.pilot)
         with run.open_private(data / "trials.jsonl", append=True) as fh:
             fh.write(json.dumps(rec, sort_keys=True) + "\n")
-        print(counts_line(i, len(ids), rec, args.lesson), flush=True)
+        print(counts_line(i, len(ids), rec), flush=True)
     return 0
 
 
@@ -106,11 +103,13 @@ def cmd_report(args) -> int:
     rows, excluded = stats.load_rows(data_dir() / "trials.jsonl", args.exclude_pilot)
     groups, cued, single = stats.summarize(rows), stats.summarize(rows, cued=True), stats.summarize(rows, single=True)
     bad, out = stats.mismatches(rows), stats.outside(data_dir() / "trials.jsonl") or {}
+    found = checks.checks(data_dir() / "trials.jsonl", args.exclude_pilot)
     print(json.dumps({"groups": groups, "cued": cued, "single": single, "excluded": excluded, "exitplan_mismatches": bad,
                       "outside_run_dir_tool_inputs": out.get("total"), "outside_unreadable": out.get("unreadable"),
                       "outside_bad_lines": out.get("bad_streams"),
-                      "outside_trials": out.get("trials", [])}, indent=1, sort_keys=True) if args.json
-          else stats.render(groups, excluded, cued, single, bad, out.get("total"), out.get("unreadable", 0), out.get("bad_streams", 0)))
+                      "outside_trials": out.get("trials", []), "checks": found}, indent=1, sort_keys=True) if args.json
+          else stats.render(groups, excluded, cued, single, bad, out.get("total"), out.get("unreadable", 0), out.get("bad_streams", 0),
+                            found if any(found.values()) else None))
     return 0
 
 

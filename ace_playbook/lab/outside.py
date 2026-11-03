@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fnmatch
 import posixpath
+import re
 
 PATH_KEYS = ("file_path", "path", "notebook_path")
 
@@ -29,7 +30,8 @@ MAX_ALTERNATIVES = 64
 MAX_DEPTH = 32
 MAX_GROUPS = 64
 MAX_CHARS = 4096
-GLOB_CHARS = frozenset("*?[")
+GLOB_CHARS = frozenset("*?")
+ALLOWED = re.compile(r"[A-Za-z0-9_./*?{},-]*")                                # ASCII only: the whitelist of a pattern, a glob and a path
 
 
 def _split(body: str) -> list[str]:
@@ -80,54 +82,21 @@ def expand(val: str) -> list[str]:
     return done
 
 
-def _class_end(val: str, i: int) -> int:
-    """The index of the `]` closing the class that opens at `val[i]` (as `fnmatch` reads it), or -1: no class, the `[` is a literal."""
-    j = i + 1 + (val[i + 1:i + 2] == "!")
-    return val.find("]", j + (val[j:j + 1] == "]"))
-
-
-def _components(val: str) -> list[tuple[str, bool]]:
-    """`val` split on every `/` that is not inside a `[...]` class (as `fnmatch` reads one: an optional `!`, then a `]` first is literal), each
-    with whether a class of it may hold a `/` (a literal one or a range over it; a negated class is not counted)."""
-    parts, cur, slash, i = [], [], False, 0
-    while i < len(val):
-        ch = val[i]
-        end = _class_end(val, i) if ch == "[" else -1
-        if end > 0:
-            slash = slash or (val[i + 1] != "!" and _holds_slash(val[i + 1:end]))
-            cur.append(val[i:end + 1])
-            i = end + 1
-            continue
-        if ch == "/":
-            parts.append(("".join(cur), slash))
-            cur, slash = [], False
-        else:
-            cur.append(ch)
-        i += 1
-    parts.append(("".join(cur), slash))
-    return parts
-
-
-def _holds_slash(body: str) -> bool:
-    """Whether a class body (no leading `!`) lists a `/` or a range over it."""
-    i = 0
-    while i < len(body):
-        if i + 2 < len(body) and body[i + 1] == "-":
-            if ord(body[i]) <= 47 <= ord(body[i + 2]):
-                return True
-            i += 3
-        else:
-            if body[i] == "/":
-                return True
-            i += 1
+def _brace_dotdot(val: str) -> bool:
+    """A `..` inside a brace body: a sequence expression (`{Z..a}`, `{1..3}`) builds characters this module does not expand."""
+    depth = 0
+    for i, ch in enumerate(val):
+        depth += (ch == "{") - (ch == "}")
+        if depth > 0 and val.startswith("..", i):
+            return True
     return False
 
 
 def _worst_case(val: str) -> str:
-    """`val` with every component that may match `..` written as `..`: a component other than bare `*` / `**` for which Python's `fnmatch` says
-    `..` matches (`[.][.]`, `[!a][!a]`, `??`, `.?`, `.*`, `[--/][.]`), or whose class may hold a `/` (it can build one). Other engines
-    (minimatch, ripgrep, bash) read globs differently, so this is the conservative reading of every `*`, `?`, `[seq]`, `[!seq]` and range."""
-    return "/".join(".." if sl or p not in ("*", "**") and fnmatch.fnmatchcase("..", p) else p for p, sl in _components(val))
+    """`val` with every component that may match `..` written as `..`: one that starts with `.` and for which Python's `fnmatch` says `..`
+    matches (`.*`, `.?`, `.*.`). A component that starts with `*` or `?` never matches `..` (bash 3.2 with or without dotglob, node glob and
+    minimatch), so `*.*`, `??`, `?.` and `*.` stay as they are."""
+    return "/".join(".." if p[:1] == "." and fnmatch.fnmatchcase("..", p) else p for p in val.split("/"))
 
 
 def _globbed_dotdot(val: str) -> bool:
@@ -141,21 +110,22 @@ def _globbed_dotdot(val: str) -> bool:
 
 
 def _one_leaves(cwd, val: str) -> int:
-    """One brace-free alternative, read worst case (`_worst_case`): a `..` after a glob component is outside; an absolute or `~` one is tested as
-    a path; a relative one with a `..` component is resolved against the cwd; any other relative one stays inside."""
+    """One brace-free alternative, read worst case (`_worst_case`): a `..` after a glob component is outside; an absolute one is tested as a
+    path; a relative one with a `..` component is resolved against the cwd; any other relative one stays inside."""
     val = _worst_case(val)
     if _globbed_dotdot(val):
         return 1
-    if val.startswith(("/", "~")) or ".." in val.split("/"):
+    if val.startswith("/") or ".." in val.split("/"):
         return leaves(cwd, val)
     return 0
 
 
 def _pattern_leaves(cwd, val: str) -> int:
-    """A Glob `pattern` / Grep `glob`, already joined to the tool's `path`: longer than MAX_CHARS or holding a backslash is outside (an escape can
-    build a `..`: `.\\./*`), its braces are expanded (a brace can build a `..` without a literal one; an unbalanced, too deep or too wide group
-    counts as outside), then every alternative is tested by `_one_leaves`."""
-    if len(val) > MAX_CHARS or "\\" in val:
+    """A Glob `pattern` / Grep `glob`, already joined to the tool's `path` (a Grep glob's leading `!` is stripped first). A WHITELIST decides
+    first: longer than MAX_CHARS, any character other than ASCII `A-Za-z0-9_./*?-{},` (so no `[`, `\\`, `^`, `:`, `=`, `~`, `!`, space, NUL or
+    non-ASCII), or a `..` inside a brace body (`{Z..a}`) is outside. Then the braces are expanded (an unbalanced, too deep or too wide group is
+    outside) and every alternative is tested by `_one_leaves`."""
+    if len(val) > MAX_CHARS or not ALLOWED.fullmatch(val) or _brace_dotdot(val):
         return 1
     try:
         alts = expand(val)
@@ -165,9 +135,11 @@ def _pattern_leaves(cwd, val: str) -> int:
 
 
 def _base_leaves(cwd, base: str) -> int:
-    """A `path` with no pattern beside it: outside when it is over MAX_CHARS, has a brace or a backslash, has a `..` after a glob component, or
-    has a component that may match `..` and then resolves outside (`leaves` already tests a literal `..`)."""
-    if len(base) > MAX_CHARS or set("{\\") & set(base) or _globbed_dotdot(base):
+    """A `path` with no pattern beside it: outside when it is over MAX_CHARS, has a character outside the whitelist or a brace, has a `..` after
+    a glob component, or has a component that may match `..` and then resolves outside (`leaves` already tests a literal `..` and a leading `~`)."""
+    if base.startswith("~"):
+        return 0
+    if len(base) > MAX_CHARS or not ALLOWED.fullmatch(base) or set("{}") & set(base) or _globbed_dotdot(base):
         return 1
     worst = _worst_case(base)
     return int(worst != base and bool(leaves(cwd, worst)))
@@ -175,13 +147,18 @@ def _base_leaves(cwd, base: str) -> int:
 
 def inputs(cwd, name, inp: dict) -> int:
     """The outside count of one tool_use input: a non-str value (not None) under `pattern`, `glob`, `path`, `file_path` or `notebook_path` (1
-    each); the path keys; a Glob `pattern` or a Grep `glob` (a Grep `pattern` is a content regex and is left alone), joined to the tool's `path`
-    when it has one (not when the pattern is absolute or starts with `~`) and tested as one pattern; and a `path` with no pattern beside it
-    (`_base_leaves`)."""
+    each); the path keys; a Glob `pattern` or a Grep `glob` (a Grep `pattern` is a content regex and is left alone; a Grep `glob` may start with
+    one `!`, ripgrep's negation, which only filters), joined to the tool's `path` when it has one (not when the pattern is absolute or starts
+    with `~`) and tested as one pattern; and a `path` with no pattern beside it (`_base_leaves`)."""
     n = sum(1 for k in ("pattern", "glob") + PATH_KEYS if inp.get(k) is not None and not isinstance(inp[k], str))
     n += sum(leaves(cwd, inp[k]) for k in PATH_KEYS if isinstance(inp.get(k), str) and inp[k])
     base = inp.get("path") if isinstance(inp.get("path"), str) and inp.get("path") else None
-    pats = [v for v in (inp.get(k) for k in (("glob", "pattern") if name == "Glob" else ("glob",))) if isinstance(v, str) and v]
+    pats = []
+    for key in ("glob", "pattern") if name == "Glob" else ("glob",):
+        val = inp.get(key)
+        if isinstance(val, str):
+            pats.append(val[1:] if name == "Grep" and key == "glob" and val.startswith("!") else val)
+    pats = [v for v in pats if v]
     for val in pats:
         n += _pattern_leaves(cwd, val if base is None or val.startswith(("/", "~")) else posixpath.join(base, val))
     if base is not None and not pats:

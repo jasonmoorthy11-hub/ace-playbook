@@ -108,3 +108,59 @@ def test_an_errored_trial_is_retried_on_resume_and_the_later_record_wins(capsys,
     assert len(scored) == 1 and excluded == {}
     assert cli(capsys, *base, "--claude", str(FAKE))[1] == "" and len(trials_of(cli_env)) == 2
     assert "retried" in run_help()
+
+
+# ------------------------------------------------------------------ wave 8: an error result or a nonzero exit is a trial error
+ERR = {"is_error": True, "subtype": "error_during_execution"}
+
+
+def test_an_is_error_result_sets_the_error_and_keeps_the_record(lab):
+    lab.scenario(turns=[{"result": {**ERR, "total_cost_usd": 0.5}}])
+    rec = lab.go("pc-port", "told")
+    assert rec["error"] == "result error: error_during_execution" and rec["is_error"] is True
+    assert rec["results"] == ["error_during_execution"] and rec["costs"] == [0.5] and rec["exit_code"] is not None
+
+
+def test_a_non_success_subtype_without_is_error_sets_the_error(lab):
+    lab.scenario(turns=[{"result": {"subtype": "error_max_budget_usd"}}])
+    rec = lab.go("pc-port", "told")
+    assert rec["error"] == "result error: error_max_budget_usd" and rec["is_error"] is False and rec["results"] == ["error_max_budget_usd"]
+
+
+def test_an_error_result_in_a_later_turn_is_recorded_after_the_earlier_ones(lab):
+    lab.scenario(turns=[{}, {"result": ERR}])
+    rec = lab.go("eu-parser", "told")
+    assert rec["error"] == "result error: error_during_execution" and rec["results"] == ["success", "error_during_execution"]
+
+
+def test_a_nonzero_exit_with_clean_results_sets_exit_code_as_the_error(lab):
+    lab.scenario(turns=[{}], exit=2)
+    rec = lab.go("pc-port", "told")
+    assert rec["error"] == "exit 2" and rec["exit_code"] == 2 and rec["results"] == ["success"]
+
+
+def test_a_nonzero_exit_never_replaces_an_earlier_error(lab):
+    lab.scenario(turns=[{"result": ERR}], exit=2)
+    assert lab.go("pc-port", "told")["error"] == "result error: error_during_execution"
+
+
+def test_a_clean_trial_has_no_error(lab):
+    lab.scenario(turns=[{}, {}])
+    rec = lab.go("eu-parser", "told")
+    assert rec["error"] is None and rec["exit_code"] == 0 and rec["is_error"] is False and rec["results"] == ["success", "success"]
+
+
+@pytest.mark.parametrize("bad", [dict(turns=[{"result": ERR}]), dict(turns=[{"result": {"subtype": "error_max_budget_usd"}}]), dict(turns=[{}], exit=2)])
+def test_such_a_trial_is_excluded_by_report_and_retried_by_the_next_run(capsys, cli_env, lab, bad):
+    base = ("run", "--model", "m1", "--lesson", "preclaim", "--seed", "1", "--tasks", "pc-port", "--arms", "told", "--claude", str(FAKE))
+    lab.scenario(**bad)
+    out = cli(capsys, *base)[1]
+    assert " error=" in out and "violations" not in out
+    assert cmd.recorded(cli_env / "trials.jsonl") == set()
+    assert stats.load_rows(cli_env / "trials.jsonl") == ([], {"m1/preclaim/told": 1})
+    lab.scenario(turns=[{}])
+    out = cli(capsys, *base)[1]
+    rows = trials_of(cli_env)
+    assert out.count("\n") == 1 and " error=" not in out and [r["error"] is None for r in rows] == [False, True]
+    assert cmd.recorded(cli_env / "trials.jsonl") == {rows[0]["trial_id"]} and len(stats.load_rows(cli_env / "trials.jsonl")[0]) == 1
+    assert cli(capsys, *base)[1] == "" and len(trials_of(cli_env)) == 2

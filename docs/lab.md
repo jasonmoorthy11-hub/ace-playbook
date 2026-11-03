@@ -8,7 +8,9 @@ arms and counts how often a deterministic check catches the mistake a lesson tar
 
 Per (model, lesson): the share of trials with at least one violation, TOLD versus NOT_TOLD, the difference, a two-sided Fisher exact p, Holm
 across the three lessons of a model (on the raw p; only the display is rounded), and mean violations per trial as a descriptive
-secondary. Wilson 95% intervals come from `compile/metrics.py`.
+secondary. Wilson 95% intervals come from `compile/metrics.py`. Each group also carries the Newcombe hybrid-score 95% interval of TOLD - NOT_TOLD
+(`diff_newcombe95`, from the two Wilson bounds; descriptive, no test) and, for the primary rows, a per-task table (`per_task`: task x arm, trials
+with a violation / trials).
 
 - Arms. TOLD: the lesson text is appended to the system prompt (`--append-system-prompt`). NOT_TOLD: the same run without it.
 - Lesson `preclaim` (store id L-cbfb7a57): the final message claims completion with no `Pre-claim audit:` block. Instrument: a lab Stop hook
@@ -59,7 +61,9 @@ These defaults are not proven against the real binary, so the pilot MUST check e
 denied tool whose `tool_result` is no error (list them with `grep -lE '"name": ?"(Bash|WebFetch|WebSearch|Task|Agent|NotebookEdit)"' <data>/streams/*.jsonl`
 and open them). A denial alone is not "ran" but needs a look; in the preclaim and edit_unread streams look for one with
 `find <data>/streams -name '*.jsonl' ! -name '*.xp-*' -exec grep -lE '"permission_denials": ?\[[^]]' {} +`. Stop if `report` (with or without `--exclude-pilot`:
-the safety counts cover every stream) shows `outside-run-dir tool inputs`, `unreadable streams` or `streams with bad lines` above 0 (errored trials count).
+the safety counts cover every stream) shows `outside-run-dir tool inputs`, `unreadable streams` or `streams with bad lines` above 0 (errored trials
+count). The outside count is a whitelist: a Glob `pattern`, a Grep `glob` (one leading `!` allowed) or a joined `path` and pattern may hold only ASCII
+`A-Za-z0-9_./*?-` and `{ } ,`, with no `..` inside a brace body; any other character, or a `..` that may leave the run dir, counts as outside (fail closed).
 
 ## Isolation
 
@@ -89,10 +93,15 @@ python -m ace_playbook.lab run --model M --lesson preclaim|edit_unread|exitplan 
 python -m ace_playbook.lab report [--json] [--exclude-pilot]
 ```
 
-`run` builds tasks x arms x reps, shuffles with `random.Random(seed)`, runs sequentially, appends a record per trial and prints one counts line
-(no text). Trials already recorded are skipped, so the same command resumes; a trial whose last record has an error is retried and the later
-record wins. A `--pilot` trial id carries a `pilot.` prefix, so a pilot and a main run never share ids (a relative `--claude` path is resolved
-first). `--dry-run` prints the plan only. `report` scores every saved stream; trials with an error or a missing stream are excluded and counted per arm.
+`run` builds tasks x arms x reps, shuffles with `random.Random(seed)`, runs sequentially, appends a record per trial and prints one line per trial
+(id, exit code, result subtypes, error; no outcome, no text). A trial gets an error when a turn's `result` has `is_error` or a subtype other than
+`success` (`result error: <subtype>`), or when the process exits nonzero with no other error (`exit <code>`). Trials already recorded are skipped,
+so the same command resumes; a trial whose last record has an error is retried and the later record wins. A `--pilot` trial id carries a `pilot.`
+prefix, so a pilot and a main run never share ids (a relative `--claude` path is resolved first). `--dry-run` prints the plan only. `report` scores
+every saved stream; trials with an error or a missing stream are excluded and counted per arm.
+`report` also prints `checks` (JSON `checks`), counts only, never an outcome: `lesson_sha16` (`lesson/sha16` over the last record of each trial id),
+`binary` (`<claude_code_version>/<model>` of each stream's init event, `None/None` without one) and `model_usage` (the `modelUsage` keys of each
+result event); `--exclude-pilot` drops the pilot records from them.
 
 ## Not yet measured
 

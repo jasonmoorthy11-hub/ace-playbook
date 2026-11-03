@@ -394,19 +394,20 @@ def test_outside_scan_also_returns_whether_the_stream_had_any_event_blank_lines_
         score.outside_scan(write(tmp_path, ["{broken"], pair=False))
 
 
-@pytest.mark.parametrize("val,want", [("[.][.]/*", 1), ("src/[.][.]/[.][.]/*", 1), ("[!a][!a]/*", 1), ("??/*", 1), (".?/*", 1), (".*/x", 1),
-                                      ("{[.][.],x}/*", 1), ("[--/][.]/*", 1), ("?./*", 1), ("src/[.][.]/x.py", 0), ("**/test_[a-z]*.py", 0),
-                                      ("*.{py,md}", 0), ("src/**/*.py", 0), ("**/test_*.py", 0), ("{src,tests}/**/*.py", 0), ("src/*.py", 0)])
-def test_a_component_that_fnmatch_says_may_match_dotdot_counts_as_dotdot(tmp_path, val, want):
+@pytest.mark.parametrize("val,want", [(".?/*", 1), (".*/x", 1), ("..*/x", 1), (".*./x", 1), ("??/*", 0), ("?./*", 0), ("*.*", 0), ("*./x", 0), ("**/*.*", 0),
+                                      ("src/*.*", 0), ("./*", 0), ("*.{py,md}", 0), ("src/**/*.py", 0), ("**/test_*.py", 0), ("{src,tests}/**/*.py", 0),
+                                      ("src/*.py", 0), ("{.*,x}/*", 1), ("src/.?/.?/x.py", 1), ("src/.?/x.py", 0), ("*/.*/*", 1)])
+def test_a_component_that_starts_with_a_dot_and_may_match_dotdot_counts_as_dotdot_but_a_leading_wildcard_never_does(tmp_path, val, want):
     for name, key in (("Glob", "pattern"), ("Grep", "glob")):
         extra = {} if name == "Glob" else {"pattern": "x"}
         assert outside(tmp_path, [init("/r/work"), use_in(name, **{key: val}, **extra), result()]) == want, (name, val)
 
 
-def test_a_dotdot_class_in_a_joined_path_counts(tmp_path):
-    assert outside(tmp_path, [init("/r/work"), use_in("Glob", pattern="*.py", path="[.][.]"), result()]) == 1
-    assert outside(tmp_path, [init("/r/work"), use_in("Glob", pattern="[.][.]/*", path="src"), result()]) == 0      # src/../* is /r/work/*
-    assert outside(tmp_path, [init("/r/work"), use_in("Glob", pattern="[.][.]/[.][.]/*", path="src"), result()]) == 1
+def test_a_dotdot_wildcard_in_a_joined_path_counts(tmp_path):
+    assert outside(tmp_path, [init("/r/work"), use_in("Glob", pattern="*.py", path=".*"), result()]) == 1
+    assert outside(tmp_path, [init("/r/work"), use_in("Glob", pattern=".*/*", path="src"), result()]) == 0      # src/../* is /r/work/*
+    assert outside(tmp_path, [init("/r/work"), use_in("Glob", pattern=".*/.*/*", path="src"), result()]) == 1
+    assert outside(tmp_path, [init("/r/work"), use_in("Glob", pattern="*.*", path="??"), result()]) == 0
 
 
 @pytest.mark.parametrize("n,want", [(4096, 0), (4097, 1)])
@@ -430,8 +431,57 @@ def test_a_non_string_pattern_glob_or_path_input_counts_as_outside(tmp_path, bad
     assert ev({"pattern": "*.py", "path": None}) == 0
 
 
-@pytest.mark.parametrize("val,want", [("a[/]../x", 1), ("a[+-0]../x", 1), ("[a/b]*", 1), ("[!/]x/*.py", 0), ("[ab]/*.py", 0), ("src/[a-z]x.py", 0), ("a[/", 0)])
-def test_a_class_that_may_hold_a_slash_is_read_as_a_dotdot_so_a_slash_in_it_does_not_hide_a_component(tmp_path, val, want):
+# ------------------------------------------------------------------ wave 8: the character whitelist replaces escape hunting
+R4_ESCAPES = ["{Z..a}/etc/hosts", "{Z..a}.]./{Z..a}.]./*", "..{Z..a}/*", "{Z..a}/*", ".[^a]/*", ".[[:punct:]]/*", ".[[=.=]]/*", "[^a][^a]/*",
+              "[.][.]/*", ".\\./*", "a\x00b/*", "\x00", "x ../../*"]
+OTHER_CHARS = ["{1..3}/*", "{a,{1..3}}/*", "{..,x}/*", "[ab]/*.py", "src/[a-z]x.py", "[!/]x/*.py", "a[/", "a\\b", "a b/*", "a\tb", "a\nb", "a=b", "a:b",
+               "a^b", "a~b", "~", "~/x", "a!b", "!!a", "a(b)", "a$b", "a+b", "a@b", "a#b", "a%b", "a;b", "a'b", 'a"b', "a|b", "a&b", "a`b",
+               "caf\u00e9/*", "\uff0e\uff0e/*", "a\u2025/*", "\u202e*"]
+PILOT_AND_COMMON = ["**/*.py", "**/config.json", "**/*", "**/*.{py,md,toml,cfg,txt}", "*.{py,md}", "src/**/*.py", "**/test_*.py", "{src,tests}/**/*.py",
+                    "**/*.*", "src/*.*", "a-b/c_d.e/*", "{a,b}{c,d}/*"]
+
+
+@pytest.mark.parametrize("val", R4_ESCAPES + OTHER_CHARS)
+def test_any_character_outside_the_whitelist_and_any_dotdot_in_a_brace_body_counts_as_outside(tmp_path, val):
     for name, key in (("Glob", "pattern"), ("Grep", "glob")):
         extra = {} if name == "Glob" else {"pattern": "x"}
-        assert outside(tmp_path, [init("/r/work"), use_in(name, **{key: val}, **extra), result()]) == want, (name, val)
+        assert outside(tmp_path, [init("/r/work"), use_in(name, **{key: val}, **extra), result()]) == 1, (name, val)
+        assert outside(tmp_path, [init("/r/work"), use_in(name, **{key: val}, **extra, path="src"), result()]) == 1, (name, val, "joined")
+
+
+@pytest.mark.parametrize("path", ["**/[.][.]", "[.][.]", "a/[x]", "a b", "{Z..a}", "a\x00", "caf\u00e9", "a=b", "~", "a~"])
+def test_a_path_alone_goes_through_the_same_character_rule(tmp_path, path):
+    assert outside(tmp_path, [init("/r/work"), use_in("Glob", path=path), result()]) == 1, path
+    assert outside(tmp_path, [init("/r/work"), use_in("Grep", path=path, pattern="x"), result()]) == 1, path
+
+
+@pytest.mark.parametrize("val", PILOT_AND_COMMON)
+def test_every_pilot_and_common_pattern_is_inside_the_whitelist(tmp_path, val):
+    for name, key in (("Glob", "pattern"), ("Grep", "glob")):
+        extra = {} if name == "Glob" else {"pattern": "x"}
+        assert outside(tmp_path, [init("/r/work"), use_in(name, **{key: val}, **extra), result()]) == 0, (name, val)
+        assert outside(tmp_path, [init("/r/work"), use_in(name, **{key: val}, **extra, path="src"), result()]) == 0, (name, val, "joined")
+
+
+def test_a_grep_glob_may_start_with_one_bang_only_and_a_glob_pattern_never_may(tmp_path):
+    ev = lambda name, key, val, **kw: outside(tmp_path, [init("/r/work"), use_in(name, **{key: val}, **kw), result()])   # noqa: E731
+    assert ev("Grep", "glob", "!.git/**", pattern="x") == 0 and ev("Grep", "glob", "!a", pattern="x") == 0
+    assert ev("Grep", "glob", "!*.py", pattern="x", path="src") == 0
+    assert ev("Grep", "glob", "!!a", pattern="x") == 1 and ev("Grep", "glob", "a!b", pattern="x") == 1 and ev("Grep", "glob", "a/!b", pattern="x") == 1
+    assert ev("Grep", "glob", "!../../*", pattern="x") == 1 and ev("Grep", "glob", "!/etc/*", pattern="x") == 1
+    assert ev("Glob", "pattern", "!.git/**") == 1 and ev("Glob", "pattern", "!*.py", path="src") == 1
+
+
+def test_a_path_with_a_comma_or_inside_chars_stays_inside_and_a_brace_in_a_path_alone_stays_outside(tmp_path):
+    assert outside(tmp_path, [init("/r/work"), use_in("Glob", path="src/a,b"), result()]) == 0
+    assert outside(tmp_path, [init("/r/work"), use_in("Glob", path="/r/work/src-1/a_b.c"), result()]) == 0
+    assert outside(tmp_path, [init("/r/work"), use_in("Glob", path="{a,b}"), result()]) == 1
+
+
+@pytest.mark.parametrize("tail,want", [("*", 0), ("*/../y", 1)])
+def test_a_64_alternative_pattern_under_4096_characters_is_expanded_in_bounded_time_and_memory(tmp_path, tail, want):
+    from ace_playbook.lab import outside as out
+    val = "{" + ",".join(f"d{i}" for i in range(64)) + "}/" + "x/" * 1500 + tail
+    assert len(val) < 4096
+    assert timed(lambda: out.inputs("/r/work", "Glob", {"pattern": val})) == want
+    assert timed(lambda: out.inputs("/r/work", "Grep", {"glob": val, "pattern": "x", "path": "src"})) == want

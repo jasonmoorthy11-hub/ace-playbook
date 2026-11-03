@@ -365,7 +365,7 @@ def test_cli_accepts_the_third_lesson_dry_run_and_a_fake_run(capsys, cli_env, la
     lab.scenario(turns=[{"control": [EPM]}])
     code, out, _ = cli(capsys, "run", "--model", "m1", "--lesson", "exitplan", "--seed", "1", "--tasks", "xp-typehints", "--arms", "told",
                        "--claude", str(FAKE))
-    assert code == 0 and "violations=1" in out
+    assert code == 0 and "violations" not in out and "exit=0" in out
     [row] = trials_of(cli_env)
     assert row["lesson"] == "exitplan" and row["exitplan_violations"] == 1
     assert cmd_report(capsys)["groups"][0]["lesson"] == "exitplan"
