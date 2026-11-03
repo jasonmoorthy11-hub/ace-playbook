@@ -534,7 +534,12 @@ def test_the_exempt_check_reads_the_log_not_the_view(w, capsys):
     capsys.readouterr()
 
 
-@pytest.mark.parametrize("raw", [["not json"], ['{"op": "PATCH"}', "{"], ["[1, 2]"]], ids=["text", "cut", "array"])
+def _rec(lid):
+    return json.dumps({"op": "PATCH", "lesson_id": lid, "ts": "2026-10-01T00:00:00Z", "fields": {"holdout_exempt": True}})
+
+
+@pytest.mark.parametrize("raw", [["not json"], ['{"op": "PATCH"}', "{"], ["[1, 2]"], [_rec(["x"])], [_rec({})], [_rec(7)]],
+                         ids=["text", "cut", "array", "id_list", "id_dict", "id_int"])
 def test_an_unreadable_delta_log_refuses_the_test_and_is_named_in_the_interim_mode(w, capsys, raw):
     w.session("s1", FULL)
     w.write()
