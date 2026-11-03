@@ -22,6 +22,19 @@ MAX_INJECT_CHARS = 7000
 CHECK_FIELDS = ("backup_check", "brain_check", "acewatch_check", "watch_claude")   # optional scripts and binaries, type-checked only
 READER_MODEL = re.compile(r"claude-[A-Za-z0-9][A-Za-z0-9._-]*")
 SEED_HEX = re.compile(r"[0-9a-f]{64}")
+# whole-second UTC stamps, checked by pattern and then as a real calendar date by hand (days per month, Gregorian leap years): neither
+# `datetime` nor `time.strptime` (which imports `_strptime`) is loaded on the hook path
+UTC_STAMP = re.compile(r"\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\dZ")
+MONTH_DAYS = (31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+
+
+def utc_stamp_ok(value: Any) -> bool:
+    """True for a whole-second UTC `Z` stamp that is a real date (the pattern alone lets 2026-02-30 and 2026-11-31 through)."""
+    if not (isinstance(value, str) and UTC_STAMP.fullmatch(value)):
+        return False
+    year, month, day = int(value[:4]), int(value[5:7]), int(value[8:10])
+    leap = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+    return year >= 1 and day <= MONTH_DAYS[month - 1] + (month == 2 and leap)
 
 
 def check_value(key: str, value: Any) -> None:
@@ -86,6 +99,11 @@ class Config:
     # and the arm rate; None means not set yet, and `compile seal` refuses until all three are
     shadow_seed: str | None = field(default=None, repr=False)
     permutation_seed: str | None = field(default=None, repr=False)
+    # the holdout field analysis (compile/holdout_report.py): its own private permutation seed, same shape; None refuses the report
+    holdout_permutation_seed: str | None = field(default=None, repr=False)
+    # the one registered window of that analysis (whole-second UTC `Z` stamps, start < end); None means unset and the test refuses
+    holdout_start: str | None = None
+    holdout_end: str | None = None
     arm_rate: float | None = None
     source: ClassVar[Path | None] = None  # not a config key: the file `load` read (or would have read), set on the instance by `load`
 
@@ -106,10 +124,16 @@ class Config:
 
     def check_arms(self) -> None:
         """Raise ValueError when a set arm field is unusable; the message names the key and never the value."""
-        for key in ("shadow_seed", "permutation_seed"):
+        for key in ("shadow_seed", "permutation_seed", "holdout_permutation_seed"):
             value = getattr(self, key)
             if value is not None and not (isinstance(value, str) and SEED_HEX.fullmatch(value)):
                 raise ValueError(f"{key} must be 64 lowercase hex characters (or absent)")
+        for key in ("holdout_start", "holdout_end"):
+            value = getattr(self, key)
+            if value is not None and not utc_stamp_ok(value):
+                raise ValueError(f"{key} must be a UTC stamp like 2026-11-01T00:00:00Z (or absent)")
+        if self.holdout_start is not None and self.holdout_end is not None and not self.holdout_start < self.holdout_end:
+            raise ValueError("holdout_start must be before holdout_end")
         rate = self.arm_rate
         if rate is not None and not (isinstance(rate, (int, float)) and not isinstance(rate, bool) and 0.0 < rate < 1.0):
             raise ValueError("arm_rate must be a number strictly between 0 and 1 (or absent)")

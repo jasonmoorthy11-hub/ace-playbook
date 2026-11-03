@@ -1,4 +1,4 @@
-"""CLI: `python -m ace_playbook.store rebuild|verify|list|search|pin|unpin|stats|promote|provisional`."""
+"""CLI: `python -m ace_playbook.store rebuild|verify|list|search|pin|unpin|exempt|unexempt|stats|promote|provisional`."""
 
 from __future__ import annotations
 
@@ -11,9 +11,14 @@ from . import DeltaLog, promote, view
 from .schema import SchemaError
 
 
+FLAG_VERBS = {"pin": ("pinned", True), "unpin": ("pinned", False),
+              "exempt": ("holdout_exempt", True), "unexempt": ("holdout_exempt", False)}
+
+
 def _lesson_line(row) -> str:
     pin = "*" if row["pinned"] else " "
-    return f"{pin} {row['id']} [{row['status']}] ({row['scope_type']}:{row['scope_key'] or '-'}) {row['text']}"
+    exempt = " [exempt]" if row["holdout_exempt"] else ""
+    return f"{pin} {row['id']} [{row['status']}]{exempt} ({row['scope_type']}:{row['scope_key'] or '-'}) {row['text']}"
 
 
 def run(args: argparse.Namespace) -> int:
@@ -32,10 +37,10 @@ def run(args: argparse.Namespace) -> int:
             except Exception:
                 print("promoted; view rebuild failed, run `rebuild`")
         return rc
-    if args.cmd in ("pin", "unpin"):
-        log.append({"op": "PATCH", "lesson_id": args.lesson_id,
-                    "fields": {"pinned": args.cmd == "pin"}})
-    if args.cmd in ("rebuild", "pin", "unpin") or view.view_head(cfg.sqlite) != log.head_hash():
+    if args.cmd in FLAG_VERBS:
+        flag, value = FLAG_VERBS[args.cmd]
+        log.append({"op": "PATCH", "lesson_id": args.lesson_id, "fields": {flag: value}})
+    if args.cmd == "rebuild" or args.cmd in FLAG_VERBS or view.view_head(cfg.sqlite) != log.head_hash():
         state = log.rebuild_view(cfg.sqlite)
         if args.cmd == "rebuild":
             print(f"rebuilt view: {len(state)} lessons -> {cfg.sqlite.name}")
@@ -62,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
     ls = sub.add_parser("list")
     ls.add_argument("--status")
     sub.add_parser("search").add_argument("query")
-    for name in ("pin", "unpin"):
+    for name in FLAG_VERBS:
         sub.add_parser(name).add_argument("lesson_id")
     pr = sub.add_parser("promote", help="operator-only: provisional -> active with a typed quote")
     pr.add_argument("lesson_id")

@@ -173,3 +173,26 @@ def test_citation_recording(cfg, tmp_path):
     assert rec["cited_ids"] == ids and rec["unknown_ids"] == ["L-deadbeef"]
     assert record_citations(cfg, "c1", "no citations") is None
     assert len(list(read_jsonl(cfg.citations))) == 1
+
+
+def _row(cfg, tmp_path, monkeypatch, entrypoint):
+    if entrypoint is None:
+        monkeypatch.delenv("CLAUDE_CODE_ENTRYPOINT", raising=False)
+    else:
+        monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", entrypoint)
+    injector.run(cfg, "s-entry", str(tmp_path))
+    return list(read_jsonl(cfg.injections))[-1]
+
+
+@pytest.mark.parametrize("value,recorded", [("cli", "cli"), ("sdk-py", "sdk-py"), (None, None), ("", "invalid"), ("cli\nx", "invalid"),
+                                            ("x" * 40, "invalid"), ("CLI", "invalid"), ("1cli", "invalid"), ("a" * 32, "a" * 32)])
+def test_the_row_records_the_entrypoint_validated(cfg, tmp_path, monkeypatch, value, recorded):
+    assert _row(cfg, tmp_path, monkeypatch, value)["entrypoint"] == recorded
+
+
+def test_the_entrypoint_changes_no_other_row_field(cfg, tmp_path, monkeypatch):
+    seed(cfg, [("Entrypoint neutral lesson text", GLOBAL)])
+    a, b = _row(cfg, tmp_path, monkeypatch, "cli"), _row(cfg, tmp_path, monkeypatch, None)
+    assert {k: v for k, v in a.items() if k not in ("entrypoint", "ts")} == {k: v for k, v in b.items() if k not in ("entrypoint", "ts")}
+    assert set(a) == {"ts", "session_id", "source", "key", "mode", "shown_ids", "holdout_ids", "excluded", "dropped_cap", "holdout_rate",
+                      "seed_fp", "block_chars", "refused", "entrypoint"}
