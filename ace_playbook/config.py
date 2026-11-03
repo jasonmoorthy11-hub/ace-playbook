@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, ClassVar
@@ -22,8 +23,19 @@ MAX_INJECT_CHARS = 7000
 CHECK_FIELDS = ("backup_check", "brain_check", "acewatch_check", "watch_claude")   # optional scripts and binaries, type-checked only
 READER_MODEL = re.compile(r"claude-[A-Za-z0-9][A-Za-z0-9._-]*")
 SEED_HEX = re.compile(r"[0-9a-f]{64}")
-# whole-second UTC stamps, checked by pattern (no datetime import on the hook path)
+# whole-second UTC stamps, checked by pattern and then as a real calendar date with `time.strptime` (no datetime import on the hook path)
 UTC_STAMP = re.compile(r"\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\dZ")
+
+
+def utc_stamp_ok(value: Any) -> bool:
+    """True for a whole-second UTC `Z` stamp that is a real date (the pattern alone lets 2026-02-30 and 2026-11-31 through)."""
+    if not (isinstance(value, str) and UTC_STAMP.fullmatch(value)):
+        return False
+    try:
+        time.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return False
+    return True
 
 
 def check_value(key: str, value: Any) -> None:
@@ -119,7 +131,7 @@ class Config:
                 raise ValueError(f"{key} must be 64 lowercase hex characters (or absent)")
         for key in ("holdout_start", "holdout_end"):
             value = getattr(self, key)
-            if value is not None and not (isinstance(value, str) and UTC_STAMP.fullmatch(value)):
+            if value is not None and not utc_stamp_ok(value):
                 raise ValueError(f"{key} must be a UTC stamp like 2026-11-01T00:00:00Z (or absent)")
         if self.holdout_start is not None and self.holdout_end is not None and not self.holdout_start < self.holdout_end:
             raise ValueError("holdout_start must be before holdout_end")

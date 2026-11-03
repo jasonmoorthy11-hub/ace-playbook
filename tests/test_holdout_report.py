@@ -146,7 +146,7 @@ def test_each_exclusion_has_its_own_counter(w, capsys):
         "unmatched_session": 1, "analysed_sessions": 2, "lesson_not_assigned": 1}
     assert lesson(res, B)["n"] == {"shown": 0, "hidden": 1} and lesson(res, B)["not_assigned"] == 1
     assert lesson(res, A)["n"] == {"shown": 2, "hidden": 0}
-    assert res["config"]["min_prompts"] == 1 and hr.main(["--config", str(w.conf), "--min-prompts", "0", "--json"], now=NOW) == 0
+    assert res["config"]["min_prompts"] == 1 and hr.main(["--config", str(w.conf), "--interim-descriptive", "--min-prompts", "0", "--json"], now=NOW) == 0
     assert json.loads(capsys.readouterr().out)["counts"]["below_min_prompts"] == 0
 
 
@@ -392,3 +392,89 @@ def test_the_inferential_mode_uses_the_registered_window_and_waits_for_its_end(w
     assert hr.main(["--config", str(w.conf), "--json"], now="2026-11-09T00:00:00Z") == 0
     res = json.loads(capsys.readouterr().out)
     assert res["config"]["start"] == "2026-11-08T00:00:00Z" and res["counts"]["outside_window"] == 1
+
+
+# ------------------------------------------------------------------------------------------------ Opus round 2 minors
+IMPOSSIBLE = ("2026-11-31T00:00:00Z", "2026-02-30T00:00:00Z")
+
+
+@pytest.mark.parametrize("key", ("holdout_start", "holdout_end"))
+@pytest.mark.parametrize("bad", IMPOSSIBLE)
+def test_an_impossible_calendar_date_is_a_config_error(key, bad):
+    with pytest.raises(ValueError) as err:
+        cfgmod.from_dict({key: bad})
+    assert key in str(err.value) and bad not in str(err.value)
+
+
+@pytest.mark.parametrize("which,bad", (("holdout_end", IMPOSSIBLE[0]), ("holdout_start", IMPOSSIBLE[1])))
+def test_the_report_refuses_a_window_stamp_that_is_not_a_real_date(w, capsys, monkeypatch, which, bad):
+    """Defence in depth: a config object that got past validation (here set after the fact) still ends in one line, not a traceback."""
+    w.session("s1", FULL)
+    w.write()
+    cfg = cfgmod.from_dict({"data_dir": str(w.dir), "holdout_permutation_seed": SEED, "holdout_start": START, "holdout_end": END})
+    setattr(cfg, which, bad)
+    monkeypatch.setattr(hr.cfgmod, "load", lambda path=None: cfg)
+    for argv in ([], ["--interim-descriptive"]):
+        rc = hr.main([*argv, "--json"], now=NOW)
+        cap = capsys.readouterr()
+        assert rc == 2 and cap.out == "" and len(cap.err.strip().splitlines()) == 1 and which in cap.err and "Traceback" not in cap.err
+
+
+def test_the_confirmatory_read_refuses_any_min_prompts_but_the_registered_one(w, capsys):
+    w.session("s1", FULL)
+    rc, out, err = w.run(capsys, "--min-prompts", "3")
+    assert rc == 2 and out == "" and len(err.strip().splitlines()) == 1 and "--min-prompts" in err and "1" in err
+    assert w.run(capsys, "--min-prompts", "1")[0] == 0
+    res = w.result(capsys, "--interim-descriptive", "--min-prompts", "3")
+    assert res["config"]["min_prompts"] == 3
+
+
+def _view(dirpath, exempt):
+    """A minimal store view (the one table the report reads) in the config's own data dir."""
+    import sqlite3
+    (dirpath / "playbook.sqlite").unlink(missing_ok=True)
+    con = sqlite3.connect(dirpath / "playbook.sqlite")
+    con.execute("CREATE TABLE lessons (id TEXT, holdout_exempt INTEGER)")
+    con.executemany("INSERT INTO lessons VALUES (?, ?)", [(lid, int(lid in exempt)) for lid in (A, B, C, "L-other000")])
+    con.commit()
+    con.close()
+
+
+def test_the_confirmatory_read_refuses_when_one_of_the_three_lessons_is_exempt(w, capsys):
+    w.session("s1", FULL)
+    w.write()
+    argv = ["--config", str(w.conf), "--json"]
+    assert hr.main(argv, now=NOW, exempt=[B]) == 2
+    cap = capsys.readouterr()
+    assert cap.out == "" and len(cap.err.strip().splitlines()) == 1 and B in cap.err and A not in cap.err
+    assert hr.main(argv, now=NOW, exempt=[]) == 0
+    capsys.readouterr()
+    _view(w.dir, {C, "L-other000"})                                                       # the real read path, read-only, in the tmp data dir
+    assert hr.main(argv, now=NOW) == 2 and C in capsys.readouterr().err
+    _view(w.dir, {"L-other000"})                                                          # exempt, but not one of the three
+    assert hr.main(argv, now=NOW) == 0
+    capsys.readouterr()
+
+
+def test_an_unreadable_store_view_refuses_the_test_and_is_named_in_the_interim_mode(w, capsys):
+    w.session("s1", FULL)
+    w.write()
+    (w.dir / "playbook.sqlite").write_text("not a database")
+    argv = ["--config", str(w.conf), "--json"]
+    assert hr.main(argv, now=NOW) == 2
+    cap = capsys.readouterr()
+    assert cap.out == "" and len(cap.err.strip().splitlines()) == 1 and "store view" in cap.err
+    assert hr.main([*argv, "--interim-descriptive"], now=NOW) == 0
+    assert json.loads(capsys.readouterr().out)["lessons_exempt"] == "unreadable"
+
+
+def test_the_interim_mode_prints_the_exempt_ids_as_a_counter(w, capsys):
+    w.session("s1", FULL)
+    w.write()
+    argv = ["--config", str(w.conf), "--interim-descriptive", "--start", START, "--end", END]
+    assert hr.main([*argv, "--json"], now=NOW, exempt=[C, A]) == 0
+    assert json.loads(capsys.readouterr().out)["lessons_exempt"] == sorted([A, C])
+    assert hr.main(argv, now=NOW, exempt=[C, A]) == 0
+    assert f"lessons_exempt {', '.join(sorted([A, C]))}" in capsys.readouterr().out
+    assert hr.main(argv, now=NOW, exempt=[]) == 0
+    assert "lessons_exempt" not in capsys.readouterr().out

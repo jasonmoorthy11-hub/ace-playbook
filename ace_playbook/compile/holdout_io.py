@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from pathlib import Path
 
 from . import state as state_mod
 
@@ -29,6 +30,24 @@ def parse_ts(value: object) -> datetime | None:
 
 def nat(value: object) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+
+
+def exempt_lessons(db_path: Path) -> list[str] | None:
+    """The sorted ids of `LESSONS` flagged `holdout_exempt` in the store view at `db_path`, read-only (the injector always shows an exempt
+    lesson, so its row would look coin-shown). No view file: []. A view that cannot be read: None (the caller decides)."""
+    if not db_path.exists():
+        return []
+    from ..store import view                                  # lazy: the store pulls in sqlite3
+    ids = [lid for lid, _ in LESSONS]
+    try:
+        con = view.open_view(db_path)
+        try:
+            marks = ",".join("?" * len(ids))
+            return sorted(r["id"] for r in con.execute(f"SELECT id FROM lessons WHERE holdout_exempt = 1 AND id IN ({marks})", ids))
+        finally:
+            con.close()
+    except view.sqlite3.Error:                                # compile/ imports no sqlite3 itself (tests/test_compile_events.py)
+        return None
 
 
 def fire_counts(ev_rows: list[dict]) -> dict[tuple[str, str], int]:

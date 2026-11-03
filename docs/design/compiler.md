@@ -1705,8 +1705,11 @@ marker, exits 1, and a rerun is clean.
 - Per lesson: PRIMARY the difference in the share of sessions with the mistake (Wilson interval per arm), SECONDARY the difference in mean counts;
   `permutation_test` (0.5, 10,000 draws, config `holdout_permutation_seed`) and `holm` over the three lessons, the two families apart. The
   secondary's `shift_ci95_null_redraws` is D minus the null re-draws' quantiles, not a confidence interval; the primary has none.
-- Refuses (exit 2): the seed or the window unset; before `holdout_end` unless `--interim-descriptive` (per-arm n and means, no p-value, no interval,
+- Refuses (exit 2): the seed or the window unset; a window stamp that is not a real date (config validation says so too); `--min-prompts` other than
+  the registered 1; before `holdout_end` unless `--interim-descriptive` (per-arm n and means, no p-value, no interval,
   headed `descriptive, not the pre-registered test`). Neither module is on the hook path; neither prints text or the seed.
+- The three lessons must never be `holdout_exempt` during the registered window (the injector always shows an exempt lesson, so its row would look
+  coin-shown): the report reads the store view read-only and the confirmatory read refuses if one is; `--interim-descriptive` prints `lessons_exempt`.
 
 ### 8.x Brief (as built)
 

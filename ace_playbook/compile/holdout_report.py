@@ -27,7 +27,7 @@ from .. import config as cfgmod
 from ..canon import now_iso
 from . import labels, metrics, report
 from .arms_stats import ALPHA, RUNS, holm, permutation_test
-from .holdout_io import ARM_RATE, LESSONS, assignments, fire_counts, parse_ts
+from .holdout_io import ARM_RATE, LESSONS, assignments, exempt_lessons, fire_counts, parse_ts
 
 HEADING = "descriptive, not the pre-registered test"
 COUNTERS = ("injection_sessions", "null_session_id", "session_rows", "below_min_prompts", "outside_window", "no_start", "unmatched_injection",
@@ -117,7 +117,9 @@ def render(d: dict) -> str:
     head = d.get("heading") or f"ace-playbook holdout analysis (preregistered; permutation test, Holm across the three lessons, alpha {ALPHA})"
     cfg = d["config"]
     return "\n".join([head, f"window [{cfg['start']}, {cfg['end']}), min prompts {cfg['min_prompts']}",
-                      "counts: " + ", ".join(f"{k} {v}" for k, v in d["counts"].items()), *_cells(d)]) + "\n"
+                      "counts: " + ", ".join(f"{k} {v}" for k, v in d["counts"].items()),
+                      *([f"lessons_exempt {', '.join(d['lessons_exempt']) if isinstance(d['lessons_exempt'], list) else d['lessons_exempt']}"]
+                        if d.get("lessons_exempt") else []), *_cells(d)]) + "\n"
 
 
 def _window(args, cfg, ap) -> tuple[str, str]:
@@ -133,10 +135,26 @@ def _window(args, cfg, ap) -> tuple[str, str]:
         return args.start, args.end
     if cfg.holdout_start is None or cfg.holdout_end is None:
         raise labels.Refusal("holdout_start and holdout_end are unset in the config (UTC stamps): the registered window is required", 2)
+    for key in ("holdout_start", "holdout_end"):                                        # defence in depth: config validation already says so
+        if parse_ts(getattr(cfg, key)) is None:
+            raise labels.Refusal(f"{key} in the config is not a real UTC stamp like 2026-11-01T00:00:00Z", 2)
     return cfg.holdout_start, cfg.holdout_end
 
 
-def main(argv: list[str] | None = None, now: str | None = None) -> int:
+def _exempt(args, cfg, exempt: list[str] | None) -> list[str] | str:
+    """The registered lessons flagged `holdout_exempt` (the injector always shows them, so a row would look coin-shown): `exempt` when given
+    (tests), else the store view read-only. The test refuses on any, and on a view it cannot read; the descriptive mode reports them."""
+    ids = exempt_lessons(cfg.sqlite) if exempt is None else sorted(exempt)
+    if args.interim_descriptive:
+        return "unreadable" if ids is None else ids
+    if ids is None:
+        raise labels.Refusal("the store view cannot be read: the test needs to know no registered lesson is holdout_exempt", 2)
+    if ids:
+        raise labels.Refusal(f"lesson {', '.join(ids)} is holdout_exempt (always shown): the registered lessons must not be exempt during the window", 2)
+    return ids
+
+
+def main(argv: list[str] | None = None, now: str | None = None, exempt: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m ace_playbook.compile.holdout_report")
     ap.add_argument("--config")
     ap.add_argument("--start", help="with --interim-descriptive only: describe this window instead of the registered one")
@@ -152,8 +170,11 @@ def main(argv: list[str] | None = None, now: str | None = None) -> int:
         if cfg.holdout_permutation_seed is None:
             raise labels.Refusal("holdout_permutation_seed is unset in the config (64 lowercase hex): the analysis refuses without it", 2)
         start, end = _window(args, cfg, ap)
+        if not args.interim_descriptive and args.min_prompts != 1:
+            raise labels.Refusal("--min-prompts is registered as 1: the test cannot change it (only --interim-descriptive can)", 2)
         if not args.interim_descriptive and parse_ts(now or now_iso()) < parse_ts(end):
             raise labels.Refusal(f"the analysis day (holdout_end {end}) has not passed: only --interim-descriptive runs before it", 2)
+        exempt_ids = _exempt(args, cfg, exempt)
         inj_rows = report._read(Path(args.injections) if args.injections else cfg.injections)
         ev_rows = report._read(Path(args.events) if args.events else cfg.path(report.EVENTS))
     except labels.Refusal as exc:
@@ -163,6 +184,8 @@ def main(argv: list[str] | None = None, now: str | None = None) -> int:
         print(f"error: {'config not found' if isinstance(exc, OSError) else exc}", file=sys.stderr)
         return 2
     d = analyse(cfg, start, end, args.min_prompts, inj_rows, ev_rows, args.interim_descriptive)
+    if args.interim_descriptive:
+        d["lessons_exempt"] = exempt_ids
     print(json.dumps(d, indent=1, sort_keys=True) if args.json else render(d), end="")
     return 0
 
