@@ -535,13 +535,13 @@ Deviations from the draft, each decided before any holdout session:
   any per-arm data is seen, the operator compares the two records and classifies every added, changed or removed line as a statement of a rule or
   a mere mention, in a dated line; drift maps to a deviation only as (k) states. A paraphrase that matches no pattern is not caught
   (a limitation). The `brutal-honesty` skill description is not counted: it is the same in both arms, and a change to it is logged in
-  a dated line. The estimate is therefore the incremental effect of the injected text over this residual exposure. The draft rule is
-  amended to say so.
+  a dated line. The estimate is therefore the incremental effect of the lesson's coin (its text and the layout shift, (k)) over this
+  residual exposure. The draft rule is amended to say so.
   The subject is not blind. Of the 40 transcripts counted in (d), 34 ran in the rebuild-lab project, where the agent can read this entry
-  (the lesson ids and their rules) and sees its own block, so it can infer its arm for a lesson. The estimand is the effect of the text on
-  a subject that may be aware of the experiment, demand effects included. A split by the project directory holding the session's
-  transcript (a name ending in `-rebuild-lab` or containing `-ace-playbook`, against all others; joined by session id) is pre-stated as
-  exploratory only.
+  (the lesson ids and their rules) and sees its own block, so it can infer its arm for a lesson. The estimand is the effect of the
+  lesson's coin (its text and the layout shift, (k)) on a subject that may be aware of the experiment, demand effects included. A split by
+  the project directory holding the session's transcript (a name ending in `-rebuild-lab` or containing `-ace-playbook`, against all
+  others; joined by session id) is pre-stated as exploratory only.
 - (d) Step-0 gate (draft: "about six lessons at 2 % or more"): replaced by measured rates and a power table, stated before data. Counts
   were read on 2026-11-03 from `detector_events.jsonl`, offline tier, without the interactive filter (77 of the 79 injection rows written
   before 2026-11-03T02:10Z carry no entrypoint; the field was added that day, and the two that do are 02:02Z `cli` and 02:07Z `sdk-cli`).
@@ -584,11 +584,12 @@ Deviations from the draft, each decided before any holdout session:
 
   For each lesson the report gives the risk difference D (shown minus hidden) in the any-violation rate, a Wilson interval per arm, and
   the rate ratio as a point estimate. The test is two-sided: |D| is compared against 10,000 re-draws of the coin (`arms_stats.permutation
-  _test`, arm rate 0.5), seeded by the config key `holdout_permutation_seed`. That is an exact test of the sharp null of no effect for any
-  session; no clustering is used. The Wilson intervals treat sessions as independent and are descriptive. Holm runs over the three
-  lessons at alpha 0.05, and the count secondary is a separate family with its own Holm. No interval is reported for D or for the rate
-  ratio; the secondary JSON's `shift_ci95_null_redraws` field (D minus the quantiles of the shifted null re-draws, not a confidence
-  interval) is not reported either. The draft's clustered Poisson cross-check is dropped.
+  _test`, arm rate 0.5), seeded by the config key `holdout_permutation_seed`. That is a valid randomization test (Monte Carlo,
+  p = (1 + hits)/(n + 1), a re-draw that leaves an arm empty counts as extreme) of the sharp null stated in (k); no clustering is used.
+  The Wilson intervals treat sessions as independent and are descriptive. Holm runs over the three lessons at alpha 0.05, and the count
+  secondary is a separate family with its own Holm. No interval is reported for D or for the rate ratio; the secondary JSON's
+  `shift_ci95_null_redraws` field (D minus the quantiles of the shifted null re-draws, not a confidence interval) is not reported either.
+  The draft's clustered Poisson cross-check is dropped.
 - (h) The registered window is 2026-11-10T00:00:00Z to 2027-02-02T00:00:00Z (84 days). The report reads it from the config keys
   `holdout_start` and `holdout_end`, which it does not compare with these literals. The read counts as confirmatory only if the window
   line it prints equals them. The read runs after the first nightly sweep that completes on or after 2027-02-05; that sweep's completion
@@ -680,16 +681,19 @@ Deviations from the draft, each decided before any holdout session:
   its command. If one does not, the fill stops; the only amendment allowed is a text commit that changes the non-reproducing literal
   lines and adds one dated line giving the reason, confirmed by a docs-lens review before `holdout_start`. If that review cannot finish
   in time, the start moves: `holdout_start`, `holdout_end` and the read date shift by the same whole number of days, only those literals
-  change, and a dated line gives the reason; the 84-day length and the power table stay as written.
+  change, and a dated line gives the reason; the 84-day length and the power table stay as written. The start moves at most once; the
+  start-move commit is covered by the next docs-lens review, whose commit is R below. If the moved start cannot be met either, the
+  holdout does not start under this entry.
   Fill gate: the commit that fills (j) changes exactly the three placeholder lines, and in each only the `<...>` token, replaced by 64
   lowercase hex characters, each line staying at its line number; its parent is the commit the last review passed, and its message
-  names it. With R that reviewed parent and F the fill commit, run in bash or zsh in the ace-playbook repository (byte level: a
-  whitespace or indentation change, or a moved line, anywhere fails it):
+  contains that commit's full 40-character sha. With R that reviewed parent and F the fill commit, run in bash or zsh in the ace-playbook
+  repository (byte level: a whitespace or indentation change, or a moved line, anywhere fails it):
 
   ```bash
-  f=PREREGISTRATION.md; d=$(git diff -U0 "$R" "$F" -- "$f")
+  export GIT_NO_REPLACE_OBJECTS=1; f=PREREGISTRATION.md; d=$(git diff -U0 "$R" "$F" -- "$f")
   [ "$(git rev-parse "$F^")" = "$(git rev-parse "$R")" ] || echo "FAIL parent"
   [ "$(git rev-list --parents -n 1 "$F" | wc -w)" -eq 2 ] || echo "FAIL merge"
+  git log -1 --format=%B "$F" | grep -qF "$(git rev-parse "$R")" || echo "FAIL message"
   [ "$(git diff --numstat "$R" "$F")" = "$(printf '3\t3\t%s' "$f")" ] || echo "FAIL numstat"
   [ "$(grep -cE '^-[^-].*<[A-Z0-9_]+>' <<<"$d")" = 3 ] || echo "FAIL removed"
   [ "$(grep -cE '^\+[^+].* [0-9a-f]{64}$' <<<"$d")" = 3 ] || echo "FAIL added"
@@ -699,9 +703,10 @@ Deviations from the draft, each decided before any holdout session:
   ```
 
   It passes only when it prints nothing. (Tested before this entry on a throwaway repository: an honest fill passes; a re-indented code
-  line, a changed label, a 65-character or upper-case token, a second changed file, a moved placeholder line, a two-commit range and a
-  merge commit each fail.) A read-only docs-lens review confirms the fill. F is the last commit on this branch, its tip at the merge, and the sha256 of the
-  merged PREREGISTRATION.md equals the stamped one.
+  line, a changed label, a 65-character or upper-case token, a second changed file, a moved placeholder line, a two-commit range, a
+  merge commit, a merge hidden by `git replace --graft` and a message without R's sha each fail.) A read-only docs-lens review confirms
+  the fill. F is the last commit on this branch, its tip at the merge, and the sha256 of the merged PREREGISTRATION.md equals the
+  stamped one.
 
   Before the read, the operator checks that sha256 of each config seed equals its line above, that every live injection row's `seed_fp`
   equals the first 8 hex digits of `holdout_seed_sha256`, that every other value in the block reproduces by its command, and that the six
@@ -718,11 +723,12 @@ Deviations from the draft, each decided before any holdout session:
   them, and the operator does not inspect them for the three lessons before the read. The injector orders the pinned lines by a score
   built on those counters (`store/rank.py`), so the order of lines in the block is not frozen and can depend on outcomes (a
   limitation). It also depends on the lesson's own past coins (its counters grow only when it was shown), a carryover channel, and
-  hiding a lesson shifts the layout of the other lines in that session. The permutation test is therefore exact for the sharp null "no
+  hiding a lesson shifts the layout of the other lines in that session. The permutation test is therefore valid for the sharp null "no
   session's outcome for the lesson depends on the lesson's coins by any path (its text, the layout of the other lines, later order),
   and no session's existence or eligibility depends on them". D estimates the effect of a session's own coin on that session's outcome
   (its text and that session's layout), marginal over the lesson's coins in other sessions and over the other two lessons' coins (e);
-  carryover to later sessions is not part of D but is covered by the sharp null. With four pinned lessons and `max_global` 4, which
+  carryover to later sessions is not part of D; it makes the sharp null false, but the |D| statistic has little power against it.
+  With four pinned lessons and `max_global` 4, which
   lessons are eligible does not depend on order, and the character cap cannot bind (the whole block is 1712 of the 7000-character
   `inject_max_chars`, injection rows of 2026-11-03), so `dropped_cap` cannot depend on it either. A reflector edit to one
   of the three lessons is a text change, mapped below. A change after `holdout_start`, or a (j) mismatch found later, makes a read
@@ -735,14 +741,17 @@ Deviations from the draft, each decided before any holdout session:
   other hook in `$HOME/.claude/hooks` whose text matches a pattern of (c) or acts around ExitPlanMode (at 2026-11-03 these include
   `stop-exitplan-rejection-followup.sh`, the `rollforward-*` hooks, `subagentstop-implementer-audit.sh`, `block-unreviewed-plan-commit.sh`,
   `mark-plan-approved.sh` and `pretooluse-v83-gates.sh`); they apply in both arms. At the switch-on and again at `holdout_end` the
-  operator records the list and each listed file's sha256, in dated lines (the list includes the two scoring hooks, which (j) freezes), from:
+  operator records the list and each listed file's sha256, in dated lines (the list includes the two scoring hooks, which (j)
+  freezes), from:
 
   ```bash
-  grep -l -i -E 'pre-claim|preclaim|read.{0,30}before.{0,30}edit|read the target file|exitplanmode|exit plan mode' "$HOME"/.claude/hooks/* | xargs shasum -a 256
+  grep -l --null -i -E 'pre-claim|preclaim|read.{0,30}before.{0,30}edit|read the target file|exitplanmode|exit plan mode' \
+    "$HOME"/.claude/hooks/* | xargs -0 shasum -a 256
   ```
 
   Where a change falls under two rules (a detector source file is also in the measurement code set), the union applies: here, all
-  three. The one exception is a recorded bug fix, written before any per-arm data is seen. If the holdout is switched off before
+  three. A change recorded before the read as a bug fix (it restores the registered behaviour, applies to both arms and is confirmed
+  by a docs-lens review) is exempt from the mapping above. If the holdout is switched off before
   `holdout_end`, the sessions up to the switch-off are analysed and the result is labelled exploratory.
 - (l) Null handling (replacing the draft's paragraph, whose figures assumed another horizon and rate): if no lesson's Holm-adjusted p is
   below 0.05, the README reports "no detectable effect" with D, the per-arm rates and the power table in (d). No other outcome, window
@@ -755,8 +764,8 @@ Switch-on order: steps 1-5 before `holdout_start` (a step 1-5 after it is a devi
 2. `store exempt L-b3d1fba9` (the delta log has no exempt record yet).
 3. The operator generates `holdout_seed` and `holdout_permutation_seed` in his terminal (`secrets.token_hex(32)` each). He sets them,
    together with `holdout_seed_sha256` (required, non-empty), `holdout_rate` 0.5, `holdout_start` and `holdout_end`, in the private config.
-4. A commit on this entry, before its merge and as its last commit, replaces the three placeholders in (j) by the values the commands of (j) print and
-   passes the fill gate. The sha256 of PREREGISTRATION.md at that commit is OpenTimestamps-stamped.
+4. A commit on this entry, before its merge and as its last commit, replaces the three placeholders in (j) by the values the commands
+   of (j) print and passes the fill gate. The sha256 of PREREGISTRATION.md at that commit is OpenTimestamps-stamped.
 5. `holdout_enabled` is set to true.
 6. Day-1 check. D0 is the first `YYYY-MM-DDT00:00:00Z` after step 5 and D1 the same form one day later; the operator runs at least one
    interactive session between them. After the first nightly sweep that completes after D1, with I the data dir's `injections.jsonl`:
