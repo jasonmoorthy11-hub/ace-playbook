@@ -104,7 +104,7 @@ A `--pilot` trial id carries a `pilot.` prefix, so a pilot and a main run never 
 `--dry-run` prints the plan only. `report` scores the last record of each trial id; trials with an error or a missing stream are excluded and counted per arm.
 `report` always prints `checks` (JSON `checks`; empty Counters without records), counts only, never an outcome: `lesson_sha16` (`lesson/sha16` over the
 last record of each trial id), `binary` (`<claude_code_version>/<model>` of each attempt's init event, `None/None` without one), `model_usage` (the
-`modelUsage` keys of each result event, every attempt), `attempt_errors` (`<arm>/<error up to the first ':'>` over every record) and
+`modelUsage` keys of each result event, every attempt), `attempt_errors` (`<arm>/<error>` over every record) and
 `first_attempt_errors` (the same over attempt 1 only); `--exclude-pilot` drops the pilot records from all five (checks stay main-only).
 
 ## Not yet measured

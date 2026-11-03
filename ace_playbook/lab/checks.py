@@ -1,7 +1,7 @@
 """The report's `checks` (docs/lab.md): five Counters that show what was actually run, counts only, never an outcome.
 `lesson_sha16`: `lesson/sha16` over the last record of every trial id. `binary`: `<init claude_code_version>/<init model>` over the stream of
 EVERY attempt (a stream without an init event, or an unreadable one, is `None/None`). `model_usage`: the keys of each result event's
-`modelUsage`, one count per result event, over every attempt's stream. `attempt_errors`: `<arm>/<error up to the first ':'>` over every record
+`modelUsage`, one count per result event, over every attempt's stream. `attempt_errors`: `<arm>/<error>` over every record
 (every attempt); `first_attempt_errors`: the same over the first record of each trial id. `report --exclude-pilot` drops the pilot records
 from all five."""
 
@@ -27,8 +27,8 @@ def _stream(stream) -> tuple[str, list[str]]:
 
 
 def _error_keys(rec: dict) -> list[str]:
-    """[`<arm>/<error up to the first ':'>`] of an errored record, else []."""
-    return [f"{rec.get('arm')}/{str(rec['error']).split(':')[0]}"] if rec.get("error") else []
+    """[`<arm>/<error>`] of an errored record, else [] (every recorded error string is bounded: a subtype, an exception class name or an exit code)."""
+    return [f"{rec.get('arm')}/{rec['error']}"] if rec.get("error") else []
 
 
 def checks(trials: Path, exclude_pilot: bool = False) -> dict:

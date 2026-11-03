@@ -175,24 +175,26 @@ def test_binary_and_model_usage_read_the_stream_of_every_attempt_and_the_lesson_
 
 def test_attempt_errors_count_every_errored_record_by_arm_and_first_attempt_errors_only_attempt_one(tmp_path):
     out = checks.checks(write(tmp_path, attempts(tmp_path)))
-    assert out["attempt_errors"] == {"not_told/timeout": 1, "told/exit 2": 1, "told/result error": 1}
-    assert out["first_attempt_errors"] == {"not_told/timeout": 1, "told/result error": 1}
+    assert out["attempt_errors"] == {"not_told/timeout": 1, "told/exit 2": 1, "told/result error: error_max_turns": 1}
+    assert out["first_attempt_errors"] == {"not_told/timeout": 1, "told/result error: error_max_turns": 1}
 
 
-def test_an_error_is_cut_at_its_first_colon_and_a_clean_trial_adds_nothing(tmp_path):
+def test_an_error_is_kept_whole_and_a_clean_trial_adds_nothing(tmp_path):
     recs = [{**rec(tmp_path, 0), "error": "spawn failed: FileNotFoundError"}, {**rec(tmp_path, 1), "error": "build failed: OSError", "arm": "not_told"},
             rec(tmp_path, 2)]
     out = checks.checks(write(tmp_path, recs))
-    assert out["attempt_errors"] == {"not_told/build failed": 1, "told/spawn failed": 1} and out["first_attempt_errors"] == out["attempt_errors"]
+    assert out["attempt_errors"] == (
+        {"not_told/build failed: OSError": 1, "told/spawn failed: FileNotFoundError": 1})
+    assert out["first_attempt_errors"] == out["attempt_errors"]
 
 
 def test_exclude_pilot_keeps_the_attempt_counters_main_only(tmp_path):
     path = write(tmp_path, attempts(tmp_path))
     out = checks.checks(path, exclude_pilot=True)
-    assert out["attempt_errors"] == {"not_told/timeout": 1, "told/exit 2": 1, "told/result error": 1}
+    assert out["attempt_errors"] == {"not_told/timeout": 1, "told/exit 2": 1, "told/result error: error_max_turns": 1}
     pilot = [{**r, "pilot": True, "trial_id": "p" + r["trial_id"]} for r in attempts(tmp_path)]
     out = checks.checks(write(tmp_path, attempts(tmp_path) + pilot), exclude_pilot=True)
-    assert out["attempt_errors"] == {"not_told/timeout": 1, "told/exit 2": 1, "told/result error": 1}
+    assert out["attempt_errors"] == {"not_told/timeout": 1, "told/exit 2": 1, "told/result error: error_max_turns": 1}
     assert checks.checks(write(tmp_path, pilot), exclude_pilot=True) == {k: {} for k in out}
 
 
