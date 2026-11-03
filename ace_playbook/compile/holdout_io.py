@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from pathlib import Path
 
+from . import labels
 from . import state as state_mod
 
 LESSONS = (("L-cbfb7a57", "preclaim_audit_block"), ("L-f8a355f9", "edit_unread_turn"), ("L-93544dae", "exitplan_question_block"))
@@ -32,22 +32,38 @@ def nat(value: object) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
 
 
-def exempt_lessons(db_path: Path) -> list[str] | None:
-    """The sorted ids of `LESSONS` flagged `holdout_exempt` in the store view at `db_path`, read-only (the injector always shows an exempt
-    lesson, so its row would look coin-shown). No view file: []. A view that cannot be read: None (the caller decides)."""
-    if not db_path.exists():
-        return []
-    from ..store import view                                  # lazy: the store pulls in sqlite3
-    ids = [lid for lid, _ in LESSONS]
+def exempt_lessons(cfg, end: str) -> list[str] | None:
+    """The sorted ids of `LESSONS` that some record of the delta LOG sets `holdout_exempt` true with a `ts` before `end` (an unparseable `ts`
+    counts as before), even if a later record unexempts it: the injector always shows an exempt lesson, so its row would look coin-shown. A
+    record from `end` on does not count; the SQLite view is not read (it keeps no history). No log: []. A log that cannot be read: None."""
+    from ..store import DeltaLog, SchemaError                 # lazy: the store pulls in sqlite3, which compile/ never imports itself
+    ids, hit, t1 = {lid for lid, _ in LESSONS}, set(), parse_ts(end)
     try:
-        con = view.open_view(db_path)
-        try:
-            marks = ",".join("?" * len(ids))
-            return sorted(r["id"] for r in con.execute(f"SELECT id FROM lessons WHERE holdout_exempt = 1 AND id IN ({marks})", ids))
-        finally:
-            con.close()
-    except view.sqlite3.Error:                                # compile/ imports no sqlite3 itself (tests/test_compile_events.py)
+        records = DeltaLog(cfg.deltas, tuple(cfg.deny_terms)).read()
+    except (SchemaError, OSError):
         return None
+    for r in records:
+        if not isinstance(r, dict):
+            return None
+        f = r.get("fields") if isinstance(r.get("fields"), dict) else {}
+        t = parse_ts(r.get("ts"))
+        if r.get("lesson_id") in ids and f.get("holdout_exempt") is True and (t is None or t < t1):
+            hit.add(r["lesson_id"])
+    return sorted(hit)
+
+
+def check_exempt(cfg, end: str, descriptive: bool) -> list[str] | str:
+    """The registered lessons that were `holdout_exempt` before `end`. The test refuses on any, and on a log it cannot read; the descriptive
+    mode returns them (or "unreadable")."""
+    ids = exempt_lessons(cfg, end)
+    if descriptive:
+        return "unreadable" if ids is None else ids
+    if ids is None:
+        raise labels.Refusal("the delta log cannot be read: the test needs to know no registered lesson was holdout_exempt", 2)
+    if ids:
+        raise labels.Refusal(f"lesson {', '.join(ids)} was holdout_exempt (always shown) before holdout_end: the registered lessons must not be "
+                             "exempt during the window", 2)
+    return ids
 
 
 def fire_counts(ev_rows: list[dict]) -> dict[tuple[str, str], int]:

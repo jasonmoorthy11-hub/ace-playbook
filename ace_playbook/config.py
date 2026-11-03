@@ -6,7 +6,6 @@ import hashlib
 import json
 import os
 import re
-import time
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, ClassVar
@@ -23,19 +22,19 @@ MAX_INJECT_CHARS = 7000
 CHECK_FIELDS = ("backup_check", "brain_check", "acewatch_check", "watch_claude")   # optional scripts and binaries, type-checked only
 READER_MODEL = re.compile(r"claude-[A-Za-z0-9][A-Za-z0-9._-]*")
 SEED_HEX = re.compile(r"[0-9a-f]{64}")
-# whole-second UTC stamps, checked by pattern and then as a real calendar date with `time.strptime` (no datetime import on the hook path)
+# whole-second UTC stamps, checked by pattern and then as a real calendar date by hand (days per month, Gregorian leap years): neither
+# `datetime` nor `time.strptime` (which imports `_strptime`) is loaded on the hook path
 UTC_STAMP = re.compile(r"\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\dZ")
+MONTH_DAYS = (31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
 
 
 def utc_stamp_ok(value: Any) -> bool:
     """True for a whole-second UTC `Z` stamp that is a real date (the pattern alone lets 2026-02-30 and 2026-11-31 through)."""
     if not (isinstance(value, str) and UTC_STAMP.fullmatch(value)):
         return False
-    try:
-        time.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
-    except ValueError:
-        return False
-    return True
+    year, month, day = int(value[:4]), int(value[5:7]), int(value[8:10])
+    leap = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+    return year >= 1 and day <= MONTH_DAYS[month - 1] + (month == 2 and leap)
 
 
 def check_value(key: str, value: Any) -> None:

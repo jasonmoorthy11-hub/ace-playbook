@@ -2,6 +2,7 @@
 
 import json
 import random
+from pathlib import Path
 
 import pytest
 
@@ -279,6 +280,28 @@ def test_the_registered_window_keys_are_optional_whole_second_utc_stamps_in_orde
         assert "holdout_start" in str(err.value) and "holdout_end" in str(err.value)
 
 
+@pytest.mark.parametrize("stamp,ok", [("2024-02-29T00:00:00Z", True), ("2000-02-29T00:00:00Z", True), ("2100-02-29T00:00:00Z", False),
+                                      ("2026-02-29T00:00:00Z", False), ("2026-02-28T23:59:59Z", True), ("2026-04-31T00:00:00Z", False),
+                                      ("2026-11-31T00:00:00Z", False), ("2026-12-31T23:59:59Z", True), ("2026-01-32T00:00:00Z", False),
+                                      ("2026-00-10T00:00:00Z", False), ("2026-06-30T24:00:00Z", False), ("2026-06-30T00:00:00", False)])
+def test_the_calendar_check_knows_month_lengths_and_the_gregorian_leap_rule(stamp, ok):
+    assert cfgmod.utc_stamp_ok(stamp) is ok
+
+
+def test_loading_a_config_with_the_holdout_keys_imports_neither_datetime_nor_strptime(tmp_path):
+    """Run in a fresh interpreter: the hook path loads the config, and the holdout keys must not pull the datetime machinery in."""
+    import subprocess
+    import sys
+    conf = tmp_path / "config.json"
+    conf.write_text(json.dumps({"data_dir": str(tmp_path), "holdout_start": START, "holdout_end": END}))
+    code = ("import sys; from ace_playbook import config; before = set(sys.modules); c = config.load(sys.argv[1]); "
+            "new = set(sys.modules) - before; print(c.holdout_start, c.holdout_end, sorted(new & {'datetime', '_strptime'}))")
+    out = subprocess.run([sys.executable, "-I", "-c", code, str(conf)], capture_output=True, text=True, timeout=60,
+                         env={"PYTHONPATH": str(Path(cfgmod.__file__).parent.parent)})
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() == f"{START} {END} []"
+
+
 def test_real_start_stamps_carry_milliseconds_and_the_window_takes_both_forms(w, capsys):
     w.session("ms", FULL, start="2026-11-10T08:30:00.123Z")
     w.session("whole", FULL, start="2026-11-11T08:30:00Z")
@@ -461,41 +484,64 @@ def test_the_confirmatory_read_refuses_any_min_prompts_but_the_registered_one(w,
     assert res["config"]["min_prompts"] == 3
 
 
-def _view(dirpath, exempt):
-    """A minimal store view (the one table the report reads) in the config's own data dir."""
-    import sqlite3
-    (dirpath / "playbook.sqlite").unlink(missing_ok=True)
-    con = sqlite3.connect(dirpath / "playbook.sqlite")
-    con.execute("CREATE TABLE lessons (id TEXT, holdout_exempt INTEGER)")
-    con.executemany("INSERT INTO lessons VALUES (?, ?)", [(lid, int(lid in exempt)) for lid in (A, B, C, "L-other000")])
-    con.commit()
-    con.close()
+def _log(dirpath, *recs, raw=None):
+    """A test-made delta log in the config's own data dir (the report reads only lesson_id, ts and fields): recs = (lesson id, ts, flag)."""
+    lines = raw if raw is not None else [json.dumps({"op": "PATCH", "lesson_id": lid, "ts": ts, "fields": {"holdout_exempt": flag}}) for lid, ts, flag in recs]
+    (dirpath / "deltas.jsonl").write_text("".join(x + "\n" for x in lines))
+
+
+def _refused(capsys):
+    cap = capsys.readouterr()
+    assert cap.out == "" and len(cap.err.strip().splitlines()) == 1
+    return cap.err
 
 
 def test_the_confirmatory_read_refuses_when_one_of_the_three_lessons_is_exempt(w, capsys):
     w.session("s1", FULL)
     w.write()
     argv = ["--config", str(w.conf), "--json"]
-    assert hr.main(argv, now=NOW, exempt=[B]) == 2
-    cap = capsys.readouterr()
-    assert cap.out == "" and len(cap.err.strip().splitlines()) == 1 and B in cap.err and A not in cap.err
-    assert hr.main(argv, now=NOW, exempt=[]) == 0
+    assert hr.main(argv, now=NOW) == 0                                                    # no log at all: nothing exempt
     capsys.readouterr()
-    _view(w.dir, {C, "L-other000"})                                                       # the real read path, read-only, in the tmp data dir
-    assert hr.main(argv, now=NOW) == 2 and C in capsys.readouterr().err
-    _view(w.dir, {"L-other000"})                                                          # exempt, but not one of the three
+    _log(w.dir, (B, "2026-10-01T00:00:00Z", True))
+    assert hr.main(argv, now=NOW) == 2
+    err = _refused(capsys)
+    assert B in err and A not in err
+    _log(w.dir, ("L-other000", "2026-10-01T00:00:00Z", True), (A, "2026-10-01T00:00:00Z", False))   # exempt, but not one of the three
     assert hr.main(argv, now=NOW) == 0
     capsys.readouterr()
 
 
-def test_an_unreadable_store_view_refuses_the_test_and_is_named_in_the_interim_mode(w, capsys):
+def test_an_exempt_then_unexempt_inside_the_window_still_refuses_and_a_record_from_the_end_on_does_not(w, capsys):
     w.session("s1", FULL)
     w.write()
-    (w.dir / "playbook.sqlite").write_text("not a database")
+    argv = ["--config", str(w.conf), "--json"]
+    _log(w.dir, (C, "2026-11-10T00:00:00Z", True), (C, "2026-11-12T00:00:00Z", False))
+    assert hr.main(argv, now=NOW) == 2 and C in _refused(capsys)                         # exempt for two days of the window
+    _log(w.dir, (C, END, True), (A, "2026-12-05T00:00:00Z", True))                       # set only from holdout_end on
+    assert hr.main(argv, now=NOW) == 0
+    capsys.readouterr()
+
+
+def test_the_exempt_check_reads_the_log_not_the_view(w, capsys):
+    w.session("s1", FULL)
+    w.write()
+    assert not (w.dir / "playbook.sqlite").exists()                                      # no view file at all
+    _log(w.dir, (A, "2026-10-01T00:00:00Z", True))
+    assert hr.main(["--config", str(w.conf), "--json"], now=NOW) == 2 and A in _refused(capsys)
+    (w.dir / "playbook.sqlite").write_text("not a database")                             # a broken view is not even opened
+    _log(w.dir)
+    assert hr.main(["--config", str(w.conf), "--json"], now=NOW) == 0
+    capsys.readouterr()
+
+
+@pytest.mark.parametrize("raw", [["not json"], ['{"op": "PATCH"}', "{"], ["[1, 2]"]], ids=["text", "cut", "array"])
+def test_an_unreadable_delta_log_refuses_the_test_and_is_named_in_the_interim_mode(w, capsys, raw):
+    w.session("s1", FULL)
+    w.write()
+    _log(w.dir, raw=raw)
     argv = ["--config", str(w.conf), "--json"]
     assert hr.main(argv, now=NOW) == 2
-    cap = capsys.readouterr()
-    assert cap.out == "" and len(cap.err.strip().splitlines()) == 1 and "store view" in cap.err
+    assert "delta log" in _refused(capsys)
     assert hr.main([*argv, "--interim-descriptive"], now=NOW) == 0
     assert json.loads(capsys.readouterr().out)["lessons_exempt"] == "unreadable"
 
@@ -504,9 +550,11 @@ def test_the_interim_mode_prints_the_exempt_ids_as_a_counter(w, capsys):
     w.session("s1", FULL)
     w.write()
     argv = ["--config", str(w.conf), "--interim-descriptive", "--start", START, "--end", END]
-    assert hr.main([*argv, "--json"], now=NOW, exempt=[C, A]) == 0
+    _log(w.dir, (C, "2026-10-01T00:00:00Z", True), (A, "2026-11-10T00:00:00Z", True), (A, "2026-11-11T00:00:00Z", False))
+    assert hr.main([*argv, "--json"], now=NOW) == 0
     assert json.loads(capsys.readouterr().out)["lessons_exempt"] == sorted([A, C])
-    assert hr.main(argv, now=NOW, exempt=[C, A]) == 0
+    assert hr.main(argv, now=NOW) == 0
     assert f"lessons_exempt {', '.join(sorted([A, C]))}" in capsys.readouterr().out
-    assert hr.main(argv, now=NOW, exempt=[]) == 0
+    _log(w.dir)
+    assert hr.main(argv, now=NOW) == 0
     assert "lessons_exempt" not in capsys.readouterr().out

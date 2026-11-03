@@ -29,7 +29,7 @@ from .. import config as cfgmod
 from ..canon import now_iso
 from . import labels, metrics, report
 from .arms_stats import ALPHA, RUNS, holm, permutation_test
-from .holdout_io import ARM_RATE, LESSONS, assignments, exempt_lessons, fire_counts, parse_ts
+from .holdout_io import ARM_RATE, LESSONS, assignments, check_exempt, fire_counts, parse_ts
 
 HEADING = "descriptive, not the pre-registered test"
 COUNTERS = ("injection_sessions", "null_session_id", "not_interactive", "session_rows", "below_min_prompts", "outside_window", "no_start",
@@ -144,20 +144,7 @@ def _window(args, cfg, ap) -> tuple[str, str]:
     return cfg.holdout_start, cfg.holdout_end
 
 
-def _exempt(args, cfg, exempt: list[str] | None) -> list[str] | str:
-    """The registered lessons flagged `holdout_exempt` (the injector always shows them, so a row would look coin-shown): `exempt` when given
-    (tests), else the store view read-only. The test refuses on any, and on a view it cannot read; the descriptive mode reports them."""
-    ids = exempt_lessons(cfg.sqlite) if exempt is None else sorted(exempt)
-    if args.interim_descriptive:
-        return "unreadable" if ids is None else ids
-    if ids is None:
-        raise labels.Refusal("the store view cannot be read: the test needs to know no registered lesson is holdout_exempt", 2)
-    if ids:
-        raise labels.Refusal(f"lesson {', '.join(ids)} is holdout_exempt (always shown): the registered lessons must not be exempt during the window", 2)
-    return ids
-
-
-def main(argv: list[str] | None = None, now: str | None = None, exempt: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, now: str | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m ace_playbook.compile.holdout_report")
     ap.add_argument("--config")
     ap.add_argument("--start", help="with --interim-descriptive only: describe this window instead of the registered one")
@@ -177,7 +164,7 @@ def main(argv: list[str] | None = None, now: str | None = None, exempt: list[str
             raise labels.Refusal("--min-prompts is registered as 1: the test cannot change it (only --interim-descriptive can)", 2)
         if not args.interim_descriptive and parse_ts(now or now_iso()) < parse_ts(end):
             raise labels.Refusal(f"the analysis day (holdout_end {end}) has not passed: only --interim-descriptive runs before it", 2)
-        exempt_ids = _exempt(args, cfg, exempt)
+        exempt_ids = check_exempt(cfg, end, args.interim_descriptive)
         inj_rows = report._read(Path(args.injections) if args.injections else cfg.injections)
         ev_rows = report._read(Path(args.events) if args.events else cfg.path(report.EVENTS))
     except labels.Refusal as exc:

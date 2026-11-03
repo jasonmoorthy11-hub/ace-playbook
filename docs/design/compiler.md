@@ -1712,7 +1712,10 @@ marker, exits 1, and a rerun is clean.
   the registered 1; before `holdout_end` unless `--interim-descriptive` (per-arm n and means, no p-value, no interval,
   headed `descriptive, not the pre-registered test`). Neither module is on the hook path; neither prints text or the seed.
 - The three lessons must never be `holdout_exempt` during the registered window (the injector always shows an exempt lesson, so its row would look
-  coin-shown): the report reads the store view read-only and the confirmatory read refuses if one is; `--interim-descriptive` prints `lessons_exempt`.
+  coin-shown): the report reads the delta LOG (not the SQLite view, which keeps no history) and the confirmatory read refuses (exit 2, one line
+  naming the id) if any record sets `holdout_exempt` true on one of them with a `ts` before `holdout_end`, even if a later record unexempts it, or
+  if the log cannot be read; a record from `holdout_end` on does not count. `--interim-descriptive` prints `lessons_exempt` (the same ids, or
+  `unreadable`). The config's calendar check of the window stamps is by hand (month lengths, Gregorian leap years): no `datetime` import on the hook path.
 
 ### 8.x Brief (as built)
 
