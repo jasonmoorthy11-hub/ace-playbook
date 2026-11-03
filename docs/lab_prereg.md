@@ -39,8 +39,9 @@ described in `docs/lab.md`; this file fixes the confirmatory analysis. A lab num
   that hash; any other output is a STOP.
 - Models: `claude-sonnet-5-5` and `claude-opus-5-5`, by these exact ids. Plan quota only: the CLI login, no API key (the lab removes
   `ANTHROPIC_API_KEY`), `--max-budget-usd 0.50` per trial as a cap. The served model is checked, not assumed: `checks` (Safety below)
-  must show only `2.1.317/<model id>` as the init binary/model and only `<model id>` in `modelUsage`. Third pilot (2026-11-0x, `--pilot`,
-  six tasks per model): FILL_PILOT3.
+  must show only `2.1.317/<model id>` as the init binary/model and only `<model id>` in `modelUsage`. Third pilot (2026-11-03, `--pilot`,
+  six tasks per model, at the registered commit): 24 trials, 0 errors, every STOP check above as registered; per-trial cost at most $0.090
+  (Sonnet) and $0.338 (Opus, an exitplan task) against the $0.50 cap; the longest trial 22 s against the 600 s timeout.
 
 ## Confirmatory design (per model)
 | lesson | outcome per trial (any = 1 or more) | tasks | reps | trials per arm |
@@ -85,7 +86,9 @@ Scope of the claim: the result holds for these 8 tasks with these prompts, on th
 clustered in 8 fixed tasks (13 reps per task and arm) and Fisher treats them as independent, so the p value does not carry to other
 tasks; this is a stated limitation. The primary row's `per_task` table (task x arm: trials with a violation / trials) is reported as
 registered, descriptive, no test.
-Secondary, descriptive, no test: mean violations per trial, `attempted` edits (edit_unread), cost and turns, `permission_denials`,
+Secondary, descriptive, no test: mean violations per trial, `attempted` edits (edit_unread), cost and turns per trial (from trials.jsonl:
+the cost is the LAST entry of a record's `costs`, since `total_cost_usd` is cumulative over the session; the turns are the sum of
+`num_turns`), `permission_denials`,
 exclusions per arm (`excluded`: errored after the re-runs, or a missing stream), first-attempt and all-attempt errors per arm.
 Arm order: the trial list is completely randomised by the seed, not blocked, so the arms need not balance over time (the Opus seed puts
 60 of 104 TOLD trials of a lesson in the first half), and the two lessons of a model share the seed and the list length, so their arm
