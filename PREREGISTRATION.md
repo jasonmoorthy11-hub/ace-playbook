@@ -606,7 +606,7 @@ Deviations from the draft, each decided before any holdout session:
   the config values `inject_mode`, `holdout_rate`, `max_global` and `inject_max_chars`, the edited CLAUDE.md, the pinned set (with its
   exempt flags), and the measurement code set. Every value known before the switch-on is written here now (computed 2026-11-03 at main
   372ec18, whose measurement code is byte-identical to 2c88d58); the pinned-set line is the state expected after step 2 (before it the
-  command prints `L-b3d1fba9:active:global:0`); only the two seed hashes and the post-edit CLAUDE.md hash are placeholders:
+  same line shows `L-b3d1fba9:active:global:0`); only the two seed hashes and the post-edit CLAUDE.md hash are placeholders:
 
   ```text
   holdout_seed_sha256                      <HOLDOUT_SEED_SHA256>
@@ -689,6 +689,7 @@ Deviations from the draft, each decided before any holdout session:
   ```bash
   f=PREREGISTRATION.md; d=$(git diff -U0 "$R" "$F" -- "$f")
   [ "$(git rev-parse "$F^")" = "$(git rev-parse "$R")" ] || echo "FAIL parent"
+  [ "$(git rev-list --parents -n 1 "$F" | wc -w)" -eq 2 ] || echo "FAIL merge"
   [ "$(git diff --numstat "$R" "$F")" = "$(printf '3\t3\t%s' "$f")" ] || echo "FAIL numstat"
   [ "$(grep -cE '^-[^-].*<[A-Z0-9_]+>' <<<"$d")" = 3 ] || echo "FAIL removed"
   [ "$(grep -cE '^\+[^+].* [0-9a-f]{64}$' <<<"$d")" = 3 ] || echo "FAIL added"
@@ -698,8 +699,8 @@ Deviations from the draft, each decided before any holdout session:
   ```
 
   It passes only when it prints nothing. (Tested before this entry on a throwaway repository: an honest fill passes; a re-indented code
-  line, a changed label, a 65-character or upper-case token, a second changed file, a moved placeholder line and a two-commit range each
-  fail.) A read-only docs-lens review confirms the fill. F is the last commit on this branch, its tip at the merge, and the sha256 of the
+  line, a changed label, a 65-character or upper-case token, a second changed file, a moved placeholder line, a two-commit range and a
+  merge commit each fail.) A read-only docs-lens review confirms the fill. F is the last commit on this branch, its tip at the merge, and the sha256 of the
   merged PREREGISTRATION.md equals the stamped one.
 
   Before the read, the operator checks that sha256 of each config seed equals its line above, that every live injection row's `seed_fp`
@@ -718,9 +719,11 @@ Deviations from the draft, each decided before any holdout session:
   built on those counters (`store/rank.py`), so the order of lines in the block is not frozen and can depend on outcomes (a
   limitation). It also depends on the lesson's own past coins (its counters grow only when it was shown), a carryover channel, and
   hiding a lesson shifts the layout of the other lines in that session. The permutation test is therefore exact for the sharp null "no
-  session's outcome for the lesson depends on the lesson's coins by any path (its text, the layout of the other lines, later order)",
-  and the estimand is the total effect of the lesson's coin through all of these. With four pinned lessons and `max_global` 4, which lessons are
-  eligible does not depend on order, and the character cap cannot bind (the whole block is 1712 of the 7000-character
+  session's outcome for the lesson depends on the lesson's coins by any path (its text, the layout of the other lines, later order),
+  and no session's existence or eligibility depends on them". D estimates the effect of a session's own coin on that session's outcome
+  (its text and that session's layout), marginal over the lesson's coins in other sessions and over the other two lessons' coins (e);
+  carryover to later sessions is not part of D but is covered by the sharp null. With four pinned lessons and `max_global` 4, which
+  lessons are eligible does not depend on order, and the character cap cannot bind (the whole block is 1712 of the 7000-character
   `inject_max_chars`, injection rows of 2026-11-03), so `dropped_cap` cannot depend on it either. A reflector edit to one
   of the three lessons is a text change, mapped below. A change after `holdout_start`, or a (j) mismatch found later, makes a read
   exploratory as follows, mapped in advance: a scoring hook or its settings entry → the lesson it scores; a detector, its mode or its
@@ -732,11 +735,10 @@ Deviations from the draft, each decided before any holdout session:
   other hook in `$HOME/.claude/hooks` whose text matches a pattern of (c) or acts around ExitPlanMode (at 2026-11-03 these include
   `stop-exitplan-rejection-followup.sh`, the `rollforward-*` hooks, `subagentstop-implementer-audit.sh`, `block-unreviewed-plan-commit.sh`,
   `mark-plan-approved.sh` and `pretooluse-v83-gates.sh`); they apply in both arms. At the switch-on and again at `holdout_end` the
-  operator records the list and each listed file's sha256, in dated lines, from:
+  operator records the list and each listed file's sha256, in dated lines (the list includes the two scoring hooks, which (j) freezes), from:
 
   ```bash
-  grep -l -i -E 'pre-claim|preclaim|read.{0,30}before.{0,30}edit|read the target file|exitplanmode|exit plan mode' "$HOME"/.claude/hooks/*
-  shasum -a 256 <each listed file>
+  grep -l -i -E 'pre-claim|preclaim|read.{0,30}before.{0,30}edit|read the target file|exitplanmode|exit plan mode' "$HOME"/.claude/hooks/* | xargs shasum -a 256
   ```
 
   Where a change falls under two rules (a detector source file is also in the measurement code set), the union applies: here, all
@@ -753,7 +755,7 @@ Switch-on order: steps 1-5 before `holdout_start` (a step 1-5 after it is a devi
 2. `store exempt L-b3d1fba9` (the delta log has no exempt record yet).
 3. The operator generates `holdout_seed` and `holdout_permutation_seed` in his terminal (`secrets.token_hex(32)` each). He sets them,
    together with `holdout_seed_sha256` (required, non-empty), `holdout_rate` 0.5, `holdout_start` and `holdout_end`, in the private config.
-4. A commit on this entry, before its merge and as its last commit, replaces the three placeholders in (j) by the commands of (j) and
+4. A commit on this entry, before its merge and as its last commit, replaces the three placeholders in (j) by the values the commands of (j) print and
    passes the fill gate. The sha256 of PREREGISTRATION.md at that commit is OpenTimestamps-stamped.
 5. `holdout_enabled` is set to true.
 6. Day-1 check. D0 is the first `YYYY-MM-DDT00:00:00Z` after step 5 and D1 the same form one day later; the operator runs at least one
