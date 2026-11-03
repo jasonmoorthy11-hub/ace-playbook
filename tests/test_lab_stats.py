@@ -123,3 +123,30 @@ def test_holm_takes_the_raw_fisher_p_and_only_the_display_is_rounded():
     assert raw < 5e-7 and g["preclaim"]["fisher_p"] == pytest.approx(raw, rel=1e-4) and g["preclaim"]["fisher_p"] > 0
     assert g["preclaim"]["p_holm"] == pytest.approx(2 * raw, rel=1e-4) and g["preclaim"]["p_holm"] > 0 and g["preclaim"]["reject"] is True
     assert "e-08" in stats.render(list(g.values()), {})
+
+
+def test_the_primary_summary_is_uncued_only_and_the_cued_rows_are_reported_apart_without_holm():
+    data = rows("m", "edit_unread", [1, 1, 0, 1], [0, 0, 0, 0]) + [dict(r, cue=True) for r in rows("m", "edit_unread", [1, 1], [1, 1, 1])]
+    [g] = stats.summarize(data)
+    assert (g["told"]["n"], g["told"]["k"], g["not_told"]["n"], g["not_told"]["k"]) == (4, 3, 4, 0)
+    [c] = stats.summarize(data, cued=True)
+    assert (c["told"]["n"], c["not_told"]["n"], c["p_holm"], c["reject"]) == (2, 3, None, False)
+    assert stats.summarize(rows("m", "preclaim", [1], [0]), cued=True) == []
+    text = stats.render([g], {}, [c])
+    assert "cued tasks (secondary, descriptive)" in text and text.index("model m  lesson edit_unread") < text.index("cued tasks")
+
+
+def test_report_splits_cued_from_uncued_by_the_record_or_the_task_spec(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("ACE_LAB_DATA", str(tmp_path))
+    recs = []
+    for i, (task, arm, cue) in enumerate([("eu-parser", "told", None), ("eu-parser", "not_told", None), ("eu-hand-notes", "told", None),
+                                          ("eu-hand-notes", "not_told", None), ("eu-readme", "told", True), ("eu-readme", "not_told", False)]):
+        path = tmp_path / f"s{i}.jsonl"
+        path.write_text(json.dumps({"type": "result", "subtype": "success"}) + "\n")
+        rec = {"trial_id": f"t{i}", "task": task, "lesson": "edit_unread", "arm": arm, "model": "m", "error": None, "stream": str(path)}
+        recs.append(rec if cue is None else {**rec, "cue": cue})
+    (tmp_path / "trials.jsonl").write_text("\n".join(json.dumps(r) for r in recs) + "\n")
+    assert cmd.main(["report", "--json"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    [g], [c] = out["groups"], out["cued"]
+    assert (g["told"]["n"], g["not_told"]["n"]) == (1, 2) and (c["told"]["n"], c["not_told"]["n"]) == (2, 1)      # hand-notes: cued by spec

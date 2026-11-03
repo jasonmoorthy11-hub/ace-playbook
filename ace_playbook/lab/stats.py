@@ -11,7 +11,7 @@ from pathlib import Path
 
 from ..compile.arms_stats import ALPHA, holm
 from ..compile.metrics import wilson
-from . import score
+from . import score, tasks
 
 ARMS = ("told", "not_told")
 
@@ -36,8 +36,10 @@ def _arm(rows: list[dict]) -> dict:
             "mean_violations": round(sum(r["violations"] for r in rows) / n, 4) if n else None}
 
 
-def summarize(rows: list[dict]) -> list[dict]:
-    """rows: {model, lesson, arm, violations, any}. One group per (model, lesson), Holm-adjusted across the lessons of a model."""
+def summarize(rows: list[dict], cued: bool = False) -> list[dict]:
+    """rows: {model, lesson, arm, violations, any, cue?}. One group per (model, lesson), Holm-adjusted across the lessons of a model.
+    The primary summary takes the uncued rows only; `cued=True` summarises the cued rows apart (descriptive: no Holm, never a rejection)."""
+    rows = [r for r in rows if bool(r.get("cue")) == cued]
     keys = sorted({(r["model"], r["lesson"]) for r in rows})
     groups, raw = [], {}
     for model, lesson in keys:
@@ -48,7 +50,7 @@ def summarize(rows: list[dict]) -> list[dict]:
         raw[model, lesson] = p                                                  # Holm runs on the raw p; only the display is rounded
         groups.append({"model": model, "lesson": lesson, "told": told, "not_told": not_told, "diff": diff,
                        "fisher_p": None if p is None else _show(p), "p_holm": None, "reject": False})
-    for model in sorted({g["model"] for g in groups}):
+    for model in sorted({g["model"] for g in groups} if not cued else ()):
         same = [g for g in groups if g["model"] == model]
         for g, (adj, rej) in zip(same, holm([raw[model, g["lesson"]] for g in same])):
             g["p_holm"], g["reject"] = _show(adj), rej and raw[model, g["lesson"]] is not None
@@ -76,12 +78,30 @@ def load_rows(trials: Path, exclude_pilot: bool = False) -> tuple[list[dict], di
             key = f"{rec.get('model')}/{rec.get('lesson')}/{rec.get('arm')}"
             excluded[key] = excluded.get(key, 0) + 1
             continue
-        rows.append({"model": rec["model"], "lesson": rec["lesson"], "arm": rec["arm"], **sc})
+        rows.append({"model": rec["model"], "lesson": rec["lesson"], "arm": rec["arm"], "cue": _cued(rec), **sc})
     return rows, excluded
 
 
-def render(groups: list[dict], excluded: dict) -> str:
+def _cued(rec: dict) -> bool:
+    """The record's own `cue`, else the task spec's; an unknown task is uncued."""
+    if "cue" in rec:
+        return bool(rec["cue"])
+    try:
+        return tasks.get(rec["task"]).cue
+    except KeyError:
+        return False
+
+
+def render(groups: list[dict], excluded: dict, cued: list[dict] = ()) -> str:
     out = []
+    for title, part in (("", groups), ("cued tasks (secondary, descriptive)", cued)):
+        out += _render(part, title)
+    out += [f"excluded (error or missing stream) {k}: {v}" for k, v in sorted(excluded.items())]
+    return "\n".join(out) if out else "no scored trials"
+
+
+def _render(groups: list[dict], title: str) -> list[str]:
+    out = [title] if title and groups else []
     for g in groups:
         out.append(f"model {g['model']}  lesson {g['lesson']}")
         for arm in ARMS:
@@ -89,5 +109,4 @@ def render(groups: list[dict], excluded: dict) -> str:
             out.append(f"  {arm:<9} n={a['n']:<4} any={a['k']:<4} rate={a['rate']} wilson95={a['wilson95']} mean_violations={a['mean_violations']}")
         out.append(f"  diff(told - not_told)={g['diff']}  fisher p={g['fisher_p']}  holm p={g['p_holm']}  "
                    f"{'REJECT' if g['reject'] else 'no rejection'} at {ALPHA}")
-    out += [f"excluded (error or missing stream) {k}: {v}" for k, v in sorted(excluded.items())]
-    return "\n".join(out) if out else "no scored trials"
+    return out

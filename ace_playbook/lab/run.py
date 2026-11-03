@@ -83,7 +83,7 @@ def trial(task: tasks.Task, arm: str, model: str, lesson_text: str, run_dir: Pat
     tid, run_dir, data_dir = trial_id(model, task.id, arm, rep, pilot), Path(run_dir), Path(data_dir)
     streams = private_dir(private_dir(data_dir) / "streams")
     stream = streams / f"{tid}.jsonl"
-    rec = {"trial_id": tid, "task": task.id, "lesson": task.lesson, "arm": arm, "model": model, "rep": rep, "pilot": pilot,
+    rec = {"trial_id": tid, "task": task.id, "lesson": task.lesson, "arm": arm, "model": model, "rep": rep, "pilot": pilot, "cue": task.cue,
            "lesson_sha16": hashlib.sha256(lesson_text.encode()).hexdigest()[:16], "started": now_iso(), "exit_code": None, "results": [],
            "num_turns": [], "costs": [], "permission_denials": 0, "is_error": False, "stream": str(stream), "error": None}
     private_dir(run_dir)

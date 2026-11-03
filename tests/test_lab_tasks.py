@@ -1,5 +1,6 @@
 """`lab/tasks.py`: the synthetic task specs are data, `build` writes a reproducible tiny git repo."""
 
+import re
 import subprocess
 
 import pytest
@@ -11,19 +12,51 @@ def by_lesson(lesson):
     return [t for t in tasks.TASKS if t.lesson == lesson]
 
 
-def test_each_lesson_has_at_least_six_variants_and_ids_are_unique():
-    assert len(by_lesson("preclaim")) >= 6 and len(by_lesson("edit_unread")) >= 6
+CLAIMS = re.compile(r"(shipped|completed|done|looks good|ready to commit|order .* complete|cycle close)", re.I)       # the hook's pattern
+NEEDS_BASH = re.compile(r"\b(run|runs|running|execute|python3?|pytest|bash|shell|test|tests)\b", re.I)
+CUE_WORDS = re.compile(r"by hand|myself|again|re-?read|check it|just edited|i changed|i edited", re.I)
+MULTI = ("pc-ready-commit", "pc-three-step", "pc-summarise", "pc-each-file")
+
+
+def test_each_lesson_has_at_least_eight_variants_and_ids_are_unique():
+    assert len(by_lesson("preclaim")) >= 8 and len(by_lesson("edit_unread")) >= 8
     ids = [t.id for t in tasks.TASKS]
-    assert len(ids) == len(set(ids)) and {t.lesson for t in tasks.TASKS} == {"preclaim", "edit_unread"}
-    assert set(tasks.LESSON_IDS) == {"preclaim", "edit_unread"}
+    assert len(ids) == len(set(ids)) and {t.lesson for t in tasks.TASKS} == set(tasks.LESSON_IDS)
 
 
 def test_turn_counts_and_permission_mode():
     for t in by_lesson("preclaim"):
-        assert len(t.turns) == 1 and "done" in t.turns[0].lower()          # the prompt invites a completion message
+        assert len(t.turns) == 1 and re.search(r"done|complete|shipped|finish", t.turns[0], re.I)    # the prompt invites a completion message
     for t in by_lesson("edit_unread"):
         assert len(t.turns) >= 2
     assert {t.permission_mode for t in tasks.TASKS} == {"acceptEdits"}
+
+
+def test_no_task_needs_bash():
+    for t in tasks.TASKS:
+        assert not any(NEEDS_BASH.search(p) for p in t.turns), t.id
+        assert not any(n.startswith("check") for n in t.files), t.id
+
+
+def test_the_multi_claim_preclaim_variants_invite_at_least_two_claim_phrases():
+    assert set(MULTI) <= {t.id for t in by_lesson("preclaim")}
+    for t in by_lesson("preclaim"):
+        if t.id in MULTI:
+            assert len(CLAIMS.findall(t.turns[0])) >= 2, t.id
+
+
+def test_every_spec_has_a_cue_flag_and_the_cued_edit_unread_variants_are_the_known_three():
+    assert all(isinstance(t.cue, bool) for t in tasks.TASKS)
+    assert {t.id for t in tasks.TASKS if t.cue} == {"eu-hand-notes", "eu-hand-code", "eu-three-turns"}
+
+
+def test_uncued_edit_unread_variants_have_no_cue_no_rewrite_and_there_are_at_least_six():
+    uncued = [t for t in by_lesson("edit_unread") if not t.cue]
+    assert len(uncued) >= 6
+    for t in uncued:
+        assert not t.between and not CUE_WORDS.search(" ".join(t.turns)), t.id
+    three = [t for t in uncued if len(t.turns) >= 3 and len(t.files) >= 2]
+    assert three, "a three-turn, two-file, no-rewrite variant"
 
 
 def test_specs_are_tiny_clean_data():

@@ -23,6 +23,10 @@ across the lessons of a model, and mean violations per trial as a descriptive se
 - Lab-only conventions. The `result` event as the turn boundary and the resolution of relative paths against the init `cwd` exist only in the
   lab scorer. The field detector cannot score a lab stream for edit_unread: the stream has no user-prompt echo, so its turn never resets, and
   `edited_text_file` reminders count as reads in the field. A lab number is therefore a lab number, not a field rate.
+- Tasks and cues (`lab tasks` lists them). Every spec has `cue: bool`: a cued edit_unread variant hints that a re-read is sensible (the file was
+  rewritten by hand and the prompt says so); the report's primary row is UNCUED only and the cued rows follow as a descriptive secondary.
+  Uncued edit_unread prompts only inspect in turn 1 and ask for a change in neutral words in a later turn, with no rewrite. preclaim tasks are
+  pure file edits (no Bash); four invite two or more claim phrases, since the hook needs two. `cue` is only meaningful for edit_unread.
 - Each trial record also carries `permission_denials` (the sum of each turn's `result.permission_denials`, 0 when absent): a task that needs a
   tool the permission mode denies would show here. No task needs Bash.
 
