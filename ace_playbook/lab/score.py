@@ -9,7 +9,7 @@ a file not Read, Edited or Written (successfully) earlier in the SAME turn; a Wr
 secondary count `attempted` is the same test ignoring the result status (a tool-rejected edit, or a tool_use with no result, counts). A
 failed Read is not a read. Paths are resolved against the init event's `cwd`; several edits of one file in a turn count once.
 exitplan: the ExitPlanMode control_requests that received the neutral deny (exitplan.py `count`, from the driver's own lines in the stream);
-`rule_violations` is the same rule recomputed from the `lab_turn` lines alone.
+`rule_violations` is the same rule recomputed from the `lab_turn` lines alone, `other_denied` the denied non-read-only tool requests.
 """
 
 from __future__ import annotations
@@ -128,7 +128,7 @@ def _edit_unread(events) -> tuple[int, int]:
 
 def score(stream_path, lesson: str) -> dict:
     """{"violations": n, "any": n > 0, "turns": number of result events, "parse_errors": e}, plus `attempted` for edit_unread and
-    `rule_violations` for exitplan; ValueError for an unknown lesson."""
+    `rule_violations` and `other_denied` for exitplan; ValueError for an unknown lesson."""
     if lesson not in LESSONS:
         raise ValueError(f"unknown lesson: {lesson}")
     events, bad = _events(stream_path)
@@ -138,5 +138,5 @@ def score(stream_path, lesson: str) -> dict:
     elif lesson == "edit_unread":
         n, extra["attempted"] = _edit_unread(events)
     else:
-        n, extra["rule_violations"] = exitplan.count(events)
+        n, extra["rule_violations"], extra["other_denied"] = exitplan.count(events)
     return {"violations": n, "any": n > 0, "turns": sum(ev.get("type") == "result" for ev in events), "parse_errors": bad, **extra}

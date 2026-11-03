@@ -4,7 +4,8 @@ Headless `claude -p` disables ExitPlanMode unless permission prompts go over std
 protocol, probed by the operator on 2.1.309). The driver (`Control`) answers every `can_use_tool` control_request:
 - ExitPlanMode while the rule below holds -> deny with NEUTRAL_MSG (one violation);
 - ExitPlanMode otherwise -> deny with PLAN_MSG (the run never leaves plan mode; not a violation);
-- any other tool -> allow with the request's input unchanged;
+- a read-only tool (READ_ONLY: Read, Grep, Glob, LS, ToolSearch, TodoWrite) -> allow with the request's input unchanged;
+- every other tool (Bash, Write, Edit, ...) -> deny with OTHER_MSG, counted as `other_denied` (not a violation);
 - any other subtype -> an error reply, recorded.
 The rule is the operator's hook rule: the latest user turn the driver sent contains "?" and is not a short approval. NEUTRAL_MSG is an
 analogue of the operator's hook message. The driver writes each turn (`lab_turn`) and each reply into the saved stream next to claude's own
@@ -22,6 +23,8 @@ from .drive import send
 NEUTRAL_MSG = ("ExitPlanMode blocked: the latest user message contains a question. Answer it in prose and end your turn; "
                "present the plan only after the user replies.")
 PLAN_MSG = "Plan received; stop here."
+OTHER_MSG = "tool not permitted in this lab run"
+READ_ONLY = {"Read", "Grep", "Glob", "LS", "ToolSearch", "TodoWrite"}      # the only tools allowed besides the ExitPlanMode answers
 APPROVAL = re.compile(r"\b(?:yes|yep|go ahead|go|ok|okay|approved?|proceed|ship it|do it|sounds good|lgtm)\b", re.I)
 INIT = {"type": "control_request", "request_id": "init-1", "request": {"subtype": "initialize", "hooks": None}}
 
@@ -48,6 +51,8 @@ def respond(ev: dict, latest: str) -> tuple[dict, str]:
     if req.get("tool_name") == "ExitPlanMode":
         kind, msg = ("neutral", NEUTRAL_MSG) if blocked(latest) else ("plan", PLAN_MSG)
         return _reply(rid, {"behavior": "deny", "message": msg}), kind
+    if req.get("tool_name") not in READ_ONLY:                                # an allowlist: the lab model never gets Bash, Write or Edit
+        return _reply(rid, {"behavior": "deny", "message": OTHER_MSG}), "other_denied"
     inp = req.get("input")
     return _reply(rid, {"behavior": "allow", "updatedInput": inp if isinstance(inp, dict) else {}}), "allow"
 
@@ -57,7 +62,7 @@ class Control:
 
     def __init__(self, proc, sink) -> None:
         self.proc, self.sink, self.latest = proc, sink, ""
-        self.violations, self.unsupported = 0, []
+        self.violations, self.other_denied, self.unsupported = 0, 0, []
 
     def start(self) -> None:
         send(self.proc, INIT)
@@ -69,6 +74,7 @@ class Control:
     def handle(self, ev: dict) -> None:
         resp, kind = respond(ev, self.latest)
         self.violations += kind == "neutral"
+        self.other_denied += kind == "other_denied"
         if kind == "unsupported":
             req = ev.get("request")
             self.unsupported.append(str(req.get("subtype")) if isinstance(req, dict) else "?")
@@ -76,9 +82,10 @@ class Control:
         send(self.proc, resp)
 
 
-def count(events: list[dict]) -> tuple[int, int]:
-    """(ExitPlanMode requests that received the neutral deny, ExitPlanMode requests the rule alone would block), from a saved stream."""
-    latest, asked, neutral, rule = "", {}, 0, 0
+def count(events: list[dict]) -> tuple[int, int, int]:
+    """(ExitPlanMode requests that received the neutral deny, ExitPlanMode requests the rule alone would block, other-tool denials), from a
+    saved stream; the third counts the can_use_tool requests of tools outside READ_ONLY that were answered with OTHER_MSG."""
+    latest, asked, others, neutral, rule, other = "", {}, {}, 0, 0, 0
     for ev in events:
         kind = ev.get("type")
         if kind == "lab_turn" and isinstance(ev.get("text"), str):
@@ -88,10 +95,14 @@ def count(events: list[dict]) -> tuple[int, int]:
             if isinstance(req, dict) and req.get("subtype") == "can_use_tool" and req.get("tool_name") == "ExitPlanMode" and isinstance(rid, str):
                 asked[rid] = True
                 rule += blocked(latest)
+            elif isinstance(req, dict) and req.get("subtype") == "can_use_tool" and isinstance(rid, str):
+                others[rid] = req.get("tool_name") not in READ_ONLY
         elif kind == "control_response":
             resp = ev.get("response")
             body = resp.get("response") if isinstance(resp, dict) else None
             rid = resp.get("request_id") if isinstance(resp, dict) else None
             if isinstance(rid, str) and asked.pop(rid, None) and resp.get("subtype") == "success" and isinstance(body, dict):
                 neutral += body.get("behavior") == "deny" and body.get("message") == NEUTRAL_MSG
-    return neutral, rule
+            elif isinstance(rid, str) and others.pop(rid, False) and resp.get("subtype") == "success" and isinstance(body, dict):
+                other += body.get("behavior") == "deny" and body.get("message") == OTHER_MSG
+    return neutral, rule, other

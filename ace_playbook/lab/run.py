@@ -115,7 +115,7 @@ def trial(task: tasks.Task, arm: str, model: str, lesson_text: str, run_dir: Pat
         try:
             rec["error"] = drive.drive(proc, task, work, lines, deadline, rec, ctl)
             if ctl is not None:
-                rec["exitplan_violations"], rec["unsupported_control"] = ctl.violations, ctl.unsupported
+                rec["exitplan_violations"], rec["other_denied"], rec["unsupported_control"] = ctl.violations, ctl.other_denied, ctl.unsupported
             if rec["error"] is None:
                 try:
                     proc.stdin.close()
