@@ -74,6 +74,36 @@ def test_every_trial_of_every_lesson_passes_one_single_argument_deny_list(lab, t
     assert argv[i + 1].startswith("--")                                      # the variadic flag swallows nothing: a flag follows it
 
 
+TOOLS_EDIT = "--tools=Read,Edit,Write,Glob,Grep,ToolSearch"
+TOOLS_PLAN = "--tools=Read,Glob,Grep,ToolSearch,ExitPlanMode"
+KIND_TOOLS = {"pc-port": TOOLS_EDIT, "eu-parser": TOOLS_EDIT, "xp-greet": TOOLS_PLAN}                # preclaim, edit_unread, exitplan
+
+
+def test_the_tool_constants_are_the_probed_literals():
+    assert (run.TOOLS_EDIT, run.TOOLS_PLAN) == (TOOLS_EDIT, TOOLS_PLAN)
+
+
+@pytest.mark.parametrize("task_id,arm", [("pc-port", "told"), ("pc-port", "not_told"), ("eu-parser", "told"), ("eu-parser", "not_told"),
+                                         ("xp-greet", "told"), ("xp-greet", "not_told")])
+def test_every_trial_allowlists_the_built_in_tools_per_kind_and_drops_every_mcp_server(lab, task_id, arm):
+    lab.scenario(turns=[{}, {}])
+    lab.go(task_id, arm)
+    argv = lab.read("argv.json")
+    assert [a for a in argv if a.startswith("--tools")] == [KIND_TOOLS[task_id]]            # exactly one, a single `=` element
+    assert argv.count("--strict-mcp-config") == 1 and "--mcp-config" not in argv and not any(a.startswith("--mcp-config") for a in argv)
+    assert "--tools" not in argv and argv.index("--strict-mcp-config") != len(argv) - 1
+    i = argv.index(KIND_TOOLS[task_id])
+    assert argv[i + 1].startswith("--")                                      # the variadic flag swallows nothing: a flag follows it
+    assert DENY in argv                                                      # the denied list stays as the second layer
+
+
+def test_the_exitplan_tool_set_is_the_drivers_read_only_set_plus_exit_plan_mode_minus_ls():
+    from ace_playbook.lab import exitplan
+    names = set(TOOLS_PLAN.split("=", 1)[1].split(","))
+    assert names == (exitplan.READ_ONLY | {"ExitPlanMode"}) - {"LS"}         # LS is not among the 25 built-ins of 2.1.317 (probed 2026-11-04)
+    assert set(TOOLS_EDIT.split("=", 1)[1].split(",")) == {"Read", "Edit", "Write", "Glob", "Grep", "ToolSearch"}
+
+
 def test_not_told_has_no_append_system_prompt_and_no_lesson_anywhere_in_argv(lab):
     lab.scenario(turns=[READ_X])
     lab.go("pc-port", "not_told")

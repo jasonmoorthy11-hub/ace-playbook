@@ -51,9 +51,15 @@ with a violation / trials).
 
 ## Safety
 
-The lab model gets file tools in its run dir only. Every trial (all three lessons) passes the single argument
-`--disallowedTools=Bash,WebFetch,WebSearch,NotebookEdit,Task,Agent` (one argument: the tool flags are variadic, so a separate value would
-swallow the next flag). The exit-plan driver allows a read-only tool only when every path input is `.`, the run dir, or a relative path (alone or after the run
+The lab model gets file tools in its run dir only. Every trial (all three lessons) passes a per-kind built-in allowlist as one `--tools=` argument
+(preclaim and edit_unread: `--tools=Read,Edit,Write,Glob,Grep,ToolSearch`; exitplan: `--tools=Read,Glob,Grep,ToolSearch,ExitPlanMode`, the driver's
+read-only set plus ExitPlanMode without LS, which Claude Code 2.1.317 does not have) and `--strict-mcp-config` with no `--mcp-config` (zero MCP
+servers). Why (probed on 2.1.317, 2026-11-04): without them a trial is offered 25 built-ins (CronCreate, RemoteTrigger, PushNotification,
+SendMessage, Workflow, Skill, EnterWorktree, TaskCreate, ...) and, from turn 2 on, 337 claude.ai connector tools (Gmail, Drive, Slack, ...), since
+`--setting-sources ""` does not drop the connectors; with both flags init lists exactly the allowlisted tools and no MCP server. The single
+argument `--disallowedTools=Bash,WebFetch,WebSearch,NotebookEdit,Task,Agent` stays on every trial as a second layer (all tool flags are
+variadic, so a separate value would swallow the next flag).
+The exit-plan driver allows a read-only tool only when every path input is `.`, the run dir, or a relative path (alone or after the run
 dir + `/`) of shape `[A-Za-z0-9_][A-Za-z0-9_./-]*`, at most 200 characters, no `..` component, that resolves inside the run dir (resolved once; an absolute path
 is also checked after textual normalisation). Glob `pattern` and Grep `glob`: shape `[A-Za-z0-9_*?][A-Za-z0-9_./*?-]*`, no `..` component, not absolute, never
 resolved. Grep `pattern` is a content regex, never resolved; any other string input containing `/` is denied; list inputs are not checked.
@@ -73,8 +79,8 @@ is always checked, whatever its glob says, and counted once (a `path` that alrea
 
 ## Isolation
 
-- `--setting-sources ""`: no user CLAUDE.md, no user hooks, no user settings. `--disallowedTools=...` (see Safety) on every trial. Hooks
-  come only from the lab settings file (`--settings`).
+- `--setting-sources ""`: no user CLAUDE.md, no user hooks, no user settings. `--tools=<allowlist>` per task kind and `--strict-mcp-config`
+  (see Safety) on every trial, `--disallowedTools=...` as the second layer. Hooks come only from the lab settings file (`--settings`).
 - The settings file holds the Stop hook (preclaim tasks only) and `plansDirectory` (`<work>/.lab-plans`: Claude Code requires it inside the project root — the
   session cwd), nothing else. `exitplan` tasks run with `--permission-mode plan --permission-prompt-tool stdio` instead of `acceptEdits` (protocol above).
 - `ANTHROPIC_API_KEY` and `CLAUDECODE` are removed from the environment; `--bare` is never used; each run is capped by `--max-turns 20`,

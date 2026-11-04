@@ -1,7 +1,8 @@
 """One lab trial: build the run dir, launch `claude -p` in stream-json mode, drive the turns, save the raw stream (docs/lab.md).
 
-Isolation: `--setting-sources ""` (no user CLAUDE.md, hooks or settings), `--disallowedTools=...` on every trial (Bash, web and agent
-tools), the hooks and `plansDirectory` (`<work>/.lab-plans`) come only from the lab settings file, the prompts go through stdin (never argv), and
+Isolation: `--setting-sources ""` (no user CLAUDE.md, hooks or settings), `--tools=<allowlist>` per task kind and `--strict-mcp-config` (no MCP
+server) on every trial, `--disallowedTools=...` as a second layer (Bash, web and agent tools), the hooks and
+`plansDirectory` (`<work>/.lab-plans`) come only from the lab settings file, the prompts go through stdin (never argv), and
 ANTHROPIC_API_KEY and CLAUDECODE are removed from the environment. The lesson text is read from the operator's store by id at run time; the
 record keeps only `sha256(text)[:16]`. The only run-time reader of the store here.
 The process plumbing (pump, turn loop, group stop) is in drive.py.
@@ -29,6 +30,8 @@ HOOK = Path(__file__).resolve().parent / "hooks" / "stop-mid-task-audit.sh"
 DROP_ENV = ("ANTHROPIC_API_KEY", "CLAUDECODE")
 DENY = "--disallowedTools=Bash,WebFetch,WebSearch,NotebookEdit,Task,Agent"       # ONE argument: the tool flags are variadic, a separate
 #                                                                                  value would swallow the next flag
+TOOLS_EDIT = "--tools=Read,Edit,Write,Glob,Grep,ToolSearch"                      # preclaim, edit_unread: ONE argument, same reason as DENY
+TOOLS_PLAN = "--tools=Read,Glob,Grep,ToolSearch,ExitPlanMode"                    # exitplan: the driver's read-only set + ExitPlanMode (no LS in 2.1.317)
 
 
 def lesson_text(lesson: str) -> str:
@@ -62,6 +65,7 @@ def settings(task: tasks.Task, work: Path) -> dict:
 def command(claude: str, model: str, task: tasks.Task, settings_path: Path, arm: str, text: str) -> list[str]:
     argv = [claude, "-p", "--model", model, "--no-session-persistence", "--setting-sources", "", "--settings", str(settings_path),
             "--permission-mode", task.permission_mode, "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+            TOOLS_PLAN if task.lesson == "exitplan" else TOOLS_EDIT, "--strict-mcp-config",
             DENY, "--max-turns", "20", "--max-budget-usd", "0.50"]
     if task.lesson == "exitplan":                                            # ExitPlanMode exists headless only over the stdio protocol
         argv += ["--permission-prompt-tool", "stdio"]
