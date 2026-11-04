@@ -35,8 +35,8 @@ described in `docs/lab.md`; this file fixes the confirmatory analysis. A lab num
   pilot record, 2026-11-02/03). A sha16 that differs is a STOP that ends the run (Safety below), not an exclusion. The store is live, so
   the nightly reflection job is paused for the runs: before the first command
   `launchctl bootout gui/$(id -u)/com.jasonmoorthy.ace-playbook-nightly`; before each command
-  `launchctl print gui/$(id -u)/com.jasonmoorthy.ace-playbook-nightly` must fail (the job is not loaded), else the command waits until it
-  is unloaded; after the last command
+  `launchctl print gui/$(id -u)/com.jasonmoorthy.ace-playbook-nightly` must fail (the job is not loaded), else the bootout is run again
+  and the print re-checked before the command; after the last command
   `launchctl bootstrap gui/$(id -u) "$HOME/Library/LaunchAgents/com.jasonmoorthy.ace-playbook-nightly.plist"`. The pause times are
   recorded with the result.
 - Binary: Claude Code 2.1.317, passed as `--claude "$HOME/.local/share/claude/versions/2.1.317"`, the file whose sha256 is
@@ -64,17 +64,19 @@ Per model: 2 lessons x 2 arms x 104 = 416 scored trials in ONE fresh data dir (`
 and `.../lab-opus`, so `report` holds exactly these two lessons and Holm runs over two. Seeds (drawn 2026-11-03T08:06Z with
 `secrets.randbits(32)`): Sonnet 3796039195, Opus 2022561169. Per model and lesson, from the repository at the registered commit:
 
+Before the first check the four data dirs are created: `mkdir -p -m 700 "$HOME/.local/share/ace-playbook/lab-sonnet"`, and likewise
+`lab-opus`, `lab-xp-sonnet` and `lab-xp-opus`. Then, per command:
+
 ```bash
-mkdir -p -m 700 <data dir>
 ACE_LAB_DATA=<data dir> uv run python -m ace_playbook.lab run --model <model id> --lesson <lesson> --reps 13 --seed <seed> \
   --tasks <the 8 ids, comma-separated> --claude "$HOME/.local/share/claude/versions/2.1.317" --max-attempts 3 >> <data dir>/run.log 2>&1
 ```
 
 Order: Sonnet preclaim, Sonnet edit_unread, Opus preclaim, Opus edit_unread, then the two descriptive exitplan commands (Sonnet, Opus)
-only after all four (separate days allowed). Within a command the trial list (tasks x
-arms x reps) is shuffled by the seed and run sequentially, so the arms interleave in time. `run` prints no outcome (one line per trial: id,
-exit code, result subtypes, error); its output goes to `run.log`, which the operator does not read before that model's analysis except to
-diagnose a STOP. Opus's commands run as registered whatever the Sonnet analysis shows; nothing here changes between the models.
+only after all four (separate days allowed). Within a command the trial list (tasks x arms x reps) is shuffled by the seed and run
+sequentially, so the arms interleave in time. `run` prints no outcome (one line per trial: id, exit code, result subtypes, error); its
+output goes to `run.log`, which the operator does not read before that model's analysis (a STOP is diagnosed from the safety block's
+output and the file system only). Opus's commands run as registered whatever the Sonnet analysis shows; nothing here changes between the models.
 Errors: an attempt is errored when its record's `error` is non-null (docs/lab.md and run.py/drive.py list the causes, for example an
 error `result`, a nonzero exit, a timeout, a closed stdin, no result, a failed build, spawn or between-turns step); an errored attempt is
 never scored. After a command finishes and the safety check passes, the same command is re-run while `run ... --dry-run` with the same
@@ -91,44 +93,47 @@ not rejected, whatever its p; the other lesson of that model then rejects only i
 not by the report's `p_holm`. The decision block below applies this rule.
 Differential exclusion: an error can be tied to the outcome (a Stop-hook block lengthens a trial towards `error_max_turns` or the budget
 cap), so a bounds row is computed for every lesson (descriptive, registered): the excluded trials are added back against the observed
-direction (if TOLD - NOT_TOLD is at most 0, excluded TOLD trials count as violations and excluded NOT_TOLD trials as clean; otherwise the
-reverse), and the decision rule is re-applied. A claim whose decision differs on the bounds row is labelled fragile.
-Decision block: saved as a file and run from the repository as `ACE_LAB_DATA=<data dir> PYTHONPATH=. uv run python -P <file>`, it
-prints per lesson an `observed` line (the registered decision) and a `bounds` line, each with the arms' counts, the raw two-sided Fisher p
-(unrounded, from `fisher_two_sided`), the not-interpretable flag and the decision `reduce`, `increase` or `none`:
+direction (if the TOLD rate is at most the NOT_TOLD rate, excluded TOLD trials count as violations and excluded NOT_TOLD trials as clean;
+otherwise the reverse; the rates are compared as k1 x n0 against k0 x n1, never through the rounded `diff`), and the decision rule is
+re-applied. A claim whose decision differs on the bounds row is labelled fragile.
+Decision block: saved as a file and run from the repository as `ACE_LAB_DATA=<data dir> PYTHONPATH=. uv run python -P <file> <model id>`,
+it prints for both registered lessons (a lesson with no scored trial in an arm is not interpretable, with n 0) an `observed` line (the
+registered decision) and a `bounds` line, each with the arms' counts, the raw two-sided Fisher p (unrounded, from `fisher_two_sided`),
+the not-interpretable flag and the decision `reduce`, `increase` or `none`:
 
 ```python
 import json, os, subprocess, sys
 from ace_playbook.compile.arms_stats import holm
 from ace_playbook.lab.stats import fisher_two_sided
+model = sys.argv[1]
 cmd = [sys.executable, "-m", "ace_playbook.lab", "report", "--exclude-pilot", "--json"]
 d = json.loads(subprocess.run(cmd, capture_output=True, text=True, check=True, env=os.environ).stdout)
+groups = {g["lesson"]: g for g in d["groups"] if g["model"] == model}
 def decide(rows):
-    ps = [r["p"] for r in rows]
     if any(r["ni"] for r in rows):
         rej = [not r["ni"] and r["p"] is not None and r["p"] <= 0.025 for r in rows]
     else:
-        rej = [j for _, j in holm(ps)]
+        rej = [j for _, j in holm([r["p"] for r in rows])]
     for r, j in zip(rows, rej):
         r["decision"] = ("reduce" if r["k1"] * r["n0"] < r["k0"] * r["n1"] else "increase") if j and r["p"] is not None else "none"
-for model in sorted({g["model"] for g in d["groups"]}):
-    obs, bnd = [], []
-    for g in (g for g in d["groups"] if g["model"] == model):
-        t, n = g["told"], g["not_told"]
-        et, en = (d["excluded"].get(f'{model}/{g["lesson"]}/{a}', 0) for a in ("told", "not_told"))
-        ni = et > 10 or en > 10
-        obs.append(dict(lesson=g["lesson"], k1=t["k"], n1=t["n"], k0=n["k"], n0=n["n"], ni=ni))
-        if g["diff"] is None or g["diff"] <= 0:
-            bnd.append(dict(lesson=g["lesson"], k1=t["k"] + et, n1=t["n"] + et, k0=n["k"], n0=n["n"] + en, ni=ni))
-        else:
-            bnd.append(dict(lesson=g["lesson"], k1=t["k"], n1=t["n"] + et, k0=n["k"] + en, n0=n["n"] + en, ni=ni))
-    for name, rows in (("observed", obs), ("bounds", bnd)):
-        for r in rows:
-            r["p"] = fisher_two_sided(r["k1"], r["n1"], r["k0"], r["n0"])
-        decide(rows)
-        for r in rows:
-            print(name, model, r["lesson"], f'told {r["k1"]}/{r["n1"]} not_told {r["k0"]}/{r["n0"]}', "p", repr(r["p"]),
-                  "not_interpretable", r["ni"], "decision", r["decision"])
+obs, bnd = [], []
+for lesson in ("edit_unread", "preclaim"):
+    g = groups.get(lesson, {"told": {"k": 0, "n": 0}, "not_told": {"k": 0, "n": 0}})
+    k1, n1, k0, n0 = g["told"]["k"], g["told"]["n"], g["not_told"]["k"], g["not_told"]["n"]
+    et, en = (d["excluded"].get(f"{model}/{lesson}/{a}", 0) for a in ("told", "not_told"))
+    ni = et > 10 or en > 10 or n1 == 0 or n0 == 0
+    obs.append(dict(lesson=lesson, k1=k1, n1=n1, k0=k0, n0=n0, ni=ni))
+    if k1 * n0 <= k0 * n1:
+        bnd.append(dict(lesson=lesson, k1=k1 + et, n1=n1 + et, k0=k0, n0=n0 + en, ni=ni))
+    else:
+        bnd.append(dict(lesson=lesson, k1=k1, n1=n1 + et, k0=k0 + en, n0=n0 + en, ni=ni))
+for name, rows in (("observed", obs), ("bounds", bnd)):
+    for r in rows:
+        r["p"] = fisher_two_sided(r["k1"], r["n1"], r["k0"], r["n0"])
+    decide(rows)
+    for r in rows:
+        print(name, model, r["lesson"], f'told {r["k1"]}/{r["n1"]} not_told {r["k0"]}/{r["n0"]}', "p", repr(r["p"]),
+              "not_interpretable", r["ni"], "decision", r["decision"])
 ```
 
 First-attempt errors per arm (`checks` `first_attempt_errors`) and all attempts' errors (`attempt_errors`) are reported after the
@@ -208,10 +213,14 @@ Before the first scored trial and after every command (each re-run included), in
 command (Instrument) must print the registered hash, and the block below, saved as a file and run as `ACE_LAB_DATA=<data dir>
 PYTHONPATH=. uv run python -P <file> <data dir> <model id> <main|xp>`, must print `PASS` as its last line. It prints counts and error
 kinds (without the arm), never an outcome; the streams are never opened by hand (docs/lab.md's "open them" and "needs a look" steps are
-replaced by its counts). A tool_use of a denied tool counts as `denied_ran` unless its tool_result is an error whose content is EXACTLY
-the binary's refusal (`<tool_use_error>Error: No such tool available: <name>. <name> is disabled for this session, in subagents as well
-as here.</tool_use_error>`, the 2.1.317 text seen in the re-pilot of 2026-11-03); an exact refusal counts as `denied_refused` (reported,
-not a STOP). A denied tool that ran and failed, or any other result or none, is `denied_ran`.
+replaced by its counts). The registered tool sets are the lab's `--tools` lists: `Read, Edit, Write, Glob, Grep, ToolSearch` for a
+confirmatory (main) dir and `Read, Glob, Grep, ToolSearch, ExitPlanMode` for an exitplan (xp) dir. Every init event of every stream must
+list only tools of its set and no MCP server, else `bad_keys` rises (the claude.ai connectors attach from a trial's second turn unless
+`--strict-mcp-config` holds; probed on 2.1.317, 2026-11-04). A tool_use of a tool outside the set counts as `denied_ran` unless its
+tool_result is an error whose content is EXACTLY the binary's refusal (`<tool_use_error>Error: No such tool available: <name>. <name> is
+disabled for this session, in subagents as well as here.</tool_use_error>`, the 2.1.317 text for a disallowed tool and for one left out
+of `--tools`, seen 2026-11-03/04); an exact refusal counts as `denied_refused` (reported, not a STOP). A tool outside the set that ran
+and failed, or any other result or none, is `denied_ran`.
 
 ```python
 import collections, json, os, subprocess, sys
@@ -226,27 +235,34 @@ state["bad_keys"] = (len(set(c["lesson_sha16"]) - sha) + len(set(c["binary"]) - 
                      + len(set(c["model_usage"]) - {model}))
 state["none_binary"] = c["binary"].get("None/None", 0)
 state["errored_attempts"] = sum(c["attempt_errors"].values())
-denied, sdir = {"Bash", "WebFetch", "WebSearch", "NotebookEdit", "Task", "Agent"}, os.path.join(data, "streams")
+allowed = {"main": {"Read", "Edit", "Write", "Glob", "Grep", "ToolSearch"}, "xp": {"Read", "Glob", "Grep", "ToolSearch", "ExitPlanMode"}}[kind]
+sdir = os.path.join(data, "streams")
 state["denied_ran"] = state["opaque_streams"] = refused = 0
 refusal = ("<tool_use_error>Error: No such tool available: {0}. {0} is disabled for this session, in subagents as well as "
            "here.</tool_use_error>")
 for name in sorted(os.listdir(sdir)) if os.path.exists(sdir) else []:
     try:
         with open(os.path.join(sdir, name), "rb") as fh:
-            lines = fh.read().decode("utf-8", "replace").splitlines()
+            lines = fh.read().decode("utf-8", "replace").split("\n")
     except OSError:
         state["opaque_streams"] += 1
         continue
     bad, uses, results = [], {}, {}
+    while lines and not lines[-1].strip():
+        lines.pop()
     for i, line in enumerate(lines):
+        if not line.strip():
+            continue
         try:
             e = json.loads(line)
         except ValueError:
             bad.append(i)
             continue
+        if isinstance(e, dict) and e.get("type") == "system" and e.get("subtype") == "init":
+            state["bad_keys"] += bool(set(e.get("tools") or []) - allowed or e.get("mcp_servers"))
         body = e.get("message") if isinstance(e, dict) else None
         for b in body.get("content") or [] if isinstance(body, dict) else []:
-            if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") in denied:
+            if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") not in allowed:
                 uses[b.get("id")] = b.get("name")
             if isinstance(b, dict) and b.get("type") == "tool_result":
                 results[b.get("tool_use_id")] = (b.get("is_error"), b.get("content"))
@@ -269,28 +285,33 @@ if len(sys.argv) > 4 and sys.argv[4] == "snapshot":
         print("no snapshot: a run-ending count rose")
     else:
         name = f"stop-{len(snaps) + 1}.json"
-        json.dump(state, open(os.path.join(data, name), "x"))
+        with os.fdopen(os.open(os.path.join(data, name), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as fh:
+            json.dump(state, fh)
         print("snapshot", name)
         base = state
 limit = {k: base[k] + (5 if k == "errored_attempts" else 0) for k in state}
 print("PASS" if all(state[k] <= limit[k] for k in state) else "STOP: " + ",".join(k for k in state if state[k] > limit[k]))
 ```
 
-On an empty data dir it prints `counts {...}` with every value 0 and `baseline none`, `errors {} denied_refused 0`, then `PASS`. A count is cumulative over
-every attempt, so a check passes when no count rose above the baseline (zero, or the latest snapshot `stop-<n>.json` written at a resumed
-STOP), except that `errored_attempts` may rise by up to 5.
-Any STOP line, a wrong binary hash, or a block that fails to run → a `STOP` file in that data dir and no further trial in any data dir;
-the data are kept and every recorded trial stays in the record.
+On an empty data dir it prints `counts {...}` with every value 0 and `baseline none`, `errors {} denied_refused 0`, then `PASS`. A
+count is cumulative over every attempt, so a check passes when no count rose above the baseline (zero, or the latest snapshot
+`stop-<n>.json` written at a resumed STOP), except that `errored_attempts` may rise by up to 5.
+Any STOP line, a wrong binary hash, or a block that fails to run (an exception or a nonzero exit) → a `STOP` file in that data dir and
+no further trial in any data dir; the data are kept and every recorded trial stays in the record. A block that failed to run is resumed
+by the rule below once it runs again.
 A STOP is resumable exactly when none of `outside_run_dir_tool_inputs`, `denied_ran`, `bad_keys`, `opaque_streams` rose and the binary
 hash is right; this is mechanical (an unreadable stream that is empty, an orphan or a stream whose only bad line is a truncated last line
-without `tool_` was still scanned in full by both scanners). Before the resume: `pgrep -f 'max-budget-us[d] 0.50'` prints nothing (no lab
-`claude` child survives), and after an `errored_attempts` STOP at least 5 hours have passed since the STOP; the cause as seen in the
-block's `errors` line, `run.log` and the file system is recorded, not judged. To resume: the block is run with a fifth argument `snapshot`
-(it prints `snapshot stop-<n>.json` and then `PASS` against the new baseline, or `no snapshot: a run-ending count rose` and a STOP line),
+without `tool_` was still scanned in full by both scanners). Before the resume: `pgrep -f 'versions/2\.1\.31[7] -p'` prints nothing (no
+lab `claude` child survives; if it prints, the operator waits 10 minutes and re-checks, and never kills it), and after an
+`errored_attempts` STOP at least 5 hours have passed since the STOP; the cause as seen in the block's `errors` line and the file system
+(never `run.log`, which names the arm) is recorded, not judged. To resume: the block is run with a fifth argument `snapshot` (its
+`counts` line still names the old baseline; it then prints `snapshot stop-<n>.json` (mode 0600) and `PASS` against the new baseline, or
+`no snapshot: a run-ending count rose` and a STOP line),
 the `STOP` file is renamed `STOP.<n>` and kept, and the same command is run again. Every other STOP ends the run, a false positive
 included (it is never inspected and resumed). A run-ending STOP ends every command not yet finished, for both models. A model whose
-confirmatory commands (and re-runs) finished before it keeps its confirmatory result, except that a `bad_keys` or binary-hash STOP in
-that model's own data dir, whenever raised, makes its result descriptive only. A result made descriptive only, and the trials of an
+confirmatory commands (and re-runs) finished before it keeps its confirmatory result, except that a `bad_keys` STOP in that model's
+confirmatory data dir (`lab-sonnet` or `lab-opus`) at any time, or a wrong binary hash at any check up to and including the one after
+that model's last confirmatory command, makes its result descriptive only. A result made descriptive only, and the trials of an
 ended run, are reported apart from the confirmatory results. Every STOP is reported with its time, its cause and its snapshot.
 
 ## Power (stated before data)
