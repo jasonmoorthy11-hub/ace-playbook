@@ -315,7 +315,7 @@ for name in sorted(os.listdir(sdir)) if os.path.exists(sdir) else []:
             mem = (e.get("memory_paths") or {}).get("auto")                     # the binary's auto-memory dir: any file there is outside
             if isinstance(mem, str) and os.path.lexists(mem):
                 unlisted = []                                                    # a dir that cannot be listed counts: never fail open
-                state["memory_files"] += (sum(len(fs) for _, _, fs in os.walk(mem, onerror=unlisted.append)) + len(unlisted)
+                state["memory_files"] += (sum(len(fs) for _, _, fs in os.walk(mem, followlinks=True, onerror=unlisted.append)) + len(unlisted)
                                           if os.path.isdir(mem) else 1)
         body = e.get("message") if isinstance(e, dict) else None
         for b in body.get("content") or [] if isinstance(body, dict) else []:
