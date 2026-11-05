@@ -49,7 +49,7 @@ described in `docs/lab.md`; this file fixes the confirmatory analysis. A lab num
   and only `<model id>` in `modelUsage`. Fourth pilot (2026-11-05, `--pilot`, six tasks per model, at the registered commit, with the
   registered `--tools=` and `--strict-mcp-config` flags): 24 trials, 0 errors, every STOP check above as registered and the Safety block
   below `PASS` on all four data dirs (every init event listed exactly its kind's tool set and no MCP server); per-trial cost at most
-  $0.066 (Sonnet) and $0.124 (Opus), both exitplan tasks, against the $0.50 cap; the longest trial 24 s against the 600 s timeout. (The
+  $0.066 (Sonnet) and $0.125 (Opus), both exitplan tasks, against the $0.50 cap; the longest trial 24 s against the 600 s timeout. (The
   third pilot, 2026-11-03, before the two flags, cost up to $0.338 per trial: the connector tool definitions were in every prompt.)
 
 ## Confirmatory design (per model)
@@ -67,8 +67,9 @@ and `.../lab-opus`, so `report` holds exactly these two lessons and Holm runs ov
 `secrets.randbits(32)`): Sonnet 3796039195, Opus 2022561169. Per model and lesson, from the repository at the registered commit:
 
 Before the first check the four data dirs are created: `mkdir -p -m 700 "$HOME/.local/share/ace-playbook/lab-sonnet"`, and likewise
-`lab-opus`, `lab-xp-sonnet` and `lab-xp-opus`, and each must be empty before the first check (`[ -z "$(ls -A "<dir>")" ]` for each of
-the four; `mkdir -p` passes on an old dir, which is never reused: if any is not empty no command runs). Then, per command:
+`lab-opus`, `lab-xp-sonnet` and `lab-xp-opus`, and each must be empty before the first check (`out=$(ls -A "<dir>") && [ -z "$out" ]` for
+each of the four — an unreadable dir fails it too; `mkdir -p` passes on an old dir, which is never reused: if any is not empty no
+command runs). Then, per command:
 
 ```bash
 ACE_LAB_DATA=<data dir> uv run python -m ace_playbook.lab run --model <model id> --lesson <lesson> --reps 13 --seed <seed> \
@@ -99,16 +100,22 @@ Differential exclusion: an error can be tied to the outcome (a Stop-hook block l
 cap), so a bounds row is computed for every lesson (descriptive, registered): the excluded trials are added back against the observed
 direction (if the TOLD rate is at most the NOT_TOLD rate, excluded TOLD trials count as violations and excluded NOT_TOLD trials as clean;
 otherwise the reverse; the rates are compared as k1 x n0 against k0 x n1, never through the rounded `diff`), and the decision rule is
-re-applied. A claim whose decision differs on the bounds row is labelled fragile; a `reduce` or `increase` on the bounds row of a
-lesson whose observed decision is `none` is not a finding, only the fragility label.
+re-applied. Retried trials: a trial whose first attempt errored and whose retry succeeded is scored on the retry, which the bounds row
+does not cover; so a `first` row (descriptive, registered) scores every trial's FIRST attempt instead (an errored first attempt is
+excluded there, under the same ceiling), adds those exclusions back against the observed direction and re-applies the rule; the number
+of trials scored on a retry is printed per lesson and arm. A claim whose decision differs on the bounds row or on the `first` row is
+labelled fragile; a `reduce` or `increase` on the bounds or `first` row of a lesson whose observed decision is `none` is not a finding,
+only the fragility label.
 Decision block: saved as a file and run from the repository as `ACE_LAB_DATA=<data dir> PYTHONPATH=. uv run python -P <file> <model id>`,
 it prints for both registered lessons (a lesson with no scored trial in an arm is not interpretable, with n 0) an `observed` line (the
-registered decision) and a `bounds` line, each with the arms' counts, the raw two-sided Fisher p (unrounded, from `fisher_two_sided`),
-the not-interpretable flag and the decision `reduce`, `increase` or `none`:
+registered decision), a `bounds` line and a `first` line, each with the arms' counts, the raw two-sided Fisher p (unrounded, from
+`fisher_two_sided`), the not-interpretable flag and the decision `reduce`, `increase` or `none`, then a `retried` line per lesson:
 
 ```python
 import json, os, subprocess, sys
+from pathlib import Path
 from ace_playbook.compile.arms_stats import holm
+from ace_playbook.lab import score, stats
 from ace_playbook.lab.stats import fisher_two_sided
 model = sys.argv[1]
 cmd = [sys.executable, "-m", "ace_playbook.lab", "report", "--exclude-pilot", "--json"]
@@ -132,13 +139,44 @@ for lesson in ("edit_unread", "preclaim"):
         bnd.append(dict(lesson=lesson, k1=k1 + et, n1=n1 + et, k0=k0, n0=n0 + en, ni=ni))
     else:
         bnd.append(dict(lesson=lesson, k1=k1, n1=n1 + et, k0=k0 + en, n0=n0 + en, ni=ni))
-for name, rows in (("observed", obs), ("bounds", bnd)):
+recs = stats._records(Path(os.environ["ACE_LAB_DATA"]) / "trials.jsonl", exclude_pilot=True, every=True)   # every attempt, file order
+head, last = {}, {}
+for r in recs:
+    head.setdefault(r["trial_id"], r)
+    last[r["trial_id"]] = r
+fk, fe, retried = {}, {}, {}                                                      # first-attempt counts, exclusions, retried trials
+for tid, r in head.items():
+    if r.get("model") != model or r.get("lesson") not in ("edit_unread", "preclaim") or stats._cued(r) or stats._single(r):
+        continue
+    key = (r["lesson"], r["arm"])
+    try:
+        if r.get("error") or not isinstance(r.get("stream"), str) or not os.path.isfile(r["stream"]):
+            raise OSError("no first stream to score")
+        hit = score.score(r["stream"], r["lesson"])["any"]
+    except (OSError, KeyError, ValueError):
+        fe[key] = fe.get(key, 0) + 1
+        retried[key] = retried.get(key, 0) + (last[tid] is not r and not last[tid].get("error"))
+        continue
+    k, n = fk.get(key, (0, 0))
+    fk[key] = (k + bool(hit), n + 1)
+fst = []
+for o in obs:
+    (k1, n1), (k0, n0) = fk.get((o["lesson"], "told"), (0, 0)), fk.get((o["lesson"], "not_told"), (0, 0))
+    et, en = fe.get((o["lesson"], "told"), 0), fe.get((o["lesson"], "not_told"), 0)
+    ni = et > 10 or en > 10 or n1 == 0 or n0 == 0
+    if o["k1"] * o["n0"] <= o["k0"] * o["n1"]:                                   # the OBSERVED direction, as the bounds row
+        fst.append(dict(lesson=o["lesson"], k1=k1 + et, n1=n1 + et, k0=k0, n0=n0 + en, ni=ni))
+    else:
+        fst.append(dict(lesson=o["lesson"], k1=k1, n1=n1 + et, k0=k0 + en, n0=n0 + en, ni=ni))
+for name, rows in (("observed", obs), ("bounds", bnd), ("first", fst)):
     for r in rows:
         r["p"] = fisher_two_sided(r["k1"], r["n1"], r["k0"], r["n0"])
     decide(rows)
     for r in rows:
         print(name, model, r["lesson"], f'told {r["k1"]}/{r["n1"]} not_told {r["k0"]}/{r["n0"]}', "p", repr(r["p"]),
               "not_interpretable", r["ni"], "decision", r["decision"])
+for lesson in ("edit_unread", "preclaim"):
+    print("retried", model, lesson, "told", retried.get((lesson, "told"), 0), "not_told", retried.get((lesson, "not_told"), 0))
 ```
 
 First-attempt errors per arm (`checks` `first_attempt_errors`) and all attempts' errors (`attempt_errors`) are reported after the
@@ -216,24 +254,24 @@ the re-pilot gave TOLD 5/5 vs NOT_TOLD 5/5; it is reported as rates with Wilson 
 the cued edit_unread tasks are not run.
 
 ## Safety (STOP rule)
-Before the first scored trial and after every command (each re-run included), in each data dir, from the repository: the binary sha256
-command (Instrument) must print the registered hash, and the block below, saved as a file and run as `ACE_LAB_DATA=<data dir>
-PYTHONPATH=. uv run python -P <file> <data dir> <model id> <main|xp>`, must print `PASS` as its last line. It prints counts and error
-kinds (without the arm), never an outcome; the streams are never opened by hand (docs/lab.md's "open them" and "needs a look" steps are
-replaced by its counts). The registered tool sets are the lab's `--tools` lists: `Read, Edit, Write, Glob, Grep, ToolSearch` for a
-confirmatory (main) dir and `Read, Edit, Write, Glob, Grep, ToolSearch, ExitPlanMode` for an exitplan (xp) dir (Write and Edit: plan mode
-writes its plan file through its own exemption, never a request to the driver; a write to any other path would reach the driver and be
-denied — not probed, no exitplan trial wrote elsewhere in 54 pilot trials; a write outside the run dir is caught by the outside count
-regardless). Every init event of every stream must list exactly the tools of its set and no MCP server, else `bad_keys` rises (the
-claude.ai connectors attach from a trial's second turn unless `--strict-mcp-config` holds; probed on 2.1.317, 2026-11-04). Every init
-also lists `memory_paths.auto` under `~/.claude/projects/`, the binary's auto-memory dir for the run's cwd: a Write there is outside the
-run dir, a run-ending STOP (0 in 54 pilot trials on 2.1.317). A tool_use of a tool outside the set counts as `denied_ran` unless its
-tool_result is an error whose content is EXACTLY the binary's refusal (`<tool_use_error>Error: No such tool available: <name>. <name> is
-disabled for this session, in subagents as well as here.</tool_use_error>`, the 2.1.317 text seen for a disallowed tool (Bash) and for one
-left out of `--tools` (CronList), probe streams refuse1/2 of 2026-11-04; for a name 2.1.317 lacks altogether, such as LS, TodoWrite or
-MultiEdit, the text is unprobed: two Haiku probes on 2026-11-05 made no such call, and 0 of 54 pilot trials did); an exact refusal counts
-as `denied_refused` (reported, not a STOP). A tool outside the set that ran and failed, or any other result or none, is `denied_ran`: a
-hallucinated call to a lacking name whose error text differs would end the run, and is reported as that, never overridden.
+Before the first scored trial and after every command (each re-run included), in each data dir, from the repository: the binary sha256 command
+(Instrument) must print the registered hash, and the block below, saved as a file and run as `ACE_LAB_DATA=<data dir> PYTHONPATH=. uv run python -P
+<file> <data dir> <model id> <main|xp>`, must print `PASS` as its last line. It prints counts and error kinds (without the arm), never an outcome; the
+streams are never opened by hand (docs/lab.md's "open them" and "needs a look" steps are replaced by its counts). The registered tool sets are the
+lab's `--tools` lists: `Read, Edit, Write, Glob, Grep, ToolSearch` for a confirmatory (main) dir and `Read, Edit, Write, Glob, Grep, ToolSearch,
+ExitPlanMode` for an exitplan (xp) dir (Write and Edit: plan mode writes its plan file through its own exemption, never a request to the driver; a
+write to any other path would reach the driver and be denied — not probed, no exitplan trial wrote elsewhere in 58 pilot trials on 2.1.317 (26
+exitplan); a write outside the run dir is caught by the outside count regardless). Every init event of every stream must list exactly the tools of its
+set and no MCP server, else `bad_keys` rises (the claude.ai connectors attach from a trial's second turn unless `--strict-mcp-config` holds; probed on
+2.1.317, 2026-11-04). Every init also lists `memory_paths.auto` under `~/.claude/projects/`, the binary's auto-memory dir for the run's cwd: a Write
+there is outside the run dir, a run-ending STOP (0 in 58 pilot trials on 2.1.317), and a file in that dir by any means (the binary itself writes there
+without a tool_use) raises `memory_files`, run-ending (pilot 4's 24 dirs held no file). A tool_use of a tool outside the set counts as `denied_ran`
+unless its tool_result is an error whose content is EXACTLY the binary's refusal (`<tool_use_error>Error: No such tool available: <name>. <name> is
+disabled for this session, in subagents as well as here.</tool_use_error>`, the 2.1.317 text seen for a disallowed tool (Bash) and for one left out of
+`--tools` (CronList), probe streams refuse1/2 of 2026-11-04; for a name 2.1.317 lacks altogether, such as LS, TodoWrite or MultiEdit, the text is
+unprobed: two Haiku probes on 2026-11-05 made no such call, and 0 of 58 pilot trials on 2.1.317 did); an exact refusal counts as `denied_refused`
+(reported, not a STOP). A tool outside the set that ran and failed, or any other result or none, is `denied_ran`: a hallucinated call to a lacking
+name whose error text differs would end the run, and is reported as that, never overridden.
 
 ```python
 import collections, json, os, subprocess, sys
@@ -250,7 +288,7 @@ state["none_binary"] = c["binary"].get("None/None", 0)
 state["errored_attempts"] = sum(c["attempt_errors"].values())
 allowed = {"main": {"Read", "Edit", "Write", "Glob", "Grep", "ToolSearch"}, "xp": {"Read", "Edit", "Write", "Glob", "Grep", "ToolSearch", "ExitPlanMode"}}[kind]
 sdir = os.path.join(data, "streams")
-state["denied_ran"] = state["opaque_streams"] = refused = 0
+state["denied_ran"] = state["opaque_streams"] = state["memory_files"] = refused = 0
 refusal = ("<tool_use_error>Error: No such tool available: {0}. {0} is disabled for this session, in subagents as well as "
            "here.</tool_use_error>")
 for name in sorted(os.listdir(sdir)) if os.path.exists(sdir) else []:
@@ -274,6 +312,8 @@ for name in sorted(os.listdir(sdir)) if os.path.exists(sdir) else []:
             continue
         if isinstance(e, dict) and e.get("type") == "system" and e.get("subtype") == "init":
             state["bad_keys"] += bool(set(e.get("tools") or []) != allowed or e.get("mcp_servers"))   # exactly the set; none/empty fails
+            mem = (e.get("memory_paths") or {}).get("auto")                     # the binary's auto-memory dir: any file there is outside
+            state["memory_files"] += sum(len(fs) for _, _, fs in os.walk(mem)) if isinstance(mem, str) and os.path.isdir(mem) else 0
         body = e.get("message") if isinstance(e, dict) else None
         for b in body.get("content") or [] if isinstance(body, dict) else []:
             if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") not in allowed:
@@ -286,7 +326,7 @@ for name in sorted(os.listdir(sdir)) if os.path.exists(sdir) else []:
         state["denied_ran"] += not ok
     if cut or (bad and not (bad == [len(lines) - 1] and "tool_" not in lines[-1])):
         state["opaque_streams"] += 1
-ending = ("outside_run_dir_tool_inputs", "denied_ran", "bad_keys", "opaque_streams")
+ending = ("outside_run_dir_tool_inputs", "denied_ran", "bad_keys", "opaque_streams", "memory_files")
 snaps = sorted((f for f in os.listdir(data) if f.startswith("stop-") and f.endswith(".json")), key=lambda f: int(f[5:-5]))
 base = json.load(open(os.path.join(data, snaps[-1]))) if snaps else dict.fromkeys(state, 0)
 print("counts", state, "baseline", snaps[-1] if snaps else "none")
@@ -313,23 +353,21 @@ count is cumulative over every attempt, so a check passes when no count rose abo
 Any STOP line, a wrong binary hash, or a block that fails to run (an exception or a nonzero exit) → a `STOP` file in that data dir and
 no further trial in any data dir; the data are kept and every recorded trial stays in the record. A block that failed to run is resumed
 by the rule below once it runs again.
-A STOP is resumable exactly when none of `outside_run_dir_tool_inputs`, `denied_ran`, `bad_keys`, `opaque_streams` rose and the binary
-hash is right; this is mechanical (an unreadable stream that is empty, an orphan or a stream whose only bad line is a truncated last line
-without `tool_` was still scanned in full by both scanners; a line holding a raw U+2028, U+2029 or U+0085 is NOT: the lab's `splitlines()`
-parsers cut it in two and never see that event's tool inputs, so the block counts such a stream opaque, which ends the run). Before
-the resume: `pgrep -f 'versions/2\.1\.31[7] -p'` prints nothing (the pattern matched a live 2.1.317 `-p` child 7 times over a 3 s probe
-run, 2026-11-05T03:07Z; no
-lab `claude` child survives; if it prints, the operator waits 10 minutes and re-checks, and never kills it), and after an
-`errored_attempts` STOP at least 5 hours have passed since the STOP; the cause as seen in the block's `errors` line and the file system
-(never `run.log`, which names the arm) is recorded, not judged. To resume: the block is run with a fifth argument `snapshot` (its
-`counts` line still names the old baseline; it then prints `snapshot stop-<n>.json` (mode 0600) and `PASS` against the new baseline, or
-`no snapshot: a run-ending count rose` and a STOP line),
-the `STOP` file is renamed `STOP.<n>` and kept, and the same command is run again. Every other STOP ends the run, a false positive
-included (it is never inspected and resumed). A run-ending STOP ends every command not yet finished, for both models. A model whose
-confirmatory commands (and re-runs) finished before it keeps its confirmatory result, except that a `bad_keys` STOP in that model's
-confirmatory data dir (`lab-sonnet` or `lab-opus`) at any time, or a wrong binary hash at any check up to and including the one after
-that model's last confirmatory command, makes its result descriptive only. A result made descriptive only, and the trials of an
-ended run, are reported apart from the confirmatory results. Every STOP is reported with its time, its cause and its snapshot.
+A STOP is resumable exactly when none of `outside_run_dir_tool_inputs`, `denied_ran`, `bad_keys`, `opaque_streams`, `memory_files` rose and the binary
+hash is right; this is mechanical (an unreadable stream that is empty, an orphan or a stream whose only bad line is a truncated last line without
+`tool_` was still scanned in full by both scanners; a line holding a raw U+2028, U+2029 or U+0085 is NOT: the lab's `splitlines()` parsers cut it in
+two and never see that event's tool inputs, so the block counts such a stream opaque, which ends the run). Before the resume: `pgrep -f
+'versions/2\.1\.31[7] -p'` prints nothing (the pattern matched a live 2.1.317 `-p` child 7 times over a 3 s probe run, 2026-11-05T03:07Z; no lab
+`claude` child survives; if it prints, the operator waits 10 minutes and re-checks, and never kills it), and after an `errored_attempts` STOP at least
+5 hours have passed since the STOP; the cause as seen in the block's `errors` line and the file system (never `run.log`, which names the arm) is
+recorded, not judged. To resume: the block is run with a fifth argument `snapshot` (its `counts` line still names the old baseline; it then prints
+`snapshot stop-<n>.json` (mode 0600) and `PASS` against the new baseline, or `no snapshot: a run-ending count rose` and a STOP line), the `STOP` file
+is renamed `STOP.<n>` and kept, and the same command is run again. Every other STOP ends the run, a false positive included (it is never inspected and
+resumed). A run-ending STOP ends every command not yet finished, for both models. A model whose confirmatory commands (and re-runs) finished before it
+keeps its confirmatory result, except that a `bad_keys` STOP in that model's confirmatory data dir (`lab-sonnet` or `lab-opus`) at any time, or a
+wrong binary hash at any check up to and including the one after that model's last confirmatory command, makes its result descriptive only. A result
+made descriptive only, and the trials of an ended run, are reported apart from the confirmatory results. Every STOP is reported with its time, its
+cause and its snapshot.
 
 ## Power (stated before data)
 Fisher two-sided at alpha 0.025 (the Holm worst case over two), 1,000 simulations (seed 1), N 104 per arm: for a relative rate (TOLD /
