@@ -33,11 +33,12 @@ described in `docs/lab.md`; this file fixes the confirmatory analysis. A lab num
 - Lessons: the text is read at run time from the operator's store; each trial record keeps `sha256(text)[:16]`. Registered: preclaim
   L-cbfb7a57 `403bac3abaed7d36`, edit_unread L-f8a355f9 `5e0a169cf0eaf46c`, exitplan L-93544dae `05204efb06eb3f69` (the values of every
   pilot record, 2026-11-02/03). A sha16 that differs is a STOP that ends the run (Safety below), not an exclusion. The store is live, so
-  the nightly reflection job is paused for the runs: before the first command
-  `launchctl bootout gui/$(id -u)/com.jasonmoorthy.ace-playbook-nightly`; before each command
-  `launchctl print gui/$(id -u)/com.jasonmoorthy.ace-playbook-nightly` must fail (the job is not loaded), else the bootout is run again
+  the nightly reflection job is paused for the runs (the label below is the shipped plist's, hooks/INSTALL.md; the operator's installed
+  label is recorded with the result): before the first command
+  `launchctl bootout gui/$(id -u)/com.example.ace-playbook-nightly`; before each command
+  `launchctl print gui/$(id -u)/com.example.ace-playbook-nightly` must fail (the job is not loaded), else the bootout is run again
   and the print re-checked before the command; after the last command
-  `launchctl bootstrap gui/$(id -u) "$HOME/Library/LaunchAgents/com.jasonmoorthy.ace-playbook-nightly.plist"`. The pause times are
+  `launchctl bootstrap gui/$(id -u) "$HOME/Library/LaunchAgents/com.example.ace-playbook-nightly.plist"`. The pause times are
   recorded with the result.
 - Binary: Claude Code 2.1.317, passed as `--claude "$HOME/.local/share/claude/versions/2.1.317"`, the file whose sha256 is
   `09f153b46b5df9e8b3454716d682a91901de020cbca630f61dec1a015b32b5e9`, at that path only, never the auto-updated `claude` symlink (if the
