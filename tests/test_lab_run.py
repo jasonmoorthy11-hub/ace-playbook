@@ -75,7 +75,7 @@ def test_every_trial_of_every_lesson_passes_one_single_argument_deny_list(lab, t
 
 
 TOOLS_EDIT = "--tools=Read,Edit,Write,Glob,Grep,ToolSearch"
-TOOLS_PLAN = "--tools=Read,Glob,Grep,ToolSearch,ExitPlanMode"
+TOOLS_PLAN = "--tools=Read,Edit,Write,Glob,Grep,ToolSearch,ExitPlanMode"
 KIND_TOOLS = {"pc-port": TOOLS_EDIT, "eu-parser": TOOLS_EDIT, "xp-greet": TOOLS_PLAN}                # preclaim, edit_unread, exitplan
 
 
@@ -97,10 +97,10 @@ def test_every_trial_allowlists_the_built_in_tools_per_kind_and_drops_every_mcp_
     assert DENY in argv                                                      # the denied list stays as the second layer
 
 
-def test_the_exitplan_tool_set_is_the_drivers_read_only_set_plus_exit_plan_mode_minus_ls():
+def test_the_exitplan_tool_set_is_the_drivers_read_only_set_plus_exit_plan_mode_write_and_edit_minus_ls():
     from ace_playbook.lab import exitplan
-    names = set(TOOLS_PLAN.split("=", 1)[1].split(","))
-    assert names == (exitplan.READ_ONLY | {"ExitPlanMode"}) - {"LS"}         # LS is not among the 25 built-ins of 2.1.317 (probed 2026-11-04)
+    names = set(run.TOOLS_PLAN.split("=", 1)[1].split(","))                  # the module constant, not a copied literal
+    assert names == (exitplan.READ_ONLY | {"ExitPlanMode", "Write", "Edit"}) - {"LS"}   # LS is not among the 25 built-ins of 2.1.317 (probed 2026-11-04)
     assert set(TOOLS_EDIT.split("=", 1)[1].split(",")) == {"Read", "Edit", "Write", "Glob", "Grep", "ToolSearch"}
 
 

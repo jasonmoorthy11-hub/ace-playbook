@@ -1,7 +1,8 @@
 """One lab trial: build the run dir, launch `claude -p` in stream-json mode, drive the turns, save the raw stream (docs/lab.md).
 
 Isolation: `--setting-sources ""` (no user CLAUDE.md, hooks or settings), `--tools=<allowlist>` per task kind and `--strict-mcp-config` (no MCP
-server) on every trial, `--disallowedTools=...` as a second layer (Bash, web and agent tools), the hooks and
+server) on every trial (the exitplan set keeps Write and Edit: the plan file is written through plan mode's own exemption, never a request to the
+driver, and any other write is denied there), `--disallowedTools=...` as a second layer (Bash, web and agent tools), the hooks and
 `plansDirectory` (`<work>/.lab-plans`) come only from the lab settings file, the prompts go through stdin (never argv), and
 ANTHROPIC_API_KEY and CLAUDECODE are removed from the environment. The lesson text is read from the operator's store by id at run time; the
 record keeps only `sha256(text)[:16]`. The only run-time reader of the store here.
@@ -31,7 +32,9 @@ DROP_ENV = ("ANTHROPIC_API_KEY", "CLAUDECODE")
 DENY = "--disallowedTools=Bash,WebFetch,WebSearch,NotebookEdit,Task,Agent"       # ONE argument: the tool flags are variadic, a separate
 #                                                                                  value would swallow the next flag
 TOOLS_EDIT = "--tools=Read,Edit,Write,Glob,Grep,ToolSearch"                      # preclaim, edit_unread: ONE argument, same reason as DENY
-TOOLS_PLAN = "--tools=Read,Glob,Grep,ToolSearch,ExitPlanMode"                    # exitplan: the driver's read-only set + ExitPlanMode (no LS in 2.1.317)
+# exitplan: the driver's read-only set + ExitPlanMode (no LS in 2.1.317) + Write/Edit: the plan file is written through plan mode's own exemption,
+# never a can_use_tool request, so every earlier pilot wrote it; any other write still reaches the driver and is denied (OTHER_MSG)
+TOOLS_PLAN = "--tools=Read,Edit,Write,Glob,Grep,ToolSearch,ExitPlanMode"
 
 
 def lesson_text(lesson: str) -> str:

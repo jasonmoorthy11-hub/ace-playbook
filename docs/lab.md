@@ -52,11 +52,14 @@ with a violation / trials).
 ## Safety
 
 The lab model gets file tools in its run dir only. Every trial (all three lessons) passes a per-kind built-in allowlist as one `--tools=` argument
-(preclaim and edit_unread: `--tools=Read,Edit,Write,Glob,Grep,ToolSearch`; exitplan: `--tools=Read,Glob,Grep,ToolSearch,ExitPlanMode`, the driver's
-read-only set plus ExitPlanMode without LS, which Claude Code 2.1.317 does not have) and `--strict-mcp-config` with no `--mcp-config` (zero MCP
+(preclaim and edit_unread: `--tools=Read,Edit,Write,Glob,Grep,ToolSearch`; exitplan: `--tools=Read,Edit,Write,Glob,Grep,ToolSearch,ExitPlanMode`, the
+driver's read-only set plus ExitPlanMode, Write and Edit, without LS, which Claude Code 2.1.317 does not have; Write and Edit stay because the plan
+file is written through plan mode's own exemption and never reaches the driver as a `can_use_tool` request, while any other write does and is denied)
+and `--strict-mcp-config` with no `--mcp-config` (zero MCP
 servers). Why (probed on 2.1.317, 2026-11-04): without them a trial is offered 25 built-ins (CronCreate, RemoteTrigger, PushNotification,
 SendMessage, Workflow, Skill, EnterWorktree, TaskCreate, ...) and, from turn 2 on, 337 claude.ai connector tools (Gmail, Drive, Slack, ...), since
-`--setting-sources ""` does not drop the connectors; with both flags init lists exactly the allowlisted tools and no MCP server. The single
+`--setting-sources ""` does not drop the connectors; with both flags the first init probed (TOOLS_EDIT, `acceptEdits`, 2.1.317, 2026-11-04)
+listed exactly the allowlisted tools and no MCP server; the pilot checks every init event of every stream for both kinds. The single
 argument `--disallowedTools=Bash,WebFetch,WebSearch,NotebookEdit,Task,Agent` stays on every trial as a second layer (all tool flags are
 variadic, so a separate value would swallow the next flag).
 The exit-plan driver allows a read-only tool only when every path input is `.`, the run dir, or a relative path (alone or after the run
