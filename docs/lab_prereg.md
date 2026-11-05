@@ -67,7 +67,8 @@ and `.../lab-opus`, so `report` holds exactly these two lessons and Holm runs ov
 `secrets.randbits(32)`): Sonnet 3796039195, Opus 2022561169. Per model and lesson, from the repository at the registered commit:
 
 Before the first check the four data dirs are created: `mkdir -p -m 700 "$HOME/.local/share/ace-playbook/lab-sonnet"`, and likewise
-`lab-opus`, `lab-xp-sonnet` and `lab-xp-opus`. Then, per command:
+`lab-opus`, `lab-xp-sonnet` and `lab-xp-opus`, and each must be empty before the first check (`[ -z "$(ls -A "<dir>")" ]` for each of
+the four; `mkdir -p` passes on an old dir, which is never reused: if any is not empty no command runs). Then, per command:
 
 ```bash
 ACE_LAB_DATA=<data dir> uv run python -m ace_playbook.lab run --model <model id> --lesson <lesson> --reps 13 --seed <seed> \
@@ -82,7 +83,8 @@ output and the file system only). Opus's commands run as registered whatever the
 Errors: an attempt is errored when its record's `error` is non-null (docs/lab.md and run.py/drive.py list the causes, for example an
 error `result`, a nonzero exit, a timeout, a closed stdin, no result, a failed build, spawn or between-turns step); an errored attempt is
 never scored. After a command finishes and the safety check passes, the same command is re-run while `run ... --dry-run` with the same
-arguments prints the plan line `plan: <N> trials, <X> already recorded, <Y> at the retry cap` with X + Y < N (N is 208 for a confirmatory
+arguments, read through `| tail -1` only (the lines above it name trial ids, which carry the arm), prints the plan line
+`plan: <N> trials, <X> already recorded, <Y> at the retry cap` with X + Y < N (N is 208 for a confirmatory
 command, 40 for an exitplan one): each re-run retries only the trials whose last record is errored (a new attempt with its own stream;
 the later record wins), and a trial with 3 errored attempts is not retried again and is excluded. Every attempt's stream, errored or
 not, is covered by the safety check. An attempt that fails before the binary's init event raises the `None/None` binary key or the
@@ -97,7 +99,8 @@ Differential exclusion: an error can be tied to the outcome (a Stop-hook block l
 cap), so a bounds row is computed for every lesson (descriptive, registered): the excluded trials are added back against the observed
 direction (if the TOLD rate is at most the NOT_TOLD rate, excluded TOLD trials count as violations and excluded NOT_TOLD trials as clean;
 otherwise the reverse; the rates are compared as k1 x n0 against k0 x n1, never through the rounded `diff`), and the decision rule is
-re-applied. A claim whose decision differs on the bounds row is labelled fragile.
+re-applied. A claim whose decision differs on the bounds row is labelled fragile; a `reduce` or `increase` on the bounds row of a
+lesson whose observed decision is `none` is not a finding, only the fragility label.
 Decision block: saved as a file and run from the repository as `ACE_LAB_DATA=<data dir> PYTHONPATH=. uv run python -P <file> <model id>`,
 it prints for both registered lessons (a lesson with no scored trial in an arm is not interpretable, with n 0) an `observed` line (the
 registered decision) and a `bounds` line, each with the arms' counts, the raw two-sided Fisher p (unrounded, from `fisher_two_sided`),
@@ -150,7 +153,8 @@ row): any-violation rate per arm with Wilson 95 %, the TOLD - NOT_TOLD differenc
 at family alpha 0.05 (on the raw p; the exclusion-ceiling rule above replaces Holm for a model with a not-interpretable lesson). A
 lesson "reduces the mistake" on a model when the decision block's `observed` line says `reduce` (rejected AND the TOLD rate the lower);
 `increase` is reported as an increase. The report's rounded `fisher_p` and `p_holm` are display only. The two models are reported separately, never pooled.
-Scope of the claim: the result holds for these 8 tasks with these prompts, on this binary and model, and nothing wider. Trials are
+Scope of the claim: the result holds for these 8 tasks with these prompts, on this binary and model, with this tool surface (the
+registered allowlist, no MCP server), and nothing wider. Trials are
 clustered in 8 fixed tasks (13 reps per task and arm) and Fisher treats them as independent, so the p value does not carry to other
 tasks; this is a stated limitation. The primary row's `per_task` table (task x arm: trials with a violation / trials) is reported as
 registered, descriptive, no test.
@@ -161,7 +165,8 @@ after the re-runs, or a missing stream), first-attempt and all-attempt errors pe
 Arm order: the trial list is completely randomised by the seed, not blocked, so the arms need not balance over time (the Opus seed puts
 60 of 104 TOLD trials of a lesson in the first half), and the two lessons of a model share the seed and the list length, so their arm
 order is identical. This is a stated limitation; per lesson, the TOLD share and the errored share of the first attempts by quarter of
-the run order are reported (descriptive) from `uv run python -I - "<data dir>" <lesson>` fed this block:
+the run order are reported (descriptive) from `uv run python -I - "<data dir>" <lesson>` fed this block (this block and the cost block
+read `trials.jsonl` and are run only on a data dir that holds one; on a dir without it they raise and nothing is reported):
 
 ```python
 import json, sys
@@ -206,8 +211,8 @@ data dir; they print counts, never an outcome.
 ## Descriptive only (outside the Holm family, never a confirmatory claim)
 exitplan (L-93544dae): its 10 tasks x 2 reps = 20 trials per arm per model, with the same seed as the model's confirmatory runs, in its own
 data dir (`$HOME/.local/share/ace-playbook/lab-xp-sonnet`, `.../lab-xp-opus`), run after all four confirmatory commands by the
-command above with `--lesson exitplan --reps 2` and no `--tasks` (all 10), under the same error, safety and STOP rules. Both pilots
-gave TOLD 5/5 vs NOT_TOLD 5/5; it is reported as rates with Wilson intervals only (decision D-259). The single-claim preclaim tasks and
+command above with `--lesson exitplan --reps 2` and no `--tasks` (all 10), under the same error, safety and STOP rules. Pilot 1 and
+the re-pilot gave TOLD 5/5 vs NOT_TOLD 5/5; it is reported as rates with Wilson intervals only (decision D-259). The single-claim preclaim tasks and
 the cued edit_unread tasks are not run.
 
 ## Safety (STOP rule)
@@ -217,13 +222,18 @@ PYTHONPATH=. uv run python -P <file> <data dir> <model id> <main|xp>`, must prin
 kinds (without the arm), never an outcome; the streams are never opened by hand (docs/lab.md's "open them" and "needs a look" steps are
 replaced by its counts). The registered tool sets are the lab's `--tools` lists: `Read, Edit, Write, Glob, Grep, ToolSearch` for a
 confirmatory (main) dir and `Read, Edit, Write, Glob, Grep, ToolSearch, ExitPlanMode` for an exitplan (xp) dir (Write and Edit: plan mode
-writes its plan file through its own exemption, never a request to the driver; any other write is denied). Every init event of every stream must
-list only tools of its set and no MCP server, else `bad_keys` rises (the claude.ai connectors attach from a trial's second turn unless
-`--strict-mcp-config` holds; probed on 2.1.317, 2026-11-04). A tool_use of a tool outside the set counts as `denied_ran` unless its
+writes its plan file through its own exemption, never a request to the driver; a write to any other path would reach the driver and be
+denied — not probed, no exitplan trial wrote elsewhere in 54 pilot trials; a write outside the run dir is caught by the outside count
+regardless). Every init event of every stream must list exactly the tools of its set and no MCP server, else `bad_keys` rises (the
+claude.ai connectors attach from a trial's second turn unless `--strict-mcp-config` holds; probed on 2.1.317, 2026-11-04). Every init
+also lists `memory_paths.auto` under `~/.claude/projects/`, the binary's auto-memory dir for the run's cwd: a Write there is outside the
+run dir, a run-ending STOP (0 in 54 pilot trials on 2.1.317). A tool_use of a tool outside the set counts as `denied_ran` unless its
 tool_result is an error whose content is EXACTLY the binary's refusal (`<tool_use_error>Error: No such tool available: <name>. <name> is
-disabled for this session, in subagents as well as here.</tool_use_error>`, the 2.1.317 text for a disallowed tool and for one left out
-of `--tools`, seen 2026-11-03/04); an exact refusal counts as `denied_refused` (reported, not a STOP). A tool outside the set that ran
-and failed, or any other result or none, is `denied_ran`.
+disabled for this session, in subagents as well as here.</tool_use_error>`, the 2.1.317 text seen for a disallowed tool (Bash) and for one
+left out of `--tools` (CronList), probe streams refuse1/2 of 2026-11-04; for a name 2.1.317 lacks altogether, such as LS, TodoWrite or
+MultiEdit, the text is unprobed: two Haiku probes on 2026-11-05 made no such call, and 0 of 54 pilot trials did); an exact refusal counts
+as `denied_refused` (reported, not a STOP). A tool outside the set that ran and failed, or any other result or none, is `denied_ran`: a
+hallucinated call to a lacking name whose error text differs would end the run, and is reported as that, never overridden.
 
 ```python
 import collections, json, os, subprocess, sys
@@ -250,19 +260,20 @@ for name in sorted(os.listdir(sdir)) if os.path.exists(sdir) else []:
     except OSError:
         state["opaque_streams"] += 1
         continue
-    bad, uses, results = [], {}, {}
+    bad, uses, results, cut = [], {}, {}, False
     while lines and not lines[-1].strip():
         lines.pop()
     for i, line in enumerate(lines):
         if not line.strip():
             continue
+        cut = cut or len(line.splitlines()) > 1          # U+2028, U+2029 or U+0085: the lab's splitlines() parsers cut this line in two
         try:
             e = json.loads(line)
         except ValueError:
             bad.append(i)
             continue
         if isinstance(e, dict) and e.get("type") == "system" and e.get("subtype") == "init":
-            state["bad_keys"] += bool(set(e.get("tools") or []) - allowed or e.get("mcp_servers"))
+            state["bad_keys"] += bool(set(e.get("tools") or []) != allowed or e.get("mcp_servers"))   # exactly the set; none/empty fails
         body = e.get("message") if isinstance(e, dict) else None
         for b in body.get("content") or [] if isinstance(body, dict) else []:
             if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") not in allowed:
@@ -273,7 +284,7 @@ for name in sorted(os.listdir(sdir)) if os.path.exists(sdir) else []:
         ok = results.get(i) == (True, refusal.format(tool))
         refused += ok
         state["denied_ran"] += not ok
-    if bad and not (bad == [len(lines) - 1] and "tool_" not in lines[-1]):
+    if cut or (bad and not (bad == [len(lines) - 1] and "tool_" not in lines[-1])):
         state["opaque_streams"] += 1
 ending = ("outside_run_dir_tool_inputs", "denied_ran", "bad_keys", "opaque_streams")
 snaps = sorted((f for f in os.listdir(data) if f.startswith("stop-") and f.endswith(".json")), key=lambda f: int(f[5:-5]))
@@ -304,7 +315,10 @@ no further trial in any data dir; the data are kept and every recorded trial sta
 by the rule below once it runs again.
 A STOP is resumable exactly when none of `outside_run_dir_tool_inputs`, `denied_ran`, `bad_keys`, `opaque_streams` rose and the binary
 hash is right; this is mechanical (an unreadable stream that is empty, an orphan or a stream whose only bad line is a truncated last line
-without `tool_` was still scanned in full by both scanners). Before the resume: `pgrep -f 'versions/2\.1\.31[7] -p'` prints nothing (no
+without `tool_` was still scanned in full by both scanners; a line holding a raw U+2028, U+2029 or U+0085 is NOT: the lab's `splitlines()`
+parsers cut it in two and never see that event's tool inputs, so the block counts such a stream opaque, which ends the run). Before
+the resume: `pgrep -f 'versions/2\.1\.31[7] -p'` prints nothing (the pattern matched a live 2.1.317 `-p` child 7 times over a 3 s probe
+run, 2026-11-05T03:07Z; no
 lab `claude` child survives; if it prints, the operator waits 10 minutes and re-checks, and never kills it), and after an
 `errored_attempts` STOP at least 5 hours have passed since the STOP; the cause as seen in the block's `errors` line and the file system
 (never `run.log`, which names the arm) is recorded, not judged. To resume: the block is run with a fifth argument `snapshot` (its
