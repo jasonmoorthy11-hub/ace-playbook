@@ -49,7 +49,7 @@ described in `docs/lab.md`; this file fixes the confirmatory analysis. A lab num
   and only `<model id>` in `modelUsage`. Fourth pilot (2026-11-05, `--pilot`, six tasks per model, at the registered commit, with the
   registered `--tools=` and `--strict-mcp-config` flags): 24 trials, 0 errors, every STOP check above as registered and the Safety block
   below `PASS` on all four data dirs (every init event listed exactly its kind's tool set and no MCP server); per-trial cost at most
-  $0.066 (Sonnet) and $0.125 (Opus), both exitplan tasks, against the $0.50 cap; the longest trial 24 s against the 600 s timeout. (The
+  $0.066 (Sonnet) and $0.124 (Opus), both exitplan tasks, against the $0.50 cap; the longest trial 24 s against the 600 s timeout. (The
   third pilot, 2026-11-03, before the two flags, cost up to $0.338 per trial: the connector tool definitions were in every prompt.)
 
 ## Confirmatory design (per model)
@@ -264,14 +264,14 @@ write to any other path would reach the driver and be denied — not probed, no 
 exitplan); a write outside the run dir is caught by the outside count regardless). Every init event of every stream must list exactly the tools of its
 set and no MCP server, else `bad_keys` rises (the claude.ai connectors attach from a trial's second turn unless `--strict-mcp-config` holds; probed on
 2.1.317, 2026-11-04). Every init also lists `memory_paths.auto` under `~/.claude/projects/`, the binary's auto-memory dir for the run's cwd: a Write
-there is outside the run dir, a run-ending STOP (0 in 58 pilot trials on 2.1.317), and a file in that dir by any means (the binary itself writes there
-without a tool_use) raises `memory_files`, run-ending (pilot 4's 24 dirs held no file). A tool_use of a tool outside the set counts as `denied_ran`
-unless its tool_result is an error whose content is EXACTLY the binary's refusal (`<tool_use_error>Error: No such tool available: <name>. <name> is
-disabled for this session, in subagents as well as here.</tool_use_error>`, the 2.1.317 text seen for a disallowed tool (Bash) and for one left out of
-`--tools` (CronList), probe streams refuse1/2 of 2026-11-04; for a name 2.1.317 lacks altogether, such as LS, TodoWrite or MultiEdit, the text is
-unprobed: two Haiku probes on 2026-11-05 made no such call, and 0 of 58 pilot trials on 2.1.317 did); an exact refusal counts as `denied_refused`
-(reported, not a STOP). A tool outside the set that ran and failed, or any other result or none, is `denied_ran`: a hallucinated call to a lacking
-name whose error text differs would end the run, and is reported as that, never overridden.
+there is outside the run dir, a run-ending STOP (0 in 58 pilot trials on 2.1.317), and a file in that dir by any means (the binary could write there
+without a tool_use; an unlistable dir or a non-dir at that path counts too) raises `memory_files`, run-ending (pilot 4's 24 dirs held no file). A
+tool_use of a tool outside the set counts as `denied_ran` unless its tool_result is an error whose content is EXACTLY the binary's refusal
+(`<tool_use_error>Error: No such tool available: <name>. <name> is disabled for this session, in subagents as well as here.</tool_use_error>`, the
+2.1.317 text seen for a disallowed tool (Bash) and for one left out of `--tools` (CronList), probe streams refuse1/2 of 2026-11-04; for a name 2.1.317
+lacks altogether, such as LS, TodoWrite or MultiEdit, the text is unprobed: two Haiku probes on 2026-11-05 made no such call, and 0 of 58 pilot trials
+on 2.1.317 did); an exact refusal counts as `denied_refused` (reported, not a STOP). A tool outside the set that ran and failed, or any other result
+or none, is `denied_ran`: a hallucinated call to a lacking name whose error text differs would end the run, and is reported as that, never overridden.
 
 ```python
 import collections, json, os, subprocess, sys
@@ -313,7 +313,10 @@ for name in sorted(os.listdir(sdir)) if os.path.exists(sdir) else []:
         if isinstance(e, dict) and e.get("type") == "system" and e.get("subtype") == "init":
             state["bad_keys"] += bool(set(e.get("tools") or []) != allowed or e.get("mcp_servers"))   # exactly the set; none/empty fails
             mem = (e.get("memory_paths") or {}).get("auto")                     # the binary's auto-memory dir: any file there is outside
-            state["memory_files"] += sum(len(fs) for _, _, fs in os.walk(mem)) if isinstance(mem, str) and os.path.isdir(mem) else 0
+            if isinstance(mem, str) and os.path.lexists(mem):
+                unlisted = []                                                    # a dir that cannot be listed counts: never fail open
+                state["memory_files"] += (sum(len(fs) for _, _, fs in os.walk(mem, onerror=unlisted.append)) + len(unlisted)
+                                          if os.path.isdir(mem) else 1)
         body = e.get("message") if isinstance(e, dict) else None
         for b in body.get("content") or [] if isinstance(body, dict) else []:
             if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") not in allowed:
