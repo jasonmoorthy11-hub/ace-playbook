@@ -291,24 +291,30 @@ as LS, TodoWrite or MultiEdit, the text is unprobed: two Haiku probes on 2026-11
 exact refusal counts as `denied_refused` (reported, not a STOP). A tool outside the set that ran and failed, or any other result or none, is
 `denied_ran`: a hallucinated call to a lacking name whose error text differs would end the run, and is reported as that, never overridden. A tool_use
 input outside the run dir (the report's own test, `outside.inputs` on the init `cwd`, read as `score._outside` reads it: the tool_use blocks of
-`assistant` events; the block walks the regular, non-symlink `.jsonl` files of `streams/` and counts anything else there as opaque) is
-`outside_refused` only when its tool_use id is a string that exactly one tool_use of the stream carries, at least one tool_result names that id, every
-such result has `is_error` true with a content that is a str beginning with a text seen on 2.1.317 — for a main dir `Claude requested permissions to `
-(the headless `-p` denial of a path outside the cwd; a main run has no permission-prompt tool) or `<tool_use_error>File does not exist.` (the Edit
-tool's own error), for an xp dir exactly the driver's `tool not permitted in this lab run` (exitplan.OTHER_MSG; the driver's messages come back
-verbatim, pilot 4) — or exactly the binary's refusal above for a tool outside the set (such an input counts in both `denied_*` and `outside_*`), and
-the report's scanner (`score.outside_scan`) counts for that stream exactly what the walk counted. Every other outside input is `outside_ran`: a result
-that is not an error or has any other text (an unseen refusal text would end the run and is reported as that, never overridden, as for `denied_ran`),
-no result, a shared or missing id, a stream the scanner reads differently, or an input the report counts in a stream the walk does not read (a record
-naming a stream outside `streams/`): `outside_ran` is the report's `outside_run_dir_tool_inputs` minus `outside_refused` (the block prints both;
-`outside_refused` never exceeds the total). `outside_refused` is reported, not a STOP (version 1's 2 of 208 Sonnet trials were refused typos of the
-cwd; 0 of 58 pilot trials); `outside_ran` is run-ending. The counts `outside_unreadable`, `outside_bad_lines` and `outside_orphan_streams` are the
-report's, unchanged.
+`assistant` events, with the tool_result blocks of `user` events, where the binary puts them; the block walks the regular, non-symlink `.jsonl` files
+of `streams/` and counts anything else there as opaque) is `outside_refused` only when its tool_use id is a string that exactly one tool_use of the
+stream carries, at least one tool_result names that id, every such result has `is_error` true with a content that is a str of the text seen on 2.1.317
+for that tool — for a tool outside the set exactly the binary's refusal above (such an input counts in both `denied_*` and `outside_*`); for Edit a
+text beginning `<tool_use_error>File does not exist.` (the Edit tool's own error, in a main or an xp dir: it comes before any permission request, as
+version 1's r12 shows); otherwise, for a main dir a text beginning `Claude requested permissions to ` (the headless `-p` denial of a path outside the
+cwd; a main run has no permission-prompt tool) and for an xp dir exactly the driver's `tool not permitted in this lab run` (exitplan.OTHER_MSG, never
+seen itself on 2.1.317: that it comes back verbatim is inferred from the driver's twelve ExitPlanMode answers in pilot 4, which did) — and the report
+counted that stream once, through a path it could read: exactly one record of trials.jsonl (not a `build failed` one) names the stream's realpath and
+the report's scanner (`score.outside_scan`) on that record's own path counts what the walk counted, or no record names it and the scanner on the file
+does (an orphan). Every other outside input is `outside_ran`: a result that is not an error or has any other text (an unseen refusal text would end
+the run and is reported as that, never overridden, as for `denied_ran`), no result, a shared or missing id, a stream named by two records or by a path
+the report could not read, a stream the scanner reads differently, or an input the report counts in a stream the walk does not read (a record naming a
+stream outside `streams/`): `outside_ran` is the report's `outside_run_dir_tool_inputs` minus `outside_refused` (the block prints both;
+`outside_refused` never exceeds the total; the block first asserts that `ACE_LAB_DATA`, which the report reads, and its first argument, which the walk
+reads, are the same directory). `outside_refused` is reported, not a STOP (version 1's 2 of 208 Sonnet trials were refused typos of the cwd; 0 of 58
+pilot trials); `outside_ran` is run-ending. The counts `outside_unreadable`, `outside_bad_lines` and `outside_orphan_streams` are the report's,
+unchanged.
 
 ```python
 import collections, json, os, posixpath, subprocess, sys
 from ace_playbook.lab import outside, score
 data, model, kind = sys.argv[1:4]
+assert os.path.realpath(os.environ["ACE_LAB_DATA"]) == os.path.realpath(data)        # the report and the walk read the same dir
 cmd = [sys.executable, "-m", "ace_playbook.lab", "report", "--json"]
 d = json.loads(subprocess.run(cmd, capture_output=True, text=True, check=True, env=os.environ).stdout)
 keys = ("outside_unreadable", "outside_bad_lines", "outside_orphan_streams")
@@ -325,10 +331,29 @@ sdir = os.path.join(data, "streams")
 state["denied_ran"] = state["opaque_streams"] = state["memory_files"] = state["outside_ran"] = refused = out_refused = 0
 refusal = ("<tool_use_error>Error: No such tool available: {0}. {0} is disabled for this session, in subagents as well as "
            "here.</tool_use_error>")
-refused_text = {"main": ("Claude requested permissions to ", "<tool_use_error>File does not exist."),   # the -p denial and the Edit error seen
-                "xp": ("tool not permitted in this lab run",)}[kind]                                # exitplan.OTHER_MSG, the driver's denial
-def refused_ok(content):
-    return isinstance(content, str) and content.startswith(refused_text) and (kind == "main" or content == refused_text[0])
+FNE = "<tool_use_error>File does not exist."                                   # the Edit tool's own error, seen on 2.1.317 (v1, r12)
+def refused_ok(tool, content):                                                 # a seen text, bound to the tool that produced it
+    if not isinstance(content, str):
+        return False
+    if tool not in allowed:
+        return content == refusal.format(tool)                                 # the binary's refusal of a tool outside the set
+    if tool == "Edit" and content.startswith(FNE):
+        return True
+    return (content.startswith("Claude requested permissions to ") if kind == "main"   # the headless -p denial (main has no driver)
+            else content == "tool not permitted in this lab run")                   # exitplan.OTHER_MSG, the xp driver's denial
+named, npath = collections.Counter(), {}                                       # realpath -> records naming it, and the path they name
+try:
+    for line in open(os.path.join(data, "trials.jsonl"), "rb").read().decode("utf-8", "replace").split("\n"):
+        try:
+            r = json.loads(line) if line.strip() else None
+        except ValueError:
+            continue                                                            # an unparseable record names nothing
+        s = r.get("stream") if isinstance(r, dict) else None
+        if isinstance(s, str) and s and not str(r.get("error") or "").startswith("build failed"):
+            named[os.path.realpath(s)] += 1
+            npath[os.path.realpath(s)] = s
+except OSError:
+    pass                                                                        # no trials.jsonl: every stream is an orphan
 for name in sorted(os.listdir(sdir)) if os.path.exists(sdir) else []:
     path = os.path.join(sdir, name)
     if not name.endswith(".jsonl") or os.path.islink(path) or not os.path.isfile(path):   # not a stream the lab wrote: fail closed
@@ -372,7 +397,7 @@ for name in sorted(os.listdir(sdir)) if os.path.exists(sdir) else []:
                     walk += n
                     if n:
                         outs[b.get("id")] = (outs.get(b.get("id"), (0,))[0] + n, b.get("name"))
-            if isinstance(b, dict) and b.get("type") == "tool_result":
+            if isinstance(b, dict) and b.get("type") == "tool_result" and e.get("type") == "user":   # where the binary puts them
                 results[b.get("tool_use_id")].append((b.get("is_error"), b.get("content")))
     def one(i):                                                                  # one tool_use carries the id and at least one result
         return isinstance(i, str) and ids[i] == 1 and bool(results[i])
@@ -380,13 +405,14 @@ for name in sorted(os.listdir(sdir)) if os.path.exists(sdir) else []:
         ok = one(i) and all(r == (True, refusal.format(tool)) for r in results[i])
         refused += ok
         state["denied_ran"] += not ok
+    rp = os.path.realpath(path)                                                  # counted by the report once, through the path it read?
+    via = npath[rp] if named[rp] == 1 else (path if named[rp] == 0 else None)   # one record's own path, or an orphan's
     try:
-        same = score.outside_scan(path)[0] == walk                               # the report's scanner on this stream agrees with the walk
+        same = via is not None and score.outside_scan(via)[0] == walk            # the report's scanner on that path agrees with the walk
     except (OSError, ValueError):
         same = False
     for i, (n, tool) in outs.items():                                             # refused only when every result is an error of a seen text
-        out_refused += n if same and one(i) and all(r[0] is True and (refused_ok(r[1]) or r[1] == refusal.format(tool))
-                                                    for r in results[i]) else 0
+        out_refused += n if same and one(i) and all(r[0] is True and refused_ok(tool, r[1]) for r in results[i]) else 0
     if cut or (bad and not (bad == [len(lines) - 1] and "tool_" not in lines[-1])):
         state["opaque_streams"] += 1
 out_refused = min(out_refused, total)
