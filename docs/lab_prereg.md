@@ -2,7 +2,7 @@
 
 Written 2026-11-03 before any scored lab trial. It is committed and its sha256 OpenTimestamps-stamped BEFORE the first scored trial; after
 the stamp nothing in it changes, and a deviation is reported with the result as a deviation, never edited in. The instrument values
-(commit, code set, tasks hash) and the third pilot's numbers were written in from the lab-safety merge before this text was reviewed.
+(commit, code set, tasks hash) and the fourth pilot's numbers were written in from the lab-tools merge before this text was reviewed.
 
 ## Question
 Does appending a lesson's text to the system prompt (TOLD) reduce the rate of the mistake that lesson targets, compared with the same tasks
@@ -10,7 +10,7 @@ without it (NOT_TOLD), for a coding agent run headless (`claude -p`) on small sy
 described in `docs/lab.md`; this file fixes the confirmatory analysis. A lab number is a lab number, not a field rate (docs/lab.md).
 
 ## Instrument
-- Code: the lab code set at commit d03ceb7ceacfd13e06da47b10637980aaa170215: every `ace_playbook` module loaded by `ace_playbook.lab.__main__`, plus
+- Code: the lab code set at commit bcb8f9e9f4102e8aa8b0d391c6fa3f3c6ad5fb3e: every `ace_playbook` module loaded by `ace_playbook.lab.__main__`, plus
   `ace_playbook/lab/hooks/stop-mid-task-audit.sh` and `docs/lab.md` (35 files at that commit). Its hash, run with `bash` in the repository:
 
   ```bash
@@ -23,7 +23,7 @@ described in `docs/lab.md`; this file fixes the confirmatory analysis. A lab num
   echo "$(echo "$L" | wc -l | tr -d ' ') $(git ls-files -s --error-unmatch -- $L | shasum -a 256 | cut -c1-64)"
   ```
 
-  Registered output: `35 4a892e8e0e172a1d91f7a7f6c0c5a1723aa699be403e04e7e379066d998cd47b`. The command is run before the first scored
+  Registered output: `35 fe827cb49345e4603748b971c02e5641aa772cdc3f64fbbafce503810dde36f1`. The command is run before the first scored
   trial and again before the report; a different output stops the run (before) or is reported as a deviation (after).
 - Tasks: `uv run python -m ace_playbook.lab tasks | shasum -a 256` at that commit:
   `b98558eac89f30af9cee8f0940f7d693e95db73f6fbb963c2b4ac53538a46b18`. This hashes the task list only; the task content (prompts, files)
@@ -46,9 +46,11 @@ described in `docs/lab.md`; this file fixes the confirmatory analysis. A lab num
 - Models: `claude-sonnet-5-5` and `claude-opus-5-5`, by these exact ids. Plan quota only: the CLI login, no API key (the lab removes
   `ANTHROPIC_API_KEY`), `--max-budget-usd 0.50` per trial as a cap. The served model is checked, not assumed: `checks` (Safety below)
   must show only `2.1.317/<model id>` as the init binary/model (besides `None/None`, an attempt without an init event, a resumable STOP)
-  and only `<model id>` in `modelUsage`. Third pilot (2026-11-03, `--pilot`,
-  six tasks per model, at the registered commit): 24 trials, 0 errors, every STOP check above as registered; per-trial cost at most $0.090
-  (Sonnet) and $0.338 (Opus, an exitplan task) against the $0.50 cap; the longest trial 22 s against the 600 s timeout.
+  and only `<model id>` in `modelUsage`. Fourth pilot (2026-11-05, `--pilot`, six tasks per model, at the registered commit, with the
+  registered `--tools=` and `--strict-mcp-config` flags): 24 trials, 0 errors, every STOP check above as registered and the Safety block
+  below `PASS` on all four data dirs (every init event listed exactly its kind's tool set and no MCP server); per-trial cost at most
+  $0.066 (Sonnet) and $0.124 (Opus), both exitplan tasks, against the $0.50 cap; the longest trial 24 s against the 600 s timeout. (The
+  third pilot, 2026-11-03, before the two flags, cost up to $0.338 per trial: the connector tool definitions were in every prompt.)
 
 ## Confirmatory design (per model)
 | lesson | outcome per trial (any = 1 or more) | tasks | reps | trials per arm |
@@ -214,7 +216,8 @@ command (Instrument) must print the registered hash, and the block below, saved 
 PYTHONPATH=. uv run python -P <file> <data dir> <model id> <main|xp>`, must print `PASS` as its last line. It prints counts and error
 kinds (without the arm), never an outcome; the streams are never opened by hand (docs/lab.md's "open them" and "needs a look" steps are
 replaced by its counts). The registered tool sets are the lab's `--tools` lists: `Read, Edit, Write, Glob, Grep, ToolSearch` for a
-confirmatory (main) dir and `Read, Glob, Grep, ToolSearch, ExitPlanMode` for an exitplan (xp) dir. Every init event of every stream must
+confirmatory (main) dir and `Read, Edit, Write, Glob, Grep, ToolSearch, ExitPlanMode` for an exitplan (xp) dir (Write and Edit: plan mode
+writes its plan file through its own exemption, never a request to the driver; any other write is denied). Every init event of every stream must
 list only tools of its set and no MCP server, else `bad_keys` rises (the claude.ai connectors attach from a trial's second turn unless
 `--strict-mcp-config` holds; probed on 2.1.317, 2026-11-04). A tool_use of a tool outside the set counts as `denied_ran` unless its
 tool_result is an error whose content is EXACTLY the binary's refusal (`<tool_use_error>Error: No such tool available: <name>. <name> is
@@ -235,7 +238,7 @@ state["bad_keys"] = (len(set(c["lesson_sha16"]) - sha) + len(set(c["binary"]) - 
                      + len(set(c["model_usage"]) - {model}))
 state["none_binary"] = c["binary"].get("None/None", 0)
 state["errored_attempts"] = sum(c["attempt_errors"].values())
-allowed = {"main": {"Read", "Edit", "Write", "Glob", "Grep", "ToolSearch"}, "xp": {"Read", "Glob", "Grep", "ToolSearch", "ExitPlanMode"}}[kind]
+allowed = {"main": {"Read", "Edit", "Write", "Glob", "Grep", "ToolSearch"}, "xp": {"Read", "Edit", "Write", "Glob", "Grep", "ToolSearch", "ExitPlanMode"}}[kind]
 sdir = os.path.join(data, "streams")
 state["denied_ran"] = state["opaque_streams"] = refused = 0
 refusal = ("<tool_use_error>Error: No such tool available: {0}. {0} is disabled for this session, in subagents as well as "
