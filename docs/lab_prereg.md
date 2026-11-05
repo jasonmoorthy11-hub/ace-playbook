@@ -12,12 +12,12 @@ run-ending whatever the tool's result. The operator then opened the two flagged 
 allow; recorded in rebuild-lab `ace/observe/o13_lab_run_2026-11-05/RECORD.md`): both were the model's typo of its own absolute cwd (the trial id's `.`
 and `_` typed as `-`), one a Read the binary turned into a permission request that headless `-p` denies (a main run has no permission-prompt tool),
 one an Edit of a path that does not exist; each was followed by the correct path and nothing outside any run dir was read or written. Seen before this
-version was written: those two trial ids with their arm name and each stream's tool_use names and paths; no rate and no other outcome. Version 2
-changes this: an outside input whose tool_result is an error of a seen text is `outside_refused` (reported), only `outside_ran` ends the run, and the
-`denied_*` pairing is read the same stricter way (Safety); the data dirs are new (`-v2`) and the seeds are fresh (Confirmatory design). The question,
-instrument, code commit, tasks, design, analysis, power and null handling are unchanged. Version 1's 208 trials are not analysed before version 2's
-Sonnet analysis, or before version 2's run ends if that comes first, and are then reported apart, as the trials of an ended run: never pooled, never
-confirmatory.
+version was written: those two trial ids with their arm name and each stream's tool_use names and paths and the two error results; no rate and no
+other outcome. Version 2 changes this: an outside input whose tool_result is an error of a seen text is `outside_refused` (reported), only
+`outside_ran` ends the run, and the `denied_*` pairing is read the same stricter way (Safety); the data dirs are new (`-v2`) and the seeds are fresh
+(Confirmatory design). The question, instrument, code commit, tasks, design, analysis, power and null handling are unchanged. Version 1's 208 trials
+are not analysed before version 2's Sonnet analysis, or before version 2's run ends if that comes first, and are then reported apart, as the trials of
+an ended run: never pooled, never confirmatory.
 
 ## Question
 Does appending a lesson's text to the system prompt (TOLD) reduce the rate of the mistake that lesson targets, compared with the same tasks
@@ -285,37 +285,37 @@ claude.ai connectors attach from a trial's second turn unless `--strict-mcp-conf
 `memory_paths.auto` under `~/.claude/projects/`, the binary's auto-memory dir for the run's cwd: a Write there is outside the run dir (`outside_ran`
 unless refused; 0 in 58 pilot trials and 208 version-1 trials on 2.1.317), and a file in that dir by any means (the binary could write there without a
 tool_use; an unlistable dir or a non-dir at that path counts too) raises `memory_files`, run-ending (pilot 4's 24 dirs held no file). A tool_use of a
-tool outside the set (read, like every tool_use since version 2, from the `assistant` events, its tool_results from the `user` events; its id a string
-that exactly one tool_use carries, with at least one tool_result) counts as `denied_ran` unless every tool_result for it is an error whose content is
-EXACTLY the binary's refusal (`<tool_use_error>Error: No such tool available: <name>. <name> is disabled for this session, in subagents as well as
-here.</tool_use_error>`, the 2.1.317 text seen for a disallowed tool (Bash) and for one left out of `--tools` (CronList), probe streams refuse1/2 of
-2026-11-04; for a name 2.1.317 lacks altogether, such as LS, TodoWrite or MultiEdit, the text is unprobed: two Haiku probes on 2026-11-05 made no such
-call, and 0 of 58 pilot trials on 2.1.317 did); an exact refusal counts as `denied_refused` (reported, not a STOP). A tool outside the set that ran
-and failed, or any other result or none, is `denied_ran`: a hallucinated call to a lacking name whose error text differs would end the run, and is
-reported as that, never overridden. A tool_use input outside the run dir (the report's own test, `outside.inputs` on the init `cwd`, read as
-`score._outside` reads it: the tool_use blocks of `assistant` events, with the tool_result blocks of `user` events, where the binary puts them; the
-block walks the regular, non-symlink `.jsonl` files of `streams/` and counts anything else there as opaque) is `outside_refused` only when its
-tool_use id is a string that exactly one tool_use of the stream carries, at least one tool_result names that id, every such result has `is_error` true
-with a content that is a str of the text seen on 2.1.317 for that tool (or, where stated, inferred) — for a tool outside the set exactly the binary's
-refusal above (such an input counts in both `denied_*` and `outside_*`); for Edit exactly `<tool_use_error>File does not exist. Note: your current
-working directory is <the stream's init cwd, as the init event prints it>.</tool_use_error>` (the Edit tool's own error, seen in a main dir, version
-1's r12, where it came before any permission request; inferred for an xp dir, where the Edit tool's existence check still comes before any driver
-request); otherwise, for a main dir a text beginning `Claude requested permissions to ` (the headless `-p` denial of a path outside the cwd; a main
-run has no permission-prompt tool; seen for Read, version 1's r0, inferred for the other tools of the set) and for an xp dir exactly the driver's
-`tool not permitted in this lab run` (exitplan.OTHER_MSG, never seen itself on 2.1.317: that it comes back verbatim is inferred from the driver's
-twelve ExitPlanMode answers in pilot 4, which did) — and the report counted that stream once, through a path it could read: exactly one record of
-trials.jsonl, read as the report reads it (a line that `splitlines()` would split in two — a CR, VT, FF, FS, GS, RS, NEL, U+2028 or U+2029 inside it —
-is not read: it counts as an opaque stream, run-ending, and no input is then refused), not a `build failed` one, names the stream's realpath and the
-report's scanner (`score.outside_scan`) on that record's own path counts what the walk counted, or no record names it and the scanner on the file does
-(an orphan). Every other outside input is `outside_ran`: a result that is not an error or has any other text (an unseen refusal text would end the run
-and is reported as that, never overridden, as for `denied_ran`), no result, a shared or missing id, a stream named by two records, a stream the block
-counts opaque (nothing is refused there), a stream the scanner reads differently, or an input the report counts in a stream the walk does not read (a
-record naming a stream outside `streams/`); the walk's inputs of a stream the report could not read (its scanner raises on the record's path) are
-added to `outside_ran`, and a JSON line that is not an object counts as a bad line, as the report counts it: `outside_ran` is the report's
-`outside_run_dir_tool_inputs` minus `outside_refused` (the block prints both; `outside_refused` never exceeds the total; the block first exits, a
-STOP, unless `ACE_LAB_DATA`, which the report reads, and its first argument, which the walk reads, are the same directory). `outside_refused` is
-reported, not a STOP (version 1's 2 of 208 Sonnet trials were refused typos of the cwd; 0 of 58 pilot trials); `outside_ran` is run-ending. The counts
-`outside_unreadable`, `outside_bad_lines` and `outside_orphan_streams` are the report's, unchanged.
+tool outside the set (read, like every tool_use since version 2, from the `assistant` events, its tool_results from the `user` events) counts as
+`denied_ran` unless its id is a string that exactly one tool_use carries, at least one tool_result names it, and every tool_result for it is an error
+whose content is EXACTLY the binary's refusal (`<tool_use_error>Error: No such tool available: <name>. <name> is disabled for this session, in
+subagents as well as here.</tool_use_error>`, the 2.1.317 text seen for a disallowed tool (Bash) and for one left out of `--tools` (CronList), probe
+streams refuse1/2 of 2026-11-04; for a name 2.1.317 lacks altogether, such as LS, TodoWrite or MultiEdit, the text is unprobed: two Haiku probes on
+2026-11-05 made no such call, and 0 of 58 pilot trials on 2.1.317 did); an exact refusal counts as `denied_refused` (reported, not a STOP). A tool
+outside the set that ran and failed, or any other result or none, or a shared or missing id, is `denied_ran`: a hallucinated call to a lacking name
+whose error text differs would end the run, and is reported as that, never overridden. A tool_use input outside the run dir (the report's own test,
+`outside.inputs` on the init `cwd`, read as `score._outside` reads it: the tool_use blocks of `assistant` events, with the tool_result blocks of
+`user` events, where the binary puts them; the block walks the regular, non-symlink `.jsonl` files of `streams/` and counts anything else there as
+opaque) is `outside_refused` only when its tool_use id is a string that exactly one tool_use of the stream carries, at least one tool_result names
+that id, every such result has `is_error` true with a content that is a str of the text seen on 2.1.317 for that tool (or, where stated, inferred) —
+for a tool outside the set exactly the binary's refusal above (such an input counts in both `denied_*` and `outside_*`); for Edit exactly
+`<tool_use_error>File does not exist. Note: your current working directory is <the stream's init cwd, as the init event prints it>.</tool_use_error>`
+(the Edit tool's own error, seen in a main dir, version 1's r12, where it came before any permission request; inferred for an xp dir, where the Edit
+tool's existence check still comes before any driver request); otherwise, for a main dir a text beginning `Claude requested permissions to ` (the
+headless `-p` denial of a path outside the cwd; a main run has no permission-prompt tool; seen for Read, version 1's r0, inferred for the other tools
+of the set) and for an xp dir exactly the driver's `tool not permitted in this lab run` (exitplan.OTHER_MSG, never seen itself on 2.1.317: that it
+comes back verbatim is inferred from the driver's twelve ExitPlanMode answers in pilot 4, which did) — and the report counted that stream once,
+through a path it could read: exactly one record of trials.jsonl, read as the report reads it (a line that `splitlines()` would split in two — a CR,
+VT, FF, FS, GS, RS, NEL, U+2028 or U+2029 inside it — is not read: it counts as an opaque stream, run-ending, and no input is then refused), not a
+`build failed` one, names the stream's realpath and the report's scanner (`score.outside_scan`) on that record's own path counts what the walk
+counted, or no record names it and the scanner on the file does (an orphan). Every other outside input is `outside_ran`: a result that is not an error
+or has any other text (an unseen refusal text would end the run and is reported as that, never overridden, as for `denied_ran`), no result, a shared
+or missing id, a stream named by two records, a stream the block counts opaque (nothing is refused there), a stream the scanner reads differently, or
+an input the report counts in a stream the walk does not read (a record naming a stream outside `streams/`): `outside_ran` is the report's
+`outside_run_dir_tool_inputs` minus `outside_refused`, plus the walk's inputs of a stream the report could not read (its scanner raises on the
+record's path) — the block prints the first two; a JSON line that is not an object counts as a bad line, as the report counts it; `outside_refused`
+never exceeds the total; the block first exits, a STOP, unless `ACE_LAB_DATA`, which the report reads, and its first argument, which the walk reads,
+are the same directory). `outside_refused` is reported, not a STOP (version 1's 2 of 208 Sonnet trials were refused typos of the cwd; 0 of 58 pilot
+trials); `outside_ran` is run-ending. The counts `outside_unreadable`, `outside_bad_lines` and `outside_orphan_streams` are the report's, unchanged.
 
 ```python
 import collections, json, os, posixpath, subprocess, sys
@@ -435,7 +435,7 @@ for name in sorted(os.listdir(sdir)) if os.path.exists(sdir) else []:
     if opaque:
         state["opaque_streams"] += 1
 out_refused = 0 if split_records else min(out_refused, total)                  # the records were not read as the report reads them
-state["outside_ran"] = total - out_refused + unread_walk                        # every input of the report's total not refused ran
+state["outside_ran"] = total - out_refused + unread_walk                        # the report's inputs not refused, plus the unread
 ending = ("outside_ran", "denied_ran", "bad_keys", "opaque_streams", "memory_files")
 snaps = sorted((f for f in os.listdir(data) if f.startswith("stop-") and f.endswith(".json")), key=lambda f: int(f[5:-5]))
 base = json.load(open(os.path.join(data, snaps[-1]))) if snaps else dict.fromkeys(state, 0)
