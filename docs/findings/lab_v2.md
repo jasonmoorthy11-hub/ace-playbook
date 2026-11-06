@@ -43,13 +43,14 @@ mean turns 4.8 to 7.0. Version 1's 208 Sonnet self-audit trials, apart: TOLD 55/
 version 2's Sonnet row.
 
 ## Safety and deviations
-Seven post-command safety checks, all passed; no STOP. Two deviations, both the run script's: the safety block did not run before the
-first trial (an emptiness check of each new data dir stood in; on an empty dir the block passes by its own statement), and the binary
-hash was checked before each of the seven command runs (re-run included) but not after the last one. Sonnet refused-outside-run-dir
-inputs: 15 in 11 trials, each refused by the binary with a registered refusal text (not inspected; nothing ran outside a run dir,
-`outside_ran` 0); Opus 0 in its confirmatory dir, 1 in its exitplan dir. The Sonnet read-before-edit command stalled four times for
-about 4.7 hours in all (two attempts ended after one turn with an error result and were retried); the cause was not diagnosed, since
-the registered procedure opens no stream; the lab's 600 s per-trial timeout did not fire, so the clock it reads advanced less than 600 s over each stalled attempt.
+Seven post-command safety checks, all passed; no STOP. Two deviations, both the run script's: the safety block did not run before
+the first trial (an emptiness check of each new data dir stood in; on an empty dir the block passes by its own statement), and the
+binary hash was checked before each of the seven command runs (re-run included) but not after the last one. Sonnet
+refused-outside-run-dir inputs: 15 in 11 trials, each refused by the binary with a registered refusal text (not inspected; nothing
+ran outside a run dir, `outside_ran` 0); Opus 0 in its confirmatory dir, 1 in its exitplan dir. The Sonnet read-before-edit command
+stalled four times for about 4.7 hours in all (two attempts ended after one turn with an error result and were retried); the cause
+was not diagnosed, since the registered procedure opens no stream; the lab's 600 s per-trial timeout did not fire, so the clock it
+reads advanced less than 600 s over each stalled attempt.
 
 ## What it shows
 1. The read-before-edit reminder works on these tasks for both models, and the effect is large: without it the agent edited an
