@@ -6,15 +6,16 @@ no difference was detected, +0.02, 95 % [−0.09, 0.12]).** Every result below i
 data of the one registered run.
 
 ## What ran
-The lab ([docs/lab.md](../lab.md)) runs `claude -p` (Claude Code 2.1.317) on tiny synthetic tasks in two arms, TOLD (the lesson text is
-injected at the start) and NOT_TOLD, and a deterministic check counts the mistake. The pre-registration
+The lab ([docs/lab.md](../lab.md)) runs `claude -p` (Claude Code 2.1.317) on tiny synthetic tasks in two arms, TOLD (the lesson text
+is injected at the start) and NOT_TOLD, and a deterministic check counts the mistake. The pre-registration
 ([docs/lab_prereg.md](../lab_prereg.md), version 2) was sealed at commit ebcad10 (sha256 `acaf6e0c1372600f…`, OpenTimestamps
 2026-11-05T21:24:49Z, earliest Bitcoin attestation block 974714) before any version-2 trial; the lab code is pinned to commit
-bcb8f9e (35-file hash in the text). Per model and lesson: 8 tasks × 13 reps × 2 arms = 208 trials (104 per arm), shuffled by a
-seed drawn and logged before the seal, run in one fresh data dir per model, Sonnet first, then Opus, each command followed by a registered safety check (binary hash, tool set,
-no file touched outside the run dir, no stream opened by hand). Two-sided Fisher exact test, Holm over the two lessons of a model;
-a decision is `reduce`, `increase` or `none`, and a decision that differs when excluded or retried trials are added back is labelled
-fragile. A third lesson (leaving plan mode with a question pending) ran descriptively at 20 per arm with no test registered.
+bcb8f9e (35-file hash in the text). Per model and lesson: 8 tasks × 13 reps × 2 arms = 208 trials (104 per arm), shuffled by a seed
+drawn and logged before the seal, run in one fresh data dir per model, Sonnet first, then Opus, each command followed by a
+registered safety check (binary hash, tool set, no file touched outside the run dir, no stream opened by hand). Two-sided Fisher
+exact test, Holm over the two lessons of a model; a decision is `reduce`, `increase` or `none`, and a decision that differs when
+excluded or retried trials are added back is labelled fragile. A third lesson (leaving plan mode with a question pending) ran
+descriptively at 20 per arm with no test registered.
 
 Version 1 of the same registration (sha256 `877efbd00661f46f…`, earliest attestation block 974627) ended on its own safety rule
 after its first command: two of 208 Sonnet trials typed their own working directory wrong and the binary refused the path, which
