@@ -2,8 +2,8 @@
 
 **Result: on both models, reminding the agent to read a file before editing it removed unread edits; reminding it to write the
 self-audit block before claiming "done" did not reduce the hook's blocks (on Claude Sonnet 5.5 it increased them; on Claude Opus 5.5
-no difference was detected, +0.02, 95 % [−0.09, 0.12]).** Every result below is the output of the sealed analysis, run once, on the
-data of the one registered run.
+no difference was detected, +0.02, 95 % [−0.09, 0.12]).** Every confirmatory result below is the output of the sealed analysis, run once, on the
+data of the one registered run; version 1's trials, reported apart, are from its ended run.
 
 ## What ran
 The lab ([docs/lab.md](../lab.md)) runs `claude -p` (Claude Code 2.1.317) on tiny synthetic tasks in two arms, TOLD (the lesson text
@@ -12,7 +12,7 @@ is injected at the start) and NOT_TOLD, and a deterministic check counts the mis
 2026-11-05T21:24:49Z, earliest Bitcoin attestation block 974714) before any version-2 trial; the lab code is pinned to commit
 bcb8f9e (35-file hash in the text). Per model and lesson: 8 tasks × 13 reps × 2 arms = 208 trials (104 per arm), shuffled by a seed
 drawn and logged before the seal, run in one fresh data dir per model, Sonnet first, then Opus, each command followed by a
-registered safety check (binary hash before the command, then the tool set and no executed tool input outside the run dir; counts
+registered safety check (binary hash before the command, then the tool set and no unrefused tool input outside the run dir; counts
 only, streams never opened by hand). Two-sided Fisher exact test, Holm over the two lessons of a model; a decision is `reduce`,
 `increase` or `none`, and a decision that differs when excluded trials are added back against the observed direction, or when every
 trial is scored on its first attempt, is labelled fragile. A third lesson (leaving plan mode with a question pending) ran
@@ -21,7 +21,7 @@ descriptively at 20 per arm with no test registered.
 Version 1 of the same registration (sha256 `877efbd00661f46f…`, earliest attestation block 974627) ended on its own safety rule
 after its first command: two of 208 Sonnet trials typed their own working directory wrong and the binary refused the path, which
 version 1 counted as run-ending.
-Version 2 splits refused from executed outside-run-dir inputs (a refused one is reported, an executed one still ends the run), draws
+Version 2 splits refused from executed outside-run-dir inputs (a refused one is reported, any other one still ends the run), draws
 fresh seeds, uses new data dirs and reads the denied-tool pairing the same stricter way; the question, instrument, code, tasks,
 design, analysis, power and null handling are unchanged. Version 1's 208 trials are reported apart below and never pooled.
 
@@ -44,15 +44,17 @@ mean turns 4.8 to 7.0. Version 1's 208 Sonnet self-audit trials, apart: TOLD 55/
 version 2's Sonnet row.
 
 ## Safety and deviations
-Seven post-command safety checks, all passed; no STOP. Two deviations, both the run script's (the re-run of the 2 errored attempts
+Seven post-command safety checks, all passed; no STOP. Three deviations: two the run script's (the re-run of the 2 errored attempts
 came at once: 2 errors, below the more-than-5 count the sealed text ties an error burst to, so no 5-hour wait was due): the safety
 block did not run before the first trial (an emptiness check of each new data dir stood in; on an empty dir the block passes by its
-own statement), and the binary hash was checked before each of the seven command runs (re-run included) but not after the last one.
-Sonnet refused-outside-run-dir inputs: 15 in 11 trials, each refused by the binary with a registered refusal text (not inspected;
-nothing ran outside a run dir, `outside_ran` 0); Opus 0 in its confirmatory dir, 1 in its exitplan dir. The Sonnet read-before-edit
-command stalled four times for about 4.7 hours in all (two attempts ended after one turn with an error result and were retried); the
-cause was not diagnosed, since the registered procedure opens no stream; the lab's 600 s per-trial timeout did not fire, so, if the
-stall fell inside the lab's wait for a result, the clock it reads advanced less than 600 s.
+own statement), and the binary hash was checked before each of the seven command runs (re-run included) but not after the last one;
+and one the operator's: a read of the Sonnet data file's line counts and, during the stalls, its start times, exit codes and turn
+counts while that model's commands were still running (no outcome, trial id or arm read), where the sealed text allows only the
+safety checks. Sonnet refused-outside-run-dir inputs: 15 in 11 trials, each refused by the binary with a registered refusal text
+(not inspected; no unrefused outside input, `outside_ran` 0); Opus 0 in its confirmatory dir, 1 in its exitplan dir. The Sonnet
+read-before-edit command stalled four times for about 4.7 hours in all (two attempts ended after one turn with an error result and
+were retried); the cause was not diagnosed, since the registered procedure opens no stream; the lab's 600 s per-trial timeout did
+not fire, so, if the stall fell inside the lab's wait for a result, the clock it reads advanced less than 600 s.
 
 ## What it shows
 1. The read-before-edit reminder works on these tasks for both models, and the effect is large: without it the agent edited an
