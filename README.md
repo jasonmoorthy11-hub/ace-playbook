@@ -44,7 +44,8 @@ Pre-registered, sealed and run once on 2026-11-05/06 with 104 trials per arm, pe
 | Write the self-audit block before claiming "done" (Stop-hook blocks) | 64 of 104 vs 32 of 104: **increase** | 86 of 104 vs 84 of 104: **none** |
 
 The first reminder removed the mistake on both models. The second did not reduce it: on Sonnet the hook blocked twice as often with
-the reminder, on Opus it blocked about 80 % of trials either way. No result is fragile to the registered re-analyses. The first version
+the reminder; on Opus it blocked about 80 % of trials in both arms (difference +0.02, 95 % [−0.09, 0.12]: no difference detected,
+which is not the same as no effect). No result is fragile to the registered re-analyses. The first version
 of the same registration ended on its own safety rule after 208 trials (two refused path typos); those trials are reported apart.
 These are effects on small scripted tasks, not in real sessions.
 
