@@ -12,10 +12,11 @@ is injected at the start) and NOT_TOLD, and a deterministic check counts the mis
 2026-11-05T21:24:49Z, earliest Bitcoin attestation block 974714) before any version-2 trial; the lab code is pinned to commit
 bcb8f9e (35-file hash in the text). Per model and lesson: 8 tasks × 13 reps × 2 arms = 208 trials (104 per arm), shuffled by a seed
 drawn and logged before the seal, run in one fresh data dir per model, Sonnet first, then Opus, each command followed by a
-registered safety check (binary hash, tool set, no file touched outside the run dir, no stream opened by hand). Two-sided Fisher
-exact test, Holm over the two lessons of a model; a decision is `reduce`, `increase` or `none`, and a decision that differs when
-excluded trials are added back against the observed direction, or when every trial is scored on its first attempt, is labelled
-fragile. A third lesson (leaving plan mode with a question pending) ran descriptively at 20 per arm with no test registered.
+registered safety check (binary hash before the command, then the tool set and no executed tool input outside the run dir; counts
+only, streams never opened by hand). Two-sided Fisher exact test, Holm over the two lessons of a model; a decision is `reduce`,
+`increase` or `none`, and a decision that differs when excluded trials are added back against the observed direction, or when every
+trial is scored on its first attempt, is labelled fragile. A third lesson (leaving plan mode with a question pending) ran
+descriptively at 20 per arm with no test registered.
 
 Version 1 of the same registration (sha256 `877efbd00661f46f…`, earliest attestation block 974627) ended on its own safety rule
 after its first command: two of 208 Sonnet trials typed their own working directory wrong and the binary refused the path, which
@@ -43,21 +44,22 @@ mean turns 4.8 to 7.0. Version 1's 208 Sonnet self-audit trials, apart: TOLD 55/
 version 2's Sonnet row.
 
 ## Safety and deviations
-Seven post-command safety checks, all passed; no STOP. Two deviations, both the run script's: the safety block did not run before
-the first trial (an emptiness check of each new data dir stood in; on an empty dir the block passes by its own statement), and the
-binary hash was checked before each of the seven command runs (re-run included) but not after the last one. Sonnet
-refused-outside-run-dir inputs: 15 in 11 trials, each refused by the binary with a registered refusal text (not inspected; nothing
-ran outside a run dir, `outside_ran` 0); Opus 0 in its confirmatory dir, 1 in its exitplan dir. The Sonnet read-before-edit command
-stalled four times for about 4.7 hours in all (two attempts ended after one turn with an error result and were retried); the cause
-was not diagnosed, since the registered procedure opens no stream; the lab's 600 s per-trial timeout did not fire, so the clock it
-reads advanced less than 600 s over each stalled attempt.
+Seven post-command safety checks, all passed; no STOP. Two deviations, both the run script's (the re-run of the 2 errored attempts
+came at once: 2 errors, below the more-than-5 count the sealed text ties an error burst to, so no 5-hour wait was due): the safety
+block did not run before the first trial (an emptiness check of each new data dir stood in; on an empty dir the block passes by its
+own statement), and the binary hash was checked before each of the seven command runs (re-run included) but not after the last one.
+Sonnet refused-outside-run-dir inputs: 15 in 11 trials, each refused by the binary with a registered refusal text (not inspected;
+nothing ran outside a run dir, `outside_ran` 0); Opus 0 in its confirmatory dir, 1 in its exitplan dir. The Sonnet read-before-edit
+command stalled four times for about 4.7 hours in all (two attempts ended after one turn with an error result and were retried); the
+cause was not diagnosed, since the registered procedure opens no stream; the lab's 600 s per-trial timeout did not fire, so, if the
+stall fell inside the lab's wait for a result, the clock it reads advanced less than 600 s.
 
 ## What it shows
 1. The read-before-edit reminder works on these tasks for both models, and the effect is large: without it the agent edited an
    unread file in 95 to 100 % of trials, with it in none (close to the largest the design can show).
 2. The self-audit reminder does not reduce the Stop hook's blocks. On Sonnet the hook blocked twice as often with the reminder; on Opus
-   it blocked about 80 % of trials in both arms, five of the eight tasks at 13 of 13, far above the planning value near 0.4; at that
-   rate the registered power for a relative rate of 0.5 or 0.67 is 1.00 or 0.95, and the interval excludes a reduction larger than
+   it blocked about 80 % of trials in both arms, five of the eight tasks at 13 of 13, far above the 0.4 rate the Power section's caveat
+   names; at that rate the registered power for a relative rate of 0.5 or 0.67 is 1.00 or 0.95, and the interval excludes a reduction larger than
    0.09. Why the Sonnet rate rose is not measured here.
 3. The tasks are small and built to elicit each mistake, and the outcome is the lab's own hook, so these are effects on scripted
    tasks, not in real sessions. The field experiment ([PREREGISTRATION.md](../../PREREGISTRATION.md)) is the test of that.
