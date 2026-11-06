@@ -1,35 +1,84 @@
 # ACE playbook
 
-A measured lesson-to-hook compiler for CLI coding agents. It implements ideas from
-*Agentic Context Engineering* (Zhang et al., ICLR 2026, [arXiv:2510.04618](https://arxiv.org/abs/2510.04618);
-reference code at [github.com/ace-agent/ace](https://github.com/ace-agent/ace)) for a single
-user's day-to-day coding agent, tested with Claude Code.
+Coding agents repeat their mistakes. Telling them not to, in a file like CLAUDE.md or AGENTS.md, is unreliable: a 2026 study found
+that repository context files do not generally improve task success and add over 20 % to cost (Gloaguen et al.,
+[arXiv:2602.11988](https://arxiv.org/abs/2602.11988)). This project asks a narrower question and tries to answer it with measurements
+instead of impressions: **when an agent is reminded of a specific lesson at the start of a session, does it make that specific mistake
+less often?**
 
-**Status: stage 2 shadow mode, observe only, no results yet.** The stage-1 plumbing and the
-stage-2 compiler exist as code; as of 2026-10-19 no proposal has been approved, so nothing has been
-measured. Nothing here shows that injecting lessons or compiling them into hooks helps, and the
-pre-registration is a draft that is not sealed. Read [LIMITATIONS.md](LIMITATIONS.md) first.
+**Status (2026-11-06): the lab experiment has a result, the first field experiment ended with a null, and the second field
+experiment is pre-registered and waits for its switch-on.** Read [LIMITATIONS.md](LIMITATIONS.md) for what is and is not shown.
 
 Not affiliated with or endorsed by Anthropic or by the authors of the ACE paper.
 
-## What it is
+## The idea
 
-An agent that is told the same things in every session never learns which of them matter.
-This project keeps an **append-only store of short lessons** extracted from past sessions, records
-**which lessons were shown in which session** (with a randomized hide/show holdout), and is built
-so that lessons which prove their worth can later be **compiled into enforcing hooks** instead of
-staying as prose the agent may ignore. The compile step exists in shadow mode (see below); the
-evaluation harness is planned.
+1. **Lessons.** After each session, a reflection step writes short lessons ("read the file again before you edit it") into an
+   append-only, hash-chained store. It follows *Agentic Context Engineering* (Zhang et al., ICLR 2026,
+   [arXiv:2510.04618](https://arxiv.org/abs/2510.04618)): lessons change only by small, validated edits, never by a rewrite.
+2. **Reminders.** At the start of each session, a hook shows the agent a few of those lessons, and records exactly which ones it showed.
+3. **Checks.** Automatic detectors read each session afterwards and count how often each mistake happened.
+4. **Measurement.** Randomly hiding a lesson in some sessions and showing it in others makes the difference between the two groups
+   an estimate of what the reminder does. The analysis is written down and sealed before the data exists.
 
-## Why
+## What is built and runs every day
 
-- ACE's idea of itemized lessons changed only by small validated deltas, never rewritten whole,
-  is sound. Its published gains depend on execution feedback that a coding assistant mostly lacks.
-- Independent work finds auto-generated context can be neutral or harmful. The honest position is
-  that "lessons help" is a hypothesis, so the project is designed to measure it and to report a
-  null result if that is what comes out.
-- Anthropic's own documentation describes CLAUDE.md-style memory as context, not enforced
-  configuration. Where a rule must hold, a hook enforces it.
+- Lesson injection at session start, with a randomized show/hide switch (off until an experiment turns it on).
+- Nightly reflection over the day's sessions, with secret and personal-data scrubbing before anything is stored.
+- Shadow detectors on tool calls with a promotion ladder (observe → warn → block) that a human approves step by step.
+- A sealed pre-registration for the field (`PREREGISTRATION.md`, tag `prereg-v1`, anchored with OpenTimestamps) and an append-only
+  amendments log; a sealed pre-registration for the lab (`docs/lab_prereg.md`, anchored the same way).
+- A scripted lab (`ace_playbook/lab`, [docs/lab.md](docs/lab.md)) that runs the agent on synthetic tasks with a lesson told or not
+  told, under a registered safety check.
+- A read-only morning brief (an agent that reads calendar, mail and issues and writes a local page) and a release/docs watcher.
+- 7,221 tests (7,158 pass, 1 skipped, 62 expected failures), CI on Linux, hook overhead p95 13 ms.
+
+## What the lab found
+
+Pre-registered, sealed and run once on 2026-11-05/06 with 104 trials per arm, per lesson, per model
+([the finding](docs/findings/lab_v2.md)):
+
+| lesson | Claude Sonnet 5.5, told vs not told | Claude Opus 5.5, told vs not told |
+|---|---|---|
+| Read a file before editing it (edits of an unread file) | 0 of 104 vs 99 of 104: **reduce** | 0 of 104 vs 104 of 104: **reduce** |
+| Write the self-audit block before claiming "done" (blocks by the Stop hook) | 64 of 104 vs 32 of 104: **increase** | 86 of 104 vs 84 of 104: **none** |
+
+The first reminder removed the mistake on both models. The second did not reduce it: on Sonnet the hook blocked twice as often with
+the reminder, on Opus it blocked about 80 % of trials either way. No result is fragile to the registered re-analyses. The first version
+of the same registration ended on its own safety rule after 208 trials (two refused path typos); those trials are reported apart.
+These are effects on small scripted tasks, not in real sessions.
+
+## What happened in the first field experiment
+
+The first lesson tested was "never `rm -rf` a directory without listing it first" (it came from a real 7.8 GB loss). Over 13 days the
+detector fired 44 times, and a human labelled all 44 as false alarms: every one was a sandboxed helper agent deleting its own scratch
+folder. The dangerous version never happened. With no real positives there was nothing to measure, so the test was stopped and
+**reported as a null result**, as the pre-registration says it must be ([the finding](docs/findings/rm_rf.md)).
+
+## What the data says to test next
+
+Counting the same detectors over the operator's 28 real interactive sessions (2026-10-19 → 10-30) shows which mistakes actually recur:
+
+| Mistake (each is already blocked by a hook, so detection is exact) | Sessions where it happened |
+|---|---|
+| Claiming "done" without the short self-audit block | 16 of 28 (57 %) |
+| Editing a file without reading it in the same turn | 9 of 28 (32 %) |
+| Leaving plan mode while the user's question is unanswered | 7 of 28 (25 %) |
+| The first experiment's `rm -rf` detector fired (all false alarms) | 2 of 28 (7 %) |
+
+## What is running now
+
+- **Field test (pre-registered, analysis merged, switch-on date to be set):** in each real session, each of the three lessons above
+  is shown or hidden at random; the hooks stay on in every session, so nothing unsafe is allowed through. The outcome is how often
+  each hook had to step in. No field result yet.
+- **Lab test: done** (above). The lab stays available for a new registration; a new registration is a new experiment.
+
+## Built with Claude
+
+The code was written by Claude agents (Claude Code) under the author's direction; substantial changes went through adversarial review
+rounds by a separate Claude Opus agent before merging, and the commit trailers show which model wrote what.
+
+## Details
 
 ## What stage 1 contains
 
@@ -45,8 +94,9 @@ evaluation harness is planned.
 | `ace_playbook/fixtures` | Seeded synthetic corpus generator, a frozen seed-1 copy, `DATASHEET.md` |
 
 Planned and **not built**: enforcement by the compiler (only its shadow hook in observe mode exists,
-see below), the curator and refiner, the replay and task-suite
-evaluation harness, the judge. See [PREREGISTRATION.md](PREREGISTRATION.md).
+see below), the curator and refiner, the judge. The lab harness exists (`ace_playbook/lab`,
+[docs/lab.md](docs/lab.md)); its sealed pre-registration is [docs/lab_prereg.md](docs/lab_prereg.md).
+The field pre-registration is [PREREGISTRATION.md](PREREGISTRATION.md).
 
 ### Migration
 
@@ -99,7 +149,7 @@ the only way a legacy lesson gets an evidence card, and `tp`/`fp` labels on shad
 `label --rows` stays for audit.
 `compile report` prints counts per proposal from the shadow rows and those human labels, then per corpus the eligible-session
 rates with Wilson intervals, friction, hook cost and live-versus-offline agreement; synthetic rows are reported
-apart and never blended with the private ones. There are still no results: to produce the reproducible synthetic table run
+apart and never blended with the private ones. The first shadow experiment's result is [docs/findings/rm_rf.md](docs/findings/rm_rf.md); to produce the reproducible synthetic table run
 `python3 -m ace_playbook.compile replay-synthetic` and then `compile report` (the private table stays empty until a proposal is approved). The nightly `compile offline` pass (run by `hooks/nightly_sweep.py`)
 records detector events from finished transcripts, pre-fills labels that a human row always overrides, and
 appends hash-chained demotions that only ever lower a proposal's mode and that the shadow hook honours until the operator approves it again.
@@ -157,6 +207,7 @@ only when you run `python -m ace_playbook.reflect` or the sweep for real; see `h
 ```
 ace_playbook/   package (store, clean, scrub, keys, inject, reflect, fixtures, sweep, enqueue)
 hooks/          hook scripts, nightly sweep, launchd example, INSTALL.md
+docs/           design notes, the lab (lab.md, lab_prereg.md), findings/
 tests/          pytest suite
 ```
 
