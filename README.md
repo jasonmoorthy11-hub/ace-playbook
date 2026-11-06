@@ -41,7 +41,7 @@ Pre-registered, sealed and run once on 2026-11-05/06 with 104 trials per arm, pe
 | lesson | Claude Sonnet 5.5, told vs not told | Claude Opus 5.5, told vs not told |
 |---|---|---|
 | Read a file before editing it (edits of an unread file) | 0 of 104 vs 99 of 104: **reduce** | 0 of 104 vs 104 of 104: **reduce** |
-| Write the self-audit block before claiming "done" (blocks by the Stop hook) | 64 of 104 vs 32 of 104: **increase** | 86 of 104 vs 84 of 104: **none** |
+| Write the self-audit block before claiming "done" (Stop-hook blocks) | 64 of 104 vs 32 of 104: **increase** | 86 of 104 vs 84 of 104: **none** |
 
 The first reminder removed the mistake on both models. The second did not reduce it: on Sonnet the hook blocked twice as often with
 the reminder, on Opus it blocked about 80 % of trials either way. No result is fragile to the registered re-analyses. The first version
