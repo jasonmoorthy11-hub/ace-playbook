@@ -35,12 +35,12 @@ Not affiliated with or endorsed by Anthropic or by the authors of the ACE paper.
 
 ## What the lab found
 
-Pre-registered, sealed and run once on 2026-11-05/06 with 104 trials per arm, per lesson, per model
-([the finding](docs/findings/lab_v2.md)):
+Pre-registered, sealed and run once on 2026-11-05/06 with 104 trials per arm, per lesson, per model, with three declared
+deviations ([the finding](docs/findings/lab_v2.md)):
 
 | lesson | Claude Sonnet 5.5, told vs not told | Claude Opus 5.5, told vs not told |
 |---|---|---|
-| Read a file before editing it (edits of an unread file) | 0 of 104 vs 99 of 104: **reduce** | 0 of 104 vs 104 of 104: **reduce** |
+| Read a file before editing it (successful edits of an unread file) | 0 of 104 vs 99 of 104: **reduce** | 0 of 104 vs 104 of 104: **reduce** |
 | Write the self-audit block before claiming "done" (Stop-hook blocks) | 64 of 104 vs 32 of 104: **increase** | 86 of 104 vs 84 of 104: **none** |
 
 The first reminder removed the mistake on both models. The second did not reduce it: on Sonnet the hook blocked twice as often with
