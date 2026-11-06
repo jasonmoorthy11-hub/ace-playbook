@@ -39,7 +39,9 @@ mean turns 4.8 to 7.0. Version 1's 208 Sonnet self-audit trials, apart: TOLD 55/
 version 2's Sonnet row.
 
 ## Safety and deviations
-Seven safety checks, all passed; no STOP; no deviation from the sealed procedure. Sonnet refused-outside-run-dir inputs: 15 in 11
+Seven post-command safety checks, all passed; no STOP. Two deviations, both the run script's: the safety block did not run before the
+first trial (an emptiness check of each new data dir stood in; on an empty dir the block passes by its own statement), and the binary
+hash was checked before each of the six commands but not after the last one. Sonnet refused-outside-run-dir inputs: 15 in 11
 trials (path typos the binary refused; nothing was written outside a run dir); Opus 0 in the confirmatory dirs, 1 in its exitplan dir.
 The Sonnet read-before-edit command stalled four times for about 4.7 hours in all (two attempts were killed by the lab's timeout after
 one turn and retried); the cause was not diagnosed, since the registered procedure opens no stream.
