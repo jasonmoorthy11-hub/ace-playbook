@@ -28,7 +28,7 @@ design, analysis, power and null handling are unchanged. Version 1's 208 trials 
 ## Confirmatory results (104 trials per arm)
 | model | lesson (outcome per trial) | TOLD | NOT_TOLD | difference, Newcombe 95 % | Fisher p (Holm) | decision | fragile |
 |---|---|---|---|---|---|---|---|
-| Claude Sonnet 5.5 | read before edit (a successful edit of a file not read in the turn) | 0/104 | 99/104 | −0.95 [−0.98, −0.88] | 2.1e-53 | reduce | no |
+| Claude Sonnet 5.5 | read before edit (a successful edit of an unread file) | 0/104 | 99/104 | −0.95 [−0.98, −0.88] | 2.1e-53 | reduce | no |
 | Claude Sonnet 5.5 | self-audit before "done" (a block by the Stop hook) | 64/104 | 32/104 | +0.31 [0.17, 0.43] | 1.4e-05 | increase | no |
 | Claude Opus 5.5 | read before edit | 0/104 | 104/104 | −1.00 [−1.00, −0.95] | 1.8e-61 | reduce | no |
 | Claude Opus 5.5 | self-audit before "done" | 86/104 | 84/104 | +0.02 [−0.09, 0.12] | 0.86 | none | no |
