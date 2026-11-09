@@ -42,9 +42,11 @@ Descriptive, registered: the third lesson (plan mode left with a question pendin
 Sonnet TOLD 0.85 (0.640–0.948) vs NOT_TOLD 1.0 (0.839–1.0), Opus 0.90 (0.699–0.972) vs 1.0 (0.839–1.0). Registered secondaries: mean
 violations per trial edit_unread TOLD 0.00 vs NOT_TOLD 1.19 (Sonnet) and 0.00 vs 1.25 (Opus), preclaim 0.62 vs 0.31 (Sonnet) and
 0.83 vs 0.81 (Opus); attempted unread edits equal the counted ones (every attempt succeeded); permission denials in 5 Sonnet
-NOT_TOLD trials, none elsewhere. Mean cost per trial as the binary reports it: Sonnet $0.023 (NOT_TOLD) to $0.027 (TOLD), Opus
-$0.049 to $0.058; mean turns 4.8 to 7.0. Version 1's 208 Sonnet self-audit trials, apart: TOLD 55/104 vs NOT_TOLD 29/104, the same
-direction as version 2's Sonnet row.
+NOT_TOLD trials, none elsewhere (attempted edits and permission denials are from a script written after the run, not a sealed
+block). Mean cost per trial as the binary reports it: Sonnet $0.023 (NOT_TOLD) to $0.027 (TOLD), Opus $0.049 to $0.058; mean turns
+4.8 to 7.0. Version 1's 208 Sonnet self-audit trials, apart: TOLD 55/104 vs NOT_TOLD 29/104, the same direction as version 2's
+Sonnet row. The other registered outputs (per-task tables, quarter shares, cost maxima, the environment line, the pause times, the
+installed label) are in the operator's result record, kept with the run files and not in this repository.
 
 ## Safety and deviations
 Seven post-command safety checks, all passed; no STOP. Three deviations: two the run script's: the safety block did not run before
