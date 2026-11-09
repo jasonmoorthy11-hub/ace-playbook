@@ -6,7 +6,7 @@ that repository context files do not generally improve task success and add over
 instead of impressions: **when an agent is reminded of a specific lesson at the start of a session, does it make that specific mistake
 less often?**
 
-**Status (2026-11-06): the lab experiment has a result, the first field experiment ended with a null, and the second field
+**Status (2026-11-06): the lab experiment has a result, the first field experiment was called with no true positives (a null by construction), and the second field
 experiment's registration is written and reviewed, not yet sealed, and waits for its seal and switch-on.** Read [LIMITATIONS.md](LIMITATIONS.md) for what is and is not shown.
 
 Not affiliated with or endorsed by Anthropic or by the authors of the ACE paper.
