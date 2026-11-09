@@ -28,10 +28,12 @@ design, analysis, power and null handling are unchanged. Version 1's 208 trials 
 ## Confirmatory results (104 trials per arm)
 | model | lesson (outcome per trial) | TOLD | NOT_TOLD | difference, Newcombe 95 % | Fisher p (Holm) | decision | fragile |
 |---|---|---|---|---|---|---|---|
-| Claude Sonnet 5.5 | read before edit (a successful edit of an unread file) | 0/104 | 99/104 | −0.95 [−0.98, −0.88] | 2.1e-53 | reduce | no |
+| Claude Sonnet 5.5 | read before edit (a successful unread edit) | 0/104 | 99/104 | −0.95 [−0.98, −0.88] | 2.1e-53 | reduce | no |
 | Claude Sonnet 5.5 | self-audit before "done" (a block by the Stop hook) | 64/104 | 32/104 | +0.31 [0.17, 0.43] | 1.4e-05 | increase | no |
 | Claude Opus 5.5 | read before edit | 0/104 | 104/104 | −1.00 [−1.00, −0.95] | 1.8e-61 | reduce | no |
 | Claude Opus 5.5 | self-audit before "done" | 86/104 | 84/104 | +0.02 [−0.09, 0.12] | 0.86 | none | no |
+
+An unread edit is a successful edit of a file not read in the same turn.
 
 Wilson 95 % intervals: Sonnet read-before-edit TOLD 0–0.036, NOT_TOLD 0.892–0.979; Sonnet self-audit TOLD 0.519–0.703, NOT_TOLD
 0.227–0.402; Opus read-before-edit TOLD 0–0.036, NOT_TOLD 0.964–1.0; Opus self-audit TOLD 0.743–0.888, NOT_TOLD 0.722–0.872. No trial
@@ -45,8 +47,9 @@ violations per trial edit_unread TOLD 0.00 vs NOT_TOLD 1.19 (Sonnet) and 0.00 vs
 NOT_TOLD trials, none elsewhere (attempted edits and permission denials are from a script written after the run, not a sealed
 block). Mean cost per trial as the binary reports it: Sonnet $0.023 (NOT_TOLD) to $0.027 (TOLD), Opus $0.049 to $0.058; mean turns
 4.8 to 7.0. Version 1's 208 Sonnet self-audit trials, apart: TOLD 55/104 vs NOT_TOLD 29/104, the same direction as version 2's
-Sonnet row. The other registered outputs (per-task tables, quarter shares, cost maxima, the environment line, the pause times, the
-installed label) are in the operator's result record, kept with the run files and not in this repository.
+Sonnet row. The other registered outputs (the bounds, first and retried rows, errors per arm, per-task tables, quarter shares, turns
+per arm, cost maxima, the environment line, the pause times, the installed label) are in the operator's result record, kept with the
+run files and not in this repository.
 
 ## Safety and deviations
 Seven post-command safety checks, all passed; no STOP. Three deviations: two the run script's: the safety block did not run before
@@ -68,14 +71,15 @@ than 600 s.
 ## What it shows
 1. The read-before-edit reminder works on these tasks for both models, and the effect is large: without it the agent edited an
    unread file in 95 to 100 % of trials, with it in none (close to the largest the design can show).
-2. The self-audit reminder does not reduce the Stop hook's blocks. On Sonnet the hook blocked twice as often with the reminder; on Opus
-   it blocked about 80 % of trials in both arms, five of the eight tasks at 13 of 13, far above the 0.4 rate the Power section's caveat
-   names; at that rate the registered power for a relative rate of 0.5 or 0.67 is 1.00 or 0.95, and the interval excludes a reduction larger than
-   0.09. Why the Sonnet rate rose is not measured here.
+2. The self-audit reminder did not reduce the Stop hook's blocks on these tasks. On Sonnet the hook blocked twice as often with the
+   reminder; on Opus no difference was detected (+0.02, 95 % [−0.09, 0.12]): it blocked about 80 % of trials in both arms, five of
+   the eight tasks at 13 of 13, far above the 0.4 rate the Power section's caveat names; at that rate the registered power for a
+   relative rate of 0.5 or 0.67 is 1.00 or 0.95, and the interval excludes a reduction larger than 0.09. Why the Sonnet rate rose
+   is not measured here.
 3. Trials are clustered in 8 fixed tasks and the test treats them as independent, so the p values do not carry to other tasks.
    The trial list is completely randomised, not blocked, so the arms need not balance over time: the Opus seed put 43 of 104 TOLD
    trials in the first half (35 of 52 in the last quarter); the sealed text's "60 of 104" is version 1's retired seed, an error in
    the sealed text.
    The tasks are small and built to elicit each mistake, and the outcomes are the lab's own counts (a block by its Stop hook; a
-   successful edit of an unread file in the stream), so these are effects on scripted tasks, not in real sessions. The field
-   experiment ([PREREGISTRATION.md](../../PREREGISTRATION.md)) is the test of that.
+   successful edit of a file not read in the same turn, counted from the stream), so these are effects on scripted tasks, not in
+   real sessions. The second field experiment, whose registration is written and reviewed but not yet sealed, is meant to test that.
