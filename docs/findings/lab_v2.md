@@ -2,8 +2,8 @@
 
 **Result: on both models, reminding the agent to read a file before editing it removed unread edits; reminding it to write the
 self-audit block before claiming "done" did not reduce the hook's blocks (on Claude Sonnet 5.5 it increased them; on Claude Opus 5.5
-no difference was detected, +0.02, 95 % [−0.09, 0.12]).** Every confirmatory result below is the output of the sealed analysis, run once, on the
-data of the one registered run; version 1's trials, reported apart, are from its ended run.
+no difference was detected, +0.02, 95 % [−0.09, 0.12]).** Every confirmatory result below is the output of the sealed analysis
+(re-runs print identical bytes) on the data of version 2's run; version 1's trials, reported apart, are from its ended run.
 
 ## What ran
 The lab ([docs/lab.md](../lab.md)) runs `claude -p` (Claude Code 2.1.317) on tiny synthetic tasks in two arms, TOLD (the lesson text
@@ -47,20 +47,21 @@ $0.049 to $0.058; mean turns 4.8 to 7.0. Version 1's 208 Sonnet self-audit trial
 direction as version 2's Sonnet row.
 
 ## Safety and deviations
-Seven post-command safety checks, all passed; no STOP. Three deviations: two the run script's (the re-run of the 2 errored attempts
-came at once: 2 errors, below the more-than-5 count that raises `errored_attempts`, which the records read as the sealed text's
-error burst, so no 5-hour wait was due): the safety block did not run before the first trial (an emptiness check of each new data
-dir stood in; the sealed text states that on an empty dir the block prints every count 0 and PASS), and the binary hash was checked
-before each of the seven command runs (re-run included) but not after the last one, the block running only in the command's own dir,
-not in each of the four dirs after every command (a read-only run of the block in all four dirs on 2026-11-06 printed PASS with the
-same counts); and one the operator's: a read of the Sonnet data file's line counts and, just after the stalls (03:54Z), the stalled
-attempts' start times, exit codes and turn counts while that model's commands were still running (no outcome, trial id or arm read),
-where the sealed text allows only the safety checks. Sonnet refused-outside-run-dir inputs: 15 in 11 trials, each refused by the
-binary with a registered refusal text (not inspected; no unrefused outside input, `outside_ran` 0); Opus 0 in its confirmatory dir,
-1 in its exitplan dir. The Sonnet read-before-edit command stalled four times for about 4.7 hours in all (two attempts ended after
-one turn with an error result and were retried); the cause was not diagnosed, since the registered procedure opens no stream; the
-lab's 600 s per-trial timeout did not fire, so, if the stall fell inside the lab's wait for a result, the clock it reads advanced
-less than 600 s.
+Seven post-command safety checks, all passed; no STOP. Three deviations: two the run script's: the safety block did not run before
+the first trial (an emptiness check of each new data dir stood in; the sealed text states that on an empty dir the block prints
+every count 0 and PASS), and the binary hash was checked before each of the seven command runs (re-run included) but not after the
+last one, the block running only in the command's own dir, not in each of the four dirs after every command (a read-only run of the
+block in all four dirs on 2026-11-06 printed PASS with the same counts); and one the operator's: a read of the Sonnet data file's
+line counts (and, at 21:34Z, that the other three data dirs had no file yet) and, just after the stalls (03:54Z), the start times of
+the stalled and following attempts and the stalled ones' exit codes and turn counts while that model's commands were still running
+(no outcome, trial id or arm read), where the sealed text allows only the safety checks. Not a deviation, on the records' reading of
+the sealed text's error burst: the re-run of the 2 errored attempts came at once (2 errors, below the more-than-5 count that raises
+`errored_attempts`), so no 5-hour wait was due. Sonnet refused-outside-run-dir inputs: 15 in 11 trials, each refused by the binary
+with a registered refusal text (not inspected; no unrefused outside input, `outside_ran` 0); Opus 0 in its confirmatory dir, 1 in
+its exitplan dir. The Sonnet read-before-edit command stalled four times for about 4.7 hours in all (two attempts ended after one
+turn with an error result and were retried); the cause was not diagnosed, since the registered procedure opens no stream; the lab's
+600 s per-trial timeout did not fire, so, if the stall fell inside the lab's wait for a result, the clock it reads advanced less
+than 600 s.
 
 ## What it shows
 1. The read-before-edit reminder works on these tasks for both models, and the effect is large: without it the agent edited an
@@ -73,5 +74,6 @@ less than 600 s.
    The trial list is completely randomised, not blocked, so the arms need not balance over time: the Opus seed put 43 of 104 TOLD
    trials in the first half (35 of 52 in the last quarter); the sealed text's "60 of 104" is version 1's retired seed, an error in
    the sealed text.
-   The tasks are small and built to elicit each mistake, and the outcome is the lab's own hook, so these are effects on scripted
-   tasks, not in real sessions. The field experiment ([PREREGISTRATION.md](../../PREREGISTRATION.md)) is the test of that.
+   The tasks are small and built to elicit each mistake, and the outcomes are the lab's own counts (a block by its Stop hook; a
+   successful edit of an unread file in the stream), so these are effects on scripted tasks, not in real sessions. The field
+   experiment ([PREREGISTRATION.md](../../PREREGISTRATION.md)) is the test of that.
