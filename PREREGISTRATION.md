@@ -797,3 +797,38 @@ Switch-on order: steps 1-5 before `holdout_start` (a step 1-5 after it is mapped
    transcript is not scanned). The third must print exactly one value, the first 8 hex digits of the filled `holdout_seed_sha256`
    (`seed_fp` is public). If no interactive session ran, or a `cli` session of D0 to D1 was not idle 60 minutes when the sweep ran, the check repeats for
    the next day. A failed check is fixed as a recorded bug fix of (k).
+
+### 2026-11-10 - lesson-text holdout: switch-on record
+
+- 2026-11-10: Steps 1-3 ran after `holdout_start` 2026-11-10T00:00:00Z, in order, from one operator script in his terminal, all
+  stamped 2026-11-10T00:37:20Z (one-second resolution; the order is the script's sequence). Step 1 removed rules 6, 8 and 9 from the
+  global CLAUDE.md, put one dated line in place of rule 6, and wrote the switch-on records. Step 2 ran `store exempt L-b3d1fba9`.
+  Step 3 generated the seeds with `secrets.token_hex(32)` and hashed them with `hashlib.sha256(seed.encode()).hexdigest()`, the
+  function of the getpass command in (j). Step 4: fill commit 7b9baa5bb6aca7bb96ee8f3bc6b3bfa9a8e978cd (00:37:46Z) on the reviewed
+  parent cf18774652a765560e61043cb28d1bd38da64f48; the fill gate printed nothing in the operator's terminal (00:38:34Z); sha256
+  79c69a4639f93469bc06b347f008b8e5ae73d096ee8bbb44c3647b9bd02229ac of this file at that commit was OpenTimestamps-stamped at
+  2026-11-10T00:38:50Z; a docs-lens review confirmed the fill; merged as 2c3ebd5 with the same sha256. Step 5 follows in its own
+  dated line below. By (k) the read stays confirmatory: `holdout_start` and `holdout_end` are unchanged, sessions with any injection
+  row before step 5 are `holdout_off` or `mixed_rate` exclusions, and the read reports the step-5 date and the shortened window.
+- 2026-11-10: (c)/(k)/(j) switch-on record `holdout_records_switchon_20261110T003720Z.txt` in the data dir, sha256
+  bc3858781e68573225fd2864a69cd1d029b596a10fe2062bac20426a2409485f (7 rule lines, none in the global CLAUDE.md).
+- 2026-11-10: interpreter: `env | grep -c -E '^(ACE_PLAYBOOK_HOME|ACE_PYTHON)='` 0; `command -v python3` /opt/homebrew/bin/python3;
+  Python 3.15.2.
+- 2026-11-10: checkout `$HOME/ace-playbook` at 9ad4c92ed6f81d4254ef7d1354111095ea96e067 at the switch-on (a local merge: README,
+  docs, the pyproject version) with an uncommitted `uv.lock` version line, neither in the measurement code set (40 files, hash as in
+  (j)); last sweep/cleaner commit fe04da7e50e92266aebeb15bfe67c1c976958378.
+- 2026-11-10: (k) hook list at the switch-on, 11 files (sha256, path):
+
+  ```text
+  2bb81589967628806e187131ce69df445ad439741c34317fab8f0f7f7b20d75c  $HOME/.claude/hooks/block-unreviewed-plan-commit.sh
+  9a9dee5c8c452e7e7ec89f8a24922a09fb707433a4ffa17cb79cb3546343adb1  $HOME/.claude/hooks/mark-plan-approved.sh
+  1be70af396c4b5ad0a3ba2a0b004eef21bc740addcd13e4884ab0ee53f4ff1e4  $HOME/.claude/hooks/pretooluse-exitplan-question-check.sh
+  774f2ce2291705519ac0c106e3e0a40e3a8c8e18eb0b547253b611412496e5ea  $HOME/.claude/hooks/pretooluse-v83-gates.sh
+  a443da5240b377d7c42cf5d37df7e87144723b9ab1be844e46d08ec9e9c59597  $HOME/.claude/hooks/rollforward-posttool-check.sh
+  f1fe332abe86bea8ce7b890e94bfe285d9af81a5d2fe006c1c18bc4514f9a52a  $HOME/.claude/hooks/rollforward-skill-gate.sh
+  d1112ba246906315c927b141ca04b0e58fc3144436994f383942037f6fb0f1e2  $HOME/.claude/hooks/rollforward-stop-check.sh
+  ebfcaadc1604488f41607e5bae414146c963d100de4e81b8492dd4e234614995  $HOME/.claude/hooks/rollforward-trigger.sh
+  89c8594303d1f80f87b93d41bb4bb4a7ec03a371f5ed767b4fdcfdba545a32fe  $HOME/.claude/hooks/stop-exitplan-rejection-followup.sh
+  256dc2b7d87ac0b1d8d49ebce7b5d27c30362de0b2fdb2b754361bef9777c79b  $HOME/.claude/hooks/stop-mid-task-audit.sh
+  d8fac81a37b7bafd5248f585b33f2a304eb8e1aa10baf9d2478d2cfa63d407e0  $HOME/.claude/hooks/subagentstop-implementer-audit.sh
+  ```
