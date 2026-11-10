@@ -7,8 +7,8 @@ instead of impressions: **when an agent is reminded of a specific lesson at the 
 less often?**
 
 **Status (2026-11-09).** The lab experiment has a result. The first field experiment was called with no true positives (a null by
-construction). The second field experiment's registration is written and reviewed but not yet sealed, and waits for its seal and
-switch-on. Read [LIMITATIONS.md](LIMITATIONS.md) for what is and is not shown.
+construction). The second field experiment is sealed and has been running since 2026-11-10; its
+read is due in February 2027. Read [LIMITATIONS.md](LIMITATIONS.md) for what is and is not shown.
 
 Not affiliated with or endorsed by Anthropic or by the authors of the ACE paper.
 
@@ -70,7 +70,7 @@ Counting the same detectors over the operator's 28 real interactive sessions (20
 
 ## What comes next
 
-- **Field test (registration written and reviewed, not yet sealed; analysis merged; switch-on date to be set):** in each real session, each of the three lessons above
+- **Field test (pre-registered, sealed and switched on 2026-11-10; runs to 2027-02-02):** in each real session, each of the three lessons above
   is shown or hidden at random; the hooks stay on in every session, so nothing unsafe is allowed through. The outcome is how often
   each hook had to step in. No field result yet.
 - **Lab test: done** (above). The lab stays available for a new registration; a new registration is a new experiment.

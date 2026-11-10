@@ -832,3 +832,8 @@ Switch-on order: steps 1-5 before `holdout_start` (a step 1-5 after it is mapped
   256dc2b7d87ac0b1d8d49ebce7b5d27c30362de0b2fdb2b754361bef9777c79b  $HOME/.claude/hooks/stop-mid-task-audit.sh
   d8fac81a37b7bafd5248f585b33f2a304eb8e1aa10baf9d2478d2cfa63d407e0  $HOME/.claude/hooks/subagentstop-implementer-audit.sh
   ```
+
+- 2026-11-10: Step 5 (`holdout_enabled` true, by the operator's script in his terminal; the config check passed) at
+  2026-11-10T01:17:29Z, after steps 1-4 in order. The read reports this date and the shortened window 2026-11-10T01:17:29Z to
+  2027-02-02T00:00:00Z; sessions with any injection row before it are `holdout_off` or `mixed_rate` exclusions. For the day-1 check
+  D0 is 2026-11-11T00:00:00Z and D1 2026-11-12T00:00:00Z.

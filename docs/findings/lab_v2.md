@@ -82,4 +82,5 @@ than 600 s.
    the sealed text.
    The tasks are small and built to elicit each mistake, and the outcomes are the lab's own counts (a block by its Stop hook; a
    successful edit of a file not read in the same turn, counted from the stream), so these are effects on scripted tasks, not in
-   real sessions. The second field experiment, whose registration is written and reviewed but not yet sealed, is meant to test that.
+   real sessions. The second field experiment ([PREREGISTRATION.md](../../PREREGISTRATION.md), sealed and running since 2026-11-10)
+   is meant to test that.
