@@ -492,3 +492,308 @@ line, because an approved proposal may now carry the optional `contract` key (`p
 decision moved). Its sha256 was 6f2355d8a788b99e424cf821939d11efd282bb93a743f8f0d3b34f033ed95c54 and is
 97a4014fc383d73722f656880f75563ef37059d6b47fd5fb7145302d2dc67370; the `arm_start` amendment records the hashes in force when it is written,
 as before.
+
+### 2026-11-03 - lesson-text holdout (field): the draft RER activated for three lessons
+
+This entry activates the draft sections "Question" to "Null handling" above (the injection RER experiment) for three lessons, with the
+deviations listed below. Where this entry and the draft disagree, this entry governs. The sealed block and the shadow-mode analysis are
+not edited. Arms stay NO-GO, and a holdout phase excludes an arm phase (sealed text, lines 8-10).
+
+Lessons, each scored by one detector (the hashes are those of the 2026-10-29 detector v2 entry above, unchanged at commit 2c88d58):
+
+```text
+L-cbfb7a57 (pre-claim audit)              preclaim_audit_block strong 9c51713970ced98bb4e72550cae93cc10b7e84b3a0a9df9924ce81ffe16d77ea
+L-f8a355f9 (read in the turn before edit) edit_unread_turn weak 48e43655450c841631c47cb54bbe363089882004b8ce8cbca200fd717eced69f
+L-93544dae (answer before ExitPlanMode)   exitplan_question_block strong 315f40a2239247383d8e39f82412a23ade493291a37e1d57b449bfa5bcb32281
+```
+
+`preclaim_audit_block` and `exitplan_question_block` count the block events of two operator hooks (`stop-mid-task-audit.sh`,
+`pretooluse-exitplan-question-check.sh`), matched by hook name. `edit_unread_turn` is an offline detector over the transcript; no hook
+blocks an edit of a file not read in the same turn (Claude Code itself only requires a read earlier in the session).
+
+The injector runs in `pinned` mode, which shows the pinned lessons. The pinned set is frozen for the horizon as exactly these three and
+L-b3d1fba9, all global. L-b3d1fba9 is set `holdout_exempt` for the horizon, so it is always shown.
+
+Deviations from the draft, each decided before any holdout session:
+
+- (a) Timing: one confirmatory read (decision D-235), replacing the looks at 8, 16 and 24 weeks. There is no harm-only interim. For the
+  two hook-scored lessons, the hooks keep blocking in both arms, so hiding a lesson's text opens no harm path the hooks do not stop. For
+  L-f8a355f9 no hook stops the mistake; the risk (an edit against stale content) is judged small for the horizon and is accepted.
+- (b) Outcome: the primary outcome is binary: at least one violation per (session, lesson), as the draft's "whether the specific mistake
+  recurs". The secondary outcome is the violation count per (session, lesson).
+- (c) Content eligibility (draft line 42): for the horizon, the three rules are removed from the operator's global CLAUDE.md (Discipline
+  rules 6, 8 and 9) by a dated edit (decision D-232) and restored at the end. Residual exposure remains. The memory indexes of two
+  project directories (SymbolicSystems, SymbolicSystems-ThinkHospitality) state the ExitPlanMode rule, and the descriptions of the
+  `brutal-honesty` and `cycle-close` skills, listed in every session, name the pre-claim audit (brutal-honesty also gives its format). Both are present in
+  either arm. For the two hook-scored lessons, a hook's block message restates the rule, but only after a violation, so this exposure depends on the outcome. It
+  does not affect the binary primary, because the first block is itself the outcome event. It can affect the count secondary. Auto-memory
+  files may also gain rule text during the horizon. At the switch-on and at `holdout_end` the operator records, in a private file in the
+  data dir, every line (file path and full text) of the auto-loaded files (`$HOME/.claude/CLAUDE.md`, `$HOME/.claude/rules/*.md`, the root
+  CLAUDE.md of each working directory with a field session, and `$HOME/.claude/projects/*/memory/MEMORY.md`) that matches, by
+  `grep -n -i -E`, a broad per-rule pattern: pre-claim `pre-claim|preclaim`, read-before-edit `read.{0,30}before.{0,30}edit|read the
+  target file`, exitplan `exitplanmode|exit plan mode`. The sha256 of each record goes in a dated line. Before the read, and so before
+  any per-arm data is seen, the operator compares the two records and classifies every added, changed or removed line as a statement of
+  a rule or a mere mention, in a dated line; drift maps to a deviation only as (k) states. A paraphrase that matches no pattern is not
+  caught (a limitation). The `brutal-honesty` and `cycle-close` skill descriptions are not counted: they are the same in both arms, and a
+  change to either is logged in a dated line. The estimate is therefore the incremental effect of the lesson's coin (its text and the
+  layout shift, (k)) over this residual exposure. The draft rule is amended to say so.
+  The subject is not blind. Of the 40 transcripts counted in (d), 34 ran in the rebuild-lab project, where the agent can read this entry
+  (the lesson ids and their rules) and sees its own block, so it can infer its arm for a lesson. The estimand is the effect of the
+  lesson's coin (its text and the layout shift, (k)) on a subject that may be aware of the experiment, demand effects included. A split by
+  the project directory holding the session's transcript (a name ending in `-rebuild-lab` or containing `-ace-playbook`, against all
+  others; joined by session id) is pre-stated as exploratory only.
+- (d) Step-0 gate (draft: "fewer than about six lessons recur at 2% or more"): replaced by measured rates and a power table, stated before data. Counts
+  were read on 2026-11-03 from `detector_events.jsonl` (rows to 2026-10-30T19:51Z), offline tier, without the interactive filter (77 of
+  the 79 injection rows written before 2026-11-03T02:10Z carry no entrypoint; the field was added that day, and the two that do are 02:02Z
+  `cli` and 02:07Z `sdk-cli`). The share of sessions with at least one violation, for preclaim / edit_unread_turn / exitplan, is 34 % / 18
+  % / 14 % of the 50 sessions with prompts >= 1, and 57 % / 32 % / 25 % of the 28 with prompts >= 3. `holdout_power` at commit 2c88d58 can
+  fit only the 9 sessions whose row carries a `start` (rows written before 2026-10-29 lack the field). Its fit (22 % / 22 % / 11 %) gives
+  the power below: 2 eligible sessions/day, binary primary, Holm over 3, normal method, 400 simulations, seed 1.
+
+  | lesson | 12 weeks, RR 0.5 | 12 weeks, RR 0.67 | 24 weeks, RR 0.5 | 24 weeks, RR 0.67 |
+  |---|---|---|---|---|
+  | preclaim | 0.34 | 0.14 | 0.68 | 0.30 |
+  | edit_unread_turn | 0.40 | 0.14 | 0.69 | 0.27 |
+  | exitplan | 0.15 | 0.07 | 0.42 | 0.14 |
+
+  The rate of 2 is conservative. From 2026-10-19T00:00Z to 2026-11-03T03:00Z, 40 transcripts started with `entrypoint` `cli` and carried
+  the injected block, which is 2.6 per calendar day. Counted: top-level transcripts in the project directories whose first record that
+  carries a timestamp falls in that span, whose first `entrypoint` is `cli`, and which have an attachment record carrying the block.
+  The expected n is about 168 eligible sessions in 84 days. No minimum n is set: the read happens at the registered time whatever n is.
+  The field read is expected to be inconclusive for the registered effect of 0.67. A controlled lab (`ace_playbook/lab`, its own
+  pre-registration) carries the causal question.
+- (e) Assignment and estimand: the injector's coin (`ace_playbook/inject/injector.py`, `coin` and `is_holdout`) is the first 8 hex
+  digits of sha256 of `seed|session id|lesson id`, read as a fraction of 2**32. The lesson is hidden when that fraction is below
+  `holdout_rate` 0.5. Draws are independent per (session, lesson). Each `/clear` starts a new session id and so re-draws. The estimand for
+  each lesson is marginal over the other two lessons' coins (the block shows a varying subset).
+- (f) Eligible sessions: a `_session` row with a `start` inside the registered window and prompts >= 1, and the session must be
+  interactive (decision D-239): every injection row of the session carries `entrypoint` `cli`, which the injector records from
+  `CLAUDE_CODE_ENTRYPOINT`. Automated sessions (SDK reviews, `claude -p` probes, the brief) are excluded (`not_interactive` when their
+  transcript is scanned, else by an earlier reason of (i) or as `unmatched_injection`). Subagent transcripts are never scanned.
+- (g) Analysis: the code at commit 2c88d58. The sha256 values are (the last line is the sealed `report_sha256` over its seven files,
+  section "Frozen instruments" above, which hold `arms_stats`, `metrics`, `labels` and `report`, all imported by the analysis):
+
+  ```text
+  ace_playbook/compile/holdout_report.py c05de1c362c2397c75e484ccefc99bb5f90a5c433d72cd4d7b3c65274ca9048f
+  ace_playbook/compile/holdout_io.py     d542ddc6a285ced9dc96ad6c9f4f05a3dcd7d209184e0cd19d85f4888829970d
+  ace_playbook/compile/holdout_power.py  6705752c5a81b49951583071fea2ce93239fa89a687e0f0b5e3a8c9ee5fcd9f2
+  ace_playbook/inject/injector.py        d193e5e214425282510674b003c1cc57bf4e45c22ecbb3bc6e0ffc97e21a8268
+  ace_playbook/compile/state.py          bd7e6e3dd23738a5ee2d34e8d1895625f56554ccf59045a8ff9a26265e27d8bc
+  report_sha256                          8b9d55c625f53c4e9474cdaaf2a16f0605779b0c0722fd5d3a8e0e43ac93330d
+  ```
+
+  For each lesson the report gives the risk difference D (shown minus hidden) in the any-violation rate, a Wilson interval per arm, and
+  the rate ratio as a point estimate. The test is two-sided: |D| is compared against 10,000 re-draws of the coin (`arms_stats.permutation
+  _test`, arm rate 0.5), seeded by the config key `holdout_permutation_seed`. That is a valid randomization test (Monte Carlo,
+  p = (1 + #{re-draws with |D*| >= |D|})/(10,000 + 1), a re-draw that leaves an arm empty counts as extreme) of the sharp null stated in
+  (k); no clustering is used. The Wilson intervals treat sessions as independent and are descriptive. Holm runs over the three lessons at
+  alpha 0.05, and the count secondary is a separate family with its own Holm. No interval is reported for D or for the rate ratio; the
+  secondary JSON's `shift_ci95_null_redraws` field (D minus the quantiles of the shifted null re-draws, not a confidence interval) is not
+  reported either. The draft's clustered Poisson cross-check is dropped.
+- (h) The registered window is 2026-11-10T00:00:00Z to 2027-02-02T00:00:00Z (84 days). The report reads it from the config keys
+  `holdout_start` and `holdout_end`, which it does not compare with these literals. The read counts as confirmatory only if the window
+  line it prints equals them. The read runs after the first nightly sweep that completes on or after 2027-02-05; that sweep's completion
+  time is logged in a dated line before the read, and the read's output (run without `--json`: the JSON form adds the
+  `shift_ci95_null_redraws` field and prints no window line) is committed as it is. It runs with the default `--min-prompts 1` (the report
+  refuses another value outside the descriptive mode).
+- (i) Exclusions, each counted and reported. In the order the code applies them: null_session_id (an injection row without a session
+  id); unmatched_session (an eligible session with no injection row); then, per session, no_start, below_min_prompts, outside_window,
+  not_interactive, refused, holdout_off, mixed_rate, rate_not_half, seed_fp_mismatch and assignment_conflict; unmatched_injection (an
+  injection session in the window with no `_session` row); and, per lesson, lesson_not_assigned. Every one of these is decided without
+  the coin, so they cannot differ by arm through the analysis. Per-arm exclusion counts are not computed. A lesson in `dropped_cap` is
+  analysed as assigned SHOWN (intention to treat). The read refuses if any of the three lessons was `holdout_exempt` at any time before
+  `holdout_end` (read from the delta log).
+- (j) Frozen at the switch-on and re-checked before the read: the seeds, the two scoring hooks and the three hook entries in
+  `$HOME/.claude/settings.json`, the text and `applies_when` of the four pinned lessons, `HEADER` and `FOOTER` of the injected block,
+  the config values `inject_mode`, `holdout_rate`, `max_global` and `inject_max_chars`, the edited CLAUDE.md, the pinned set (with its
+  exempt flags), and the measurement code set. Every value known before the switch-on is written here now (computed 2026-11-03 at main
+  372ec18, whose measurement code is byte-identical to 2c88d58); the pinned-set line is the state expected after step 2 (before it the
+  same line shows `L-b3d1fba9:active:global:0`); only the two seed hashes and the post-edit CLAUDE.md hash are placeholders:
+
+  ```text
+  holdout_seed_sha256                      212934ab1633ea4f802526172ffe2a91fd8952d0464b8a01daefdb69e57ae647
+  sha256(holdout_permutation_seed)         3da52c3c93273b9961ad2529359f70fcba6d58f0814a2df94c85bbd69886792f
+  CLAUDE.md (global, after the D-232 edit) 87751e1a46ad1c1c37be345bae14e5472432e7ab8dd6bcf4fe9651397d65f8ce
+  stop-mid-task-audit.sh                   256dc2b7d87ac0b1d8d49ebce7b5d27c30362de0b2fdb2b754361bef9777c79b
+  pretooluse-exitplan-question-check.sh    1be70af396c4b5ad0a3ba2a0b004eef21bc740addcd13e4884ab0ee53f4ff1e4
+  L-93544dae text+applies_when             0d3b951c66e7c806edaaa3e8b8bf796bdda28a375d7a455fa579a81724aa906b
+  L-b3d1fba9 text+applies_when             2ac2be199aaec53320700d89cc94cbd7e3bb855acb2eea6988b3a6cc9b6289c5
+  L-cbfb7a57 text+applies_when             98f4f056a2064b9b4e1d3cb88d5797ea37689a7e5e5a14dccfaa03b2419b5f0c
+  L-f8a355f9 text+applies_when             d4ec6bcfbe298b4fc4aa656eaabc85c3cd83625f87a0338cf5cccd2f5dfdd8c9
+  injector HEADER+FOOTER                   9724a65957f24d5ec9c62d43b4a5bc066fc9ab0580d4962b60cc89bacf1193c5
+  config values                            inject_mode=pinned holdout_rate=0.5 max_global=4 inject_max_chars=7000
+  pinned set (id:status:scope:exempt)      L-93544dae:active:global:0,L-b3d1fba9:active:global:1,L-cbfb7a57:active:global:0,L-f8a355f9:active:global:0
+  measurement code set (40 files)          f5fbca769f31f51cccb51963e500ba507316586181c3351d89993abe944b5034
+  settings entry SessionStart              39e0d974e5333fdb6a7a0c5300a2b9dc8b3d1eb018e57ea7ca12bc5d15e9994c
+  settings entry Stop (preclaim hook)      cedb76b590de58db0a62e7d1c97749b75f9097f28523d462a39a8dfc1b94cc00
+  settings entry PreToolUse ExitPlanMode   adf59c31cfca2a4a5b028937c38a8c277013608f0c01ade10b9fe8a911187f7e
+  ```
+
+  Each value is computed by one stated command. The seeds are generated as `secrets.token_hex(32)` each; the operator types each one
+  into `python3 -c "import getpass,hashlib;print(hashlib.sha256(getpass.getpass().encode()).hexdigest())"` (for `holdout_seed` this is
+  the hash `config.check_holdout` compares with `holdout_seed_sha256`; the permutation seed has no config-side hash check). A 256-bit seed is
+  not recoverable from its public hash. The hooks and CLAUDE.md: `shasum -a 256` of `$HOME/.claude/hooks/stop-mid-task-audit.sh`,
+  `$HOME/.claude/hooks/pretooluse-exitplan-question-check.sh` and `$HOME/.claude/CLAUDE.md`. The rest, from the checkout the SessionStart
+  hook runs, with `PYTHONPATH="$HOME/ace-playbook" python3 -P -` fed the block below without its two-space list indentation. It prints, in
+  order, the four lesson hashes, the block hash, the config line, the pinned set, the measurement code set (file count and hash) and the
+  three settings entries. The measurement code set is the union of the modules loaded by `ace_playbook.inject.__main__` (the SessionStart
+  path) and by `ace_playbook.compile.holdout_report` (the read), plus `hooks/sessionstart.sh`; it must have no uncommitted change, and
+  `--error-unmatch` fails on a missing path. The read path's only function-level import is the store (`holdout_io.check_exempt`), which
+  the injector already loads. A settings entry is the whole hook object (command, timeout, onFailure and any other key) with its event and
+  its group's matcher.
+
+  ```python
+  import hashlib, importlib, json, os, subprocess, sys
+  from ace_playbook import config
+  from ace_playbook.store.log import DeltaLog
+  from ace_playbook.inject.injector import HEADER, FOOTER
+  home = os.path.expanduser("~")
+  cfg = config.load()
+  s = DeltaLog(cfg.deltas).state()
+  for i in sorted(["L-cbfb7a57", "L-f8a355f9", "L-93544dae", "L-b3d1fba9"]):
+      one = json.dumps([i, s[i]["text"], s[i]["applies_when"]], ensure_ascii=False, separators=(",", ":"))
+      print(i, hashlib.sha256(one.encode()).hexdigest())
+  print(hashlib.sha256((HEADER + "\n" + FOOTER).encode()).hexdigest())
+  print(f"inject_mode={cfg.inject_mode} holdout_rate={cfg.holdout_rate} max_global={cfg.max_global} inject_max_chars={cfg.inject_max_chars}")
+  print(",".join(f"{i}:{l['status']}:{l['scope_type']}:{int(bool(l.get('holdout_exempt')))}" for i, l in sorted(s.items()) if l.get("pinned")))
+  repo = os.path.join(home, "ace-playbook")
+  for m in ("ace_playbook.inject.__main__", "ace_playbook.compile.holdout_report"):
+      importlib.import_module(m)
+  files = sorted({os.path.relpath(x.__file__, repo) for n, x in list(sys.modules.items())
+                  if n.startswith("ace_playbook") and getattr(x, "__file__", None)} | {"hooks/sessionstart.sh"})
+  git = ["git", "-C", repo]
+  dirty = subprocess.run(git + ["status", "--porcelain", "--", *files], capture_output=True, text=True, check=True).stdout
+  if dirty: sys.exit("uncommitted change in the measurement code set")
+  listing = subprocess.run(git + ["ls-files", "-s", "--error-unmatch", "--", *files], capture_output=True, text=True, check=True).stdout
+  print(len(files), hashlib.sha256(listing.encode()).hexdigest())
+  sj = json.load(open(os.path.join(home, ".claude", "settings.json")))
+  for name in ("sessionstart.sh", "stop-mid-task-audit.sh", "pretooluse-exitplan-question-check.sh"):
+      for ev, groups in sorted(sj.get("hooks", {}).items()):
+          for g in groups:
+              for h in g.get("hooks", []):
+                  if name in h.get("command", ""):
+                      e = json.dumps({"event": ev, "matcher": g.get("matcher"), "hook": h}, sort_keys=True)
+                      print(name, ev, hashlib.sha256(e.encode()).hexdigest())
+  ```
+
+  The config line prints only those four keys. The SessionStart hook runs the checkout `$HOME/ace-playbook` unless `ACE_PLAYBOOK_HOME`
+  is set, with the interpreter `ACE_PYTHON` if set, else the `python3` on its PATH. The settings `env` block sets neither; at the
+  switch-on and at the read the operator records, in dated lines, `env | grep -c -E '^(ACE_PLAYBOOK_HOME|ACE_PYTHON)='` (0) from his
+  terminal, `command -v python3` and `python3 --version`; an interpreter change is reported with the read.
+  At the switch-on (after step 2, which sets L-b3d1fba9's exempt flag shown in the pinned-set line) every literal above must reproduce by
+  its command. If one does not, the fill stops; the only amendment allowed is a text commit that changes the non-reproducing literal
+  lines and adds one dated line giving the reason, confirmed by a docs-lens review before `holdout_start`. If that review cannot finish
+  in time, the start moves: `holdout_start`, `holdout_end` and the read date shift by the same whole number of days, only those literals
+  change, and a dated line gives the reason; the 84-day length and the power table stay as written. The start moves at most once; the
+  start-move commit is covered by the next passing docs-lens review; its commit is R below. If the moved start cannot be met either, the
+  holdout does not start under this entry.
+  Fill gate: the commit that fills (j) changes exactly the three placeholder lines, and in each only the placeholder token, replaced by 64
+  lowercase hex characters, each line staying at its line number; its parent is the commit the last review passed, and its message
+  contains that commit's full 40-character sha. With R that reviewed parent and F the fill commit, run in a fresh `bash` or `zsh -f` (not
+  an agent's tool shell, where `grep` can be a shell function) in the ace-playbook repository (byte level: a whitespace or indentation
+  change, or a moved line, anywhere fails it):
+
+  ```bash
+  export GIT_NO_REPLACE_OBJECTS=1; f=PREREGISTRATION.md; d=$(git diff -U0 "$R" "$F" -- "$f")
+  [ "$(git cat-file commit "$F" | sed -n '/^$/q; s/^parent //p')" = "$(git rev-parse "$R^{commit}")" ] || echo "FAIL parent"
+  [ "$(git rev-list --parents -n 1 "$F" | wc -w)" -eq 2 ] || echo "FAIL merge"
+  git log -1 --format=%B "$F" | grep -qF "$(git rev-parse "$R")" || echo "FAIL message"
+  [ "$(git diff --numstat "$R" "$F")" = "$(printf '3\t3\t%s' "$f")" ] || echo "FAIL numstat"
+  [ -z "$(git diff --summary "$R" "$F")" ] || echo "FAIL mode"
+  [ "$(grep -cE '^-[^-].*<[A-Z0-9_]+>' <<<"$d")" = 3 ] || echo "FAIL removed"
+  [ "$(grep -cE '^\+[^+].* [0-9a-f]{64}$' <<<"$d")" = 3 ] || echo "FAIL added"
+  grep '^@@' <<<"$d" | awk '$2 != "-" substr($3,2) {print "FAIL moved"; exit}'
+  cmp <(grep -E '^-[^-]' <<<"$d" | sed -E 's/^-//; s/<[A-Z0-9_]+>/X/') \
+      <(grep -E '^\+[^+]' <<<"$d" | sed -E 's/^\+//; s/[0-9a-f]{64}$/X/') || echo "FAIL lines"
+  ```
+
+  It passes only when it prints nothing. (Tested before this entry on a throwaway repository: an honest fill passes; a re-indented code
+  line, a changed label, a 65-character or upper-case token, a second changed file, a moved placeholder line, a two-commit range, a
+  merge commit, a merge hidden by `git replace --graft` or by info/grafts, a root commit with a forged parent line, a mode change and a
+  message without R's sha each fail.) The gate catches accidental changes to a single honest fill; the pushed history and the
+  OpenTimestamps stamp are the record against deliberate forgery. A read-only docs-lens review confirms the fill. F is the last commit on
+  this branch, its tip at the merge, and the sha256 of the merged PREREGISTRATION.md equals the stamped one.
+
+  Before the read, the operator checks that sha256 of each config seed equals its line above, that every live injection row's `seed_fp`
+  equals the first 8 hex digits of `holdout_seed_sha256`, that every other value in the block reproduces by its command, and that the six
+  values of (g) reproduce in `$HOME/ace-playbook`. The result is recorded in a dated line before the read is run. Any mismatch, whenever
+  it occurred (also between step 4 and `holdout_start`), maps by (k).
+  Recorded, not frozen: the commit of the ace-playbook checkout and the last commit touching the sweep and cleaner code
+  (`git log -1 --format=%H -- ace_playbook/compile/offline.py ace_playbook/clean/`), at the switch-on and at the read; any change is
+  reported with the read.
+- (k) Changes and looks during the horizon. No per-arm view of holdout data is taken before the read: `--interim-descriptive` is run only
+  for the day-1 check below, piped so that only its `counts` object is printed. Evidence cards (`compile cards`, `compile propose`)
+  cross a lesson's exposure with its incidents (`lesson_shown_in_incident_session`), which is a per-arm view: none is built or read for
+  the three lessons before the read (the nightly sweep builds none). The nightly reflection adds counters (`shown`, `cited`, `helpful`,
+  `harmful`, `violated`) to a lesson only when it was shown, so they are per-arm data too: neither the digest nor the store CLI prints
+  them, and the operator does not inspect them for the three lessons before the read. The injector orders the pinned lines by a score
+  built on those counters (`store/rank.py`), so the order of lines in the block is not frozen and can depend on outcomes (a
+  limitation). It also depends on the lesson's own past coins (its counters grow only when it was shown), a carryover channel, and
+  hiding a lesson shifts the layout of the other lines in that session. The permutation test is therefore valid for the sharp null "no
+  session's outcome for the lesson depends on the lesson's coins by any path (its text, the layout of the other lines, later order),
+  and no session's existence or eligibility depends on them". D estimates the effect of a session's own coin on that session's outcome
+  (its text and that session's layout), marginal over the lesson's coins in other sessions and over the other two lessons' coins (e);
+  carryover to later sessions is not part of D; it makes the sharp null false, but the |D| statistic has little power against it.
+  With four pinned lessons and `max_global` 4, which lessons are eligible does not depend on order, and the character cap cannot bind (the
+  whole block is 1712 of the 7000-character `inject_max_chars`, injection rows of 2026-11-03), so `dropped_cap` cannot depend on it
+  either. A reflector edit to one of the three lessons is a text change, mapped below. A change after `holdout_start`, or a (j) mismatch
+  found later, makes a read exploratory as follows, mapped in advance: a scoring hook or its settings entry → the lesson it scores; a
+  detector, its mode or its approval → its lesson; the text or `applies_when` hash of one of the three lessons → that lesson; L-b3d1fba9's
+  hash, the pinned set, `HEADER`/`FOOTER`, a config value in (j), a seed, the window, the SessionStart settings entry, the measurement
+  code set or any value of (g) → all three; CLAUDE.md or an auto-memory file → a lesson only if a line classified in (c) as a statement of
+  that lesson's rule was added, changed or removed. Any other edit to those files is logged in a dated line and is not a deviation. Not
+  frozen, and logged in a dated line if changed, without a deviation: other skill descriptions that name a rule (`brutal-honesty`,
+  `cycle-close`) and every other hook in `$HOME/.claude/hooks` whose text matches a pattern of (c) or acts around ExitPlanMode (at
+  2026-11-03 these include `stop-exitplan-rejection-followup.sh`, the `rollforward-*` hooks, `subagentstop-implementer-audit.sh`,
+  `block-unreviewed-plan-commit.sh`, `mark-plan-approved.sh` and `pretooluse-v83-gates.sh`); they apply in both arms. At the switch-on and
+  again at `holdout_end` the operator records the list and each listed file's sha256, in dated lines (the list includes the two scoring
+  hooks, which (j) freezes), from:
+
+  ```bash
+  grep -l --null -i -E 'pre-claim|preclaim|read.{0,30}before.{0,30}edit|read the target file|exitplanmode|exit plan mode' \
+    "$HOME"/.claude/hooks/* | xargs -0 shasum -a 256
+  ```
+
+  Where a change falls under two rules (a detector source file is also in the measurement code set), the union applies: here, all
+  three. A change recorded as a bug fix (it restores the registered behaviour and applies to both arms), with the new hash of each
+  changed frozen value, and confirmed by a docs-lens review, all before the read, is exempt from the mapping above; each exempted fix
+  is listed with the read. A step 1-5 done after `holdout_start` in order, with a dated line, keeps the read confirmatory, except a
+  step 4 delayed by a (j) amendment, which follows the start-move rule of (j); sessions with any injection row before step 5 are
+  `holdout_off` or `mixed_rate` exclusions, and the read reports the date of step 5 and the shortened window. Steps 1-5 done out of
+  order make the read exploratory for all three. If the holdout is switched off before `holdout_end`, the sessions up to the
+  switch-off are analysed and the result is labelled exploratory.
+- (l) Null handling (replacing the draft's paragraph, whose figures assumed another horizon and rate): if no lesson's Holm-adjusted p is
+  below 0.05, the README reports "no detectable effect" with D, the per-arm rates and the power table in (d). No other outcome, window
+  or subset is searched for an effect. A significant D in the harmful direction (more violations when shown) is reported as harm.
+- (m) At the horizon, the three rules return to CLAUDE.md and `holdout_enabled` returns to false.
+
+Switch-on order: steps 1-5 before `holdout_start` (a step 1-5 after it is mapped in (k)); step 6 follows later, as it states.
+
+1. The operator removes rules 6, 8 and 9 from the global CLAUDE.md (D-232) and writes the rule-line record of (c).
+2. `store exempt L-b3d1fba9` (the delta log has no exempt record yet).
+3. The operator generates `holdout_seed` and `holdout_permutation_seed` in his terminal (`secrets.token_hex(32)` each). He sets them,
+   together with `holdout_seed_sha256` (the config accepts it empty; the operator must set it, and the pre-read check of (j) compares it),
+   `holdout_rate` 0.5, `holdout_start` and `holdout_end`, in the private config.
+4. A commit on this entry, before its merge and as its last commit, replaces the three placeholders in (j) by the values the commands
+   of (j) print and passes the fill gate. The sha256 of PREREGISTRATION.md at that commit is OpenTimestamps-stamped.
+5. `holdout_enabled` is set to true.
+6. Day-1 check. D0 is the first `YYYY-MM-DDT00:00:00Z` after step 5 and D1 the same form one day later; the operator runs at least one
+   interactive session between them and ends it at least 60 minutes before the sweep named next (the offline pass reads only transcripts
+   idle 60 minutes). After the first nightly sweep that completes after D1, with I the data dir's `injections.jsonl`:
+
+   ```sh
+   PYTHONPATH="$HOME/ace-playbook" python3 -P -m ace_playbook.compile.holdout_report --interim-descriptive --json \
+     --start "$D0" --end "$D1" | python3 -c 'import json,sys;print(json.load(sys.stdin)["counts"])'
+   python3 -c 'import json,sys,collections;a,b=sys.argv[2:4];print(collections.Counter(e for _,e in {(r.get("session_id"),r.get("entrypoint"))
+     for r in map(json.loads,open(sys.argv[1])) if a<=r["ts"]<b}))' "$I" "$D0" "$D1"
+   python3 -c 'import json,sys;a,b=sys.argv[2:4];print(sorted({r.get("seed_fp") for r in map(json.loads,open(sys.argv[1]))
+     if a<=r["ts"]<b}))' "$I" "$D0" "$D1"
+   ```
+
+   The first command prints only the `counts` object, so no per-lesson data is printed. It must show `analysed_sessions` at least 1,
+   `lesson_not_assigned` 0, and each in-window failure count (`refused`, `holdout_off`, `mixed_rate`, `rate_not_half`,
+   `seed_fp_mismatch`, `assignment_conflict`) 0. The second counts the sessions of D0 to D1 per entrypoint, from the injection log only:
+   none lacks the field (no `None` key), and `unmatched_injection` is at most the number of non-`cli` sessions (automated runs whose
+   transcript is not scanned). The third must print exactly one value, the first 8 hex digits of the filled `holdout_seed_sha256`
+   (`seed_fp` is public). If no interactive session ran, or a `cli` session of D0 to D1 was not idle 60 minutes when the sweep ran, the check repeats for
+   the next day. A failed check is fixed as a recorded bug fix of (k).
