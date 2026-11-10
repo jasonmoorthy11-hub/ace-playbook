@@ -122,3 +122,39 @@ def test_removing_a_formatting_element_does_not_scan_the_leftover_markers(monkey
     t = treebuild.Tree()
     with pytest.raises(ValueError):                                                  # an element that is not in the list: as `list.remove` said
         t.fmt_del(treebuild.Node("b"))
+
+
+# ------------------------------------------------------------------ `fmt_del` removes THE entry it was given, not a look-alike
+FMT_PAGE = "<p><b {a}>X<p><table><td><b {a}>Y</b>W</td></table>Z"
+
+
+def test_the_end_tag_of_a_formatting_element_removes_that_element_not_an_equal_looking_one_before_it():
+    # the first `b` stays in the list (the `<p>` popped it); the cell's `b` equals it by name and attributes. Removing the FIRST equal entry would drop the
+    # outer one: its copy would then not be re-opened and Z would show. Main and the branch show W only.
+    assert strip_hidden(FMT_PAGE.format(a="hidden")) == "W"
+    assert strip_hidden("<style>.h{display:none}</style>" + FMT_PAGE.format(a="class=h")) == "W"
+
+
+def test_fmt_del_removes_the_entry_by_identity():
+    from ace_playbook.compile.watch.treewalk import Node
+    for before in (True, False):
+        t = treebuild.Tree()
+        e, twin = Node("b", 0, [("class", "h")]), Node("b", 0, [("class", "h")])
+        assert e.attrs == twin.attrs and e is not twin
+        t.fmt = [twin, None, e] if before else [e, None, twin]
+        t.fmt_del(e)
+        assert len(t.fmt) == 2 and (twin in t.fmt) and not any(x is e for x in t.fmt)
+        t.fmt = [twin, e] if before else [e, twin]
+        t.fmt_del(e)
+        assert len(t.fmt) == 1 and t.fmt[0] is twin                                 # (an element before, or after, with the same name and attributes stays)
+
+
+def test_the_walk_keeps_no_state_between_calls():
+    from ace_playbook.compile.watch import treewalk
+
+    def sizes() -> dict:
+        return {k: len(v) for k, v in vars(treewalk).items() if isinstance(v, (dict, list, set))}
+    page = "<style>.h{display:none}</style><p class=h>a<p class=x>b<p id=1 class=z>c"
+    before = sizes()
+    assert strip_hidden(page) == "b\nc" and strip_hidden(page + "<p class=q>d") == "b\nc\nd"
+    assert sizes() == before                                                         # a memo kept at module level would hold the attribute lists of both pages
