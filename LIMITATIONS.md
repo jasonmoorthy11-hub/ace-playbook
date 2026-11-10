@@ -631,7 +631,7 @@ rejected so it cannot pose as a digest category such as `silent:`); `compile sta
 the arm notes come first, so with two of them plus the backup and brain notes the `acewatch` note is not shown there (it stays in `health.json`).
 
 The sandbox logs in `/var/acewatch/logs` are rotated by the `acewatch` user itself (`hooks/acewatch/acewatch_run.py`, started by the two plist templates, which name no launchd log path: the
-wrapper opens the logs itself as that user and rotates them after each scan that was not cut short by a signal: keep 5, 1024 KiB, no compression), never by root, and only when the operator installs those plists; the other launchd jobs' logs (nightly,
+wrapper opens the logs itself as that user and rotates them after each scan unless the wrapper itself was sent SIGTERM, SIGINT or SIGHUP: keep 5, 1024 KiB, no compression), never by root, and only when the operator installs those plists; the other launchd jobs' logs (nightly,
 brief) are not covered by it. There is no newsyslog template any more (root must not work inside a directory the sandbox user can write).
 
 The `acewatch` note is the same kind of text: whatever the operator's `acewatch_check` script prints (the sample prints the first `open ...`, `none` or

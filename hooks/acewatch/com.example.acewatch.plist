@@ -8,8 +8,9 @@
        __ACEWATCH_HOME__      acewatch's own home directory
      The job runs through hooks/acewatch/acewatch_run.py, which opens this job's two log files ITSELF as acewatch (the job's stdout and stderr),
      runs the scan unchanged and then rotates them (keep 5, 1024 KiB; docs/watch/SANDBOX.md "Log rotation"). The plist has NO StandardOutPath and NO
-     StandardErrorPath on purpose: launchd then opens no file anywhere, so no root process ever works inside the logs directory. A job that cannot
-     even start (a missing copy, a refused log: exit status 3) shows only as its last exit status in `sudo launchctl print system/com.example.acewatch`.
+     StandardErrorPath on purpose: launchd then opens no file anywhere, so no root process ever works inside the logs directory. A wrapper that
+     cannot start at all (a missing copy) leaves only its last exit status in `sudo launchctl print system/com.example.acewatch` (not checked on a real
+     install); a refused log is exit status 3 with the reason in the err log, else the out log, else only that exit status.
      The config at __ACEWATCH_HOME__/.config/ace-playbook/config.json is acewatch's own (its own watch_dir, watch_sources, watch_claude).
      Install by hand as root: copy to /Library/LaunchDaemons (root:wheel, 0644), then `launchctl bootstrap system <file>`.
      Remove: `launchctl bootout system/com.example.acewatch`. The weekly tier-1 job is com.example.acewatch.weekly.plist. -->

@@ -5,8 +5,9 @@
      a full checkout with a .venv built from a python outside any user home); the same install and remove steps
      (`launchctl bootout system/com.example.acewatch.weekly`). Like the daily job it runs through hooks/acewatch/acewatch_run.py, which opens this
      job's two log files itself as acewatch, runs the scan and rotates them (docs/watch/SANDBOX.md "Log rotation"). No StandardOutPath and no
-     StandardErrorPath on purpose: launchd opens no file anywhere. A job that cannot even start shows only as its last exit status in
-     `sudo launchctl print system/com.example.acewatch.weekly`. -->
+     StandardErrorPath on purpose: launchd opens no file anywhere. A wrapper that cannot start at all (a missing copy)
+     leaves only its last exit status in `sudo launchctl print system/com.example.acewatch.weekly` (not checked on a real install); a refused log is exit
+     status 3 with the reason in the err log, else the out log, else only that exit status. -->
 <plist version="1.0">
 <dict>
   <key>Label</key>

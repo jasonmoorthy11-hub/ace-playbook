@@ -299,3 +299,45 @@ def test_a_sigterm_before_the_job_exists_is_delivered_to_it_once_it_does(tmp_pat
             if proc.poll() is None:
                 proc.kill()
                 proc.wait()
+
+
+# ---------------------------------------------------------------- review-3 hardenings
+def test_a_mkdir_that_loses_a_race_to_another_creator_is_not_an_error(tmp_path, monkeypatch):
+    parent = tmp_path / "home"
+    parent.mkdir()
+    marker = tmp_path / "marker"
+    real = os.mkdir
+
+    def mkdir_then_exists(path, mode=0o777, *, dir_fd=None):
+        real(path, mode, dir_fd=dir_fd)
+        raise FileExistsError(17, "File exists")
+
+    monkeypatch.setattr(run.os, "mkdir", mkdir_then_exists)
+    assert run.main(["x", str(parent / "logs"), "o.log", "e.log", "--", sys.executable, "-c", marker_job(marker)]) == 0
+    assert marker.read_text() == "ran" and (parent / "logs" / "o.log").exists()
+
+
+@pytest.mark.parametrize("suffix", ["/", "/."])
+def test_a_logs_path_ending_in_a_slash_or_a_dot_is_refused_so_a_symlinked_last_component_is_never_followed(tmp_path, suffix):
+    real = logs_dir(tmp_path)
+    (tmp_path / "link").symlink_to(real)
+    marker = tmp_path / "marker"
+    assert run.main(["x", str(tmp_path / "link") + suffix, "o.log", "e.log", "--", sys.executable, "-c", marker_job(marker)]) == 3
+    assert not marker.exists() and list(real.iterdir()) == []
+
+
+def test_a_closed_stderr_still_ends_in_exit_3_without_a_traceback(tmp_path):
+    logs = logs_dir(tmp_path)
+    done = subprocess.run(argv(logs, "pass", out="o.log", err="o.log"), preexec_fn=lambda: os.close(2), capture_output=False, stdout=subprocess.PIPE, timeout=30)
+    assert done.returncode == 3 and done.stdout == b""
+
+
+def test_a_created_logs_directory_is_0700_whatever_the_umask(tmp_path):
+    parent = tmp_path / "home"
+    parent.mkdir()
+    old = os.umask(0o277)
+    try:
+        assert run.main(["x", str(parent / "logs"), "o.log", "e.log", "--", sys.executable, "-c", "print('ran')"]) == 0
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE((parent / "logs").stat().st_mode) == 0o700 and (parent / "logs" / "o.log").read_text() == "ran\n"

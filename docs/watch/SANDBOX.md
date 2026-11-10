@@ -341,18 +341,19 @@ items read`, and with zero compliance it prints no proposals line. A call that r
 For an install made before the `-I` sudoers line and the wrapper (the `acewatch_run.py` of "Log rotation"). The labels below are the ones step 7 tells you to
 choose (`com.yourdomain.acewatch` and `com.yourdomain.acewatch.weekly`); use your own. In THIS order, each step with the state of the system if you stop after it:
 
-1. If the old newsyslog file was installed: `sudo rm /etc/newsyslog.d/acewatch.conf` (root rotated inside a directory `acewatch` can write). State: the root
-   path into the logs directory is closed; the old jobs keep running and their logs grow.
+1. If the old newsyslog file was installed: `sudo rm /etc/newsyslog.d/acewatch.conf` (root rotated inside a directory `acewatch` can write). State: newsyslog
+   no longer works in the logs directory; the old jobs keep running and launchd still opens their logs there (possibly as root) until step 3.
 2. Replace the sudoers line with the `-I` form (see "The operator-side status line") via `sudo visudo -f /etc/sudoers.d/acewatch-check`, and the copy of
    `acewatch_check.sh` in your own folder with the new one (its sudo call carries the `-I`; the old script no longer matches the new line). The old editable venv
    already finds `ace_playbook` under `-I` (its `.pth` file points at the copy), so the status line keeps working. State: the code-execution path through the
    sudoers line is closed; the scans still run as before.
 3. `sudo launchctl bootout system/com.yourdomain.acewatch` and `sudo launchctl bootout system/com.yourdomain.acewatch.weekly`. State: no scan runs, from here
-   until step 6.
+   until step 6 (`bootout` does not remove the plist files: if the Mac restarts before step 6, the OLD jobs are loaded again at boot; either finish through
+   step 6 first or `sudo mv` the two old plists out of /Library/LaunchDaemons now).
 4. The log files the OLD plists made may be owned by root (launchd opened them; nobody verified as whom). Show their owners with
-   `sudo ls -ln /var/acewatch/logs` (the numeric owner must be `acewatch`'s uid, `id -u acewatch`). Remove any file there that `acewatch` does not own AS
+   `sudo ls -lna /var/acewatch/logs` (the numeric owner must be `acewatch`'s uid, `id -u acewatch`; the `.` line is the directory itself). Remove any file there that `acewatch` does not own AS
    `acewatch`: `sudo -u acewatch rm /var/acewatch/logs/<file>` (`acewatch` may delete in its own directory; root never deletes inside that tree). If you leave
-   one, the wrapper REFUSES to run that job (exit status 3). Old compressed archives (`*.gz`) of the newsyslog design are left alone by the new rotation:
+   one, the wrapper REFUSES to run that job (exit status 3). Old compressed archives (`*.bz2`, the old template's `J` flag) of the newsyslog design are left alone by the new rotation:
    delete them as `acewatch` if you do not want them. State: still no scan runs.
 5. Refresh the root-owned copy, as root, the way step 3 made it (a fresh root-owned checkout of this repository at the new commit, replacing the old tree), then
    re-run step 3's `uv sync` command in it, its `sudo -u acewatch <copy>/.venv/bin/python -I -c "import ace_playbook"` check and its ownership check. State: still
@@ -371,7 +372,9 @@ the scan through `hooks/acewatch/acewatch_run.py <logs dir> <out name> <err name
 `/var/acewatch/logs/`) before it starts the scan: the directory with `O_NOFOLLOW` and owned by `acewatch` (a missing one is created 0700, only its last path
 component and only under a real directory `acewatch` owns; step 2 creates it anyway), each log relative to it with `O_NOFOLLOW`, created 0600 and `fchmod`ed
 0600, and checked on the open descriptor (a regular file with one link, owned by `acewatch`). The scan's stdout and stderr are those two descriptors, its stdin
-is `/dev/null`, and it inherits no other descriptor; the wrapper's own messages go to the err log.
+is `/dev/null`, and it inherits no other descriptor; the wrapper's own messages go to the err log. The launchd behaviour in this section (no file opened when the plist
+names no log path, the discarded stderr, the `last exit code` line of `launchctl print`) is from launchd's documentation and was NOT checked on a real install;
+the wrapper itself is tested in temp directories only.
 
 If a log cannot be opened safely (a symlink, a FIFO, a directory, a hard link, a file `acewatch` does not own, a logs directory that is a symlink or not
 `acewatch`'s) the wrapper does NOT run the scan and exits with status 3, so nothing ever runs unlogged. Where the reason goes: the err log is opened first; if it
@@ -402,8 +405,7 @@ it as `<script> --check` like `backup_check` and `brain_check`, keeps the first 
 shows it: `acewatch open 3  leads 1  oldest 2d  last scan 4h` (or `acewatch none` / `acewatch disabled`); a failed or empty run shows
 `acewatch check failed`. The script runs `sudo -n -u acewatch <venv python> -I -m ace_playbook.compile --config <acewatch config> watch status`, so it needs
 ONE sudoers line, written by you with `sudo visudo -f /etc/sudoers.d/acewatch-check` (nothing installs it): `<operator> ALL=(acewatch) NOPASSWD: ` followed
-by that
-exact command (python path, `-I -m ace_playbook.compile --config` and the config path, `watch status`). It reads state only; it needs no write access.
+by that exact command (python path, `-I -m ace_playbook.compile --config` and the config path, `watch status`). It reads state only; it needs no write access.
 
 Why `-I`: sudo pins the arguments of a rule, not the working directory, and `python -m` puts the caller's working directory first on its import path.
 Without `-I`, any process running as you could run that exact command from a directory holding its own `ace_playbook` package and execute its code as

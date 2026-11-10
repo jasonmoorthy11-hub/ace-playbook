@@ -48,8 +48,8 @@ def _plain_and_ours(st, name: str) -> None:
         raise Refused(f"{name} is not a regular file with one link owned by this user")
 
 
-def _make_dir(logdir: str) -> None:
-    """Create the MISSING last component of `logdir` (0700): only under an existing real directory (not a symlink) owned by the running user."""
+def _make_dir(logdir: str) -> bool:
+    """Create the MISSING last component of `logdir` (0700): only under an existing real directory (not a symlink) owned by the running user. True if created."""
     parent, leaf = os.path.split(logdir.rstrip("/"))
     if leaf in ("", ".", "..") or not parent:
         raise Refused(f"{logdir!r} is not a directory path that can be created")
@@ -63,9 +63,10 @@ def _make_dir(logdir: str) -> None:
         try:
             os.mkdir(leaf, 0o700, dir_fd=parent_fd)
         except FileExistsError:
-            pass
+            return False
         except OSError as exc:
             raise Refused(f"the log directory cannot be created ({exc.strerror})") from exc
+        return True
     finally:
         os.close(parent_fd)
 
@@ -76,8 +77,11 @@ def _open_dir(logdir: str, create: bool = False) -> int:
     except FileNotFoundError as exc:
         if not create:
             raise Refused(f"the log directory cannot be opened ({exc.strerror})") from exc
-        _make_dir(logdir)
-        return _open_dir(logdir)
+        created = _make_dir(logdir)
+        dir_fd = _open_dir(logdir)
+        if created:
+            os.fchmod(dir_fd, 0o700)                                           # the mode must not depend on the umask
+        return dir_fd
     except OSError as exc:
         raise Refused(f"cannot open the log directory without following a link ({exc.strerror})") from exc
     if os.fstat(dir_fd).st_uid != os.geteuid():
@@ -163,7 +167,11 @@ def _say(message: str, err_fd: int | None, out_fd: int | None) -> None:
                 return
             except OSError:
                 pass
-    sys.stderr.write(line)
+    if sys.stderr is not None:                                                # a closed fd 2 leaves no stderr: still exit 3, no traceback
+        try:
+            sys.stderr.write(line)
+        except OSError:
+            pass
 
 
 def run_job(command: list[str], out_fd: int, err_fd: int) -> tuple[int, int]:
@@ -201,6 +209,8 @@ def main(argv: list[str]) -> int:
     try:
         if out_name == err_name:
             raise Refused("the out and err logs must be two different files")
+        if os.path.basename(logdir) in ("", ".", ".."):                        # a trailing slash or dot would make the open follow a symlink
+            raise Refused(f"{logdir!r} must end in a plain directory name")
         dir_fd = _open_dir(logdir, create=True)
     except Refused as exc:
         _say(f"log refused, the job was NOT run: {exc}", None, None)           # no log to write to: the inherited stderr

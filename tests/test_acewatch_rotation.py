@@ -92,7 +92,9 @@ def test_the_runbook_has_an_upgrade_section_before_log_rotation_with_the_steps_i
     assert [section.index(m) for m in marks] == sorted(section.index(m) for m in marks)       # both security fixes first, the outage window shortest
     assert section.count("State: ") == 6 and "already finds `ace_playbook` under `-I`" in section and "no scan runs, from here until step 6" in section
     assert 'sudo launchctl print system/com.yourdomain.acewatch | grep -E "state|last exit"' in section and "`last exit code = 0`, not 3" in section
-    assert "sudo ls -ln /var/acewatch/logs" in section and "sudo -u acewatch rm /var/acewatch/logs/<file>" in section and "REFUSES to run that job (exit status 3)" in section
+    assert "sudo ls -lna /var/acewatch/logs" in section and "the `.` line is the directory itself" in section and "`*.bz2`, the old template's `J` flag" in section
+    assert "if the Mac restarts before step 6, the OLD jobs are loaded again at boot" in section and "launchd still opens their logs there (possibly as root) until step 3" in section
+    assert "sudo ls -lna /var/acewatch/logs" in section and "sudo -u acewatch rm /var/acewatch/logs/<file>" in section and "REFUSES to run that job (exit status 3)" in section
     assert "root never deletes inside that tree" in section and '-I -c "import ace_playbook"' in section
     assert "Never re-run step 2's `sudo chown -R acewatch:acewatch /var/acewatch` after the first install" in section
 
@@ -109,6 +111,7 @@ def test_the_runbook_says_where_a_refusal_reason_goes_and_names_the_launchctl_co
     assert "the err log is opened first; if it opens, the reason (an out-log refusal included) is written there" in log
     assert "the reason is written to the out log if that opens" in log and "neither opens, or the directory is refused" in log
     assert "the only trace is `last exit code = 3`" in log and 'sudo launchctl print system/com.yourdomain.acewatch | grep -E "state|last exit"' in log
+    assert "was NOT checked on a real install" in log and "tested in temp directories only" in log
     assert "a missing one is created 0700, only its last path component" in log and "stdin is `/dev/null`" in log and "a hard link" in log
     tail = text.split("## Uninstalling", 1)[1]
     assert "launchctl bootout system/com.yourdomain.acewatch" in tail and "launchctl bootout system/com.yourdomain.acewatch.weekly" in tail
