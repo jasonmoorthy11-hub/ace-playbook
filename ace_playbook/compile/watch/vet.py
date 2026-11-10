@@ -9,6 +9,12 @@ knows (`target`: an inventory key or a mapped docs URL of `watch_inventory_map`,
 from the copy, and none is computed from its fields: `change.diff` and `diff_sha256` are null (the id does not depend on them), so an imported record is
 evidence and a title, and a diff comes only from the operator's own `watch scan`, which supersedes the import (`reconcile`). The title gets a visible
 ` (imported)`; `records.check` must still pass on what is stored.
+
+`verify` is never taken from the copy either: `rebuild` makes it from fields already vetted, the way a locally made record of that class gets it
+(`claude --version` for a version; `curl -gsI -- <url> | head -1` for a docs page, the url its mapped target, and for a lead, the url its first evidence
+url; `grep -n "<model id>" -- <paths>` for a model_pin and a retirement lead, the id the code-made title names and the paths the files that the
+OPERATOR's own map lists for the target). A record with no such rebuild (a docs record whose target is not a mapped docs URL but a key or a source id (an unmapped docs URL is rejected as `target`), a model_pin whose target is a map key that lists
+no file, an id or a path that `records.check` refuses) is rejected with the reason `verify`; the copy's own `verify` text decides nothing that is stored or shown.
 """
 
 from __future__ import annotations
@@ -33,7 +39,8 @@ def context(cfg: Config) -> dict:
         raise ValueError("import needs watch_sources and watch_inventory_map in the config (to know the targets)")
     mapping = inventory.load_map(Path(cfg.watch_inventory_map))
     ids = {s["id"] for s in fetch.load_sources(Path(cfg.watch_sources))}
-    return {"targets": {"claude_version", *mapping["targets"], *mapping["docs"], *ids}, "now": datetime.now(timezone.utc).replace(tzinfo=None)}
+    return {"targets": {"claude_version", *mapping["targets"], *mapping["docs"], *ids}, "now": datetime.now(timezone.utc).replace(tzinfo=None),
+            "docs": set(mapping["docs"]), "paths": {k: inventory.names(t["path"]) for k, t in mapping["targets"].items()}}
 
 
 def _hits(rec: dict) -> bool:
@@ -61,16 +68,33 @@ def _reason(rec: dict, ctx: dict) -> str:
     return "" if rec["change"]["target"] in ctx["targets"] else "target"
 
 
+def rebuild(rec: dict, ctx: dict) -> str | None:
+    """The `verify` command of a vetted record, made from its class, target, title and first evidence url, or None when its class has no safe one."""
+    cls, target, mid = rec["class"], rec["change"]["target"], records.title_model(rec["title"])[0]
+    if cls == "version":
+        return records.VERSION
+    if cls == "docs":
+        return (records.curl_cmd(target) or None) if target in ctx["docs"] else None
+    if mid and target in ctx["paths"] and cls in ("model_pin", "lead"):
+        return records.grep_cmd(mid, ctx["paths"][target]) if ctx["paths"][target] else None           # a map key that lists no file has no command
+    return records.curl_cmd(rec["evidence"][0]["url"]) or None if cls == "lead" else None
+
+
 def vet(rec: dict, ctx: dict) -> tuple[dict | None, str]:
-    """(the record to store, "") or (None, reason): checked, the diff dropped (never taken from the copy), the title marked, `check` run again."""
+    """(the record to store, "") or (None, reason): checked, the diff dropped and `verify` rebuilt (neither is taken from the copy), the title
+    marked, `check` run again."""
     why = _reason(rec, ctx)
     if why:
         return None, why
+    verify = rebuild(rec, ctx)
+    if verify is None:
+        return None, "verify"
     title = rec["title"] if rec["title"].endswith(MARK) else rec["title"] + MARK
-    new = {**rec, "title": title, "status": "open", "change": {**rec["change"], "diff": None, "diff_sha256": None}}
-    if records.title_model(title) != records.title_model(rec["title"]) or records.check(new):      # too long to mark, or the mark changed the id
+    new = {**rec, "title": title, "status": "open", "verify": verify, "change": {**rec["change"], "diff": None, "diff_sha256": None}}
+    bad = records.check(new)
+    if records.title_model(title) != records.title_model(rec["title"]) or bad not in (None, "verify"):      # too long to mark, or the mark changed the id
         return None, "title"
-    return new, ""
+    return (None, bad) if bad else (new, "")
 
 
 def read(dirfd: int, name: str, ctx: dict) -> tuple[dict | None, str, bool]:

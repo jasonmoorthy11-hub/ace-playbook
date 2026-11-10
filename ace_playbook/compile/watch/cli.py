@@ -16,7 +16,7 @@ from .. import status as status_mod
 from ... import ttyio
 from ...canon import now_iso
 from ...config import Config
-from . import fsio, store, summary
+from . import fsio, records, store, summary
 
 KEYS = {"1": "accepted", "2": "dismissed", "3": "later", "q": "quit"}
 CONTROL, TRIES, DIFF_LINES = "1 accept / 2 dismiss / 3 later / q quit", 3, 40
@@ -51,12 +51,30 @@ def add_parser(sub) -> None:
     p.set_defaults(run=lambda c, a: run(c, a, _ask, _need_tty))
 
 
+WITHHELD = "(withheld: not a command this version makes)"
+
+
+def _command(p: dict) -> str:
+    """The stored `verify` as the card shows it: only a command that `records.verify_ok` says this version would make for the record (a proposal stored by
+    an older version, or written to the store by hand, is never trusted), else a note."""
+    try:
+        return _cut(p["verify"]) if records.verify_ok(p) else WITHHELD
+    except Exception:                                                  # a malformed record is not a command to show
+        return WITHHELD
+
+
+def _cut(command: str, limit: int = 300) -> str:
+    """The command as shown: cleaned, and marked when it is cut at `limit`, so a half command is never taken for a whole one."""
+    full = store.clean(command, 1 << 20)
+    return full if len(full) <= limit else f"{full[:limit]} …(truncated, {len(full)} chars)"
+
+
 def _card(p: dict, n: int, total: int) -> None:
     c = store.clean
     ev = p["evidence"][0]
     print(f"\n[{n}/{total}] {c(p['id'])}  {c(p['class'])}  created {c(p['created'])}  expires {c(p['expires'])}\n  title:    {c(p['title'])!r}\n"
           f"  evidence: tier {c(str(ev['tier']))}  {c(ev['url'], 200)}\n  quote (untrusted text from the web): {c(ev['quote'], 400)}\n"
-          f"  hits:     {c(', '.join(map(str, p['inventory_hits'])) or 'none', 200)}\n  verify:   {c(p['verify'], 300)}\n  keys:     {CONTROL}")
+          f"  hits:     {c(', '.join(map(str, p['inventory_hits'])) or 'none', 200)}\n  verify:   {_command(p)}\n  keys:     {CONTROL}")
     diff = p["change"]["diff"]
     if diff:
         shown = diff.splitlines()

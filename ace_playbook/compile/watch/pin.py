@@ -9,10 +9,12 @@ retiring. Hunk line numbers are `grep -n` numbers. `state` and `pinned` serve `s
 
 from __future__ import annotations
 
+import hashlib
 import re
 
-from .records import record, sh, title_model
+from .records import grep_cmd, record, title_model
 
+TITLE_ROOM = 120 - len("Replace  with  in ")            # what the id and the successor of a model_pin title may share
 SAFE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{2,79}")
 MODEL_ID = re.compile(r"claude-[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?")
 NONE_WORDS = ("", "n/a", "na", "-", "none", "tbd", "to be announced")
@@ -81,6 +83,15 @@ def _diff(files: dict, rx: re.Pattern, new: str) -> str:
     return "\n".join(out) + "\n"
 
 
+def shown(mid: str, new: str) -> str:
+    """`new` as the title of a model_pin names it. The title is cut at 120 characters and `title_model` needs "Replace <id> with <successor> in " whole, so a
+    successor that does not fit is shortened to its first characters, "…" and the first 6 hex of the sha256 of the whole successor (two successors with a
+    common prefix stay two titles and two reconcile keys), never the id (`SAFE` keeps an id at 80 characters, so the id and 15 characters of the successor
+    always fit); the diff keeps `new`."""
+    room = TITLE_ROOM - len(mid)
+    return new if len(new) <= room else new[:room - 7] + "…" + hashlib.sha256(new.encode()).hexdigest()[:6]
+
+
 def model_pin(inv: dict, results: list[dict], now: str) -> list[dict]:
     out = []
     for mid, m in sorted(state(results).items()):
@@ -89,11 +100,11 @@ def model_pin(inv: dict, results: list[dict], now: str) -> list[dict]:
         rx, new = boundary(mid), m["successor"] if _real(m["successor"]) and MODEL_ID.fullmatch(m["successor"]) and SAFE.fullmatch(m["successor"]) else None
         ev = {"url": m["res"]["url"], "sha256": m["res"]["sha256"], "quote": m["row"], "tier": m["res"]["tier"]}
         for key, files in sorted(_lines(inv, rx).items()):
-            verify = f'grep -n "{mid}" ' + " ".join(sh(p) for p in sorted(files))
+            verify = grep_cmd(mid, sorted(files))
             cut = inv["targets"][key].get("truncated") or any(f.get("truncated") or f.get("too_large") for f in inv["targets"][key]["files"].values())
             whole = new and new != mid and not cut and all(len(str(t)) < MAX_LINE and "�" not in str(t) for ls in files.values() for _, t in ls)
             if whole:
-                out.append(record("model_pin", f"Replace {mid} with {new} in {key}", ev, [key], key, _diff(files, rx, new), verify, now))
+                out.append(record("model_pin", f"Replace {mid} with {shown(mid, new)} in {key}", ev, [key], key, _diff(files, rx, new), verify, now))
             else:
                 out.append(record("lead", f"retirement with no successor named: {mid} ({key})", ev, [key], key, None, verify, now))
     return out
