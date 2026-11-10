@@ -72,6 +72,7 @@ def test_check_rejects_a_template_that_does_not_belong_to_the_class():
     for cls, verify, title in (("version", curl, None), ("version", grep, None), ("docs", ver, None), ("docs", grep, None), ("lead", ver, None),
                                ("model_pin", ver, None), ("model_pin", curl, None), ("lead", 'grep -n "other" a', RETIRE),
                                ("lead", grep, None), ("model_pin", 'grep -n "other" a', None),
+                               ("version", "claude --version; id", None), ("version", "claude --version ", None),      # a prefix of the command is not the command
                                ("docs", grep, RETIRE)):         # a grep whose id the title does not name
         assert records.check(rec(cls, verify, title=title)) == "verify", (cls, verify)      # kills "the template is not tied to the class"
     assert records.check(rec("version", ver)) is None and records.check(rec("model_pin", grep)) is None
@@ -127,6 +128,12 @@ def test_a_url_with_whitespace_is_not_http_for_check():
     assert records._http(URL) and not records._http(url) and not records._http("https://example.test/a\nb")
 
 
+def test_a_url_with_no_host_is_not_http_for_check():
+    url = "http:///x"
+    assert records.check(rec("lead", f"curl -gsI -- {url} | head -1", url=url)) == "verify"            # kills "_http does not require a hostname"
+    assert not records._http(url) and records._http("http://h.test/x")
+
+
 # ------------------------------------------------------------------ vet: verify is rebuilt, never taken from the copy
 def forged(cls, **kw):
     return {**rec(cls, FORGED, **kw), "verify": FORGED}
@@ -168,6 +175,16 @@ def test_the_map_listing_is_what_inventory_build_keys_its_files_by(tmp_path):
     mapping = {"targets": {"k": {"path": str(tmp_path / "*.json"), "pattern": "x"}, "none": {"path": str(tmp_path / "*.nope"), "pattern": "x"}}}
     snap = inventory.build(mapping, NOW, which=lambda n: None)["targets"]
     assert inventory.names(mapping["targets"]["k"]["path"]) == sorted(snap["k"]["files"]) and inventory.names(mapping["targets"]["none"]["path"]) == []
+
+
+def test_the_map_listing_and_build_cap_a_target_at_max_files(tmp_path):
+    from ace_playbook.compile.watch import inventory
+    for i in range(inventory.MAX_FILES + 3):
+        (tmp_path / f"f{i:03d}.json").write_text("x")
+    mapping = {"targets": {"k": {"path": str(tmp_path / "*.json"), "pattern": "x"}}}
+    snap = inventory.build(mapping, NOW, which=lambda n: None)["targets"]["k"]
+    names = inventory.names(mapping["targets"]["k"]["path"])
+    assert len(names) == inventory.MAX_FILES == len(snap["files"]) and names == sorted(snap["files"]) and snap["truncated"] is True      # kills "names or build drops [:MAX_FILES]"
 
 
 # ------------------------------------------------------------------ the import and the queue card

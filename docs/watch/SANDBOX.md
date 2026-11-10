@@ -263,11 +263,11 @@ install and the `inputs.legacy-<date>` name are written from that run, not paste
   evidence URL (`curl -gsI -- <url> | head -1`, `-g` so that curl never expands `[ ]` or `{ }` in a URL into many requests; `claude --version` for a
   version), from the model id of the code-made title and, for a model_pin and a retirement lead, from the files that the operator's own
   `watch_inventory_map` lists for the target (`grep -n "<id>" -- <files>`). A copy whose `verify` is not the command of its class is rejected with the
-  reason `verify`, and so is a record with no command that can be made (a docs record whose target is not a mapped docs URL but a key or a source id; an unmapped docs URL is rejected as `target`; a model_pin whose map
+  reason `verify`, and so is a record with no command that can be made (a docs record whose target is not a mapped docs URL but a key or a source id; an unmapped docs URL is rejected as `target`; a model_pin or a retirement lead whose map
   key lists no file; a path or URL that cannot be one shell word). The queue card marks a command it had to cut (` …(truncated, N chars)`), and shows a stored proposal's command only when this version would make it
   for that record (otherwise `verify:   (withheld: not a command this version makes)`). Its title shows ` (imported)`.
 
-  Update the operator's checkout before or together with the root-owned copy: older operator code rejects every docs and lead record of a newer copy as `verify`. A newer operator rebuilds an older copy's commands, except a lead or docs URL with `[ ] { }` and a model_pin whose title was cut, which it rejects as `verify`.
+  Update the operator's checkout before or together with the root-owned copy: older operator code rejects as `verify` every docs record and every lead whose command is a `curl` from a newer copy (a model_pin and a retirement lead, whose `grep -n "<id>" -- <files>` the older template accepts, still import). A newer operator rebuilds an older copy's commands, except a lead or docs URL with `[ ] { }` or with a character that is not printable (a zero-width or other format character an older Atom link kept), and a model_pin whose title was cut, which it rejects as `verify`.
 
 ## Kill files
 

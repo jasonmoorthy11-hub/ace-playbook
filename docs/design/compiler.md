@@ -1456,7 +1456,7 @@ always null (the id does not depend on them, and `records.check` passes the stor
 it from the vetted class, target, title and first evidence url (`claude --version`; `curl -gsI -- <url> | head -1` with the mapped target for a docs page and the
 evidence url for a lead; `grep -n "<model id>" -- <paths>` with the files that the operator's own `watch_inventory_map` lists for the target (`inventory.names`, the
 listing `inventory.build` uses) for a model_pin and a retirement lead), and a
-record with no safe rebuild (a docs record whose target is not a mapped docs URL but a key or a source id (an unmapped docs URL is rejected as `target`), a model_pin whose map key lists no file, an id or a path that begins with `-`, a url or path that
+record with no safe rebuild (a docs record whose target is not a mapped docs URL but a key or a source id (an unmapped docs URL is rejected as `target`), a model_pin or a retirement lead whose map key lists no file, an id or a path that begins with `-`, a url or path that
 cannot be one shell word) is rejected, reason `verify`. The queue card shows the stored command, and ` …(truncated, N chars)` after a command it cut at 300 characters. A diff comes only from the operator's own `watch scan`, which
 supersedes the import (below). The summary counts `N imported without diff` for a copy's diff that was dropped. The title carries a visible ` (imported)`
 (a title too long to carry it is rejected, reason `title`); `watch status`, the
