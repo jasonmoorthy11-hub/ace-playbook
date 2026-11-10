@@ -18,7 +18,10 @@ FLAG_VERBS = {"pin": ("pinned", True), "unpin": ("pinned", False),
 def _lesson_line(row) -> str:
     pin = "*" if row["pinned"] else " "
     exempt = " [exempt]" if row["holdout_exempt"] else ""
-    return f"{pin} {row['id']} [{row['status']}]{exempt} ({row['scope_type']}:{row['scope_key'] or '-'}) {row['text']}"
+    scope = f"{promote.shown(row['scope_type'])}:{promote.shown(row['scope_key'] or '-')}"
+    shown = promote.shown
+    return (f"{pin} {row['id']} [{shown(row['status'])}]{exempt} ({scope}) {shown(row['text'])} "
+            f"(applies when: {shown(row['applies_when'])})")
 
 
 def run(args: argparse.Namespace) -> int:

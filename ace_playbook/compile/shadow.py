@@ -175,7 +175,8 @@ def load_approved(cfg, log) -> list[tuple[dict, str]]:
 
 
 def approved_records(cfg) -> list[tuple[dict, str, dict]]:
-    """[(proposal, mode, approved record)] of the approved copies whose hash holds; not re-validated (the offline pass only lowers)."""
+    """[(proposal, mode, approved record)] of the approved copies whose hash holds and whose file stem is a proposal id;
+    not re-validated (the offline pass only lowers)."""
     base, out = approved_dir(cfg), []
     for p in sorted(base.glob("*.json")) if base.is_dir() and not base.is_symlink() else []:
         try:
@@ -183,7 +184,7 @@ def approved_records(cfg) -> list[tuple[dict, str, dict]]:
             body, mode = pending_body(rec)
         except (ValueError, OSError):
             continue
-        if body is not None and body["id"] == p.stem:
+        if body is not None and body["id"] == p.stem and proposal.PID.fullmatch(p.stem):   # a file name that is no proposal id never reaches a screen
             out.append((body, mode, rec))
     return out
 

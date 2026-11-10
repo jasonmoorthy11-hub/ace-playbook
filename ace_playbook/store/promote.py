@@ -5,6 +5,9 @@ the user-origin evidence the live-status rule asks for. The TTY check proves onl
 terminal is attached to stdin, not that a person typed: a pty wrapper can pass it. It stops
 hooks, pipes and plain subprocesses, not a determined local process. With no `--evidence-quote`
 the quote and a confirmation are read from `/dev/tty`.
+
+Both injected fields, `text` and `applies_when`, are shown in full wherever a lesson is listed or
+confirmed (`show_line`, `review_block`): the reflector writes both, and both reach every session.
 """
 
 from __future__ import annotations
@@ -14,13 +17,31 @@ import copy
 import sys
 
 from .. import ttyio
+from ..compile.labels import _clean
 from ..scrub import OUTBOUND, QuarantineRequired, scan
 from . import DeltaLog, view
 from .schema import ID_RE, SchemaError, canonical, now_iso, unsafe_text_reason
 
 QUOTE_MIN, QUOTE_MAX = 12, 400
 SESSION_ID = "promote-cli"
-LIST_CHARS = 80
+REMOVED = " [control characters removed]"
+
+
+def shown(value: object) -> str:
+    """The value as a printable string: terminal escapes and other control characters never reach the operator's screen (marked, not silent)."""
+    text = str(value)
+    cleaned = _clean(text)
+    return cleaned if cleaned == text else cleaned + REMOVED
+
+
+def show_line(row) -> str:
+    """`<id>  <text> (applies when: <applies_when>)`: both injected fields, in full, on one line (the provisional listing)."""
+    return f"{row['id']}  {shown(row['text'])} (applies when: {shown(row['applies_when'])})"
+
+
+def review_block(row) -> str:
+    """The lesson as the operator confirms it: id, then the full text and the full applies_when, each labelled."""
+    return f"{row['id']}\n  text:         {shown(row['text'])}\n  applies when: {shown(row['applies_when'])}"
 
 
 def _refuse(msg: str) -> int:
@@ -67,13 +88,15 @@ def promote(log: DeltaLog, args: argparse.Namespace) -> int:
     interactive = args.evidence_quote is None
     try:
         if interactive:
-            print(f"{args.lesson_id}  {lesson['text'][:LIST_CHARS]}", file=sys.stderr)
+            print(review_block(lesson), file=sys.stderr)
             args.evidence_quote = _prompt(
                 f"Evidence quote (your own words, {QUOTE_MIN}-{QUOTE_MAX} chars): ")
         quote = args.evidence_quote.strip()
         bad = _check_quote(quote, log.deny_terms)
         if bad:
             return _refuse(bad)
+        if not interactive:                                  # no prompt on this path: the lesson is still shown before anything is written
+            print(review_block(lesson), file=sys.stderr)
         if interactive and not args.dry_run:
             if _prompt(f"Promote {args.lesson_id}? [y/N] ").strip().lower() not in ("y", "yes"):
                 return _refuse("not confirmed")
@@ -98,5 +121,5 @@ def provisional(log: DeltaLog, limit: int | None) -> int:
     rows = [r for r in log.state().values() if r["status"] == "provisional"]
     rows.sort(key=lambda r: (r["created"], r["id"]), reverse=True)
     for r in rows[:limit]:
-        print(f"{r['id']}  {r['text'][:LIST_CHARS]}")
+        print(show_line(r))
     return 0
