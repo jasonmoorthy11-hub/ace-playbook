@@ -44,7 +44,7 @@ def test_model_pin_generates_the_diff_from_the_template_and_quotes_the_table_row
     ev = r["evidence"][0]
     assert ev["quote"] == f"| March 1, 2027 | [`{OLD}`](https://docs.example.test/models) | `{NEW}` |"          # the history row, which names the successor
     assert ev["tier"] == 0 and ev["url"] == "https://example.test/deprecations.md" and len(ev["sha256"]) == 64 and len(ev["quote"]) <= 400
-    assert r["verify"] == f'grep -n "{OLD}" ~/.claude/settings.json'
+    assert r["verify"] == f'grep -n "{OLD}" -- ~/.claude/settings.json'
     assert r["expires"] == "2026-11-20T12:00:00Z" and re.fullmatch(r"W-[0-9a-f]{16}", r["id"]) and match.check(r) is None
 
 
@@ -102,7 +102,7 @@ def test_a_long_inventory_line_may_be_truncated_so_no_diff_is_written_for_it():
 
 def test_paths_with_spaces_are_quoted_in_the_verify_command():
     r = match.candidates(inv(k={"~/my dir/s.json": {"sha256": "8" * 64, "lines": [[1, OLD]]}}), [DEPR()], {}, {}, NOW)[0]
-    assert r["verify"] == f"""grep -n "{OLD}" '~/my dir/s.json'""" and match.check(r) is None
+    assert r["verify"] == f"""grep -n "{OLD}" -- '~/my dir/s.json'""" and match.check(r) is None
 
 
 # ------------------------------------------------------------------ version
@@ -133,7 +133,7 @@ def test_a_newer_sitemap_lastmod_for_a_mapped_page_is_a_docs_proposal():
     r = recs[0]
     assert (r["class"], r["change"]["diff"], r["inventory_hits"], r["change"]["target"]) == ("docs", None, ["settings.model"],
                                                                                                "https://docs.example.test/en/hooks")
-    assert r["verify"] == "curl -sI -- https://docs.example.test/en/hooks | head -1" and r["evidence"][0]["quote"].endswith("lastmod 2026-10-20")
+    assert r["verify"] == "curl -gsI -- https://docs.example.test/en/hooks | head -1" and r["evidence"][0]["quote"].endswith("lastmod 2026-10-20")
     assert match.candidates(inv(), [sm], DOCS, {"https://docs.example.test/en/hooks": "2026-10-20"}, NOW) == []     # not newer
     assert match.candidates(inv(), [sm], DOCS, {}, NOW) == []                                                       # first sight is a baseline
     assert match.candidates(inv(), [sm], {"docs": {}}, prev, NOW) == []                                             # an unmapped page is never an item
@@ -160,7 +160,7 @@ def test_a_tier_1_entry_with_a_keyword_is_a_lead_with_no_diff():
     r = recs[0]
     assert (r["class"], r["change"]["diff"], r["change"]["diff_sha256"], r["inventory_hits"]) == ("lead", None, None, [])
     assert r["title"] == "A harmless post about subagents" and r["evidence"][0]["tier"] == 1 and r["evidence"][0]["quote"] == r["title"]
-    assert r["evidence"][0]["url"] == "https://example.test/post/1" and r["verify"] == "curl -sI -- https://example.test/post/1 | head -1"
+    assert r["evidence"][0]["url"] == "https://example.test/post/1" and r["verify"] == "curl -gsI -- https://example.test/post/1 | head -1"
     assert INJECTION not in json.dumps(recs) and "evil-model" not in json.dumps(recs)
     assert match.candidates(inv(), [feed], {"lead_keywords": ["nothing"]}, {}, NOW) == []
     assert match.candidates(inv(), [{**feed, "tier": 0}], KW, {}, NOW) == []                       # W1 reads leads from tier-1 feeds only

@@ -54,6 +54,17 @@ def _display(path: str) -> str:
     return "~" + path[len(home):] if path == home or path.startswith(home + os.sep) else path
 
 
+def listing(path: str) -> tuple[str, list[str]]:
+    """(the pattern with `~` expanded, the regular files it matches, sorted and not capped): what `build` reads and `names` lists."""
+    pattern = os.path.expanduser(path)
+    return pattern, sorted(p for p in glob.glob(pattern) if os.path.isfile(p))
+
+
+def names(path: str) -> list[str]:
+    """The names `build` keys the files of one target by (at most MAX_FILES; nothing is read), [] when the pattern matches no file."""
+    return [_display(p) for p in listing(path)[1][:MAX_FILES]]
+
+
 def _scan(path: str, rx: re.Pattern) -> dict:
     """The matching lines of one file, numbered like `grep -n` (lines end at b"\\n" only, so a form feed or U+2028 does not shift them; a
     trailing carriage return stays in the text). `truncated` is true when more than MAX_LINES lines matched."""
@@ -85,8 +96,8 @@ def build(mapping: dict, now: str | None = None, which=shutil.which, run=subproc
     """The snapshot `{generated_at, claude_version, targets: {key: {files: {path: {sha256, lines} | {missing: true}}, truncated?: true}}}`."""
     targets = {}
     for key, t in sorted(mapping["targets"].items()):
-        rx, pattern = re.compile(t["pattern"]), os.path.expanduser(t["path"])
-        found = sorted(p for p in glob.glob(pattern) if os.path.isfile(p))
+        rx = re.compile(t["pattern"])
+        pattern, found = listing(t["path"])
         targets[key] = {"files": {_display(p): _scan(p, rx) for p in found[:MAX_FILES]} or {_display(pattern): {"missing": True}}}
         if len(found) > MAX_FILES:
             targets[key]["truncated"] = True

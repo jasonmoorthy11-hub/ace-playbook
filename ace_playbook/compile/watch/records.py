@@ -26,25 +26,33 @@ CLASSES = ("model_pin", "version", "docs", "lead")
 PLAIN = r"[\w./~@+:=][\w./~@+:=-]*"                                # an argument never begins with `-`: it would be an option
 ARG = rf"(?:{PLAIN}|'(?!-)[^'\x00-\x1f\x7f]*')"
 TITLE = re.compile(r"Replace (?P<mid>\S+) with (?P<succ>\S+) in |retirement with no successor named: (?P<lead>\S+) \(")
-GREP = re.compile(rf'grep -n "(?P<id>[A-Za-z0-9._:][A-Za-z0-9._:-]{{2,79}})" {ARG}( {ARG})*')
-CURL = re.compile(rf"curl -sI (?:-- )?(?P<url>{ARG}) \| head -1")                # `--` is what a new record gets; the form without it is read back
+GREP = re.compile(rf'grep -n "(?P<id>[A-Za-z0-9._:][A-Za-z0-9._:-]{{2,79}})" (?:-- )?{ARG}( {ARG})*')    # `--` is what a new record gets; the old form is read back
+CURL = re.compile(rf"curl (?:(?P<g>-gsI) -- |-sI (?:-- )?)(?P<url>{ARG}) \| head -1")      # `-gsI --` (no URL globbing) is what a new record gets; the older forms are read back
+GLOB = re.compile(r"[\[\]{}]")                                    # curl expands these in a URL into many requests unless it is run with -g
 VERSION = "claude --version"
 
 
 def sh(text: str) -> str:
-    """`text` as one shell word. A word that begins with `-` is quoted too (and `ARG` refuses it), so it is never an option."""
-    if re.fullmatch(PLAIN, text):
-        return text
-    q = shlex.quote(text)
-    return f"'{q}'" if q.startswith("-") else q
+    """`text` as one shell word; ValueError for a word that begins with `-` (quoting does not stop an option: the caller puts the word after `--` or refuses)."""
+    if text.startswith("-"):
+        raise ValueError("a word that begins with '-' is an option")
+    return text if re.fullmatch(PLAIN, text) else shlex.quote(text)
 
 
 def curl_cmd(url: str) -> str:
-    return f"curl -sI -- {sh(url)} | head -1"
+    """The one-HEAD command for `url`, or "" (a command `check` refuses, so the record is dropped) when `url` cannot be one word."""
+    try:
+        return f"curl -gsI -- {sh(url)} | head -1"
+    except ValueError:
+        return ""
 
 
 def grep_cmd(mid: str, paths: list[str]) -> str:
-    return f'grep -n "{mid}" ' + " ".join(sh(p) for p in paths)
+    """`grep -n "<id>" -- <paths>`, or "" when a path cannot be one word (see `curl_cmd`)."""
+    try:
+        return f'grep -n "{mid}" -- ' + " ".join(sh(p) for p in paths)
+    except ValueError:
+        return ""
 
 
 def title_model(title: object) -> tuple[str, str]:
@@ -78,23 +86,26 @@ def record(cls: str, title: str, ev: dict, hits: list[str], target: str, diff: s
 
 
 def _http(url: object) -> bool:
+    """An http(s) url with a host and no whitespace or control character (`urlsplit` strips some of them, a shell word must not hold them)."""
     try:
-        return isinstance(url, str) and urlsplit(url).scheme in ("http", "https") and bool(urlsplit(url).hostname)
+        return (isinstance(url, str) and not re.search(r"[\s\x00-\x1f\x7f]", url) and urlsplit(url).scheme in ("http", "https")
+                and bool(urlsplit(url).hostname))
     except ValueError:
         return False
 
 
 def verify_ok(rec: dict) -> bool:
     """`rec["verify"]` is the command that belongs to the record's class: `claude --version` for a version; `curl -sI [--] <url> | head -1` for a docs
-    page (the url is the target, a mapped page) and for a lead (the url is its first evidence url), the url http(s) and quoted as `sh` quotes it;
-    `grep -n "<model id>" <paths>` for a model_pin and a retirement lead, the id the one the code-made title names. No argument begins with `-`."""
+    page (the url is the target, a mapped page) and for a lead (the url is its first evidence url), the url http(s) and quoted as `sh` quotes it (`-g`
+    for a new record; the forms without it only for a url with none of `[ ] { }`); `grep -n "<model id>" [--] <paths>` for a model_pin and a retirement
+    lead, the id the one the code-made title names. No argument begins with `-`."""
     v, cls, mid = rec["verify"], rec["class"], title_model(rec["title"])[0]
     if cls == "version":
         return v == VERSION
     m = CURL.fullmatch(v) if cls in ("docs", "lead") else None
     if m:
         url = rec["change"]["target"] if cls == "docs" else rec["evidence"][0]["url"]
-        return _http(url) and m["url"] == sh(url)
+        return _http(url) and m["url"] == sh(url) and (m["g"] is not None or not GLOB.search(url))      # a url with [ ] { } needs -g
     g = GREP.fullmatch(v) if cls in ("model_pin", "lead") else None
     return bool(g) and bool(mid) and g["id"] == mid
 

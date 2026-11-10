@@ -108,7 +108,7 @@ def test_change_target_and_titles_never_come_from_a_page(tmp_path):
     mapping = {"docs": {"https://docs.example.test/en/hooks": ["k"]}}
     rec = match.docs({}, [sm], mapping, {"https://docs.example.test/en/hooks/#frag": "2026-10-01"}, NOW)[0]
     assert rec["title"] == "docs page changed: https://docs.example.test/en/hooks" and rec["change"]["target"] == "https://docs.example.test/en/hooks"
-    assert rec["verify"] == "curl -sI -- https://docs.example.test/en/hooks | head -1"
+    assert rec["verify"] == "curl -gsI -- https://docs.example.test/en/hooks | head -1"
 
 
 # ------------------------------------------------------------------ XHTML and inline XML in feeds

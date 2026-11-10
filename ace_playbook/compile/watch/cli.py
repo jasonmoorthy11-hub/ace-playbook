@@ -51,12 +51,18 @@ def add_parser(sub) -> None:
     p.set_defaults(run=lambda c, a: run(c, a, _ask, _need_tty))
 
 
+def _cut(command: str, limit: int = 300) -> str:
+    """The command as shown: cleaned, and marked when it is cut at `limit`, so a half command is never taken for a whole one."""
+    full = store.clean(command, 1 << 20)
+    return full if len(full) <= limit else f"{full[:limit]} …(truncated, {len(full)} chars)"
+
+
 def _card(p: dict, n: int, total: int) -> None:
     c = store.clean
     ev = p["evidence"][0]
     print(f"\n[{n}/{total}] {c(p['id'])}  {c(p['class'])}  created {c(p['created'])}  expires {c(p['expires'])}\n  title:    {c(p['title'])!r}\n"
           f"  evidence: tier {c(str(ev['tier']))}  {c(ev['url'], 200)}\n  quote (untrusted text from the web): {c(ev['quote'], 400)}\n"
-          f"  hits:     {c(', '.join(map(str, p['inventory_hits'])) or 'none', 200)}\n  verify:   {c(p['verify'], 300)}\n  keys:     {CONTROL}")
+          f"  hits:     {c(', '.join(map(str, p['inventory_hits'])) or 'none', 200)}\n  verify:   {_cut(p['verify'])}\n  keys:     {CONTROL}")
     diff = p["change"]["diff"]
     if diff:
         shown = diff.splitlines()

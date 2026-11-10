@@ -260,8 +260,11 @@ install and the `inputs.legacy-<date>` name are written from that run, not paste
   against the operator's own `watch_sources` and `watch_inventory_map` (both must be set), an imported record is evidence and a title: a diff in the copy
   is never taken (`; N imported without diff` says how many) and none is computed from its fields; a diff comes only from the operator's own
   `watch scan`, which supersedes the import. The copy's `verify` command is never taken either: it is rebuilt from the vetted class, target and
-  evidence URL (and, for a model_pin, the files of the operator's own map), and a copy whose `verify` is not the command of its class is rejected
-  with the reason `verify`. Its title shows ` (imported)`.
+  evidence URL (`curl -gsI -- <url> | head -1`, `-g` so that curl never expands `[ ]` or `{ }` in a URL into many requests; `claude --version` for a
+  version), from the model id of the code-made title and, for a model_pin and a retirement lead, from the files that the operator's own
+  `watch_inventory_map` lists for the target (`grep -n "<id>" -- <files>`). A copy whose `verify` is not the command of its class is rejected with the
+  reason `verify`, and so is a record with no command that can be made (a docs page that is not mapped, a model_pin whose map key lists no file, a path
+  or URL that cannot be one shell word). The queue card marks a command it had to cut (` …(truncated, N chars)`). Its title shows ` (imported)`.
 
 ## Kill files
 

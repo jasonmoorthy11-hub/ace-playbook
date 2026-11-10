@@ -11,15 +11,14 @@ evidence and a title, and a diff comes only from the operator's own `watch scan`
 ` (imported)`; `records.check` must still pass on what is stored.
 
 `verify` is never taken from the copy either: `rebuild` makes it from fields already vetted, the way a locally made record of that class gets it
-(`claude --version` for a version; `curl -sI -- <url> | head -1` for a docs page, the url its mapped target, and for a lead, the url its first evidence
-url; `grep -n "<model id>" <paths>` for a model_pin and a retirement lead, the paths those of the OPERATOR's own map for the target). A record with no
-such rebuild (a docs page that is not mapped, a model_pin whose target is not a mapped file, an id or a path that `records.check` refuses) is rejected
-with the reason `verify`; the copy's own `verify` text decides nothing that is stored or shown.
+(`claude --version` for a version; `curl -gsI -- <url> | head -1` for a docs page, the url its mapped target, and for a lead, the url its first evidence
+url; `grep -n "<model id>" -- <paths>` for a model_pin and a retirement lead, the id the code-made title names and the paths the files that the
+OPERATOR's own map lists for the target). A record with no such rebuild (a docs page that is not mapped, a model_pin whose target is a map key that lists
+no file, an id or a path that `records.check` refuses) is rejected with the reason `verify`; the copy's own `verify` text decides nothing that is stored or shown.
 """
 
 from __future__ import annotations
 
-import glob
 import json
 import os
 import stat
@@ -41,14 +40,7 @@ def context(cfg: Config) -> dict:
     mapping = inventory.load_map(Path(cfg.watch_inventory_map))
     ids = {s["id"] for s in fetch.load_sources(Path(cfg.watch_sources))}
     return {"targets": {"claude_version", *mapping["targets"], *mapping["docs"], *ids}, "now": datetime.now(timezone.utc).replace(tzinfo=None),
-            "docs": set(mapping["docs"]), "paths": {k: _paths(t["path"], inventory) for k, t in mapping["targets"].items()}}
-
-
-def _paths(pattern: str, inventory) -> list[str]:
-    """The files of one inventory target as `inventory.build` lists them (names only, nothing is read): the verify command of a model_pin names them."""
-    pattern = os.path.expanduser(pattern)
-    found = sorted(p for p in glob.glob(pattern) if os.path.isfile(p))[:inventory.MAX_FILES]
-    return [inventory._display(p) for p in found] or [inventory._display(pattern)]
+            "docs": set(mapping["docs"]), "paths": {k: inventory.names(t["path"]) for k, t in mapping["targets"].items()}}
 
 
 def _hits(rec: dict) -> bool:
@@ -82,10 +74,10 @@ def rebuild(rec: dict, ctx: dict) -> str | None:
     if cls == "version":
         return records.VERSION
     if cls == "docs":
-        return records.curl_cmd(target) if target in ctx["docs"] else None
+        return (records.curl_cmd(target) or None) if target in ctx["docs"] else None
     if mid and target in ctx["paths"] and cls in ("model_pin", "lead"):
-        return records.grep_cmd(mid, ctx["paths"][target])
-    return records.curl_cmd(rec["evidence"][0]["url"]) if cls == "lead" else None
+        return records.grep_cmd(mid, ctx["paths"][target]) if ctx["paths"][target] else None           # a map key that lists no file has no command
+    return records.curl_cmd(rec["evidence"][0]["url"]) or None if cls == "lead" else None
 
 
 def vet(rec: dict, ctx: dict) -> tuple[dict | None, str]:

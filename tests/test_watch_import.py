@@ -29,7 +29,9 @@ class World:
         self.src.mkdir()
         conf = tmp_path / "config.json"
         (tmp_path / "sources.json").write_text(json.dumps([{"id": "feed", "url": "https://example.test/feed.xml", "kind": "rss", "tier": 1}]))
-        targets = {f"k{n}": {"path": str(tmp_path / "none"), "pattern": "x"} for n in range(1, 10)}
+        self.pins = tmp_path / "pins.json"                                                  # the one target (k1) that lists a file
+        self.pins.write_text('{"model": "claude-old"}\n')
+        targets = {f"k{n}": {"path": str(self.pins if n == 1 else tmp_path / "none"), "pattern": "x"} for n in range(1, 10)}
         (tmp_path / "map.json").write_text(json.dumps({"targets": targets, "docs": {"https://docs.example.test/en/hooks": ["k1"], **{f"https://docs.example.test/en/p{n}": ["k1"] for n in range(1, 10)}}}))
         conf.write_text(json.dumps({"data_dir": str(tmp_path / "data"), "watch_dir": str(self.wd), "chain_key_path": None,
                                     "watch_sources": str(tmp_path / "sources.json"), "watch_inventory_map": str(tmp_path / "map.json")}))
@@ -231,6 +233,27 @@ def test_stamps_urls_and_targets_are_checked_against_the_operators_own_config(w,
     got = {ln.split()[1].rstrip(":"): ln.split(": ", 1)[1] for ln in reasons(out)}
     assert got[long_window] == "dates" and got[odd_stamp] == "dates" and got[ftp] == "url" and got[nohost] == "url" and got[notstr] in ("url", "shape")
     assert w.stored() == []
+
+
+def test_a_docs_page_that_is_not_mapped_is_a_target_rejection_and_an_inventory_key_is_a_valid_target(w, capsys):
+    page = "https://docs.example.test/en/unmapped"
+    unmapped = records.record("docs", "page", {"url": "https://example.test/d", "sha256": "5" * 64, "quote": "q", "tier": 0}, [], page, None,
+                              records.curl_cmd(page), NOW)
+    keyed = records.record("lead", "A post about k1", {"url": "https://example.test/p", "sha256": "6" * 64, "quote": "q", "tier": 1}, [], "k1", None,
+                           records.curl_cmd("https://example.test/p"), NOW)
+    pin = make(1, cls="model_pin", title="Replace claude-old with claude-new in k1")
+    for rec in (unmapped, keyed, pin):
+        w.put(rec)
+    code, out, _ = w.run(capsys)
+    assert out[:2] == ["import: 2 imported, 0 duplicate, 1 rejected", f"rejected {unmapped['id']}: target"]
+    assert w.stored() == sorted(r["id"] + ".json" for r in (keyed, pin))
+
+
+def test_a_model_pin_whose_map_key_lists_no_file_is_rejected_as_verify(w, capsys):
+    pin = make(2, cls="model_pin", title="Replace claude-old with claude-new in k2")       # k2's path matches no file: no command can be made
+    w.put(pin)
+    code, out, _ = w.run(capsys)
+    assert out[:2] == ["import: 0 imported, 0 duplicate, 1 rejected", f"rejected {pin['id']}: verify"] and w.stored() == []
 
 
 def test_an_unknown_target_is_rejected_and_a_known_one_of_each_kind_is_taken(w, capsys):
