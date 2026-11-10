@@ -25,9 +25,9 @@ from .cssscan import rules, simple_selectors, strip_comments, unescape
 
 NUMBER = re.compile(r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)([a-z%]*)")      # alternatives that exclude each other: no digit run splits two ways
 MAX_NUMBER, MAX_STYLE = 64, 65536   # a CSS number never needs more than a few dozen characters; a style text over 64 KiB is read as hiding
-SCALE = re.compile(r"scale(?:3d|x|y|z)?\(([^)]*)\)")
-INSET = re.compile(r"inset\(([^)]*)\)")
-TRANSLATE = re.compile(r"translate(?:x|y|3d)?\(([^)]*)\)")
+SCALE = re.compile(r"scale(?:3d|x|y|z)?\(")                           # the OPENERS of a function; `_args` finds the closing parenthesis (see there)
+INSET = re.compile(r"inset\(")
+TRANSLATE = re.compile(r"translate(?:x|y|3d)?\(")
 CLIP0 = re.compile(r"rect\(0(?:px)?[ ,]0(?:px)?[ ,]0(?:px)?[ ,]0(?:px)?\)")
 FONT0 = re.compile(r"(?:^| )0(?:\.0*)?(?:px|pt|em|rem|%|ex|ch|vw|vh)?(?:/| |$)")
 COLOR_FN = re.compile(r"(?:rgb|rgba|hsl|hsla)\((.*)\)")
@@ -54,6 +54,16 @@ def _num(value: str) -> tuple[float, str] | None:
             return AMBIGUOUS
     m = NUMBER.fullmatch(value)
     return (float(m.group(1)), m.group(2)) if m else None
+
+
+def _args(opener: re.Pattern, value: str):
+    """The text between each `opener` and the first `)` after it, left to right, never overlapping: what `opener + ([^)]*)\\)` found. That pattern was
+    quadratic: with the opener repeated and no `)`, every start scanned to the end. Here the first `find` that fails ends the walk (no `)` follows, so none
+    can follow a later opener either) and every later search starts past the last `)`: linear in the length of `value`."""
+    pos = 0
+    while (m := opener.search(value, pos)) and (close := value.find(")", m.end())) >= 0:
+        yield value[m.end():close]
+        pos = close + 1
 
 
 def _zero(value: str) -> bool:
@@ -86,8 +96,8 @@ def _flat(value: str) -> bool:
 
 def _inset(value: str) -> bool:
     """A clip-path inset() with a side at 50 % or more: nothing of the box is left."""
-    for m in INSET.finditer(value):
-        for arg in m.group(1).split(" round ")[0].replace(",", " ").split():
+    for args in _args(INSET, value):
+        for arg in args.split(" round ")[0].replace(",", " ").split():
             n = _num(arg)
             if n is AMBIGUOUS or (n is not None and n[1] == "%" and n[0] >= 50):
                 return True
@@ -120,8 +130,8 @@ def _hides(k: str, v: str) -> bool:
         (k == "display" and v == "none") or (k == "visibility" and v in ("hidden", "collapse")) or (k == "content-visibility" and v == "hidden")
         or (k == "opacity" and _faint(v)) or (k == "zoom" and _zero(v)) or (k == "font-size" and _tiny(v)) or (k == "font" and FONT0.search(v))
         or (k == "clip" and CLIP0.search(v)) or (k == "clip-path" and (v.startswith("circle(0") or _inset(v)))
-        or (k == "transform" and (any(_zero(a) for m in SCALE.finditer(v) for a in m.group(1).split(","))
-                                  or any(_far(a) for m in TRANSLATE.finditer(v) for a in m.group(1).split(","))))
+        or (k == "transform" and (any(_zero(a) for c in _args(SCALE, v) for a in c.split(","))
+                                  or any(_far(a) for c in _args(TRANSLATE, v) for a in c.split(","))))
         or (k == "scale" and any(_zero(a) for a in v.split(" "))) or (k.startswith("margin") and any(_far(a) for a in v.split(" ")))
         or (k in ("color", "-webkit-text-fill-color") and _clear(v)) or (k == "text-indent" and _far(v.split(" ")[0])))
 

@@ -3,13 +3,13 @@ read by the style pass (`treestyle`) and the visible-text walk (`treewalk`); the
 open elements with indexes (`idx` HTML positions by name, `fcnt` foreign names, `mk` scope-marker positions per scope variant) so a scope check or an end
 tag that names nothing open costs O(1); inserts at the appropriate place (FOSTER PARENTING: what a table cannot hold goes before it); keeps the active
 formatting list (markers pushed on insert; the list is cleared up to the last marker ONCE: at the spec's close-the-cell and caption close (`treemodes.intable`),
-at the pop of the template and at `</applet|marquee|object>`, never per popped cell; Noah's Ark; `reconstruct`; simplified `adopt`). `relaxed`: an open select
+at the pop of the template and at `</applet|marquee|object>`, never per popped cell; Noah's Ark; `reconstruct`; simplified `adopt`; the nodes `reconstruct` makes are counted: `MAX_RECONSTRUCT`). `relaxed`: an open select
 is read two ways, the older in-select mode ignores start tags (strict), the newer inserts them (relaxed, the visible text: a raw-text element a select holds
-that has a `<` hides the REST of the page, `selraw` `rawlt` `poisoned`); the style pass builds both. A stack past `MAX_DEPTH` is `TooDeep`."""
+that has a `<` hides the REST of the page, `selraw` `rawlt` `poisoned`); the style pass builds both. A stack past `MAX_DEPTH`, or `MAX_RECONSTRUCT` re-opened formatting elements, is `TooDeep`."""
 
 from __future__ import annotations
 
-from .htmlrules import MAX_DEPTH, TooDeep, TreeParser, special
+from .htmlrules import MAX_DEPTH, MAX_RECONSTRUCT, TooDeep, TreeParser, special
 from .treemodes import MODES, foreign_dispatch, m_foreign
 from .treewalk import Node
 
@@ -28,6 +28,7 @@ class Tree:
         self.hb, self.styles, self.head, self.raw = [], [], None, None            # hb: (name, attrs) of every html / body start tag
         self.quirks, self.ok, self.foster, self.dead = True, True, False, False                    # ok: frameset-ok; foster: foster parenting is on
         self.selraw = self.rawlt = self.poisoned = False
+        self.recon = 0                                                              # nodes made by `reconstruct` so far
 
     def _add(self, n: Node) -> None:
         n.open, n.pos = True, len(self.stack) - 1
@@ -110,8 +111,8 @@ class Tree:
         if not self.poisoned:
             self.place(data)
 
-    def insert(self, name: str, attrs=(), ns: int = 0, syn: bool = False) -> Node:
-        n = Node(name, ns, attrs, syn)
+    def insert(self, name: str, attrs=(), ns: int = 0, syn: bool = False, oa: bool | None = None) -> Node:
+        n = Node(name, ns, attrs, syn, oa)
         host = self.place(n)
         if name == "style":
             self.styles.append(n)
@@ -160,8 +161,11 @@ class Tree:
         i = len(f) - 1
         while i and f[i - 1] is not None and not f[i - 1].open:
             i -= 1
+        self.recon += len(f) - i
+        if self.recon > MAX_RECONSTRUCT:
+            raise TooDeep("too many re-opened formatting elements")
         for j in range(i, len(f)):
-            f[j] = self.insert(f[j].name, f[j].attrs)
+            f[j] = self.insert(f[j].name, f[j].attrs, oa=f[j].oa)                       # the copy hides for the same attributes: not evaluated again
 
     def adopt(self, name: str) -> bool:
         """The end tag of a formatting element; False: none in the list ("any other end tag"). The adoption agency is SIMPLIFIED where it is ambiguous

@@ -336,7 +336,9 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   stack of open elements keeps the scope barriers: `</p>` is stopped by `button`, `</li>` by `ol` and `ul`, an end tag by a "special"
   element in between (it pops nothing when that would unhide text), and an end tag that names nothing in scope is ignored. A slash on a
   non-void HTML tag is ignored (`<div hidden/>` hides what follows). More than 512 open elements make the page a `parse` drop (`<td>`, `<tr>`,
-  `<option>`, `<h1>`..`<h6>` and `<a>` without end tags count: they nest deeper here than in a browser, which only hides more). Implied end
+  `<option>`, `<h1>`..`<h6>` and `<a>` without end tags count: they nest deeper here than in a browser, which only hides more). So does a page that makes
+  the builder re-open more than 500,000 closed formatting elements (`<b>`, `<i>`, ... re-created after a block, one node each: a hostile page costs hundreds
+  of nodes per 4 bytes; the budget is about 8 times what 20,000 paragraphs under three misnested formatting elements need). Implied end
   tags are modelled where a missing one would unhide text: a block start tag (`div`, `ul`, `table`, `h1`, `hr`, `pre`, ... the `p`-closing
   set) closes an open `<p>` in button scope, `<li>` closes an open `<li>`, `<dd>`/`<dt>` close an open `<dd>`/`<dt>`, and the table elements
   close their open predecessors, so `<p>a<div hidden></p>X</div>` keeps X hidden. The active formatting elements (`b`, `i`, `font`, ...) are

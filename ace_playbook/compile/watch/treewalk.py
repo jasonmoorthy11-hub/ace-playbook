@@ -3,7 +3,8 @@
 `Node`: an element, `ns` 0 html / 1 svg / 2 math, `kids` nodes and text, `ip` its integration kind (0 none, 1 HTML, 2 MathML text, 3 `annotation-xml`
 without an HTML encoding: svg foreignObject desc title, math mi mo mn ms mtext, annotation-xml with encoding text/html or application/xhtml+xml),
 `own` it hides itself (`own_attrs`: a SKIP name such as `script`, `template`, `head`, `svg`, `select`; a closed `details`; `hidden`, `inert`, `popover`,
-`aria-hidden`, an inline style that hides; a declarative shadow host), `syn` the builder made it up (it prints no line break), `mask` the scope variants it
+`aria-hidden`, an inline style that hides; a declarative shadow host), `oa` what `own_attrs` said of the name and attributes alone (`Tree.reconstruct` hands it
+to the copy of a formatting element: the style is not evaluated again), `syn` the builder made it up (it prints no line break), `mask` the scope variants it
 is a marker of (0 default, 1 list item, 2 button, 3 table). A node is also hidden when a simple rule of the style sheets matches its tag, class or id (names
 without case), and so is everything below it. The document hides when the builder says it is `dead` (a frameset, a shadow root on the document) or when ANY
 `html` or `body` start tag hides (a browser merges the late ones onto the root). A visible block is a line of its own; `br` and `hr` print a blank."""
@@ -35,11 +36,12 @@ def own_attrs(name: str, attrs) -> bool:
 
 
 class Node:
-    __slots__ = ("name", "ns", "attrs", "parent", "kids", "ip", "own", "syn", "mask", "open", "pos", "tm", "tq")
+    __slots__ = ("name", "ns", "attrs", "parent", "kids", "ip", "own", "syn", "mask", "open", "pos", "tm", "tq", "oa")
 
-    def __init__(self, name: str, ns: int = 0, attrs=(), syn: bool = False) -> None:
+    def __init__(self, name: str, ns: int = 0, attrs=(), syn: bool = False, oa: bool | None = None) -> None:
         self.name, self.ns, self.attrs, self.syn, self.parent, self.kids, self.open, self.pos = name, ns, attrs, syn, None, [], False, -1
-        self.mask, self.own, self.ip, self.tm = MARK.get((ns, name), ()), own_attrs(name, attrs), 0, None
+        self.oa = own_attrs(name, attrs) if oa is None else oa
+        self.mask, self.own, self.ip, self.tm = MARK.get((ns, name), ()), self.oa, 0, None
         self.tq = False
         if ns == 1:
             self.ip = 1 if name in ("foreignobject", "desc", "title") else 0
