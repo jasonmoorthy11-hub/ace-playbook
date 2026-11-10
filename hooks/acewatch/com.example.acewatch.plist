@@ -6,6 +6,8 @@
                               home, with a .venv built from a python outside any user home (docs/watch/SANDBOX.md step 3: a uv venv made in
                               your own session symlinks into your home)
        __ACEWATCH_HOME__      acewatch's own home directory
+     The job runs through hooks/acewatch/acewatch_run.py, which runs the scan unchanged and then rotates this job's two log files AS acewatch
+     (keep 5, 1024 KiB; docs/watch/SANDBOX.md "Log rotation"): no root process ever works inside the logs directory.
      The config at __ACEWATCH_HOME__/.config/ace-playbook/config.json is acewatch's own (its own watch_dir, watch_sources, watch_claude).
      Install by hand as root: copy to /Library/LaunchDaemons (root:wheel, 0644), then `launchctl bootstrap system <file>`.
      Remove: `launchctl bootout system/com.example.acewatch`. The weekly tier-1 job is com.example.acewatch.weekly.plist. -->
@@ -17,6 +19,12 @@
   <string>acewatch</string>
   <key>ProgramArguments</key>
   <array>
+    <string>__ACE_PLAYBOOK_COPY__/.venv/bin/python</string>
+    <string>-I</string>
+    <string>__ACE_PLAYBOOK_COPY__/hooks/acewatch/acewatch_run.py</string>
+    <string>__ACEWATCH_HOME__/logs</string>
+    <string>acewatch.out.log,acewatch.err.log</string>
+    <string>--</string>
     <string>__ACE_PLAYBOOK_COPY__/.venv/bin/python</string>
     <string>-m</string>
     <string>ace_playbook.compile</string>

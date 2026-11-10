@@ -3,7 +3,8 @@
 <!-- TEMPLATE ONLY, installed by nobody: the weekly tier-1 watcher scan (feeds; the quarantined Reader runs here when watch_reader is on), run by the
      second user `acewatch` on Sundays at 05:00 (docs/watch/SANDBOX.md). Same two __PLACEHOLDERS__ as com.example.acewatch.plist (the copy is
      a full checkout with a .venv built from a python outside any user home); the same install and remove steps
-     (`launchctl bootout system/com.example.acewatch.weekly`). -->
+     (`launchctl bootout system/com.example.acewatch.weekly`). Like the daily job it runs through hooks/acewatch/acewatch_run.py, which rotates this
+     job's two log files as acewatch after the scan (docs/watch/SANDBOX.md "Log rotation"). -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
@@ -12,6 +13,12 @@
   <string>acewatch</string>
   <key>ProgramArguments</key>
   <array>
+    <string>__ACE_PLAYBOOK_COPY__/.venv/bin/python</string>
+    <string>-I</string>
+    <string>__ACE_PLAYBOOK_COPY__/hooks/acewatch/acewatch_run.py</string>
+    <string>__ACEWATCH_HOME__/logs</string>
+    <string>acewatch.weekly.out.log,acewatch.weekly.err.log</string>
+    <string>--</string>
     <string>__ACE_PLAYBOOK_COPY__/.venv/bin/python</string>
     <string>-m</string>
     <string>ace_playbook.compile</string>
