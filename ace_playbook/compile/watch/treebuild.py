@@ -3,13 +3,14 @@ read by the style pass (`treestyle`) and the visible-text walk (`treewalk`); the
 open elements with indexes (`idx` HTML positions by name, `fcnt` foreign names, `mk` scope-marker positions per scope variant) so a scope check or an end
 tag that names nothing open costs O(1); inserts at the appropriate place (FOSTER PARENTING: what a table cannot hold goes before it); keeps the active
 formatting list (markers pushed on insert; the list is cleared up to the last marker ONCE: at the spec's close-the-cell and caption close (`treemodes.intable`),
-at the pop of the template and at `</applet|marquee|object>`, never per popped cell; Noah's Ark; `reconstruct`; simplified `adopt`). `relaxed`: an open select
-is read two ways, the older in-select mode ignores start tags (strict), the newer inserts them (relaxed, the visible text: a raw-text element a select holds
-that has a `<` hides the REST of the page, `selraw` `rawlt` `poisoned`); the style pass builds both. A stack past `MAX_DEPTH` is `TooDeep`."""
+at the pop of the template and at `</applet|marquee|object>`, never per popped cell; Noah's Ark; `reconstruct`, whose nodes are counted per tree:
+`MAX_RECONSTRUCT`; simplified `adopt`). `relaxed`: an open select is read two ways, the older in-select mode ignores start tags (strict), the newer inserts
+them (relaxed, the visible text: a raw-text element a select holds that has a `<` hides the REST of the page, `selraw` `rawlt` `poisoned`); the style pass
+builds both. A stack past `MAX_DEPTH`, or more than `MAX_RECONSTRUCT` nodes made by re-opening formatting elements, is `TooDeep`."""
 
 from __future__ import annotations
 
-from .htmlrules import MAX_DEPTH, TooDeep, TreeParser, special
+from .htmlrules import MAX_DEPTH, MAX_RECONSTRUCT, TooDeep, TreeParser, special
 from .treemodes import MODES, foreign_dispatch, m_foreign
 from .treewalk import Node
 
@@ -28,6 +29,7 @@ class Tree:
         self.hb, self.styles, self.head, self.raw = [], [], None, None            # hb: (name, attrs) of every html / body start tag
         self.quirks, self.ok, self.foster, self.dead = True, True, False, False                    # ok: frameset-ok; foster: foster parenting is on
         self.selraw = self.rawlt = self.poisoned = False
+        self.recon = 0                                                              # nodes made by `reconstruct` so far
 
     def _add(self, n: Node) -> None:
         n.open, n.pos = True, len(self.stack) - 1
@@ -110,8 +112,8 @@ class Tree:
         if not self.poisoned:
             self.place(data)
 
-    def insert(self, name: str, attrs=(), ns: int = 0, syn: bool = False) -> Node:
-        n = Node(name, ns, attrs, syn)
+    def insert(self, name: str, attrs=(), ns: int = 0, syn: bool = False, oa: bool | None = None) -> Node:
+        n = Node(name, ns, attrs, syn, oa)
         host = self.place(n)
         if name == "style":
             self.styles.append(n)
@@ -140,6 +142,16 @@ class Tree:
         self.setraw(name)
         self.orig, self.mode = self.mode, "text"
 
+    def fmt_del(self, e: Node) -> None:
+        """Remove `e` from the list of active formatting elements: it is in the list once (a node is appended once and a copy replaces it), and a recent one,
+        so the search runs from the END (`list.remove` runs from the front across every leftover marker: 30 s on `<object>`s in cells). Absent: ValueError."""
+        f = self.fmt
+        for i in range(len(f) - 1, -1, -1):
+            if f[i] is e:
+                del f[i]
+                return
+        f.remove(e)
+
     def fmt_push(self, n: Node) -> None:
         same = 0
         for e in reversed(self.fmt):
@@ -148,7 +160,7 @@ class Tree:
             if e.name == n.name and e.attrs == n.attrs:
                 same += 1
                 if same == 3:                                       # the Noah's Ark clause: three equal copies after the last marker at most
-                    self.fmt.remove(e)
+                    self.fmt_del(e)
                     break
         self.fmt.append(n)
 
@@ -160,8 +172,11 @@ class Tree:
         i = len(f) - 1
         while i and f[i - 1] is not None and not f[i - 1].open:
             i -= 1
+        self.recon += len(f) - i
+        if self.recon > MAX_RECONSTRUCT:
+            raise TooDeep("too many re-opened formatting elements")
         for j in range(i, len(f)):
-            f[j] = self.insert(f[j].name, f[j].attrs)
+            f[j] = self.insert(f[j].name, f[j].attrs, oa=f[j].oa)                       # the copy hides for the same attributes: not evaluated again
 
     def adopt(self, name: str) -> bool:
         """The end tag of a formatting element; False: none in the list ("any other end tag"). The adoption agency is SIMPLIFIED where it is ambiguous
@@ -170,10 +185,10 @@ class Tree:
         f = self.fmt
         fe = next((e for e in reversed(f) if e is None or e.name == name), None)
         if fe is not None and not fe.open:
-            f.remove(fe)
+            self.fmt_del(fe)
         elif fe is not None and not (self.mk[0] and fe.pos < self.mk[0][-1]) and not any(special(e) for e in self.stack[fe.pos + 1:]):
             self.popto(fe.pos)
-            f.remove(fe)
+            self.fmt_del(fe)
         return fe is not None
 
     def reset_mode(self) -> None:
@@ -193,7 +208,7 @@ class Tree:
 
 
 def build(src: str, relaxed: bool = True) -> Tree:
-    """The tree of `src` (TooDeep past MAX_DEPTH open elements)."""
+    """The tree of `src` (TooDeep past MAX_DEPTH open elements, or past MAX_RECONSTRUCT re-opened formatting elements)."""
     parser = TreeParser(Tree(relaxed))
     parser.feed(src)
     parser.close()

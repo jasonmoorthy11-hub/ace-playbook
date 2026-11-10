@@ -5,7 +5,7 @@ state, so the tokenizer's is run over the script text (`<script><!--<script></sc
 reported in `selfclosing`, a comment ends where a browser ends it (`<!-->`, `<!--->`, `-->`, `--!>`), `<![CDATA[` (any `<![`) is a bogus comment to the
 first `>` unless the current node is not an HTML element (`foreign()`), where it is a real section to `]]>` whose text is character data; `TreeParser`:
 feeds a `Tree` and hands the tokenizer the builder's decisions (`Tree.raw`: only an HTML element enters raw text or RCDATA, `foreign()`); `MAX_DEPTH`: more
-open elements are `TooDeep`."""
+open elements are `TooDeep`; `MAX_RECONSTRUCT`: so are more nodes made by re-opening closed formatting elements."""
 
 from __future__ import annotations
 
@@ -13,6 +13,13 @@ import re
 from html.parser import HTMLParser
 
 MAX_DEPTH = 512
+# Nodes `Tree.reconstruct` may create in ONE TREE, then `TooDeep`: it re-opens every closed formatting element after a block, so `<p><b id=1>..<b id=500>`
+# and then `<p>a` repeated made ~500 new nodes per 4 bytes. A node is ~230 bytes (measured). A page with both `<select` and `<style` is built twice (a tree
+# per reading of the select), so the budget holds a page to about 2 x 500,000 nodes: peak RSS measured 285 to 509 MB on such pages (one tree: about 115 MB
+# of nodes). The realistic misnested case (3 formatting elements left open over 20,000 paragraphs) re-opens 60,000, 8 times under the budget; every other
+# node comes from a token of its own or at most a few per token (a `<td>` directly in a table also makes a `tbody` and a `tr`), so those are bounded by the
+# input already.
+MAX_RECONSTRUCT = 500_000
 WS = " \t\n\f\r"
 STANDARDS = re.compile(r"doctype[\t\n\f\r ]+html(?:[\t\n\f\r ]+system[\t\n\f\r ]+(?:\"about:legacy-compat\"|'about:legacy-compat'))?[\t\n\f\r ]*", re.I)
 HEADINGS, SECTIONS = ("h1", "h2", "h3", "h4", "h5", "h6"), ("tbody", "tfoot", "thead")
@@ -48,7 +55,8 @@ SCRIPT_MARKS = re.compile(r"<!--->|<!-->|<!--|-->|<script(?=[\t\n\f\r />])|</scr
 
 
 class TooDeep(ValueError):
-    """More than MAX_DEPTH open elements, or too many overlapping `<style` openers: `strip_hidden` gives up and `fetch` drops the page as `parse`."""
+    """More than MAX_DEPTH open elements, more than MAX_RECONSTRUCT re-opened formatting elements, or too many overlapping `<style` openers: `strip_hidden`
+    gives up and `fetch` drops the page as `parse`."""
 
 
 def special(node) -> bool:
