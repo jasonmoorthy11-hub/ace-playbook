@@ -879,3 +879,38 @@ def test_the_new_modules_and_main_keep_every_line_within_160_characters():
                  "arms.py", "arms_stats.py", "arms_window.py", "labels_queue.py"):
         for n, line in enumerate((ROOT / "ace_playbook" / "compile" / name).read_text().splitlines(), 1):
             assert len(line) <= 160, f"{name}:{n} is {len(line)} characters"
+
+
+# ------------------------------------------------------------------ F9: a file name is not a proposal id
+BAD_PID = "x\x1b[1A\x1b[2K\x1b]52;c;AAAA\x07"
+
+
+def plant_bad_copy(w, pid=BAD_PID):
+    """An approved copy whose id (and stem) is `pid`, built with the package's own helper so its hash holds."""
+    rec = shadow.approved_record({**w.props["rm_rf"], "id": pid}, "observe", "2026-10-15T00:00:00Z")
+    write_private(w.data / "proposals" / "approved" / (pid + ".json"), json.dumps(rec, indent=1, sort_keys=True) + "\n")
+
+
+def control_bytes(text):
+    return [c for c in text if ord(c) < 0x20 and c != "\n"]
+
+
+def test_an_approved_copy_whose_id_is_not_a_proposal_id_is_not_listed_and_never_reaches_the_screen(w, capsys):
+    plant_bad_copy(w)
+    ids = [r[0]["id"] for r in shadow.approved_records(w.cfg)]
+    assert sorted(ids) == sorted([pid_of(w), pid_of(w, "rm_rf")]) and all(proposal.PID.fullmatch(i) for i in ids)
+    code, out, err = run(w, capsys=capsys)
+    assert code == 0 and control_bytes(out) == [] and "\x1b" not in out and sum(ln.startswith("P-") for ln in out.splitlines()) == 2
+
+
+def test_a_normal_approved_copy_is_still_listed_next_to_a_bad_one(w):
+    plant_bad_copy(w, "P-zzzzzzzz")
+    assert {r[0]["id"] for r in shadow.approved_records(w.cfg)} == {pid_of(w), pid_of(w, "rm_rf")}
+
+
+def test_the_table_cleans_every_cell_even_when_a_bad_pid_is_injected_into_the_status_dict(w):
+    s = build(w)
+    s["proposals"][BAD_PID] = {**s["proposals"][pid_of(w)], "detector": "d\x1b[2Jet", "verdict": "ok\x07"}
+    rows = status.table(s)
+    assert control_bytes("\n".join(rows)) == [] and any(ln.startswith("x[1A") for ln in rows)
+    assert control_bytes(status.render(s)) == []

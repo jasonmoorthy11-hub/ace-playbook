@@ -55,7 +55,7 @@ def test_list_marks_an_exempt_lesson_and_leaves_every_other_line_as_it_was(env, 
     conf, log, (a, b) = env
     assert run(conf, "list") == 0
     before = capsys.readouterr().out.splitlines()
-    assert before == [f"  {k} [active] (global:-) {t}" for k, t in sorted([(a, "Use python3, not python, for scripts"),
+    assert before == [f"  {k} [active] (global:-) {t} (applies when: running python scripts)" for k, t in sorted([(a, "Use python3, not python, for scripts"),
                                                                            (b, "Read a file before you edit it")])]
     assert run(conf, "exempt", a) == 0 and run(conf, "list") == 0
     after = capsys.readouterr().out.splitlines()

@@ -249,7 +249,7 @@ def table(s: dict) -> list[str]:
     """The per-proposal grid (header first) of the screen and of the digest."""
     body = [[pid, p["detector"], p["mode"], f"{'-' if p['fires'] is None else p['fires']}/{'-' if p['eligible'] is None else p['eligible']}",
              f"{p['tp']}/{p['fp']}/{p['unlabelled']}", _precision(p["precision"]), p["verdict"]] for pid, p in s["proposals"].items()]
-    return report._grid(HEADS, body)
+    return report._grid(HEADS, [[labels._clean(c) for c in row] for row in body])    # printable only: a file name must not carry terminal escapes
 
 
 def render(s: dict) -> str:

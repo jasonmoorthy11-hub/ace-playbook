@@ -44,7 +44,8 @@ def seed(log, text="Use python3, not python, for scripts", ts="2026-01-01T00:00:
 def refused(capsys, rc, fragment):
     assert rc == 2
     err = capsys.readouterr().err
-    assert len(err.strip().splitlines()) == 1 and fragment in err
+    errors = [ln for ln in err.splitlines() if ln.startswith("error:")]     # the lesson block (F5) may precede it; the error stays one line
+    assert len(errors) == 1 and err.splitlines()[-1] == errors[0] and fragment in err
 
 
 def test_refuses_without_tty(env, monkeypatch, capsys):
@@ -119,7 +120,7 @@ def test_success_appends_one_patch_that_verifies(env, capsys):
     other = seed(log, "Another provisional lesson stays put")
     assert log.verify() == 2
     assert run(conf, "promote", lid, "--evidence-quote", f"  {QUOTE}  ") == 0
-    assert capsys.readouterr().err == ""
+    assert capsys.readouterr().err == promote_mod.review_block(log.state()[lid]) + "\n"     # the lesson is shown, nothing else is said
     assert log.verify() == 3
     rec = log.read()[-1]
     assert rec["op"] == "PATCH" and rec["lesson_id"] == lid
@@ -138,12 +139,13 @@ def test_second_promote_refuses(env, capsys):
     conf, log = env
     lid = seed(log)
     assert run(conf, "promote", lid, "--evidence-quote", QUOTE) == 0
+    capsys.readouterr()
     before = log.path.read_text()
     refused(capsys, run(conf, "promote", lid, "--evidence-quote", QUOTE), "not provisional")
     assert log.path.read_text() == before and log.verify() == 2
 
 
-def test_provisional_lists_newest_first_with_limit_and_truncation(env, capsys):
+def test_provisional_lists_newest_first_with_limit_and_no_truncation(env, capsys):
     conf, log = env
     a = seed(log, "Oldest provisional lesson about caching", ts="2026-01-01T00:00:00Z")
     b = seed(log, "Middle provisional lesson " + "x" * 120, ts="2026-01-02T00:00:00Z")
@@ -152,7 +154,7 @@ def test_provisional_lists_newest_first_with_limit_and_truncation(env, capsys):
     assert run(conf, "provisional") == 0
     lines = capsys.readouterr().out.splitlines()
     assert [ln.split()[0] for ln in lines] == [c, b, a]
-    assert lines[1] == f"{b}  " + ("Middle provisional lesson " + "x" * 120)[:80]
+    assert lines[1] == f"{b}  Middle provisional lesson " + "x" * 120 + " (applies when: running python scripts)"      # full text, nothing cut
     assert run(conf, "provisional", "--limit", "2") == 0
     assert [ln.split()[0] for ln in capsys.readouterr().out.splitlines()] == [c, b]
 
@@ -165,6 +167,63 @@ def test_provisional_listing_excludes_promoted(env, capsys):
     capsys.readouterr()
     assert run(conf, "provisional") == 0
     assert [ln.split()[0] for ln in capsys.readouterr().out.splitlines()] == [b]
+
+
+# ----------------------------------------------- F5: the operator sees what is injected (text AND applies_when), in full
+WHEN = "committing a change and the zebrafish marker is present"
+LONG = "Keep commit messages short and in the imperative mood " + "and name the touched module first " * 6 + "TAILMARK"
+
+
+def test_provisional_shows_applies_when_next_to_the_full_text(env, capsys):
+    conf, log = env
+    lid = seed(log, LONG, applies_when=WHEN)
+    assert run(conf, "provisional") == 0
+    assert capsys.readouterr().out == f"{lid}  {LONG} (applies when: {WHEN})\n" and len(LONG) > 80
+
+
+def test_list_and_search_show_applies_when_and_the_full_text(env, capsys):
+    conf, log = env
+    lid = seed(log, LONG, applies_when=WHEN)
+    for argv in (("list",), ("search", "imperative")):
+        assert run(conf, *argv) == 0
+        out = capsys.readouterr().out
+        assert lid in out and LONG in out and f"(applies when: {WHEN})" in out
+
+
+def test_promote_interactive_shows_both_fields_in_full_before_the_first_prompt(env, monkeypatch, capsys):
+    conf, log = env
+    lid = seed(log, LONG, applies_when=WHEN)
+    seen = []
+
+    def fake(text):
+        seen.append((text, capsys.readouterr().err))
+        return QUOTE if len(seen) == 1 else "y"
+
+    monkeypatch.setattr(promote_mod, "_prompt", fake)
+    assert run(conf, "promote", lid) == 0
+    first_prompt, shown_so_far = seen[0]
+    assert first_prompt.startswith("Evidence quote") and lid in shown_so_far and LONG in shown_so_far and WHEN in shown_so_far
+    assert "applies when:" in shown_so_far and len(LONG) > 80          # longer than the old 80-character cut
+
+
+def test_promote_with_a_quote_flag_shows_both_fields_before_it_writes(env, capsys):
+    conf, log = env
+    lid = seed(log, LONG, applies_when=WHEN)
+    assert run(conf, "promote", lid, "--evidence-quote", QUOTE, "--dry-run") == 0
+    cap = capsys.readouterr()
+    assert LONG in cap.err and WHEN in cap.err and WHEN not in cap.out           # the record on stdout stays pure JSON
+    assert run(conf, "promote", lid, "--evidence-quote", QUOTE) == 0
+    err = capsys.readouterr().err
+    assert LONG in err and WHEN in err
+
+
+def test_review_surfaces_print_no_control_characters_even_if_the_stored_value_has_them():
+    row = {"id": "L-00000000", "status": "provisional", "pinned": 0, "holdout_exempt": 0, "scope_type": "global\x1b[2J", "scope_key": None,
+           "text": "fine text\x1b]52;c;AAAA\x07 more", "applies_when": "when\x1b[1Athen\r\nnext\x08"}
+    for out in (promote_mod.show_line(row), promote_mod.review_block(row), cli._lesson_line(row)):
+        assert [c for c in out if ord(c) < 0x20 and c != "\n"] == [] and "\x1b" not in out and "\x7f" not in out
+        assert "fine text" in out and "when" in out and promote_mod.REMOVED in out
+    assert "\n" not in promote_mod.show_line(row) and "\n" not in cli._lesson_line(row)      # a one-line listing stays one line
 
 
 # ----------------------------------------------- schema: PATCH may add evidence
