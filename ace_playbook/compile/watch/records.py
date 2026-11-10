@@ -6,7 +6,7 @@ the (code-made) title names a model: two ids in one table cell share a quote and
 8 hex id, the first 8 hex of the new one, and `check` accepts both widths. A quote is ONE line of the fetched
 body, verbatim (`quote_line`); `check(rec, body)` also requires it to be a substring of `body` when the body is given. `check` returns None
 for a valid W1 record, else the reason: shape, title, evidence, quote, id, diff hash, "tier-1 evidence alone cannot carry a diff", verify
-(one of three fixed command templates) or dates. `change.target` is always an inventory key, a mapped docs URL, a source id or
+(the command template of the record's class, see `verify_ok`) or dates. `change.target` is always an inventory key, a mapped docs URL, a source id or
 `claude_version`, never text taken from a page.
 """
 
@@ -16,21 +16,35 @@ import hashlib
 import re
 import shlex
 from datetime import datetime, timedelta
+from urllib.parse import urlsplit
 
 from .store import clean
 
 DAYS = 30
 KEYS = {"id", "created", "class", "elevated", "title", "evidence", "inventory_hits", "change", "verify", "expires", "status"}
 CLASSES = ("model_pin", "version", "docs", "lead")
-PLAIN = r"[\w./~@+:=-]+"
-ARG = rf"(?:{PLAIN}|'[^']*')"
+PLAIN = r"[\w./~@+:=][\w./~@+:=-]*"                                # an argument never begins with `-`: it would be an option
+ARG = rf"(?:{PLAIN}|'(?!-)[^'\x00-\x1f\x7f]*')"
 TITLE = re.compile(r"Replace (?P<mid>\S+) with (?P<succ>\S+) in |retirement with no successor named: (?P<lead>\S+) \(")
-TEMPLATES = (re.compile(rf'grep -n "[A-Za-z0-9._:-]{{3,80}}" {ARG}( {ARG})*'), re.compile(r"claude --version"),
-             re.compile(rf"curl -sI {ARG} \| head -1"))
+GREP = re.compile(rf'grep -n "(?P<id>[A-Za-z0-9._:][A-Za-z0-9._:-]{{2,79}})" {ARG}( {ARG})*')
+CURL = re.compile(rf"curl -sI (?:-- )?(?P<url>{ARG}) \| head -1")                # `--` is what a new record gets; the form without it is read back
+VERSION = "claude --version"
 
 
 def sh(text: str) -> str:
-    return text if re.fullmatch(PLAIN, text) else shlex.quote(text)
+    """`text` as one shell word. A word that begins with `-` is quoted too (and `ARG` refuses it), so it is never an option."""
+    if re.fullmatch(PLAIN, text):
+        return text
+    q = shlex.quote(text)
+    return f"'{q}'" if q.startswith("-") else q
+
+
+def curl_cmd(url: str) -> str:
+    return f"curl -sI -- {sh(url)} | head -1"
+
+
+def grep_cmd(mid: str, paths: list[str]) -> str:
+    return f'grep -n "{mid}" ' + " ".join(sh(p) for p in paths)
 
 
 def title_model(title: object) -> tuple[str, str]:
@@ -63,6 +77,28 @@ def record(cls: str, title: str, ev: dict, hits: list[str], target: str, diff: s
             "verify": verify, "expires": exp, "status": "open"}
 
 
+def _http(url: object) -> bool:
+    try:
+        return isinstance(url, str) and urlsplit(url).scheme in ("http", "https") and bool(urlsplit(url).hostname)
+    except ValueError:
+        return False
+
+
+def verify_ok(rec: dict) -> bool:
+    """`rec["verify"]` is the command that belongs to the record's class: `claude --version` for a version; `curl -sI [--] <url> | head -1` for a docs
+    page (the url is the target, a mapped page) and for a lead (the url is its first evidence url), the url http(s) and quoted as `sh` quotes it;
+    `grep -n "<model id>" <paths>` for a model_pin and a retirement lead, the id the one the code-made title names. No argument begins with `-`."""
+    v, cls, mid = rec["verify"], rec["class"], title_model(rec["title"])[0]
+    if cls == "version":
+        return v == VERSION
+    m = CURL.fullmatch(v) if cls in ("docs", "lead") else None
+    if m:
+        url = rec["change"]["target"] if cls == "docs" else rec["evidence"][0]["url"]
+        return _http(url) and m["url"] == sh(url)
+    g = GREP.fullmatch(v) if cls in ("model_pin", "lead") else None
+    return bool(g) and bool(mid) and g["id"] == mid
+
+
 def check(rec: dict, body: str | None = None) -> str | None:
     """None when `rec` is a valid W1 record, else the reason it is not (see the module docstring)."""
     try:
@@ -85,7 +121,7 @@ def check(rec: dict, body: str | None = None) -> str | None:
             return "diff hash"
         if ch["diff"] is not None and all(e["tier"] == 1 for e in ev):
             return "tier-1 evidence alone cannot carry a diff"
-        if not any(t.fullmatch(rec["verify"]) for t in TEMPLATES):
+        if not verify_ok(rec):
             return "verify"
         return None if rec["expires"] > rec["created"] and rec["status"] in ("open", "queued") else "dates"
     except (KeyError, TypeError):

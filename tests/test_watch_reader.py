@@ -382,7 +382,7 @@ def test_compose_builds_a_valid_lead_through_the_existing_record_builder():
     rec = compose.compose(validate.validate(GOOD, ITEM), ITEM, NOW)
     assert rec["class"] == "lead" and rec["change"] == {"target": ITEM["source"], "diff": None, "diff_sha256": None} and rec["inventory_hits"] == []
     assert rec["evidence"] == [{"url": ITEM["url"], "sha256": ITEM["sha256"], "quote": "Subagents are useful for long tasks.", "tier": 1}]
-    assert rec["verify"] == f"curl -sI {ITEM['url']} | head -1" and rec["elevated"] is False and rec["status"] == "open"
+    assert rec["verify"] == f"curl -sI -- {ITEM['url']} | head -1" and rec["elevated"] is False and rec["status"] == "open"
     assert records.check(rec, ITEM["text"]) is None and rec["id"].startswith("W-") and len(rec["id"]) == 18
     assert rec["id"] == records.make_id("lead", ITEM["source"], ITEM["sha256"], rec["evidence"][0]["quote"])     # the id the W1 rule path gives it
 

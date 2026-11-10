@@ -17,7 +17,7 @@ import re
 from datetime import datetime, timedelta
 
 from .pin import model_pin  # noqa: F401 - part of this module's surface
-from .records import check, make_id, record, sh  # noqa: F401
+from .records import check, curl_cmd, make_id, record, sh  # noqa: F401
 from .store import RANK, clean
 
 MAX_LEADS = 10
@@ -59,7 +59,7 @@ def docs(inv: dict, results: list[dict], mapping: dict, prev: dict, now: str) ->
 
     def add(seen_url: str, ev: dict) -> None:
         page, keys = mapped[norm(seen_url)]                  # title, target and command use the operator's mapped URL, not the page's own
-        out.append(record("docs", f"docs page changed: {page}", ev, list(keys), page, None, f"curl -sI {sh(page)} | head -1", now))
+        out.append(record("docs", f"docs page changed: {page}", ev, list(keys), page, None, curl_cmd(page), now))
 
     for res in results:
         if res["kind"] == "sitemap":
@@ -92,7 +92,7 @@ def leads(results: list[dict], mapping: dict, now: str) -> list[dict]:
     for res, e in keyword_entries(results, mapping):
         url = e["link"] or res["url"]
         ev = {"url": url, "sha256": res["sha256"], "quote": e["title"], "tier": 1}
-        out.append(record("lead", e["title"], ev, [], res["id"], None, f"curl -sI {sh(url)} | head -1", now))
+        out.append(record("lead", e["title"], ev, [], res["id"], None, curl_cmd(url), now))
     return out[:MAX_LEADS]
 
 

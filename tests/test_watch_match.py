@@ -133,7 +133,7 @@ def test_a_newer_sitemap_lastmod_for_a_mapped_page_is_a_docs_proposal():
     r = recs[0]
     assert (r["class"], r["change"]["diff"], r["inventory_hits"], r["change"]["target"]) == ("docs", None, ["settings.model"],
                                                                                                "https://docs.example.test/en/hooks")
-    assert r["verify"] == "curl -sI https://docs.example.test/en/hooks | head -1" and r["evidence"][0]["quote"].endswith("lastmod 2026-10-20")
+    assert r["verify"] == "curl -sI -- https://docs.example.test/en/hooks | head -1" and r["evidence"][0]["quote"].endswith("lastmod 2026-10-20")
     assert match.candidates(inv(), [sm], DOCS, {"https://docs.example.test/en/hooks": "2026-10-20"}, NOW) == []     # not newer
     assert match.candidates(inv(), [sm], DOCS, {}, NOW) == []                                                       # first sight is a baseline
     assert match.candidates(inv(), [sm], {"docs": {}}, prev, NOW) == []                                             # an unmapped page is never an item
@@ -160,7 +160,7 @@ def test_a_tier_1_entry_with_a_keyword_is_a_lead_with_no_diff():
     r = recs[0]
     assert (r["class"], r["change"]["diff"], r["change"]["diff_sha256"], r["inventory_hits"]) == ("lead", None, None, [])
     assert r["title"] == "A harmless post about subagents" and r["evidence"][0]["tier"] == 1 and r["evidence"][0]["quote"] == r["title"]
-    assert r["evidence"][0]["url"] == "https://example.test/post/1" and r["verify"] == "curl -sI https://example.test/post/1 | head -1"
+    assert r["evidence"][0]["url"] == "https://example.test/post/1" and r["verify"] == "curl -sI -- https://example.test/post/1 | head -1"
     assert INJECTION not in json.dumps(recs) and "evil-model" not in json.dumps(recs)
     assert match.candidates(inv(), [feed], {"lead_keywords": ["nothing"]}, {}, NOW) == []
     assert match.candidates(inv(), [{**feed, "tier": 0}], KW, {}, NOW) == []                       # W1 reads leads from tier-1 feeds only
@@ -179,10 +179,8 @@ def test_tier_1_evidence_alone_never_yields_a_diff():
     diff = "--- a/x\n+++ b/x\n"
     bad = {**good, "change": {"target": good["change"]["target"], "diff": diff, "diff_sha256": hashlib.sha256(diff.encode()).hexdigest()}}
     assert match.check(bad) == "tier-1 evidence alone cannot carry a diff"
-    ok = {**bad, "evidence": [{**good["evidence"][0], "tier": 0}]}
-    ok["id"] = match.make_id(ok["class"], ok["change"]["target"], ok["evidence"][0]["sha256"], ok["evidence"][0]["quote"])
-    assert match.check({**ok, "class": "model_pin", "id": match.make_id("model_pin", ok["change"]["target"], ok["evidence"][0]["sha256"],
-                                                                         ok["evidence"][0]["quote"])}) is None
+    pin = match.candidates(inv(**{"settings.model": SETTINGS}), [DEPR()], {}, {}, NOW)[0]
+    assert pin["evidence"][0]["tier"] == 0 and pin["change"]["diff"] and match.check(pin) is None        # tier-0 evidence may carry a diff
 
 
 # ------------------------------------------------------------------ shared rules

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 
-from .records import record, sh, title_model
+from .records import grep_cmd, record, title_model
 
 SAFE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{2,79}")
 MODEL_ID = re.compile(r"claude-[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?")
@@ -89,7 +89,7 @@ def model_pin(inv: dict, results: list[dict], now: str) -> list[dict]:
         rx, new = boundary(mid), m["successor"] if _real(m["successor"]) and MODEL_ID.fullmatch(m["successor"]) and SAFE.fullmatch(m["successor"]) else None
         ev = {"url": m["res"]["url"], "sha256": m["res"]["sha256"], "quote": m["row"], "tier": m["res"]["tier"]}
         for key, files in sorted(_lines(inv, rx).items()):
-            verify = f'grep -n "{mid}" ' + " ".join(sh(p) for p in sorted(files))
+            verify = grep_cmd(mid, sorted(files))
             cut = inv["targets"][key].get("truncated") or any(f.get("truncated") or f.get("too_large") for f in inv["targets"][key]["files"].values())
             whole = new and new != mid and not cut and all(len(str(t)) < MAX_LINE and "�" not in str(t) for ls in files.values() for _, t in ls)
             if whole:

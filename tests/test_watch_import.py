@@ -18,7 +18,9 @@ NOW = "2026-10-21T12:00:00Z"
 
 def make(n, cls="docs", diff=None, tier=0, title=None):
     ev = {"url": "https://example.test/d", "sha256": f"{n:064x}", "quote": f"row {n}", "tier": tier}
-    return records.record(cls, title or f"title {n}", ev, ["k"], f"k{n}", diff, "claude --version", NOW)
+    target = f"https://docs.example.test/en/p{n}" if cls == "docs" else f"k{n}"
+    verify = {"docs": records.curl_cmd(target), "model_pin": records.grep_cmd("claude-old", ["f"])}.get(cls) or records.curl_cmd(ev["url"])
+    return records.record(cls, title or f"title {n}", ev, ["k"], target, diff, verify, NOW)
 
 
 class World:
@@ -28,7 +30,7 @@ class World:
         conf = tmp_path / "config.json"
         (tmp_path / "sources.json").write_text(json.dumps([{"id": "feed", "url": "https://example.test/feed.xml", "kind": "rss", "tier": 1}]))
         targets = {f"k{n}": {"path": str(tmp_path / "none"), "pattern": "x"} for n in range(1, 10)}
-        (tmp_path / "map.json").write_text(json.dumps({"targets": targets, "docs": {"https://docs.example.test/en/hooks": ["k1"]}}))
+        (tmp_path / "map.json").write_text(json.dumps({"targets": targets, "docs": {"https://docs.example.test/en/hooks": ["k1"], **{f"https://docs.example.test/en/p{n}": ["k1"] for n in range(1, 10)}}}))
         conf.write_text(json.dumps({"data_dir": str(tmp_path / "data"), "watch_dir": str(self.wd), "chain_key_path": None,
                                     "watch_sources": str(tmp_path / "sources.json"), "watch_inventory_map": str(tmp_path / "map.json")}))
         monkeypatch.setenv("ACE_PLAYBOOK_CONFIG", str(conf))
@@ -79,6 +81,7 @@ def test_a_duplicate_by_id_and_by_key_is_counted_not_written(w, capsys):
     keyed = make(3, cls="docs")
     keyed["evidence"][0]["sha256"] = a["evidence"][0]["sha256"]
     keyed["change"]["target"] = a["change"]["target"]
+    keyed["verify"] = a["verify"]
     keyed["id"] = records.make_id("docs", keyed["change"]["target"], keyed["evidence"][0]["sha256"], keyed["evidence"][0]["quote"])
     assert keyed["id"] != a["id"] and reconcile.key(keyed) == reconcile.key(a)
     w.put(keyed)
@@ -231,16 +234,16 @@ def test_stamps_urls_and_targets_are_checked_against_the_operators_own_config(w,
 
 
 def test_an_unknown_target_is_rejected_and_a_known_one_of_each_kind_is_taken(w, capsys):
-    foreign = records.record("docs", "t", {"url": "https://example.test/d", "sha256": "1" * 64, "quote": "q", "tier": 0}, [], "k99", None,
-                             "claude --version", NOW)
+    foreign = records.record("lead", "t", {"url": "https://example.test/d", "sha256": "1" * 64, "quote": "q", "tier": 1}, [], "k99", None,
+                             records.curl_cmd("https://example.test/d"), NOW)
     w.put(foreign)
     ok = [records.record("docs", "page", {"url": "https://example.test/d", "sha256": "2" * 64, "quote": "q", "tier": 0}, [],
-                         "https://docs.example.test/en/hooks", None, "claude --version", NOW),
+                         "https://docs.example.test/en/hooks", None, records.curl_cmd("https://docs.example.test/en/hooks"), NOW),
           records.record("version", "Claude Code 9.1.0 available (installed 9.0.1)",
                          {"url": "https://example.test/n", "sha256": "3" * 64, "quote": "q", "tier": 0}, [], "claude_version", None,
                          "claude --version", NOW),
           records.record("lead", "A post", {"url": "https://example.test/p", "sha256": "4" * 64, "quote": "q", "tier": 1}, [], "feed", None,
-                         "claude --version", NOW)]
+                         records.curl_cmd("https://example.test/p"), NOW)]
     for rec in ok:
         w.put(rec)
     code, out, _ = w.run(capsys)

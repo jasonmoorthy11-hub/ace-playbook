@@ -1387,7 +1387,7 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   installed `claude`), `docs` (a mapped page's sitemap `lastmod` moved, unless it is more than a day ahead of the scan, or its `.md` hash changed; a first
   sight is a baseline, and a future `lastmod` is never remembered) and
   `lead` (a tier-1 feed entry with a `lead_keywords` term). `check` enforces the record shape, the caps, the id, the diff hash, the
-  verify templates and "tier-1 evidence alone never carries a diff". `match.py` is the entry (`candidates`); the pieces are `records.py`
+  verify templates (the command of the record's class: no argument begins with `-`, a curl argument is the record's own http(s) url) and "tier-1 evidence alone never carries a diff". `match.py` is the entry (`candidates`); the pieces are `records.py`
   (`record`, `make_id`, `check`), `pin.py` (the `model_pin` rule, `state`, `pinned`, `model_of`) and `reconcile.py` (below).
   `change.target` is never page text: it is an inventory key, a mapped docs URL, a source id or `claude_version`, and a docs title is
   built from the mapped URL. `inventory.py` splits files on `\n` (keeping `\r`) and sets a `truncated` flag on a file cut at the line cap;
@@ -1413,7 +1413,9 @@ re-scan dedupes; a record stored with the legacy `W-<8 hex>` id stays readable (
 prefix of the new one); `title` is at most 120 characters and `quote` 400, both cleaned
 of control characters, and the quote is ONE line of the fetched body, verbatim (`records.quote_line`, empty when no line is clean, which
 drops the record; `match.candidates` runs `check(rec, body)` with the body of the result that carries the sha256); `verify` comes from a fixed template per
-class (`grep -n "<model_id>" <path>`, `claude --version`, `curl -sI <url> | head -1`); a model id or successor taken from a page must match
+class (`grep -n "<model_id>" <paths>` for a model_pin and a retirement lead, `claude --version` for a version, `curl -sI -- <url> | head -1` for a docs page, its
+mapped url, and for a lead, its evidence url; `records.check` ties the command to the class and the url, no argument begins with `-`, and a record stored with
+the older `curl -sI <url> | head -1` form, without `--`, still checks); a model id or successor taken from a page must match
 `[A-Za-z0-9][A-Za-z0-9._:-]{2,79}` before it reaches a diff or a command; `elevated` is false for every W1 class; `expires` is 30 days
 after `created`. Free text from the web appears in a record only as the title and the quote.
 
@@ -1448,7 +1450,11 @@ an int `tier` that is not a bool), whose stamps are in the store's format, at mo
 evidence URLs are http(s) (`url`) and whose `change.target` is one the operator's own config knows (`target`: a key or mapped docs URL of
 `watch_inventory_map`, a source id of `watch_sources`, or `claude_version`; both files are required). An imported record is evidence and a title: a diff is
 never taken from the copy and none is computed from its fields (the title would choose the model and the successor), so `change.diff` and `diff_sha256` are
-always null (the id does not depend on them, and `records.check` passes the stored record). A diff comes only from the operator's own `watch scan`, which
+always null (the id does not depend on them, and `records.check` passes the stored record). The copy's `verify` is never taken either: `vet.rebuild` makes
+it from the vetted class, target, title and first evidence url (`claude --version`; `curl -sI -- <url> | head -1` with the mapped target for a docs page and the
+evidence url for a lead; `grep -n "<model id>" <paths>` with the files of the operator's own `watch_inventory_map` for a model_pin and a retirement lead), and a
+record with no safe rebuild (a docs page that is not mapped, a model_pin whose target is no mapped file, an id or a path that begins with `-`) is rejected,
+reason `verify`. A diff comes only from the operator's own `watch scan`, which
 supersedes the import (below). The summary counts `N imported without diff` for a copy's diff that was dropped. The title carries a visible ` (imported)`
 (a title too long to carry it is rejected, reason `title`); `watch status`, the
 digest and the queue card show it. `status` is forced to `open`, and past the cap of five open (leads excepted) the record is written `queued` in ranking
@@ -1535,7 +1541,7 @@ for) a `model_pin` request on a tier-1 item, whether or not the answer calls the
 lives in `validate` alone), turns every whitespace separator in the title into one space, cleans it with `store.clean` (and drops lone surrogates and
 noncharacters), and refuses a title in the
 form of a code-made one (`Replace ...`, `Retirement ...`). `compose.compose` builds the record through the existing `records.record` (class `lead`, no
-hits, diff None, tier-1 evidence, the lead `verify` template); the change target is the source id of the item, the same as the W1 rule-path lead for
+hits, diff None, tier-1 evidence, the lead `verify` template, `curl -sI -- <url> | head -1`); the change target is the source id of the item, the same as the W1 rule-path lead for
 that entry. One entry is one lead: the W1 rule lead wins, and the Reader is only asked about entries the rules did not already flag (D-162: `scan`
 hands the (target, title) pairs of EVERY keyword entry, past the W1 cap of ten, to `model.stage`, which skips a matching item before the read, marks it
 done and counts it `dup`). `records.check` must pass. The only regular expression over the item is that dash substitution; none runs over the model's
