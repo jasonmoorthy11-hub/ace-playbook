@@ -175,8 +175,7 @@ def load_approved(cfg, log) -> list[tuple[dict, str]]:
 
 
 def approved_records(cfg) -> list[tuple[dict, str, dict]]:
-    """[(proposal, mode, approved record)] of the approved copies whose hash holds and whose file stem is a proposal id;
-    not re-validated (the offline pass only lowers)."""
+    """[(proposal, mode, approved record)] of the approved copies whose hash holds and whose stem is a proposal id; not re-validated (the offline pass only lowers)."""
     base, out = approved_dir(cfg), []
     for p in sorted(base.glob("*.json")) if base.is_dir() and not base.is_symlink() else []:
         try:
