@@ -611,9 +611,9 @@ Deviations from the draft, each decided before any holdout session:
   same line shows `L-b3d1fba9:active:global:0`); only the two seed hashes and the post-edit CLAUDE.md hash are placeholders:
 
   ```text
-  holdout_seed_sha256                      <HOLDOUT_SEED_SHA256>
-  sha256(holdout_permutation_seed)         <PERMUTATION_SEED_SHA256>
-  CLAUDE.md (global, after the D-232 edit) <CLAUDE_MD_SHA256>
+  holdout_seed_sha256                      212934ab1633ea4f802526172ffe2a91fd8952d0464b8a01daefdb69e57ae647
+  sha256(holdout_permutation_seed)         3da52c3c93273b9961ad2529359f70fcba6d58f0814a2df94c85bbd69886792f
+  CLAUDE.md (global, after the D-232 edit) 87751e1a46ad1c1c37be345bae14e5472432e7ab8dd6bcf4fe9651397d65f8ce
   stop-mid-task-audit.sh                   256dc2b7d87ac0b1d8d49ebce7b5d27c30362de0b2fdb2b754361bef9777c79b
   pretooluse-exitplan-question-check.sh    1be70af396c4b5ad0a3ba2a0b004eef21bc740addcd13e4884ab0ee53f4ff1e4
   L-93544dae text+applies_when             0d3b951c66e7c806edaaa3e8b8bf796bdda28a375d7a455fa579a81724aa906b
