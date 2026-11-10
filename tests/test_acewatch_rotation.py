@@ -1,12 +1,16 @@
-"""The sandbox logs are rotated by the acewatch user itself (hooks/acewatch/acewatch_run.py), never by a root newsyslog job inside the acewatch-writable
-logs directory (docs/watch/SANDBOX.md "Log rotation"). Temp directories and the text of the files only: nothing here installs or runs a template."""
+"""The sandbox logs are opened and rotated by the acewatch user itself (hooks/acewatch/acewatch_run.py): the plists name no launchd log path and no root
+process works inside the acewatch-writable logs directory (docs/watch/SANDBOX.md "Log rotation"). Temp directories and the text of the files only: nothing
+here installs or runs a template."""
 
 import importlib.util
 import os
 import plistlib
+import re
+import signal
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -45,25 +49,58 @@ def test_the_newsyslog_template_is_gone_and_no_template_asks_root_to_rotate():
         assert "newsyslog.d" not in path.read_text(encoding="utf-8"), path
 
 
-def test_each_plist_starts_its_scan_through_the_wrapper_which_rotates_exactly_the_two_logs_that_plist_writes():
+def test_each_plist_starts_its_scan_through_the_wrapper_which_opens_and_rotates_exactly_two_logs_per_plist():
     seen = set()
     for data, args in plist_args():
         assert args[1:3] == ["-I", "__ACE_PLAYBOOK_COPY__/hooks/acewatch/acewatch_run.py"]
-        assert args[3] == HOME + "/logs" and args[5] == "--" and args[6:8] == [args[0], "-m"]      # the scan argv follows `--`, unchanged
-        names = args[4].split(",")
-        assert {HOME + "/logs/" + n for n in names} == {data["StandardOutPath"], data["StandardErrorPath"]} and len(names) == 2
-        seen |= set(names)
+        assert args[3] == HOME + "/logs" and args[6] == "--" and args[7:9] == [args[0], "-m"]      # the scan argv follows `--`, unchanged
+        out, err = args[4], args[5]
+        assert out.endswith(".out.log") and err.endswith(".err.log") and "/" not in out + err
+        seen |= {out, err}
     assert len(seen) == 4
 
 
-def test_the_runbook_says_acewatch_rotates_and_tells_an_old_install_to_remove_the_newsyslog_file():
-    text = " ".join(SANDBOX.read_text(encoding="utf-8").split())
+def test_no_plist_names_a_launchd_log_path_so_launchd_opens_no_file_in_the_acewatch_directory():
+    for path in sorted(FOLDER.glob("*.plist")):
+        data = plistlib.loads(path.read_bytes())
+        assert "StandardOutPath" not in data and "StandardErrorPath" not in data, path.name
+        assert "<key>Standard" not in path.read_text(encoding="utf-8")
+        assert "sudo launchctl print system/com.example.acewatch" in path.read_text(encoding="utf-8")       # where a job that cannot start shows
+        assert [a for a in data["ProgramArguments"] if "/logs" in a] == [HOME + "/logs"]                    # the only logs path is an argument of the acewatch-run job
+
+
+def test_the_runbook_log_rotation_section_says_who_opens_and_rotates_and_has_no_root_command_in_the_logs_directory():
+    raw = SANDBOX.read_text(encoding="utf-8")
+    text = " ".join(raw.split())
     log = text.split("## Log rotation", 1)[1].split("## The operator-side status line", 1)[0]
-    assert "rotated by `acewatch` itself, never by root" in log and "hooks/acewatch/acewatch_run.py" in log
-    assert "sudo rm /etc/newsyslog.d/acewatch.conf" in log and "root newsyslog file" in log
-    assert "sudo install" not in log and "sudo newsyslog" not in log and " sed " not in log
-    assert "refuses" in log and "symlink" in log and "5 archives" in log and "1024 KiB" in log
-    assert "/etc/newsyslog.d/acewatch.conf" in text.split("## Uninstalling", 1)[1]
+    assert "NO `StandardOutPath` and NO `StandardErrorPath`" in log and "opens no file anywhere" in log and "hooks/acewatch/acewatch_run.py" in log
+    assert "opens the job's two logs itself" in log and "does NOT run the scan" in log and "exits with status 3" in log
+    assert "never as root" in log and "not compressed" in log and "5 archives are kept" in log and "1024 KiB" in log
+    assert "forwards the signal to the scan" in log and "without rotating" in log and "`ExecStart`" in log
+    assert "sudo install" not in log and "sudo newsyslog" not in log and " sed " not in log and "the script is already in it" not in text
+    assert not re.search(r"sudo (-u root )?(rm|mv|chown|chmod|install|cp)\b[^`\n]*/var/acewatch/logs", raw)       # root never works inside the logs directory
+    assert "sudo -u acewatch rm /var/acewatch/logs/<file>" in text and "/etc/newsyslog.d/acewatch.conf" in text.split("## Uninstalling", 1)[1]
+
+
+def test_the_runbook_has_an_upgrade_section_before_log_rotation_with_the_steps_in_order():
+    text = " ".join(SANDBOX.read_text(encoding="utf-8").split())
+    assert text.index("## Upgrading an existing install") < text.index("## Log rotation")
+    section = text.split("## Upgrading an existing install", 1)[1].split("## Log rotation", 1)[0]
+    marks = ["1. Refresh the root-owned copy FIRST", "2. For each job, `sudo launchctl bootout system/com.yourdomain.acewatch`",
+             "3. If the old newsyslog file was installed: `sudo rm /etc/newsyslog.d/acewatch.conf`", "4. Replace the sudoers line with the `-I` form",
+             "5. The log files the OLD plists made"]
+    assert [section.index(m) for m in marks] == sorted(section.index(m) for m in marks)
+    assert '-I -c "import ace_playbook"' in section and "Doing step 2 before this one stops every scan" in section
+    assert "sudo ls -ln /var/acewatch/logs" in section and "sudo -u acewatch rm /var/acewatch/logs/<file>" in section
+    assert "root never deletes inside that tree" in section and "REFUSES to run that job" in section and "exit status 3" in section
+
+
+def test_step_3_requires_a_root_owned_interpreter_venv_and_copy_with_a_check_that_prints_nothing():
+    text = " ".join(SANDBOX.read_text(encoding="utf-8").split())
+    step = text.split("3. Give it a checkout copy", 1)[1].split("4. `acewatch`'s own config", 1)[0]
+    assert "NOT a Homebrew or other python installed by a user account" in step and "must ALL be owned by root and not writable by group or other" in step
+    assert '! -type l \\( ! -user root -o -perm -020 -o -perm -002 \\) -print' in step and "readlink -f" in step and "must print nothing" in step
+    assert "provided step 3's ownership holds" in text
 
 
 # ---------------------------------------------------------------- the rotation, in temp directories
@@ -185,31 +222,3 @@ def test_a_name_with_a_slash_is_refused(tmp_path):
         run.rotate(str(logs), "../logs/a.log", size_kib=1)
 
 
-# ---------------------------------------------------------------- the wrapper: the job runs unchanged, its status is kept, then the logs rotate
-def wrapper(logs: Path, names: str, code: str) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, "-I", str(SCRIPT), str(logs), names, "--", sys.executable, "-c", code], capture_output=True, text=True)
-
-
-def test_the_wrapper_keeps_the_jobs_exit_status_and_rotates_afterwards(tmp_path):
-    logs = make(tmp_path, size=1024 * KIB + 1)
-    done = wrapper(logs, "a.log,b.log", "import sys; sys.exit(3)")
-    assert done.returncode == 3 and done.stderr == "" and sorted(p.name for p in logs.iterdir()) == ["a.log.0"]
-
-
-def test_the_wrapper_reports_a_refusal_on_stderr_but_never_changes_the_jobs_status(tmp_path):
-    victim = tmp_path / "victim"
-    victim.write_bytes(b"v" * (1024 * KIB + 1))
-    logs = tmp_path / "logs"
-    logs.mkdir()
-    (logs / "a.log").symlink_to(victim)
-    done = wrapper(logs, "a.log", "print('ran')")
-    assert done.returncode == 0 and done.stdout == "ran\n" and "not rotated" in done.stderr and (logs / "a.log").is_symlink()
-    assert victim.stat().st_size == 1024 * KIB + 1
-
-
-def test_the_wrapper_exits_127_for_a_job_that_cannot_start_and_2_for_a_bad_call(tmp_path):
-    logs = make(tmp_path, size=1)
-    done = subprocess.run([sys.executable, "-I", str(SCRIPT), str(logs), "a.log", "--", str(tmp_path / "no-such-program")], capture_output=True, text=True)
-    assert done.returncode == 127 and "cannot start the job" in done.stderr
-    done = subprocess.run([sys.executable, "-I", str(SCRIPT), str(logs), "a.log"], capture_output=True, text=True)
-    assert done.returncode == 2 and "usage" in done.stderr

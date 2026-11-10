@@ -1481,11 +1481,11 @@ waits for a free slot). `queue` writes `diff_sha256
 <hash|none>` as the note of an `accepted` row, so an
 accept of a record that was replaced afterwards is visibly stale.
 
-The sandbox logs (`acewatch.out.log`, `acewatch.err.log`, `acewatch.weekly.out.log`, `acewatch.weekly.err.log`, written by launchd from the two plists)
+The sandbox logs (`acewatch.out.log`, `acewatch.err.log`, `acewatch.weekly.out.log`, `acewatch.weekly.err.log`, written by the two jobs' stdout and stderr, which `acewatch_run.py` opens itself; the plists name no StandardOutPath or StandardErrorPath)
 are rotated by the `acewatch` user itself, never by root (a root newsyslog job inside a directory the sandbox user can write was retired): the two plists start
-the scan through `hooks/acewatch/acewatch_run.py`, which runs it unchanged and then rotates that job's two logs (mode 600, keep 5, 1024 KiB, not compressed;
-it refuses symlinks and files it does not own; SANDBOX.md "Log rotation"). No code on the scan path itself rotates or writes a log;
-`tests/test_acewatch_rotation.py` pins the rotation and that the plists name exactly the four log paths it rotates.
+the scan through `hooks/acewatch/acewatch_run.py`, which opens that job's two logs as acewatch (refusing a symlink, FIFO or foreign file and then NOT running the job,
+exit 3), runs it unchanged and rotates them afterwards (mode 600, keep 5, 1024 KiB, not compressed; it refuses symlinks and files it does not own; SANDBOX.md "Log rotation"). No code on the scan path itself rotates or writes a log;
+`tests/test_acewatch_rotation.py` pins the rotation, `tests/test_acewatch_wrapper.py` the wrapper, and the plists pass exactly four log names and no launchd log path.
 
 The operator-side status line is the config key `acewatch_check` (an optional path, `~` expanded, type-checked only like `backup_check`): the nightly
 (`nightly_notes.collect`, whose `CHECKS` is a tuple of (key, label)) runs `<path> --check` and turns the first stdout line (stripped, at most 80 characters,

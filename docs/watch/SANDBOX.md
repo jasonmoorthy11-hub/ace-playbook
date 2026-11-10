@@ -77,10 +77,26 @@ install and the `inputs.legacy-<date>` name are written from that run, not paste
    ```
 
    Pin the python with `--python 3.12` (the version CI tests): without it `uv sync` takes the NEWEST managed python (3.15 on 2026-10-23), which
-   worked in the live install but is untested in CI. (Or point the venv at a system-wide 3.12.) A venv built in your own session symlinks its
+   worked in the live install but is untested in CI. (Or point the venv at a system-wide 3.12 that only root can change: NOT a Homebrew or other
+   python installed by a user account.) A venv built in your own session symlinks its
    python into your home, which `acewatch` cannot read once step 1 holds. Check: `sudo -u acewatch <copy>/.venv/bin/python -I -c "import ace_playbook"`.
    The package must be found WITHOUT the working directory and without `PYTHONPATH`: the plain `uv sync` above is an editable install (a `.pth`
    file in the venv points at the copy), which is what the `-I` of the sudoers line below relies on; do not build the venv any other way.
+
+   Ownership: `-I` protects only if no process of the operator can write the interpreter, the venv or the copy (code there would run as `acewatch` through
+   the same sudoers line and through the plists). The interpreter's own tree, the venv and the copy must ALL be owned by root and not writable by group or
+   other, and so must the directories above them (`/opt`, `/usr/local` qualify; a Homebrew prefix, owned by your account, does not). This check must
+   print nothing (`readlink -f` exists on macOS 12.3 and later and in GNU coreutils; symlinks are skipped because their own mode is meaningless):
+
+   ```
+   P=$(dirname "$(dirname "$(readlink -f <copy>/.venv/bin/python)")")
+   sudo find <copy> "$P" ! -type l \( ! -user root -o -perm -020 -o -perm -002 \) -print | head
+   ls -ld /opt <copy>/.. "$P/.."          # the owner must be root and no `w` in the group or other columns
+   ```
+
+   (The find expression was run on a temporary tree on macOS, with the owner test set to the current user instead of root: it printed nothing for a clean
+   tree and exactly the one file after `chmod o+w`; it has not been run on Linux, where `find` and `readlink -f` take the same options.) If it prints a path,
+   fix the owner and mode as root before going on (`sudo chown -R root:wheel <path>`, `sudo chmod -R go-w <path>`; the group is `root` on Linux).
 4. `acewatch`'s own config, `ACE_PLAYBOOK_CONFIG` in the plists, is `/var/acewatch/.config/ace-playbook/config.json` (0600): its own
    `data_dir` and `watch_dir` (0700, owned by `acewatch`; the watch directory is the one directory the scan writes, Reader state included;
    `data_dir` is the base directory the config requires (0700, acewatch's); the scan writes nothing there), `watch_sources`,
@@ -313,25 +329,47 @@ ended in an outage or an unavailable claude. A run that is down (an outage or an
 items read`, and with zero compliance it prints no proposals line. A call that ran and failed adds `canary: F failed` on stderr. A model change
 (`watch_reader_model`) is a reason to run it before the next scan.
 
+## Upgrading an existing install
+
+For an install made before the `-I` sudoers line and the wrapper (the `acewatch_run.py` of "Log rotation"). In THIS order:
+
+1. Refresh the root-owned copy FIRST, as root, the way step 3 made it (a fresh root-owned checkout of this repository at the new commit, replacing the
+   old tree), then re-run step 3's `uv sync` command in it and its two checks (`sudo -u acewatch <copy>/.venv/bin/python -I -c "import ace_playbook"` and
+   the ownership `find`, which must print nothing). Doing step 2 before this one stops every scan: the old copy has no `hooks/acewatch/acewatch_run.py`,
+   which the new templates start.
+2. For each job, `sudo launchctl bootout system/com.yourdomain.acewatch` (then `.weekly`), then re-run step 7's `sed`, `chown`/`chmod`, `plutil -lint` and
+   `launchctl bootstrap` block on the NEW templates. Nothing rotates, and the new templates do not take effect, until this is done.
+3. If the old newsyslog file was installed: `sudo rm /etc/newsyslog.d/acewatch.conf` (root rotated inside a directory `acewatch` can write).
+4. Replace the sudoers line with the `-I` form (see "The operator-side status line") via `sudo visudo -f /etc/sudoers.d/acewatch-check`, and the copy of
+   `acewatch_check.sh` in your own folder with the new one (its sudo call carries the `-I`; the old script no longer matches the new line).
+5. The log files the OLD plists made may be owned by root (launchd opened them; nobody verified as whom). Show their owners with
+   `sudo ls -ln /var/acewatch/logs` (the numeric owner must be `acewatch`'s uid, `id -u acewatch`). Any file there that `acewatch` does not own is removed AS
+   `acewatch`: `sudo -u acewatch rm /var/acewatch/logs/<file>` (`acewatch` may delete in its own directory; root never deletes inside that tree). If you
+   leave one, the wrapper REFUSES to run that job, with exit status 3 and the reason in the job's err log, so the scan does not run until the file is gone.
+   Old compressed archives (`*.gz`) of the newsyslog design are left alone by the new rotation: delete them as `acewatch` if you do not want them.
+
 ## Log rotation
 
-launchd appends `acewatch.out.log`, `acewatch.err.log` and `acewatch.weekly.out.log` / `.err.log` in `/var/acewatch/logs/` forever; the scan itself writes
-no log file. They are rotated by `acewatch` itself, never by root: `/var/acewatch/logs` is a directory `acewatch` can write, and root must not rename,
-compress, chmod or chown inside it (the rule of step 5: root never writes through a path `acewatch` could have planted a symlink on). The two plist
-templates therefore start the scan through `hooks/acewatch/acewatch_run.py`, which runs the scan unchanged, keeps its exit status, and afterwards rotates
-that job's own two logs: a log larger than 1024 KiB becomes `<name>.0` (`.0` becomes `.1`, and so on), 5 archives are kept, archives are mode 0600, and
-they are not compressed. launchd opens the log files again for every run, so a rename after the run is safe. The rotation refuses, with one line on
-stderr and nothing renamed or chmodded, a symlink or any non-regular file at a log or archive name, a file `acewatch` does not own, and a logs
-directory that is a symlink or not `acewatch`'s; a log that does not exist is skipped. Nothing needs installing beyond the two plists of step 7
-(the copy is a full checkout, so the script is already in it); there is no newsyslog file and no logrotate stanza.
+The scan itself writes no log file. The two plist templates name NO `StandardOutPath` and NO `StandardErrorPath`, so launchd opens no file anywhere. They start
+the scan through `hooks/acewatch/acewatch_run.py <logs dir> <out name> <err name> -- <scan argv>`, which runs as `acewatch` and opens the job's two logs itself
+(`acewatch.out.log` and `acewatch.err.log` for the daily job, `acewatch.weekly.out.log` and `acewatch.weekly.err.log` for the weekly one, in
+`/var/acewatch/logs/`) before it starts the scan: the directory with `O_NOFOLLOW` and owned by `acewatch`, each log relative to it with `O_NOFOLLOW`, created
+0600 and `fchmod`ed 0600, and checked on the open descriptor (a regular file owned by `acewatch`). The scan's stdout and stderr are those two descriptors, and
+the wrapper's own messages go to the err log. If a log cannot be opened safely (a symlink, a FIFO, a directory, a file `acewatch` does not own, a logs
+directory that is a symlink or not `acewatch`'s) the wrapper does NOT run the scan: it writes the reason to the err log (else to its stderr) and exits with
+status 3, so nothing ever runs unlogged. A job that cannot even start shows only as its last exit status in `sudo launchctl print system/<label>`.
 
-After the first run, check the owner of the files launchd made: `sudo ls -l /var/acewatch/logs` must show `acewatch` as the owner. A log that is
-not owned by `acewatch` is refused by name in the job's error log (the rotation never touches a file it does not own); fix it as root with
-`sudo rm <that file>` (`rm` does not follow a link) and let the next run create it again.
+After the scan the wrapper rotates the two logs, as `acewatch`, never as root (`/var/acewatch/logs` is a directory `acewatch` can write, and root must not
+open, rename, compress, chmod or chown inside it: the rule of step 5). A log larger than 1024 KiB becomes `<name>.0` (`.0` becomes `.1`, and so on), 5
+archives are kept, archives are mode 0600, and they are not compressed. The rule: the scan's output is in the live log when the log is within the limit after
+the run, and in `.0` when the run left it over the limit; the next run opens a fresh live log. The rotation refuses, with one line in the err log and nothing
+renamed or chmodded, a symlink or any non-regular file at a log or archive name and a file `acewatch` does not own. The scan's exit status is the wrapper's
+(a scan killed by signal N gives 128+N). On SIGTERM, SIGINT or SIGHUP the wrapper forwards the signal to the scan, waits for it and exits 128+N without
+rotating (the next run rotates). Nothing needs installing beyond the two plists of step 7 and the root-owned copy of step 3, which holds the script; there is
+no newsyslog file and no logrotate stanza. Linux: start the job through `acewatch_run.py` in the unit's `ExecStart` (`<venv python> -I
+<copy>/hooks/acewatch/acewatch_run.py <logs dir> <out> <err> -- <the scan argv>`) and put no `StandardOutput` or `StandardError` file in the unit.
 
-If you installed the earlier design (a root newsyslog file), remove it: `sudo rm /etc/newsyslog.d/acewatch.conf`. Root's newsyslog rotated, chmodded
-and chowned files inside a directory the sandbox user can write, which is the path that rule forbids. The new rotation leaves the old compressed
-archives (`.gz`) alone: delete them as `acewatch` if you do not want them.
+To move an install of the earlier designs to this one, follow "Upgrading an existing install" above (a root newsyslog file is removed there).
 
 ## The operator-side status line
 
@@ -348,7 +386,8 @@ exact command (python path, `-I -m ace_playbook.compile --config` and the config
 Why `-I`: sudo pins the arguments of a rule, not the working directory, and `python -m` puts the caller's working directory first on its import path.
 Without `-I`, any process running as you could run that exact command from a directory holding its own `ace_playbook` package and execute its code as
 `acewatch` (the Reader's login token, the watch store and its config). `-I` (isolated mode) drops the working directory, the user site and the
-`PYTHON*` variables from the import path, so only the venv's own `ace_playbook` (found through the editable install of step 3) can load. If you installed
+`PYTHON*` variables from the import path, so only the venv's own `ace_playbook` (found through the editable install of step 3) can load, provided
+step 3's ownership holds (the interpreter, venv and copy are root's and not group- or other-writable). If you installed
 an earlier line without `-I`, replace it now with `sudo visudo -f /etc/sudoers.d/acewatch-check`: the old line lets any process of the operator run code as
 `acewatch`.
 
