@@ -1,8 +1,10 @@
 """A model_pin the rules produce always has a title that parses to its model id, so `records.check` (verify = a grep for that id) accepts it, however long the ids are."""
 
+import hashlib
+
 import pytest
 
-from ace_playbook.compile.watch import match, pin, records
+from ace_playbook.compile.watch import match, pin, reconcile, records
 
 NOW = "2026-10-21T12:00:00Z"
 FIT = 120 - len("Replace  with  in ")                  # what the id and the successor of a title may share: 102
@@ -34,7 +36,26 @@ def test_the_boundary_around_the_title_cut(total):
     assert len(got) == 1 and records.check(got[0]) is None
     shown = records.title_model(got[0]["title"])
     assert shown[0] == mid and succ in got[0]["change"]["diff"]
-    assert (shown[1] == succ) == (total <= FIT) and (total <= FIT or (shown[1].endswith("…") and succ.startswith(shown[1][:-1])))
+    if total <= FIT:
+        assert shown[1] == succ and got[0]["title"] == f"Replace {mid} with {succ} in settings.model"[:120]          # no cut: the title is the one main wrote
+    else:
+        assert shown[1] == pin.shown(mid, succ) and len(shown[1]) == FIT - len(mid) and "…" + hashlib.sha256(succ.encode()).hexdigest()[:6] in shown[1]
+        assert succ.startswith(shown[1].split("…")[0]) and shown[1].endswith(hashlib.sha256(succ.encode()).hexdigest()[:6])
+
+
+def test_two_long_successors_with_a_common_prefix_keep_two_titles_and_two_reconcile_keys():
+    mid = "claude-" + "x" * 73                                                   # 80 characters: 22 are left for the successor, so only 15 of it show
+    prefix = "claude-" + "y" * 30                                                # 37 characters in common
+    a, b = pinned(mid, prefix + "a" * 40)[0], pinned(mid, prefix + "b" * 40)[0]
+    assert a["title"] != b["title"] and reconcile.key(a) != reconcile.key(b) and a["id"] != b["id"]       # kills "the hash suffix removed"
+    assert records.check(a) is None and records.check(b) is None and records.title_model(a["title"])[0] == mid
+
+
+@pytest.mark.parametrize("n", range(10, 81, 7))
+def test_the_title_names_the_full_id_for_every_id_length(n):
+    mid = "claude-" + "x" * (n - 7) if n > 7 else "claude-x"
+    got = pinned(mid, "claude-" + "y" * 73)
+    assert len(got) == 1 and records.check(got[0]) is None and records.title_model(got[0]["title"])[0] == mid and len(got[0]["title"]) <= 120
 
 
 def test_the_longest_id_the_rules_accept_keeps_a_command_for_the_full_id():
@@ -42,4 +63,4 @@ def test_the_longest_id_the_rules_accept_keeps_a_command_for_the_full_id():
     assert pin.SAFE.fullmatch(mid) and not pin.SAFE.fullmatch(mid + "x")
     got = pinned(mid, "claude-" + "y" * 73)
     assert len(got) == 1 and records.check(got[0]) is None and records.title_model(got[0]["title"])[0] == mid
-    assert pin.shown(mid, "claude-new") == "claude-new" and len(pin.shown(mid, "z" * 80)) == FIT - len(mid)
+    assert pin.shown(mid, "claude-new") == "claude-new" and len(pin.shown(mid, "z" * 80)) == FIT - len(mid) and pin.shown(mid, "z" * 80).endswith(hashlib.sha256(b"z" * 80).hexdigest()[:6])

@@ -86,9 +86,10 @@ def record(cls: str, title: str, ev: dict, hits: list[str], target: str, diff: s
 
 
 def _http(url: object) -> bool:
-    """An http(s) url with a host and no whitespace or control character (`urlsplit` strips some of them, a shell word must not hold them)."""
+    """An http(s) url with a host, printable characters only (no control, format or separator character) and no whitespace: `urlsplit` strips some of
+    them and a shell word must not hold them."""
     try:
-        return (isinstance(url, str) and not re.search(r"[\s\x00-\x1f\x7f]", url) and urlsplit(url).scheme in ("http", "https")
+        return (isinstance(url, str) and url.isprintable() and not re.search(r"\s", url) and urlsplit(url).scheme in ("http", "https")
                 and bool(urlsplit(url).hostname))
     except ValueError:
         return False

@@ -9,6 +9,7 @@ retiring. Hunk line numbers are `grep -n` numbers. `state` and `pinned` serve `s
 
 from __future__ import annotations
 
+import hashlib
 import re
 
 from .records import grep_cmd, record, title_model
@@ -84,9 +85,11 @@ def _diff(files: dict, rx: re.Pattern, new: str) -> str:
 
 def shown(mid: str, new: str) -> str:
     """`new` as the title of a model_pin names it. The title is cut at 120 characters and `title_model` needs "Replace <id> with <successor> in " whole, so a
-    successor that does not fit is shortened (with "…"), never the id (`SAFE` keeps an id at 80 characters, so the id always fits); the diff keeps `new`."""
+    successor that does not fit is shortened to its first characters, "…" and the first 6 hex of the sha256 of the whole successor (two successors with a
+    common prefix stay two titles and two reconcile keys), never the id (`SAFE` keeps an id at 80 characters, so the id and 15 characters of the successor
+    always fit); the diff keeps `new`."""
     room = TITLE_ROOM - len(mid)
-    return new if len(new) <= room else new[:room - 1] + "…"
+    return new if len(new) <= room else new[:room - 7] + "…" + hashlib.sha256(new.encode()).hexdigest()[:6]
 
 
 def model_pin(inv: dict, results: list[dict], now: str) -> list[dict]:

@@ -113,6 +113,14 @@ def test_a_control_character_in_a_url_or_a_map_path_is_refused(ch):
     assert vet.vet(rec("model_pin", FORGED), {**CTX, "paths": {"k1": [path]}}) == (None, "verify")
 
 
+@pytest.mark.parametrize("ch", ["\x9b", "\u200b", "\u202e", "\ufeff", "\u2028"])
+def test_a_format_or_separator_character_in_a_url_is_refused(ch):
+    url = f"https://example.test/a{ch}b"                                 # neither a control character of ASCII nor whitespace, yet not printable
+    assert records.check(rec("lead", f"curl -gsI -- '{url}' | head -1", url=url)) == "verify"       # kills "_http does not require isprintable"
+    assert vet.vet(rec("lead", FORGED, "feed", url=url), CTX) == (None, "verify")
+    assert not records._http(url) and not records._http("https://e.test/a\x00b") and records._http("https://e.test/a%20b?x=é")
+
+
 def test_a_url_with_whitespace_is_not_http_for_check():
     url = "https://example.test/a b"
     assert records.check(rec("lead", f"curl -gsI -- '{url}' | head -1", url=url)) == "verify"          # kills "_http allows whitespace" (ARG allows a space inside quotes)
@@ -144,7 +152,7 @@ def test_vet_rebuilds_a_retirement_lead_from_the_operators_own_paths_and_other_l
 
 
 def test_vet_rejects_a_record_with_no_safe_rebuild():
-    assert vet.vet(forged("docs", target="k1"), CTX) == (None, "verify")                   # a docs page that is not a mapped page
+    assert vet.vet(forged("docs", target="k1"), CTX) == (None, "verify")                   # a docs record whose target is a key, not a mapped docs URL (an unmapped URL is `target`)
     assert vet.vet(forged("model_pin", target="claude_version"), CTX) == (None, "verify")   # a model_pin whose target is not a map key
     assert vet.vet(forged("model_pin", title="Replace -x with y in k1"), CTX) == (None, "verify")     # an id that is an option
     assert vet.vet(forged("model_pin"), {**CTX, "paths": {"k1": ["-x.json"]}}) == (None, "verify")    # a path that is an option: a refusal, not a traceback
@@ -200,6 +208,25 @@ def test_a_docs_copy_is_rebuilt_from_the_mapped_target(world, capsys):
     out = put_and_import(world, capsys, page)
     assert out[0] == "import: 1 imported, 0 duplicate, 0 rejected"
     assert json.loads((world.wd / "proposals" / (page["id"] + ".json")).read_text())["verify"] == f"curl -gsI -- {DOCS} | head -1"
+
+
+def stored_card(tmp_path, capsys, r):
+    wd = store.ensure(tmp_path / "watch")
+    assert store.write_proposal(wd, r)                                       # written straight into the store, as an older version or a hand edit would
+    cli._card(store.load_proposals(wd)[0], 1, 1)
+    return next(ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("  verify:"))
+
+
+def test_the_queue_card_withholds_a_stored_command_this_version_would_not_make(tmp_path, capsys):
+    forged_k = rec("lead", FORGED)
+    assert stored_card(tmp_path, capsys, forged_k) == f"  verify:   {cli.WITHHELD}"                # kills "the verify_ok gate removed from the card"
+    assert FORGED not in capsys.readouterr().out
+    glob = "http://x.test/[1-9]"
+    old_glob = rec("lead", f"curl -sI '{glob}' | head -1", url=glob)
+    assert stored_card(tmp_path / "b", capsys, old_glob) == f"  verify:   {cli.WITHHELD}"
+    for n, ok in enumerate((rec("lead", f"curl -sI {URL} | head -1"), rec("lead", records.curl_cmd(URL), "k2"), rec("model_pin", GREP))):
+        assert stored_card(tmp_path / f"c{n}", capsys, ok) == f"  verify:   {ok['verify']}"          # a normal record, old form or new, shows its command
+    assert cli._command({}) == cli.WITHHELD and cli._command({"verify": 5, "class": "lead"}) == cli.WITHHELD     # a malformed record is not an error
 
 
 def test_the_queue_card_marks_a_command_it_cut(capsys):

@@ -310,7 +310,7 @@ the next `compile status` or nightly; the heartbeat tile reports the staleness r
   vetted class, target and evidence URL, from the model id of the code-made title and, for a model_pin and a retirement lead, from the files of the
   operator's own map (`records.check` also ties the command to the class, refuses an argument that begins with `-`, so the copy cannot make the queue
   card show a command with an option such as `curl -K`, and accepts a curl URL with `[ ] { }` only in the `curl -gsI` form that new records get; the
-  card marks a command it cut) and its title shows ` (imported)`; a forged quote, URL or title can still
+  card marks a command it cut, and a proposal stored earlier whose command this version would not make is shown without it) and its title shows ` (imported)`; a forged quote, URL or title can still
   mislead a reader of the queue. An own scan's diff always wins over a diff-less imported twin (same id: the file is replaced in place; another id: the
   twin is closed as superseded, also when the own id is replaced; the record with a diff survives whatever the
   `created` stamps; an expired, auto-closed or forged-key twin is replaced too). A dismissal or an accept of an imported twin is a

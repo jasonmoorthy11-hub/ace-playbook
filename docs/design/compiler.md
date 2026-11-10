@@ -1387,7 +1387,7 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   installed `claude`), `docs` (a mapped page's sitemap `lastmod` moved, unless it is more than a day ahead of the scan, or its `.md` hash changed; a first
   sight is a baseline, and a future `lastmod` is never remembered) and
   `lead` (a tier-1 feed entry with a `lead_keywords` term). `check` enforces the record shape, the caps, the id, the diff hash, the
-  verify templates (the command of the record's class: no argument begins with `-`, a curl argument is the record's own http(s) url without whitespace or control characters) and "tier-1 evidence alone never carries a diff". `match.py` is the entry (`candidates`); the pieces are `records.py`
+  verify templates (the command of the record's class: no argument begins with `-`, a curl argument is the record's own http(s) url with printable characters only and no whitespace) and "tier-1 evidence alone never carries a diff". `match.py` is the entry (`candidates`); the pieces are `records.py`
   (`record`, `make_id`, `check`), `pin.py` (the `model_pin` rule, `state`, `pinned`, `model_of`) and `reconcile.py` (below).
   `change.target` is never page text: it is an inventory key, a mapped docs URL, a source id or `claude_version`, and a docs title is
   built from the mapped URL. `inventory.py` splits files on `\n` (keeping `\r`) and sets a `truncated` flag on a file cut at the line cap;
@@ -1411,8 +1411,8 @@ diff_sha256}, verify, expires, status}`. `id` is `W-` plus the first 16 hex (64 
 pre-occupy a predicted id) of sha256 of `class|target|evidence sha|quote` (with `|model id` appended when the code-made title names a model), so a
 re-scan dedupes; a record stored with the legacy `W-<8 hex>` id stays readable (`store.ID` and `records.check` accept both widths: the legacy id is a
 prefix of the new one); `title` is at most 120 characters and `quote` 400, both cleaned
-of control characters (a model_pin title whose successor would not fit in the 120 is written with the successor cut and ending in `…`, never the id, so
-`title_model` still names the id; the diff keeps the full successor), and the quote is ONE line of the fetched body, verbatim (`records.quote_line`, empty when no line is clean, which
+of control characters (a model_pin title whose successor would not fit in the 120 is written with the successor cut, then `…` and 6 hex of the sha256 of the whole successor (two long successors with a common prefix stay two
+titles), never the id, so `title_model` still names the id; the diff keeps the full successor), and the quote is ONE line of the fetched body, verbatim (`records.quote_line`, empty when no line is clean, which
 drops the record; `match.candidates` runs `check(rec, body)` with the body of the result that carries the sha256); `verify` comes from a fixed template per
 class (`grep -n "<model_id>" <paths>` for a model_pin and a retirement lead, `claude --version` for a version, `curl -gsI -- <url> | head -1` for a docs page, its
 mapped url, and for a lead, its evidence url, `-g` so that curl does not expand `[ ]` or `{ }` in the url; `records.check` ties the command to the class
@@ -1456,7 +1456,7 @@ always null (the id does not depend on them, and `records.check` passes the stor
 it from the vetted class, target, title and first evidence url (`claude --version`; `curl -gsI -- <url> | head -1` with the mapped target for a docs page and the
 evidence url for a lead; `grep -n "<model id>" -- <paths>` with the files that the operator's own `watch_inventory_map` lists for the target (`inventory.names`, the
 listing `inventory.build` uses) for a model_pin and a retirement lead), and a
-record with no safe rebuild (a docs page that is not mapped, a model_pin whose map key lists no file, an id or a path that begins with `-`, a url or path that
+record with no safe rebuild (a docs record whose target is not a mapped docs URL but a key or a source id (an unmapped docs URL is rejected as `target`), a model_pin whose map key lists no file, an id or a path that begins with `-`, a url or path that
 cannot be one shell word) is rejected, reason `verify`. The queue card shows the stored command, and ` …(truncated, N chars)` after a command it cut at 300 characters. A diff comes only from the operator's own `watch scan`, which
 supersedes the import (below). The summary counts `N imported without diff` for a copy's diff that was dropped. The title carries a visible ` (imported)`
 (a title too long to carry it is rejected, reason `title`); `watch status`, the

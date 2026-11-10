@@ -2,7 +2,7 @@
 
 The record is built by the EXISTING `records.record` (so the id, the 30-day expiry and the shape are the W1 ones) as a `lead`: no inventory
 hits, target = the item's source id (the records.py contract; the W1 rule-path lead for the same entry gets the same id, so one entry is one
-lead), diff None, tier-1 evidence, and the per-class `verify` template for a lead (`curl -sI -- <url> | head -1`). `records.check` must pass
+lead), diff None, tier-1 evidence, and the per-class `verify` template for a lead (`curl -gsI -- <url> | head -1`). `records.check` must pass
 against the item text, else ValueError with its reason (the caller counts the item as rejected). A model never writes a diff, and tier-1
 evidence alone cannot carry one (`records.check`).
 """

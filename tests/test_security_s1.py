@@ -488,7 +488,7 @@ def test_n3_scrub_scan_numbers_its_lines_like_line_of_and_a_megabyte_of_emails_i
 # ------------------------------------------------------------------ F8: 64-bit proposal ids, legacy 32-bit ids stay readable
 def make(quote="the quote", cls="docs", target="https://docs.example.test/a", sha="1" * 64):
     ev = {"url": "https://docs.example.test/a", "sha256": sha, "quote": quote, "tier": 0}
-    return records.record(cls, "A title", ev, [], target, None, "claude --version", "2026-10-21T12:00:00Z")
+    return records.record(cls, "A title", ev, [], target, None, records.curl_cmd(target), "2026-10-21T12:00:00Z")
 
 
 def test_f8_make_id_is_w_plus_16_hex_and_a_different_quote_gives_a_different_id():

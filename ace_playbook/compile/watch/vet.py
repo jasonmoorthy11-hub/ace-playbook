@@ -13,7 +13,7 @@ evidence and a title, and a diff comes only from the operator's own `watch scan`
 `verify` is never taken from the copy either: `rebuild` makes it from fields already vetted, the way a locally made record of that class gets it
 (`claude --version` for a version; `curl -gsI -- <url> | head -1` for a docs page, the url its mapped target, and for a lead, the url its first evidence
 url; `grep -n "<model id>" -- <paths>` for a model_pin and a retirement lead, the id the code-made title names and the paths the files that the
-OPERATOR's own map lists for the target). A record with no such rebuild (a docs page that is not mapped, a model_pin whose target is a map key that lists
+OPERATOR's own map lists for the target). A record with no such rebuild (a docs record whose target is not a mapped docs URL but a key or a source id (an unmapped docs URL is rejected as `target`), a model_pin whose target is a map key that lists
 no file, an id or a path that `records.check` refuses) is rejected with the reason `verify`; the copy's own `verify` text decides nothing that is stored or shown.
 """
 
