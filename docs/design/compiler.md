@@ -1481,15 +1481,17 @@ waits for a free slot). `queue` writes `diff_sha256
 <hash|none>` as the note of an `accepted` row, so an
 accept of a record that was replaced afterwards is visibly stale.
 
-The sandbox logs (`acewatch.out.log`, `acewatch.err.log`, `acewatch.weekly.out.log`, `acewatch.weekly.err.log`, written by launchd from the two plists)
-are rotated by `hooks/acewatch/newsyslog.acewatch.conf`, a root-installed newsyslog(8) template (mode 600, keep 5, 1024 KiB, compressed; SANDBOX.md "Log
-rotation"). No code on the scan path rotates or writes a log; `tests/test_acewatch_rotation.py` pins that the template names exactly the plists' four paths.
+The sandbox logs (`acewatch.out.log`, `acewatch.err.log`, `acewatch.weekly.out.log`, `acewatch.weekly.err.log`, written by the two jobs' stdout and stderr, which `acewatch_run.py` opens itself; the plists name no StandardOutPath or StandardErrorPath)
+are rotated by the `acewatch` user itself, never by root (a root newsyslog job inside a directory the sandbox user can write was retired): the two plists start
+the scan through `hooks/acewatch/acewatch_run.py`, which opens that job's two logs as acewatch (refusing a symlink, FIFO, directory, hard link or foreign file and then NOT running the job,
+exit 3), runs it unchanged and rotates them afterwards, except when the wrapper itself was sent SIGTERM, SIGINT or SIGHUP (mode 600, keep 5, 1024 KiB, not compressed; it refuses symlinks and files it does not own; SANDBOX.md "Log rotation"). No code on the scan path itself rotates or writes a log;
+`tests/test_acewatch_rotation.py` pins the rotation, `tests/test_acewatch_wrapper.py` the wrapper, and the plists pass exactly four log names and no launchd log path.
 
 The operator-side status line is the config key `acewatch_check` (an optional path, `~` expanded, type-checked only like `backup_check`): the nightly
 (`nightly_notes.collect`, whose `CHECKS` is a tuple of (key, label)) runs `<path> --check` and turns the first stdout line (stripped, at most 80 characters,
 no `/`, no colon in the first word) into a health note, in the order backup, brain, acewatch; a missing script, a non-zero exit, a timeout or an
 empty line is `acewatch check failed`. The arm notes stay first (`nightly_sweep.py`). `hooks/acewatch/acewatch_check.sh` is the sample: it runs
-`sudo -n -u acewatch <python> -m ace_playbook.compile --config <config> watch status` and prints `acewatch ` plus the first `open ...`, `none` or
+`sudo -n -u acewatch <python> -I -m ace_playbook.compile --config <config> watch status` (the `-I` keeps the caller's working directory off the import path; the documented sudoers line carries it too) and prints `acewatch ` plus the first `open ...`, `none` or
 `disabled` line. `status.py` is untouched; `compile status` shows the note in its `notes:` line.
 
 #### Reader (W2, as built)

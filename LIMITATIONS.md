@@ -630,11 +630,13 @@ wrote it, so what it prints is only as good as the script (a check line is shown
 rejected so it cannot pose as a digest category such as `silent:`); `compile status` shows at most four notes, each cut to 80 characters;
 the arm notes come first, so with two of them plus the backup and brain notes the `acewatch` note is not shown there (it stays in `health.json`).
 
-The sandbox logs in `/var/acewatch/logs` are rotated only if the operator installs the newsyslog template (`hooks/acewatch/newsyslog.acewatch.conf`) as
-root; nothing in this repository installs it, and the other launchd jobs' logs (nightly, brief) are not covered by it.
+The sandbox logs in `/var/acewatch/logs` are rotated by the `acewatch` user itself (`hooks/acewatch/acewatch_run.py`, started by the two plist templates, which name no launchd log path: the
+wrapper opens the logs itself as that user and rotates them after each scan unless the wrapper itself was sent SIGTERM, SIGINT or SIGHUP: keep 5, 1024 KiB, no compression), never by root, and only when the operator installs those plists; the other launchd jobs' logs (nightly,
+brief) are not covered by it. There is no newsyslog template any more (root must not work inside a directory the sandbox user can write).
 
 The `acewatch` note is the same kind of text: whatever the operator's `acewatch_check` script prints (the sample prints the first `open ...`, `none` or
-`disabled` line of `watch status` as `acewatch`), not a count this repository verified. The sudoers line it needs is the operator's, installed by hand.
+`disabled` line of `watch status` as `acewatch`), not a count this repository verified. The sudoers line it needs is the operator's, installed by hand; it
+names `python -I -m ace_playbook.compile ...` (the `-I` keeps the caller's working directory off the import path; SANDBOX.md "The operator-side status line").
 
 ## Platform assumptions
 

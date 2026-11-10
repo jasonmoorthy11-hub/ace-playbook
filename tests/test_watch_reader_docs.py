@@ -42,7 +42,7 @@ def test_the_acewatch_templates_lint_and_carry_the_documented_keys():
         assert d["UserName"] == "acewatch" and args[-4:] == ["watch", "scan", "--tier", tier]
         assert "-m" in args and "ace_playbook.compile" in args
         assert set(d["EnvironmentVariables"]) == {"ACE_PLAYBOOK_CONFIG", "HOME", "PATH"} and d["EnvironmentVariables"]["PATH"] == "/usr/bin:/bin"
-        assert d["StandardOutPath"].startswith("__ACEWATCH_HOME__/") and d["StandardErrorPath"].startswith("__ACEWATCH_HOME__/")
+        assert "StandardOutPath" not in d and "StandardErrorPath" not in d       # the wrapper opens the logs (tests/test_acewatch_rotation.py)
         assert d["EnvironmentVariables"]["ACE_PLAYBOOK_CONFIG"].startswith("__ACEWATCH_HOME__/") and "RunAtLoad" not in d
     assert daily["StartCalendarInterval"] == {"Hour": 4, "Minute": 30}
     assert weekly["StartCalendarInterval"] == {"Weekday": 0, "Hour": 5, "Minute": 0}
