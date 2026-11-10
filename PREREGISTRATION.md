@@ -810,8 +810,8 @@ Switch-on order: steps 1-5 before `holdout_start` (a step 1-5 after it is mapped
   2026-11-10T00:38:50Z; a docs-lens review confirmed the fill; merged as 2c3ebd5 with the same sha256. Step 5 follows in its own
   dated line below. By (k) the read stays confirmatory: `holdout_start` and `holdout_end` are unchanged, sessions with any injection
   row before step 5 are `holdout_off` or `mixed_rate` exclusions, and the read reports the step-5 date and the shortened window.
-- 2026-11-10: (c)/(k)/(j) switch-on record `holdout_records_switchon_20261110T003720Z.txt` in the data dir, sha256
-  bc3858781e68573225fd2864a69cd1d029b596a10fe2062bac20426a2409485f (7 rule lines, none in the global CLAUDE.md).
+- 2026-11-10: (c)/(k)/(j) switch-on record in the data dir (file `holdout_records_switchon_<stamp>.txt`, stamp 20261110T003720Z),
+  sha256 bc3858781e68573225fd2864a69cd1d029b596a10fe2062bac20426a2409485f (7 rule lines, none in the global CLAUDE.md).
 - 2026-11-10: interpreter: `env | grep -c -E '^(ACE_PLAYBOOK_HOME|ACE_PYTHON)='` 0; `command -v python3` /opt/homebrew/bin/python3;
   Python 3.15.2.
 - 2026-11-10: checkout `$HOME/ace-playbook` at 9ad4c92ed6f81d4254ef7d1354111095ea96e067 at the switch-on (a local merge: README,
