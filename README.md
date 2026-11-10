@@ -6,8 +6,9 @@ that repository context files do not generally improve task success and add over
 instead of impressions: **when an agent is reminded of a specific lesson at the start of a session, does it make that specific mistake
 less often?**
 
-**Status (2026-11-06): the lab experiment has a result, the first field experiment was called with no true positives (a null by construction), and the second field
-experiment's registration is written and reviewed, not yet sealed, and waits for its seal and switch-on.** Read [LIMITATIONS.md](LIMITATIONS.md) for what is and is not shown.
+**Status (2026-11-09).** The lab experiment has a result. The first field experiment was called with no true positives (a null by
+construction). The second field experiment's registration is written and reviewed but not yet sealed, and waits for its seal and
+switch-on. Read [LIMITATIONS.md](LIMITATIONS.md) for what is and is not shown.
 
 Not affiliated with or endorsed by Anthropic or by the authors of the ACE paper.
 
@@ -67,7 +68,7 @@ Counting the same detectors over the operator's 28 real interactive sessions (20
 | Leaving plan mode while the user's question is unanswered | 7 of 28 (25 %) |
 | The first experiment's `rm -rf` detector fired (all false alarms) | 2 of 28 (7 %) |
 
-## What is running now
+## What comes next
 
 - **Field test (registration written and reviewed, not yet sealed; analysis merged; switch-on date to be set):** in each real session, each of the three lessons above
   is shown or hidden at random; the hooks stay on in every session, so nothing unsafe is allowed through. The outcome is how often
@@ -80,6 +81,8 @@ The code was written by Claude agents (Claude Code) under the author's direction
 rounds by a separate Claude Opus agent before merging, and the commit trailers show which model wrote what.
 
 ## Details
+
+The technical reference follows: the modules, how to run it, and the repository layout.
 
 ## What stage 1 contains
 
