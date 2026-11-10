@@ -24,7 +24,8 @@ a select holding a barrier hides the REST too, the adoption agency leaves an ele
 above a select makes a table tag that ends it poison the rest (after a template-closed select the next cell tag hides the rest), a table in a
 select is no select in a table, a `col` or `colgroup` in a select in a table hides the rest (the older reading ignores it, the newer ends the
 select through the table steps), `</select>` needs scope. More than
-`htmlrules.MAX_DEPTH` open elements raise `htmlrules.TooDeep` (a ValueError: a parse failure). Tag names are compared as written
+`htmlrules.MAX_DEPTH` open elements, or more than `htmlrules.MAX_RECONSTRUCT` nodes made by re-opening formatting elements, raise `htmlrules.TooDeep` (a
+ValueError: a parse failure). Tag names are compared as written
 (`</x:div>` does not close `<div>`). `markdown=True` is for Markdown pages: a raw-text or content-hiding opener (`mdrules.RAW_TEXT`) is prose only in a
 code span that opens and closes on one plain line, or in a fenced block, outside HTML blocks and with no closer after it (`mdrules`); anywhere else the
 rules above apply as in HTML. Link reference definitions (`[x]: url "title"`) are not rendered: with `markdown` the strictly valid ones are dropped from
@@ -54,7 +55,7 @@ def plain(text: str) -> str:
 
 
 def strip_hidden(html: str, markdown: bool = False, definitions: bool | None = None) -> str:
-    """The visible text of `html` (see the module docstring); "" when the parser gives up; TooDeep (ValueError) past MAX_DEPTH."""
+    """The visible text of `html` (see the module docstring); "" when the parser gives up; TooDeep (ValueError) past MAX_DEPTH or MAX_RECONSTRUCT."""
     defs = markdown if definitions is None else definitions
     src = markdown_code_as_text(html, markdown, markdown and defs)
     try:

@@ -1267,7 +1267,8 @@ when a scan runs (tested in `tests/test_compile_watch_cli.py`).
   one function for the table family (table, caption, table body, row, cell, colgroup), select, template, after body, after after body, and
   `m_foreign` for foreign content. A frameset that replaces the body, or a `<template shadowrootmode>` whose host is `html`, `head` or the
   document, sets `Tree.dead` (nothing is shown); `Tree.hb` records every `html`/`body` start tag (a hiding one hides the page). Past 512
-  open elements, or past 500,000 nodes made by `reconstruct` (`MAX_RECONSTRUCT`, counted per document), the build raises `TooDeep` (a `parse` drop). The two consumers: `treewalk.visible` (iterative; an element hides when
+  open elements, or past 500,000 nodes made by `reconstruct` (`MAX_RECONSTRUCT`, counted per tree: a page with `<select` is built twice, once per
+  reading), the build raises `TooDeep` (a `parse` drop). The two consumers: `treewalk.visible` (iterative; an element hides when
   `own_attrs` says so or a style rule matches its tag, class or id; `br` and `hr` print a blank, blocks a line, the nodes the builder made up
   print none) and `treestyle` (below). The rules that matter: a block start tag of the `p`-closing set (address, article, aside,
   blockquote, center, details, dialog, dir, div, dl, fieldset, figcaption, figure, footer, form, h1 to h6, header, hgroup, hr, main, menu,

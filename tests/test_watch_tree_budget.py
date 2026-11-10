@@ -68,3 +68,57 @@ def test_three_misnested_formatting_elements_over_20000_paragraphs_still_parse(m
     assert out.split() == ["x"] + ["a"] * 20_000
     assert 60_000 <= len(made) < MAX_RECONSTRUCT
     assert MAX_RECONSTRUCT >= 5 * 60_000                                              # a budget with room (see htmlrules)
+
+
+def test_the_budget_boundary_is_exact(monkeypatch):
+    monkeypatch.setattr(treebuild, "MAX_RECONSTRUCT", 10)
+    page = "<p><b id=0><b id=1>" + "<p>a" * 5                                        # two closed b re-opened per paragraph: 5 paragraphs make exactly 10
+    assert treebuild.build(page).recon == 10                                         # at the budget: fine (a `>=` check raises here)
+    with pytest.raises(TooDeep):
+        treebuild.build(page + "<p>a")                                               # 12 > 10
+
+
+# ------------------------------------------------------------------ the per-copy work of a re-opened element is bounded too
+def attr_entries(monkeypatch, page: str) -> int:
+    """How many attribute entries `treewalk.by_attrs` (the id / class decision of a node) was asked to read in one `strip_hidden`."""
+    from ace_playbook.compile.watch import treewalk
+    seen, real = [], treewalk.by_attrs
+    monkeypatch.setattr(treewalk, "by_attrs", lambda attrs, classes, ids: seen.append(len(attrs)) or real(attrs, classes, ids))
+    strip_hidden(page)
+    return sum(seen)
+
+
+def test_the_class_and_id_decision_of_an_attribute_list_is_made_once_however_often_the_element_is_reopened(monkeypatch):
+    def page(n: int) -> str:
+        return "<style>.z{display:none}</style><p><b" + " a" * 10_000 + ">" + "<p>a" * n
+    small, large = attr_entries(monkeypatch, page(200)), attr_entries(monkeypatch, page(2_000))
+    assert small == large and 10_000 <= large <= 10_010, (small, large)              # on the branch before the memo: 10,000 per re-opened copy (2,000,000)
+
+
+def test_a_long_class_attribute_and_a_long_attribute_list_are_read_once(monkeypatch):
+    page = '<style>.z{display:none}</style><p><b class="' + "a " * 5_000 + '">' + "<p>a" * 1_000
+    assert attr_entries(monkeypatch, page) <= 10                                     # one entry (the class), not one per copy
+
+
+def test_long_attribute_lists_over_many_reopened_copies_finish_in_a_generous_time():
+    import time
+    for head in ("<style>.z{display:none}</style><p><b" + " a" * 20_000 + ">", '<style>.z{display:none}</style><p><b class="' + "a " * 20_000 + '">'):
+        t0 = time.monotonic()
+        assert strip_hidden(head + "<p>a" * 20_000).count("a") >= 20_000
+        assert time.monotonic() - t0 < 30.0                                          # measured ≈ 0.3 s; the branch before the memo needed 240+ s at 197,000 copies
+
+
+def test_removing_a_formatting_element_does_not_scan_the_leftover_markers(monkeypatch):
+    compares = []
+    monkeypatch.setattr(treebuild.Node, "__eq__", lambda self, other: compares.append(1) or self is other, raising=False)       # `list.remove` compares from the front
+
+    def page(cells: int) -> str:
+        return "<table><tr>" + ("<td>" + "<object>" * 50) * cells + "</table>" + "<b></b>" * 100
+    treebuild.build(page(4))
+    small = len(compares)
+    compares.clear()
+    treebuild.build(page(40))
+    assert small == len(compares) and small < 100, (small, len(compares))           # before: one comparison per leftover marker per `</b>` (2,000 x 100)
+    t = treebuild.Tree()
+    with pytest.raises(ValueError):                                                  # an element that is not in the list: as `list.remove` said
+        t.fmt_del(treebuild.Node("b"))

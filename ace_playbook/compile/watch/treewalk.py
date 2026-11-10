@@ -83,14 +83,26 @@ class Node:
         n != "select" and t.process(k, n, a, sc)
 
 
-def hidden(name: str, own: bool, attrs, rules: tuple) -> bool:
+def by_attrs(attrs, classes, ids) -> bool:
+    """Does the `id` or a `class` of these attributes match a hiding rule? A pure function of (attrs, classes, ids): the first copy of a repeated attribute wins."""
+    d = {k: v or "" for k, v in reversed(attrs)}
+    return d.get("id", "").lower() in ids or bool(classes & set(d.get("class", "").lower().split()))
+
+
+def hidden(name: str, own: bool, attrs, rules: tuple, memo: dict | None = None) -> bool:
+    """Is this element hidden by itself (`own`), by its tag, or by its id or class? `memo` (one per walk, so one `rules`): `by_attrs` of an attribute list, keyed on
+    the list itself (kept alive in the entry, so its `id` is never reused): the copies `Tree.reconstruct` makes share the list of the element they copy."""
     classes, ids, tags = rules
     if own or name in tags:
         return True
-    if classes or ids:
-        d = {k: v or "" for k, v in reversed(attrs)}                 # the first copy of a repeated attribute wins
-        return d.get("id", "").lower() in ids or bool(classes & set(d.get("class", "").lower().split()))
-    return False
+    if not (classes or ids):
+        return False
+    if memo is None:
+        return by_attrs(attrs, classes, ids)
+    hit = memo.get(id(attrs))
+    if hit is None:
+        hit = memo[id(attrs)] = (attrs, by_attrs(attrs, classes, ids))
+    return hit[1]
 
 
 def visible(tree, rules: tuple) -> str:
@@ -98,6 +110,7 @@ def visible(tree, rules: tuple) -> str:
     if tree.dead or any(hidden(name, own_attrs(name, attrs), attrs, rules) for name, attrs in tree.hb):
         return ""
     out: list[str] = []
+    memo: dict = {}
     todo = [(tree.root.kids, 0, "")]                                 # (children, next index, closer) of the open elements
     while todo:
         kids, i, close = todo.pop()
@@ -106,7 +119,7 @@ def visible(tree, rules: tuple) -> str:
             if c.__class__ is str:
                 out.append(c)
                 continue
-            blk, hid = "\n" if c.name in BLOCK and not c.syn else "", hidden(c.name, c.own, c.attrs, rules)
+            blk, hid = "\n" if c.name in BLOCK and not c.syn else "", hidden(c.name, c.own, c.attrs, rules, memo)
             out.append(" " if c.name in ("br", "hr") and not hid else blk)
             if hid or not c.kids:
                 out.append("" if c.name in ("br", "hr") else blk)
