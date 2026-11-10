@@ -4,10 +4,13 @@
     <venv python> -I <copy>/hooks/acewatch/acewatch_run.py <logs dir> <out name> <err name> -- <the job's argv>
 
 The two LaunchDaemon templates name NO StandardOutPath / StandardErrorPath, so launchd opens no file anywhere. This wrapper opens the two logs as the running
-user (`acewatch`) before it starts the job: the directory with O_NOFOLLOW and owned by us, each log relative to that directory descriptor with O_NOFOLLOW,
-mode 0600 (created 0600, fchmod 0600), and a descriptor check (regular file, ours; a FIFO, directory, symlink or somebody else's file is refused). The job's
-stdout and stderr ARE those descriptors, and the wrapper's own messages go to the err log. If a log cannot be opened safely the job is NOT run: the reason goes
-to whatever of the two descriptors exists (else to the inherited stderr) and the exit status is 3. Nothing runs unlogged.
+user (`acewatch`) before it starts the job: the directory with O_NOFOLLOW and owned by us (a MISSING directory is created, 0700, only its last component and only
+under an existing real directory we own), each log relative to that directory descriptor with O_NOFOLLOW, mode 0600 (created 0600, fchmod 0600), and a
+descriptor check (a regular file with one link, ours; a FIFO, directory, symlink, hard link or somebody else's file is refused). The job's stdout and stderr ARE
+those descriptors (its stdin is /dev/null and no other descriptor is passed on), and the wrapper's own messages go to the err log.
+If a log cannot be opened safely the job is NOT run and the exit status is 3. Nothing runs unlogged. Where the reason goes: the ERR log is opened first; if it opens,
+every message (an out-log refusal included) goes there; if the err log is refused, the reason goes to the out log if that opens; only if neither opens (or the
+directory is refused) does it go to the inherited stderr, which launchd discards: then the only trace is the last exit status 3 in `launchctl print`.
 
 After the job, a log larger than 1024 KiB becomes `<name>.0`, `<name>.0` becomes `<name>.1` and so on; 5 archives are kept (mode 0600, not compressed). The rule:
 the job's output is in the LIVE log when that log was within the limit after the run, and in `.0` when the run left it over the limit. The next run opens a fresh
@@ -41,13 +44,40 @@ def _lstat(name: str, dir_fd: int):
 
 
 def _plain_and_ours(st, name: str) -> None:
-    if not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid():
-        raise Refused(f"{name} is not a regular file owned by this user")
+    if not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid() or st.st_nlink != 1:
+        raise Refused(f"{name} is not a regular file with one link owned by this user")
 
 
-def _open_dir(logdir: str) -> int:
+def _make_dir(logdir: str) -> None:
+    """Create the MISSING last component of `logdir` (0700): only under an existing real directory (not a symlink) owned by the running user."""
+    parent, leaf = os.path.split(logdir.rstrip("/"))
+    if leaf in ("", ".", "..") or not parent:
+        raise Refused(f"{logdir!r} is not a directory path that can be created")
+    try:
+        parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise Refused(f"the log directory is missing and its parent cannot be opened without following a link ({exc.strerror})") from exc
+    try:
+        if os.fstat(parent_fd).st_uid != os.geteuid():
+            raise Refused("the log directory is missing and its parent is not owned by this user")
+        try:
+            os.mkdir(leaf, 0o700, dir_fd=parent_fd)
+        except FileExistsError:
+            pass
+        except OSError as exc:
+            raise Refused(f"the log directory cannot be created ({exc.strerror})") from exc
+    finally:
+        os.close(parent_fd)
+
+
+def _open_dir(logdir: str, create: bool = False) -> int:
     try:
         dir_fd = os.open(logdir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except FileNotFoundError as exc:
+        if not create:
+            raise Refused(f"the log directory cannot be opened ({exc.strerror})") from exc
+        _make_dir(logdir)
+        return _open_dir(logdir)
     except OSError as exc:
         raise Refused(f"cannot open the log directory without following a link ({exc.strerror})") from exc
     if os.fstat(dir_fd).st_uid != os.geteuid():
@@ -129,7 +159,7 @@ def _say(message: str, err_fd: int | None, out_fd: int | None) -> None:
     for fd in (err_fd, out_fd):
         if fd is not None:
             try:
-                os.write(fd, line.encode())
+                os.write(fd, line.encode(errors="backslashreplace"))
                 return
             except OSError:
                 pass
@@ -148,7 +178,7 @@ def run_job(command: list[str], out_fd: int, err_fd: int) -> tuple[int, int]:
     old = {s: signal.signal(s, forward) for s in FORWARDED}
     try:
         try:
-            state["proc"] = subprocess.Popen(command, stdout=out_fd, stderr=err_fd)
+            state["proc"] = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=out_fd, stderr=err_fd, close_fds=True)
         except OSError as exc:
             _say(f"cannot start the job ({exc.strerror})", err_fd, out_fd)
             return 127, state["got"]
@@ -167,17 +197,29 @@ def main(argv: list[str]) -> int:
         return 2
     logdir, out_name, err_name, command = argv[1], argv[2], argv[3], argv[5:]
     out_fd = err_fd = None
+    refusals = []
     try:
         if out_name == err_name:
             raise Refused("the out and err logs must be two different files")
-        dir_fd = _open_dir(logdir)
-        try:
-            out_fd = open_log(dir_fd, out_name)
-            err_fd = open_log(dir_fd, err_name)
-        finally:
-            os.close(dir_fd)
+        dir_fd = _open_dir(logdir, create=True)
     except Refused as exc:
-        _say(f"log refused, the job was NOT run: {exc}", err_fd, out_fd)
+        _say(f"log refused, the job was NOT run: {exc}", None, None)           # no log to write to: the inherited stderr
+        return REFUSED_STATUS
+    try:
+        for name in (err_name, out_name):                                      # the ERR log first: every later message goes there when it opens
+            try:
+                fd = open_log(dir_fd, name)
+            except Refused as exc:
+                refusals.append(str(exc))
+                continue
+            if name == err_name:
+                err_fd = fd
+            else:
+                out_fd = fd
+    finally:
+        os.close(dir_fd)
+    if refusals:
+        _say(f"log refused, the job was NOT run: {'; '.join(refusals)}", err_fd, out_fd)       # err log, else out log, else stderr
         return REFUSED_STATUS
     status, got = run_job(command, out_fd, err_fd)
     if got:

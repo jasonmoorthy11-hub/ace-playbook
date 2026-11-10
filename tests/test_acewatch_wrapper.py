@@ -87,35 +87,54 @@ def test_the_output_is_in_the_live_log_when_the_run_left_it_within_the_limit_and
 
 
 # ---------------------------------------------------------------- an unsafe log: the job is NOT run
-def plant(logs: Path, name: str, kind: str, tmp_path: Path) -> Path | None:
-    target = tmp_path / "victim"
+def plant(logs: Path, name: str, kind: str, tmp_path: Path) -> Path:
+    target = tmp_path / f"victim-{name}"
     if kind == "symlink":
         target.write_text("victim")
         os.chmod(target, 0o644)
         (logs / name).symlink_to(target)
     elif kind == "dangling":
-        (logs / name).symlink_to(tmp_path / "not-there")
+        (logs / name).symlink_to(target)
     elif kind == "fifo":
         os.mkfifo(logs / name)
+    elif kind == "hardlink":
+        target.write_text("victim")
+        os.link(target, logs / name)
     else:
         (logs / name).mkdir()
     return target
 
 
-@pytest.mark.parametrize("which", ["out", "err"])
-@pytest.mark.parametrize("kind", ["symlink", "dangling", "fifo", "directory"])
-def test_an_unsafe_live_log_refuses_the_job_with_exit_3_and_touches_nothing(tmp_path, which, kind):
+@pytest.mark.parametrize("which", ["out", "err", "both"])
+@pytest.mark.parametrize("kind", ["symlink", "dangling", "fifo", "directory", "hardlink"])
+def test_an_unsafe_live_log_refuses_the_job_exit_3_touches_nothing_and_the_reason_goes_where_it_can(tmp_path, which, kind):
     logs = logs_dir(tmp_path)
     marker = tmp_path / "marker"
-    target = plant(logs, "o.log" if which == "out" else "e.log", kind, tmp_path)
+    planted = {name: plant(logs, name, kind, tmp_path) for name in {"out": ["o.log"], "err": ["e.log"], "both": ["o.log", "e.log"]}[which]}
     done = call(logs, marker_job(marker))                                   # a FIFO must not hang: call() has a timeout
     assert done.returncode == 3 and not marker.exists()
-    if kind == "symlink":
-        assert target.read_text() == "victim" and stat.S_IMODE(target.stat().st_mode) == 0o644
-    if kind == "dangling":
-        assert not (tmp_path / "not-there").exists()
-    reason = done.stderr if which == "out" else (logs / "o.log").read_text()      # the diagnostic goes to whatever descriptor exists, else stderr
-    assert "the job was NOT run" in reason
+    for target in planted.values():
+        if kind in ("symlink", "hardlink"):
+            assert target.read_text() == "victim" and stat.S_IMODE(target.stat().st_mode) == 0o644
+        if kind == "dangling":
+            assert not target.exists()
+    reason = "the job was NOT run"
+    if which == "out":                                                      # the err log opened: the out-log refusal is written THERE
+        assert reason in (logs / "e.log").read_text() and "o.log" in (logs / "e.log").read_text() and done.stderr == ""
+    elif which == "err":                                                    # the err log is refused: the reason goes to the out log
+        assert reason in (logs / "o.log").read_text() and "e.log" in (logs / "o.log").read_text() and done.stderr == ""
+    else:                                                                   # neither opens: the inherited stderr, the only trace
+        assert reason in done.stderr and "o.log" in done.stderr and "e.log" in done.stderr
+
+
+def test_a_rotation_refusal_after_the_job_is_written_to_the_err_log_and_leaves_the_exit_status_alone(tmp_path):
+    logs = logs_dir(tmp_path)
+    victim = tmp_path / "victim"
+    victim.write_text("victim")
+    (logs / "o.log.2").symlink_to(victim)
+    done = call(logs, "import sys; sys.stdout.write('x' * (1100 * 1024)); sys.exit(5)")
+    assert done.returncode == 5 and "log not rotated" in (logs / "e.log").read_text() and "o.log.2" in (logs / "e.log").read_text()
+    assert "log not rotated" not in (logs / "o.log").read_text() and victim.read_text() == "victim" and done.stderr == ""
 
 
 def test_a_symlinked_logs_directory_refuses_the_job(tmp_path):
@@ -138,7 +157,7 @@ def test_a_fifo_with_a_reader_attached_is_still_refused_by_the_descriptor_check(
     reader = os.open(logs / "o.log", os.O_RDONLY | os.O_NONBLOCK)
     dir_fd = os.open(logs, os.O_RDONLY | os.O_DIRECTORY)
     try:
-        with pytest.raises(run.Refused, match="not a regular file"):
+        with pytest.raises(run.Refused, match="not a regular file with one link"):
             run.open_log(dir_fd, "o.log")
     finally:
         os.close(reader)
@@ -187,3 +206,96 @@ def test_sigterm_to_the_wrapper_reaches_the_job_which_is_waited_for_and_the_wrap
                 os.kill(int(ready.read_text()), signal.SIGKILL)
             except (ProcessLookupError, ValueError):
                 pass
+
+
+# ---------------------------------------------------------------- a missing logs directory (first install)
+def test_a_missing_logs_directory_is_created_0700_and_the_job_runs(tmp_path):
+    parent = tmp_path / "home"
+    parent.mkdir()
+    done = call(parent / "logs", "print('ran')")
+    assert done.returncode == 0 and stat.S_IMODE((parent / "logs").stat().st_mode) == 0o700 and (parent / "logs" / "o.log").read_text() == "ran\n"
+
+
+def test_a_missing_logs_directory_is_not_created_under_a_symlinked_or_missing_parent(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    (tmp_path / "link").symlink_to(real)
+    marker = tmp_path / "marker"
+    for parent in (tmp_path / "link", tmp_path / "no-such-parent"):
+        done = call(parent / "logs", marker_job(marker))
+        assert done.returncode == 3 and not marker.exists() and "the job was NOT run" in done.stderr
+    assert list(real.iterdir()) == [] and not (tmp_path / "no-such-parent").exists()
+
+
+def test_a_missing_logs_directory_is_not_created_under_a_parent_that_is_not_ours(tmp_path, monkeypatch):
+    parent = tmp_path / "home"
+    parent.mkdir()
+    marker = tmp_path / "marker"
+    _euid_as(monkeypatch, "_make_dir")
+    assert run.main(["x", str(parent / "logs"), "o.log", "e.log", "--", sys.executable, "-c", marker_job(marker)]) == 3
+    assert not marker.exists() and not (parent / "logs").exists()
+
+
+def test_only_the_last_path_component_is_ever_created(tmp_path):
+    marker = tmp_path / "marker"
+    done = call(tmp_path / "a" / "b" / "logs", marker_job(marker))
+    assert done.returncode == 3 and not marker.exists() and not (tmp_path / "a").exists()
+
+
+# ---------------------------------------------------------------- what the job inherits
+def test_the_job_sees_only_fds_0_1_2_and_a_dev_null_stdin(tmp_path):
+    logs = logs_dir(tmp_path)
+    leaked = os.open(tmp_path, os.O_RDONLY)
+    os.set_inheritable(leaked, True)                                        # an inheritable descriptor of the wrapper's own: close_fds must drop it
+    try:
+        code = (f"import os\nfor fd in ({leaked}, 3, 4, 5):\n    try:\n        os.fstat(fd)\n        print('open', fd)\n    except OSError:\n        pass\n"
+                f"print('stdin', os.read(0, 10))\n")
+        assert run.main(["x", str(logs), "o.log", "e.log", "--", sys.executable, "-c", code]) == 0
+    finally:
+        os.close(leaked)
+    assert (logs / "o.log").read_text() == "stdin b''\n"
+
+
+def test_the_jobs_stdin_is_not_the_wrappers_open_pipe(tmp_path):
+    logs = logs_dir(tmp_path)
+    wrapper = subprocess.Popen(argv(logs, "import sys; print('eof' if sys.stdin.read() == '' else 'data')"), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        assert wrapper.wait(timeout=20) == 0                                # an inherited, never-closed pipe would block the job's read
+    finally:
+        wrapper.kill()
+        wrapper.communicate()
+    assert (logs / "o.log").read_text() == "eof\n"
+
+
+# ---------------------------------------------------------------- messages
+def test_a_message_with_an_undecodable_name_does_not_raise(tmp_path):
+    fd = os.open(tmp_path / "e.log", os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        run._say("log refused: bad\udcffname", fd, None)
+    finally:
+        os.close(fd)
+    assert (tmp_path / "e.log").read_text() == "acewatch_run: log refused: bad\\udcffname\n"
+
+
+# ---------------------------------------------------------------- a signal that arrives before the job exists
+def test_a_sigterm_before_the_job_exists_is_delivered_to_it_once_it_does(tmp_path, monkeypatch):
+    real, started = subprocess.Popen, []
+
+    def popen_after_signal(*args, **kwargs):
+        os.kill(os.getpid(), signal.SIGTERM)                                # the wrapper's handler runs before the job exists
+        proc = real(*args, **kwargs)
+        started.append(proc)
+        return proc
+
+    monkeypatch.setattr(run.subprocess, "Popen", popen_after_signal)
+    fd = os.open(os.devnull, os.O_WRONLY)
+    begin = time.time()
+    try:
+        status = run.run_job([sys.executable, "-c", "import time; time.sleep(30)"], fd, fd)
+        assert status == (143, signal.SIGTERM) and time.time() - begin < 15 and started[0].poll() is not None
+    finally:
+        os.close(fd)
+        for proc in started:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()

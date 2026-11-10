@@ -82,17 +82,36 @@ def test_the_runbook_log_rotation_section_says_who_opens_and_rotates_and_has_no_
     assert "sudo -u acewatch rm /var/acewatch/logs/<file>" in text and "/etc/newsyslog.d/acewatch.conf" in text.split("## Uninstalling", 1)[1]
 
 
-def test_the_runbook_has_an_upgrade_section_before_log_rotation_with_the_steps_in_order():
+def test_the_runbook_has_an_upgrade_section_before_log_rotation_with_the_steps_in_order_each_with_its_state():
     text = " ".join(SANDBOX.read_text(encoding="utf-8").split())
     assert text.index("## Upgrading an existing install") < text.index("## Log rotation")
     section = text.split("## Upgrading an existing install", 1)[1].split("## Log rotation", 1)[0]
-    marks = ["1. Refresh the root-owned copy FIRST", "2. For each job, `sudo launchctl bootout system/com.yourdomain.acewatch`",
-             "3. If the old newsyslog file was installed: `sudo rm /etc/newsyslog.d/acewatch.conf`", "4. Replace the sudoers line with the `-I` form",
-             "5. The log files the OLD plists made"]
-    assert [section.index(m) for m in marks] == sorted(section.index(m) for m in marks)
-    assert '-I -c "import ace_playbook"' in section and "Doing step 2 before this one stops every scan" in section
-    assert "sudo ls -ln /var/acewatch/logs" in section and "sudo -u acewatch rm /var/acewatch/logs/<file>" in section
-    assert "root never deletes inside that tree" in section and "REFUSES to run that job" in section and "exit status 3" in section
+    marks = ["1. If the old newsyslog file was installed: `sudo rm /etc/newsyslog.d/acewatch.conf`", "2. Replace the sudoers line with the `-I` form",
+             "3. `sudo launchctl bootout system/com.yourdomain.acewatch`", "4. The log files the OLD plists made", "5. Refresh the root-owned copy",
+             "6. Re-run step 7's `sed`"]
+    assert [section.index(m) for m in marks] == sorted(section.index(m) for m in marks)       # both security fixes first, the outage window shortest
+    assert section.count("State: ") == 6 and "already finds `ace_playbook` under `-I`" in section and "no scan runs, from here until step 6" in section
+    assert 'sudo launchctl print system/com.yourdomain.acewatch | grep -E "state|last exit"' in section and "`last exit code = 0`, not 3" in section
+    assert "sudo ls -ln /var/acewatch/logs" in section and "sudo -u acewatch rm /var/acewatch/logs/<file>" in section and "REFUSES to run that job (exit status 3)" in section
+    assert "root never deletes inside that tree" in section and '-I -c "import ace_playbook"' in section
+    assert "Never re-run step 2's `sudo chown -R acewatch:acewatch /var/acewatch` after the first install" in section
+
+
+def test_step_2_always_creates_the_logs_directory_as_acewatch_and_roots_chown_is_first_install_only():
+    text = " ".join(SANDBOX.read_text(encoding="utf-8").split())
+    step = text.split("2. `/var/acewatch` is owned by `acewatch`", 1)[1].split("3. Give it a checkout copy", 1)[0]
+    assert "sudo -u acewatch mkdir -p -m 0700 /var/acewatch/logs" in step and "on the FIRST install only" in step and "/var/acewatch/logs`, then" not in step
+
+
+def test_the_runbook_says_where_a_refusal_reason_goes_and_names_the_launchctl_command_for_the_last_case():
+    text = " ".join(SANDBOX.read_text(encoding="utf-8").split())
+    log = text.split("## Log rotation", 1)[1].split("## The operator-side status line", 1)[0]
+    assert "the err log is opened first; if it opens, the reason (an out-log refusal included) is written there" in log
+    assert "the reason is written to the out log if that opens" in log and "neither opens, or the directory is refused" in log
+    assert "the only trace is `last exit code = 3`" in log and 'sudo launchctl print system/com.yourdomain.acewatch | grep -E "state|last exit"' in log
+    assert "a missing one is created 0700, only its last path component" in log and "stdin is `/dev/null`" in log and "a hard link" in log
+    tail = text.split("## Uninstalling", 1)[1]
+    assert "launchctl bootout system/com.yourdomain.acewatch" in tail and "launchctl bootout system/com.yourdomain.acewatch.weekly" in tail
 
 
 def test_step_3_requires_a_root_owned_interpreter_venv_and_copy_with_a_check_that_prints_nothing():
@@ -101,6 +120,8 @@ def test_step_3_requires_a_root_owned_interpreter_venv_and_copy_with_a_check_tha
     assert "NOT a Homebrew or other python installed by a user account" in step and "must ALL be owned by root and not writable by group or other" in step
     assert '! -type l \\( ! -user root -o -perm -020 -o -perm -002 \\) -print' in step and "readlink -f" in step and "must print nothing" in step
     assert "provided step 3's ownership holds" in text
+    assert 'P=$(dirname "$(dirname "$(sudo readlink -f <copy>/.venv/bin/python)")")' in step and 'case "$P" in ""|.|/) echo "refusing: no interpreter tree found"' in step
+    assert "Darwin 25.6" in step and "not been run on Linux" in step
 
 
 # ---------------------------------------------------------------- the rotation, in temp directories
@@ -202,7 +223,7 @@ def test_a_log_owned_by_someone_else_is_refused_although_the_directory_is_ours(t
     logs = make(tmp_path, size=2 * KIB)
     mine = os.stat(logs).st_uid
     _euid_sequence(monkeypatch, [mine, mine + 1])
-    with pytest.raises(run.Refused, match="a.log is not a regular file owned"):
+    with pytest.raises(run.Refused, match="a.log is not a regular file with one link owned"):
         run.rotate(str(logs), "a.log", size_kib=1)
     assert sorted(p.name for p in logs.iterdir()) == ["a.log"]
 
@@ -214,6 +235,20 @@ def test_a_logs_directory_owned_by_someone_else_is_refused(tmp_path, monkeypatch
     with pytest.raises(run.Refused, match="directory is not owned"):
         run.rotate(str(logs), "a.log", size_kib=1)
     assert sorted(p.name for p in logs.iterdir()) == ["a.log"]
+
+
+def test_a_hard_linked_log_or_archive_is_refused_and_the_other_name_is_left_alone(tmp_path):
+    other = tmp_path / "other"
+    other.write_bytes(b"o" * 10)
+    logs = make(tmp_path, size=2 * KIB)
+    os.link(logs / "a.log", other.with_name("twin"))
+    with pytest.raises(run.Refused):
+        run.rotate(str(logs), "a.log", size_kib=1)
+    (tmp_path / "twin").unlink()
+    os.link(other, logs / "a.log.1")
+    with pytest.raises(run.Refused):
+        run.rotate(str(logs), "a.log", size_kib=1)
+    assert other.read_bytes() == b"o" * 10 and sorted(p.name for p in logs.iterdir()) == ["a.log", "a.log.1"]
 
 
 def test_a_name_with_a_slash_is_refused(tmp_path):
